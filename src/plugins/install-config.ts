@@ -257,10 +257,8 @@ export async function loadConfigForInstall(
     hookMutation,
     pluginMutation,
   };
-  if (!snapshot.valid || request.installKind === "plugin") {
-    if (pluginMutation.mode === "blocked") {
-      throw new PluginInstallConfigError(pluginMutation.reason, resolved);
-    }
+  if ((!snapshot.valid || request.installKind === "plugin") && pluginMutation.mode === "blocked") {
+    throw new PluginInstallConfigError(pluginMutation.reason, resolved);
   }
   return resolved;
 }
@@ -363,12 +361,9 @@ export function resolvePluginInstallRequestContext(params: {
   }
   const fileSpec = resolveFileNpmSpecToLocalPath(params.rawSpec);
   if (fileSpec && !fileSpec.ok) {
-    return {
-      ok: false,
-      error: fileSpec.error,
-    };
+    return fileSpec;
   }
-  const normalizedSpec = fileSpec && fileSpec.ok ? fileSpec.path : params.rawSpec;
+  const normalizedSpec = fileSpec?.path ?? params.rawSpec;
   const resolvedPath = resolveUserPath(params.localPath ?? normalizedSpec);
   const localPath = params.source
     ? params.source === "local" || params.source === "bundled"
@@ -398,8 +393,5 @@ export function resolvePluginInstallRequestContext(params: {
 export function resolvePluginInstallInvalidConfigPolicy(
   request: PluginInstallRequestContext | null,
 ): PluginInstallInvalidConfigPolicy {
-  if (!request) {
-    return "deny";
-  }
-  return request.allowInvalidConfigRecovery === true ? "allow-plugin-recovery" : "deny";
+  return request?.allowInvalidConfigRecovery === true ? "allow-plugin-recovery" : "deny";
 }

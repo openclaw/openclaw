@@ -44,15 +44,16 @@ async function manifestFor(root: string) {
 
 describe("worker workspace reconciliation publication", () => {
   it.each([
-    ["true", "\n"],
-    ["true", "\r\n"],
-    ["input", "\n"],
-    ["input", "\r\n"],
-    ["false", "\n"],
-    ["false", "\r\n"],
-  ])(
-    "keeps raw bytes and the pending journal with autocrlf=%s and EOL=%j",
-    async (autocrlf, eol) => {
+    ["true", "\n", "apply"],
+    ["true", "\r\n", "apply"],
+    ["input", "\n", "apply"],
+    ["input", "\r\n", "apply"],
+    ["false", "\n", "apply"],
+    ["false", "\r\n", "apply"],
+    ["false", "\n", "commit"],
+  ] as const)(
+    "keeps raw bytes and the pending journal with autocrlf=%s and EOL=%j at %s",
+    async (autocrlf, eol, phase) => {
       vi.stubEnv("GIT_CONFIG_COUNT", "3");
       vi.stubEnv("GIT_CONFIG_KEY_0", "core.autocrlf");
       vi.stubEnv("GIT_CONFIG_VALUE_0", autocrlf);
@@ -72,47 +73,60 @@ describe("worker workspace reconciliation publication", () => {
         fs.writeFile(path.join(staged, "added.txt"), addedBytes),
       ]);
       const current = await manifestFor(staged);
+      const publicationFailure = new AcceptedWorkspacePublicationIndeterminateError(
+        phase,
+        new Error(`${phase} transport lost`),
+        new Error("settlement timed out"),
+      );
       let pending: WorkerWorkspaceReconciliationJournal | undefined;
-      const abort = vi.fn(() => {
+      const abort = vi.fn(async () => {
         pending = undefined;
       });
-      const commit = vi.fn(() => {
+      const commit = vi.fn(async () => {
+        if (phase === "commit") {
+          throw publicationFailure;
+        }
         pending = undefined;
       });
       const journal = {
-        load: () => pending,
-        begin: (value: WorkerWorkspaceReconciliationJournal) => {
+        load: async () => pending,
+        begin: async (value: WorkerWorkspaceReconciliationJournal) => {
           pending = value;
         },
         commit,
         abort,
       };
-      const publicationFailure = new AcceptedWorkspacePublicationIndeterminateError(
-        "apply",
-        new Error("apply transport lost"),
-        new Error("settlement timed out"),
-      );
 
-      await expect(
-        applyStagedWorkerWorkspace({
-          root: local,
-          stagingRoot: staged,
-          baseManifestRef: `sha256:${"a".repeat(64)}`,
-          currentManifestRef: `sha256:${"b".repeat(64)}`,
-          base,
-          current,
-          journal,
-          acceptance: {
-            kind: "reconcile",
-            publish: async () => {
-              throw publicationFailure;
+      try {
+        await expect(
+          applyStagedWorkerWorkspace({
+            root: local,
+            stagingRoot: staged,
+            baseManifestRef: `sha256:${"a".repeat(64)}`,
+            currentManifestRef: `sha256:${"b".repeat(64)}`,
+            base,
+            current,
+            journal,
+            acceptance: {
+              kind: "reconcile",
+              publish: async () => {
+                if (phase === "apply") {
+                  throw publicationFailure;
+                }
+              },
             },
-          },
-        }),
-      ).rejects.toBe(publicationFailure);
+          }),
+        ).rejects.toBe(publicationFailure);
+      } finally {
+        await commit.mock.results[0]?.value.catch(() => undefined);
+      }
 
       expect(pending).toBeDefined();
-      expect(commit).not.toHaveBeenCalled();
+      if (phase === "apply") {
+        expect(commit).not.toHaveBeenCalled();
+      } else {
+        expect(commit).toHaveBeenCalledOnce();
+      }
       expect(abort).not.toHaveBeenCalled();
       await expect(fs.readFile(path.join(local, "result.txt"))).resolves.toEqual(workerBytes);
       await expect(fs.readFile(path.join(local, "added.txt"))).resolves.toEqual(addedBytes);
@@ -132,7 +146,8 @@ describe("worker workspace reconciliation publication", () => {
     await fs.writeFile(path.join(staged, "result.txt"), "worker\n");
     const current = await manifestFor(staged);
     let pending: WorkerWorkspaceReconciliationJournal | undefined;
-    const abort = vi.fn(() => {
+    const abort = vi.fn(async () => {
+      expect(await fs.readFile(path.join(local, "result.txt"), "utf8")).toBe("base\n");
       pending = undefined;
     });
 
@@ -145,11 +160,11 @@ describe("worker workspace reconciliation publication", () => {
         base,
         current,
         journal: {
-          load: () => pending,
-          begin: (value) => {
+          load: async () => pending,
+          begin: async (value) => {
             pending = value;
           },
-          commit: () => {
+          commit: async () => {
             pending = undefined;
           },
           abort,
@@ -163,9 +178,13 @@ describe("worker workspace reconciliation publication", () => {
       }),
     ).rejects.toThrow("publication rejected");
 
-    await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe("base\n");
-    expect(pending).toBeUndefined();
-    expect(abort).toHaveBeenCalledOnce();
+    try {
+      expect(pending).toBeUndefined();
+      expect(abort).toHaveBeenCalledOnce();
+      await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe("base\n");
+    } finally {
+      await abort.mock.results[0]?.value;
+    }
   });
 
   it.each([
@@ -183,14 +202,14 @@ describe("worker workspace reconciliation publication", () => {
     const cleanupError = new Error("scratch removal failed");
     const ref = workerWorkspaceResultRef("claim-staging-cleanup");
     const record = vi.fn();
-    const commit = vi.fn();
-    const abort = vi.fn();
+    const commit = vi.fn(async () => {});
+    const abort = vi.fn(async () => {});
     const prepared = await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
       request: {
         localPath: local,
         remoteWorkspaceDir: "/worker/workspace",
         baseManifestRef: base.manifestRef,
-        journal: { load: () => undefined, begin: () => {}, commit, abort },
+        journal: { load: async () => undefined, begin: async () => {}, commit, abort },
         stagedResult: { ref, record },
       },
       stagingRoot: payload,

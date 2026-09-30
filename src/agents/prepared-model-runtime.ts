@@ -58,6 +58,7 @@ import {
 import {
   refreshCommittedProviderCatalogs,
   createPreparedModelRuntimeCatalogRecovery,
+  createPreparedModelRuntimePluginRecovery,
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
@@ -280,6 +281,11 @@ export function getPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeSnapshot | undefined {
   return getBlockingReplacement() ? undefined : readPublishedModelRuntimeSnapshot(owners, rawInput);
+}
+
+/** Reads the owner-held publication barrier without starting catalog acquisition. */
+export function getPendingPreparedModelRuntimeReplacement(): Promise<void> | undefined {
+  return getBlockingReplacement()?.promise;
 }
 
 /** Publishes one owner from an explicit startup/activation lifecycle boundary. */
@@ -510,6 +516,15 @@ export const recoverPreparedModelRuntimeCatalogWorker = createPreparedModelRunti
   refreshPreparedModelRuntimeSnapshots,
 );
 
+const recoverRetiredConfiguredPluginGeneration = createPreparedModelRuntimePluginRecovery(
+  owners,
+  () =>
+    gatewayLifecycleActive &&
+    !refreshCancellation.signal.aborted &&
+    !pendingModelRuntimeReplacement,
+  refreshPreparedModelRuntimeSnapshots,
+);
+
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
   config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
@@ -617,6 +632,7 @@ export function refreshPreparedModelRuntimeSnapshots(
           buildTimeoutMs: modelRuntimeBuildTimeoutMs,
           progress: startup?.progress,
           acquisitionSignal,
+          onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
         },
       );
       if (!isPublicationCurrent()) {

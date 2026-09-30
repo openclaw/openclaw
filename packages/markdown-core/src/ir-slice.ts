@@ -115,23 +115,27 @@ export function sliceMarkdownIRRanges(ir: MarkdownIR, ranges: MarkdownIRRange[])
       metadata: { text: ir.text, styles: [], links: [] },
     }));
 
-  function visitRanges(
-    start: number,
-    end: number,
-    visit: (metadata: MarkdownIRWithMetadata, index: number) => void,
-  ) {
+  function firstRangeEndingAtOrAfter(offset: number): number {
     let low = 0;
     let high = partitions.length;
     while (low < high) {
       const middle = Math.floor((low + high) / 2);
       const partition = partitions[middle];
-      if (partition && partition.range.end < start) {
+      if (partition && partition.range.end < offset) {
         low = middle + 1;
       } else {
         high = middle;
       }
     }
-    for (let index = low; index < partitions.length; index += 1) {
+    return low;
+  }
+
+  function visitRanges(
+    start: number,
+    end: number,
+    visit: (metadata: MarkdownIRWithMetadata, index: number) => void,
+  ) {
+    for (let index = firstRangeEndingAtOrAfter(start); index < partitions.length; index += 1) {
       const partition = partitions[index];
       if (!partition || partition.range.start > end) {
         break;
@@ -171,18 +175,7 @@ export function sliceMarkdownIRRanges(ir: MarkdownIR, ranges: MarkdownIRRange[])
   }
   for (const tag of ir.htmlTags ?? []) {
     // Search by the tag's end so a long tag split across many chunks costs O(log n).
-    let low = 0;
-    let high = partitions.length;
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2);
-      const partition = partitions[middle];
-      if (partition && partition.range.end < tag.end) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    for (let index = low; index < partitions.length; index += 1) {
+    for (let index = firstRangeEndingAtOrAfter(tag.end); index < partitions.length; index += 1) {
       const partition = partitions[index];
       if (!partition || partition.range.start > tag.start) {
         break;

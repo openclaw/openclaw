@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /** Normalizes slash-command text aliases and builds command detection caches. */
 import {
   normalizeLowercaseStringOrEmpty,
@@ -105,17 +104,15 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
   const multilineTail = newline === -1 ? undefined : trimmed.slice(newline + 1).trimStart();
 
   // `/cmd: value` is accepted as `/cmd value` because some channels insert colon syntax.
-  const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:([\s\S]*)$/);
-  const normalized = colonMatch
-    ? (() => {
-        const [, command, rest] = colonMatch;
-        const commandRest = expectDefined(rest, "commands registry normalize rest");
-        const normalizedRest = preserveArguments ? commandRest : commandRest.trimStart();
-        return normalizedRest
-          ? `/${command}${/^\s/.test(normalizedRest) ? "" : " "}${normalizedRest}`
-          : `/${command}`;
-      })()
-    : singleLine;
+  const normalized = singleLine.replace(
+    /^\/([^\s:]+)\s*:([\s\S]*)$/,
+    (_, command: string, rest: string) => {
+      const normalizedRest = preserveArguments ? rest : rest.trimStart();
+      return normalizedRest
+        ? `/${command}${/^\s/.test(normalizedRest) ? "" : " "}${normalizedRest}`
+        : `/${command}`;
+    },
+  );
 
   const normalizedBotUsername = normalizeOptionalLowercaseString(options?.botUsername);
   const mentionMatch = normalized.match(TARGETED_COMMAND_BODY_RE);

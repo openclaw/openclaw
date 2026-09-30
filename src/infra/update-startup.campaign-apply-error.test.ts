@@ -198,7 +198,7 @@ describe("update campaign apply exception boundary", () => {
       target: { kind: "git", installationMethod: "git-checkout" },
       verification: { rollbackOutcome: { status: "not-attempted" } },
     });
-    const runStatus = readUpdateRunStatus();
+    const runStatus = await readUpdateRunStatus();
     assert(!("runStatusError" in runStatus));
     const { lastRun } = runStatus;
     expect(lastRun).toEqual(run);

@@ -1,7 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-// Outbound target helpers resolve direct send targets, heartbeat destinations,
-// sender context, and session-route aware heartbeat refinements.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
@@ -700,5 +697,5 @@ export function resolveHeartbeatSenderContext(params: {
     provider,
   });
 
-  return { sender: expectDefined(sender, "resolved sender"), provider, allowFrom };
+  return { sender, provider, allowFrom };
 }

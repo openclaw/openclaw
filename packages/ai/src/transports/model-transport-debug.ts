@@ -1,9 +1,3 @@
-/**
- * Environment-driven debug controls for model transport logging.
- *
- * Model adapters share these helpers so payload, SSE, and transport diagnostics
- * interpret OpenClaw debug environment variables consistently.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type SubsystemLogger = {
@@ -34,11 +28,8 @@ export function resolveModelPayloadDebugMode(
   env: ModelTransportDebugEnv = process.env,
 ): ModelPayloadDebugMode {
   const normalized = normalizeLowercaseStringOrEmpty(env.OPENCLAW_DEBUG_MODEL_PAYLOAD);
-  if (normalized === "tools" || normalized === "full-redacted") {
+  if (normalized === "tools" || normalized === "full-redacted" || normalized === "summary") {
     return normalized;
-  }
-  if (normalized === "summary") {
-    return "summary";
   }
   return "off";
 }
@@ -51,10 +42,7 @@ export function resolveModelSseDebugMode(
   if (normalized === "peek") {
     return "peek";
   }
-  if (normalized === "events" || isTruthyEnv(normalized)) {
-    return "events";
-  }
-  return "off";
+  return isTruthyEnv(normalized) ? "events" : "off";
 }
 
 /** Returns whether any model transport debug channel is enabled. */

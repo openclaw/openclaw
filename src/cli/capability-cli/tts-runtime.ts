@@ -13,9 +13,9 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connec
 import { isLoopbackHost } from "../../gateway/net.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
+import { isTtsConfigReservedKey, resolveTtsPersonaList } from "../../tts/tts-settings.js";
 import {
   getTtsProvider,
-  getTtsPersona,
   listTtsPersonas,
   listSpeechVoices,
   resolveExplicitTtsOverrides,
@@ -167,7 +167,7 @@ async function injectTtsAuthProfileApiKey(params: {
     return params.cfg;
   }
   const effectiveTtsConfig = resolveTtsConfig(params.cfg, { channelId: params.channelId });
-  if (resolvedTtsConfigHasProviderApiKey(effectiveTtsConfig, providerId)) {
+  if (ttsProviderConfigHasApiKey(effectiveTtsConfig.providerConfigs[providerId])) {
     return params.cfg;
   }
   const existingProviderConfig = resolveExistingTtsProviderConfig({
@@ -283,7 +283,7 @@ function resolveExistingTtsProviderConfigInTts(params: {
     ["direct", params.tts],
   ] as const) {
     for (const [key, value] of Object.entries(entries ?? {})) {
-      if (container === "direct" && TTS_CONFIG_RESERVED_KEYS.has(key)) {
+      if (container === "direct" && isTtsConfigReservedKey(key)) {
         continue;
       }
       const normalizedKey = normalizeLowercaseStringOrEmpty(
@@ -296,21 +296,6 @@ function resolveExistingTtsProviderConfigInTts(params: {
   }
   return undefined;
 }
-
-const TTS_CONFIG_RESERVED_KEYS = new Set([
-  "auto",
-  "enabled",
-  "maxTextLength",
-  "mode",
-  "modelOverrides",
-  "persona",
-  "personas",
-  "prefsPath",
-  "provider",
-  "providers",
-  "summaryModel",
-  "timeoutMs",
-]);
 
 function resolveChannelTtsConfigForAuthHydration(params: {
   cfg: OpenClawConfig;
@@ -361,13 +346,6 @@ function buildTtsConfigWithHydratedProvider(params: {
 
 function ttsProviderConfigHasApiKey(value: unknown): boolean {
   return isObjectRecord(value) && "apiKey" in value;
-}
-
-function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string): boolean {
-  if (!isObjectRecord(config) || !isObjectRecord(config.providerConfigs)) {
-    return false;
-  }
-  return ttsProviderConfigHasApiKey(config.providerConfigs[providerId]);
 }
 
 export async function runTtsProviders(transport: CapabilityTransport, rawAgentId?: string) {
@@ -429,20 +407,7 @@ export async function runTtsPersonas(transport: CapabilityTransport) {
     });
   }
   const cfg = getRuntimeConfig();
-  const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
-  const active = getTtsPersona(config, prefsPath);
-  return {
-    active: active?.id ?? null,
-    personas: listTtsPersonas(config).map((persona) => ({
-      id: persona.id,
-      label: persona.label,
-      description: persona.description,
-      provider: persona.provider,
-      fallbackPolicy: persona.fallbackPolicy,
-      providers: Object.keys(persona.providers ?? {}),
-    })),
-  };
+  return resolveTtsPersonaList(cfg);
 }
 
 export async function runTtsVoices(providerRaw?: string) {

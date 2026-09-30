@@ -17,7 +17,6 @@ import {
   isDeliveredMessagingToolResult,
   isDeliveredMessagingToolSendToCurrentSource,
   isReplaySafeToolCall,
-  isToolWrappedWithBeforeToolCallHook,
   isToolResultError,
   isMessagingTool,
   projectPluginMessageDeliveryFact,
@@ -26,10 +25,8 @@ import {
   readEmbeddedMessageDeliveryFact,
   runAgentHarnessAfterToolCallHook,
   sanitizeToolResult,
-  setBeforeToolCallDiagnosticsEnabled,
   type AnyAgentTool,
   type MessagingToolSend,
-  wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   copyInternalToolResultState,
@@ -45,6 +42,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
@@ -68,16 +66,19 @@ import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
 import {
   createCodexDynamicToolSpecs,
   projectCodexDynamicTools,
-  type ProjectedCodexDynamicTool as ProjectedTool,
   type CodexDynamicToolSchemaQuarantine,
   type CodexToolDescriptor,
 } from "./dynamic-tool-catalog.js";
+import {
+  type CodexDynamicToolHookContextBase,
+  projectCodexExecutableDynamicToolSurface,
+} from "./dynamic-tool-executable-projection.js";
 import {
   createFailedDynamicToolResponse,
   failedToolResult,
   type CodexDynamicToolRuntimeResponse,
 } from "./dynamic-tool-response-state.js";
-import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
+import { invalidInlineImageText } from "./image-payload-sanitizer.js";
 import type {
   CodexDynamicToolCallOutputContentItem,
   CodexDynamicToolCallParams,
@@ -92,9 +93,7 @@ import {
 } from "./remote-workspace-media.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
-type CodexDynamicToolHookContext = NonNullable<
-  Parameters<typeof wrapToolWithBeforeToolCallHook>[1]
-> & {
+type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
   remoteWorkspaceRoot?: string;
   remoteWorkspaceRequestTimeoutMs?: number;
   currentChannelProvider?: string;
@@ -109,8 +108,6 @@ type CodexDynamicToolHookContext = NonNullable<
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
-
-type ProjectedCodexDynamicTool = ProjectedTool<AnyAgentTool>;
 
 const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
 const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS = 160;
@@ -153,9 +150,8 @@ function applyCurrentMessageProvider(
   currentProvider: string | undefined,
 ): Record<string, unknown> {
   const hasProvider =
-    typeof args.provider === "string" && args.provider.trim().length > 0
-      ? true
-      : typeof args.channel === "string" && args.channel.trim().length > 0;
+    (typeof args.provider === "string" && args.provider.trim().length > 0) ||
+    (typeof args.channel === "string" && args.channel.trim().length > 0);
   const provider = currentProvider?.trim();
   if (toolName !== "message" || hasProvider || !provider) {
     return args;
@@ -222,6 +218,7 @@ function invalidateComputerFrame(contextEpoch: {
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   registeredTools?: readonly CodexToolDescriptor[];
+  registeredFallbackTools?: AnyAgentTool[];
   registeredSpecs?: readonly CodexDynamicToolSpec[];
   signal: AbortSignal;
   computerContextEpoch?: {
@@ -263,6 +260,13 @@ export function createCodexDynamicToolBridge(params: {
     availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
   );
   const availableTools = finalized.tools;
+  const registeredFallbackProjection = projectCodexExecutableDynamicToolSurface(
+    params.registeredFallbackTools ?? [],
+    params.hookContext,
+  );
+  const registeredFallbackTools = registeredFallbackProjection.tools.filter(
+    (entry) => registrationNames.has(entry.name) && !finalized.preparedNames.has(entry.name),
+  );
   const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
   for (const { name, tool } of availableTools) {
     const pluginMeta = getPluginToolMeta(tool);
@@ -276,6 +280,10 @@ export function createCodexDynamicToolBridge(params: {
   }
   availableProjection.quarantinedTools.push(...finalized.quarantinedTools);
   const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
+  const executionToolMap = new Map([
+    ...registeredFallbackTools.map((entry) => [entry.name, entry] as const),
+    ...toolMap,
+  ]);
   const quarantinedAvailableToolNames = new Set(
     availableProjection.quarantinedTools.map((tool) => tool.tool),
   );
@@ -288,6 +296,7 @@ export function createCodexDynamicToolBridge(params: {
     inheritedNames ?? new Set(registeredSpecTools.map((entry) => entry.name));
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
+    ...registeredFallbackProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
   ]);
   reportQuarantinedDynamicTools({
@@ -378,7 +387,7 @@ export function createCodexDynamicToolBridge(params: {
           toolName,
           toolCallOrdinal: options?.toolCallOrdinal,
         });
-      const toolEntry = toolMap.get(call.tool);
+      const toolEntry = executionToolMap.get(call.tool);
       if (!toolEntry) {
         const executedArguments = asNonArrayRecord(call.arguments);
         const message = registeredToolNames.has(call.tool)
@@ -753,41 +762,6 @@ export function createCodexDynamicToolBridge(params: {
         },
       });
     },
-  };
-}
-
-function projectCodexExecutableDynamicToolSurface(
-  tools: readonly AnyAgentTool[],
-  hookContext: CodexDynamicToolHookContext | undefined,
-): {
-  tools: ProjectedCodexDynamicTool[];
-  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
-} {
-  const { tools: projectedTools, quarantinedTools } = projectCodexDynamicTools(tools);
-  const wrappedTools: ProjectedCodexDynamicTool[] = [];
-  for (const entry of projectedTools) {
-    try {
-      if (isToolWrappedWithBeforeToolCallHook(entry.tool)) {
-        setBeforeToolCallDiagnosticsEnabled(entry.tool, false);
-        wrappedTools.push(entry);
-        continue;
-      }
-      wrappedTools.push({
-        ...entry,
-        tool: wrapToolWithBeforeToolCallHook(entry.tool, hookContext, {
-          emitDiagnostics: false,
-        }),
-      });
-    } catch {
-      quarantinedTools.push({
-        tool: entry.name,
-        violations: [`${entry.name} could not be wrapped for before-tool-call hooks`],
-      });
-    }
-  }
-  return {
-    tools: wrappedTools,
-    quarantinedTools: dedupeQuarantinedDynamicTools(quarantinedTools),
   };
 }
 

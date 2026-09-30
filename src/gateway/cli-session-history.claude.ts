@@ -129,10 +129,6 @@ export function resolveClaudeCliBindingSessionId(
   return getCliSessionBinding(entry, CLAUDE_CLI_PROVIDER)?.sessionId;
 }
 
-export function resolveClaudeCliTimestampMs(value: unknown): number | undefined {
-  return parseDateStringTimestampMs(value);
-}
-
 function resolveClaudeCliUsage(raw: ClaudeCliUsage) {
   if (!raw || typeof raw !== "object") {
     return undefined;
@@ -326,7 +322,7 @@ export function parseClaudeCliHistoryEntry(
     return null;
   }
 
-  const timestamp = resolveClaudeCliTimestampMs(entry.timestamp);
+  const timestamp = parseDateStringTimestampMs(entry.timestamp);
   const externalId = normalizeOptionalString(entry.uuid);
   const baseMeta = {
     id: externalId ?? `${CLAUDE_CLI_PROVIDER}:${cliSessionId}:line:${sourceLineNumber}`,

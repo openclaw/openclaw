@@ -1,7 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-/**
- * Schedules and runs deferred context-engine turn maintenance.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasSameContextEngineInstance,
@@ -344,9 +341,6 @@ function scheduleDeferredTurnMaintenance(
   return state.promise;
 }
 
-/**
- * Run optional context-engine transcript maintenance and normalize the result.
- */
 export async function runContextEngineMaintenance(
   params: ContextEngineMaintenanceParams,
 ): Promise<ContextEngineMaintenanceResult | undefined> {

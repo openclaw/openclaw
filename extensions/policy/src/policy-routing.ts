@@ -5,6 +5,7 @@ import {
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { PolicyRoutingEvidence } from "./policy-state-types.js";
 
 export const ROUTING_MATCH_KINDS = [
   "binding.peer",
@@ -41,11 +42,6 @@ export type PolicyRoutingRules = {
   readonly probes?: readonly PolicyRoutingProbe[];
 };
 
-type PolicyRouteBinding = {
-  readonly index: number;
-  readonly channel: string;
-};
-
 export function policyRoutingRules(policy: unknown): PolicyRoutingRules | undefined {
   if (!isRecord(policy) || !isRecord(policy.routing)) {
     return undefined;
@@ -53,13 +49,39 @@ export function policyRoutingRules(policy: unknown): PolicyRoutingRules | undefi
   return policy.routing as PolicyRoutingRules;
 }
 
-export function listPolicyRouteBindings(
+export function scanPolicyRouting(
   cfg: Record<string, unknown>,
-): readonly PolicyRouteBinding[] {
+  rules: PolicyRoutingRules,
+): PolicyRoutingEvidence {
+  return {
+    bindings: listPolicyRouteBindings(cfg),
+    probes: (rules.probes ?? []).map((probe, index) => {
+      const result = resolveAgentRoute({
+        cfg: cfg as OpenClawConfig,
+        channel: probe.route.channel,
+        accountId: probe.route.accountId,
+        peer: probe.route.peer,
+        parentPeer: probe.route.parentPeer,
+        guildId: probe.route.guildId,
+        teamId: probe.route.teamId,
+        memberRoleIds:
+          probe.route.memberRoleIds === undefined ? undefined : [...probe.route.memberRoleIds],
+      });
+      return {
+        id: probe.id,
+        source: `oc://policy/routing/probes/#${index}`,
+        agentId: result.agentId,
+        matchedBy: result.matchedBy,
+      };
+    }),
+  };
+}
+
+function listPolicyRouteBindings(cfg: Record<string, unknown>): PolicyRoutingEvidence["bindings"] {
   if (!Array.isArray(cfg.bindings)) {
     return [];
   }
-  const bindings: PolicyRouteBinding[] = [];
+  const bindings: PolicyRoutingEvidence["bindings"][number][] = [];
   for (const [index, value] of cfg.bindings.entries()) {
     if (!isRecord(value) || value.type === "acp" || !isRecord(value.match)) {
       continue;
@@ -67,24 +89,11 @@ export function listPolicyRouteBindings(
     if (typeof value.agentId !== "string" || typeof value.match.channel !== "string") {
       continue;
     }
-    bindings.push({ index, channel: value.match.channel });
+    bindings.push({
+      index,
+      source: `oc://openclaw.config/bindings/#${index}`,
+      channel: value.match.channel,
+    });
   }
   return bindings;
-}
-
-export function resolvePolicyRoutingProbe(
-  cfg: Record<string, unknown>,
-  probe: PolicyRoutingProbe,
-): ResolvedAgentRoute {
-  return resolveAgentRoute({
-    cfg: cfg as OpenClawConfig,
-    channel: probe.route.channel,
-    accountId: probe.route.accountId,
-    peer: probe.route.peer,
-    parentPeer: probe.route.parentPeer,
-    guildId: probe.route.guildId,
-    teamId: probe.route.teamId,
-    memberRoleIds:
-      probe.route.memberRoleIds === undefined ? undefined : [...probe.route.memberRoleIds],
-  });
 }

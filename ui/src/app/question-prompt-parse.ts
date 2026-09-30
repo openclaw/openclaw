@@ -2,20 +2,10 @@ import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type { Question } from "../../../packages/gateway-protocol/src/index.js";
+import { takeGraphemes } from "../lib/graphemes.ts";
 import { normalizeQuestionSecretStoreFields } from "./question-prompt-secret-store.ts";
 
 const MAX_HEADER_GRAPHEMES = 12;
-
-function clampHeaderGraphemes(header: string): string {
-  const segments = [...new Intl.Segmenter().segment(header)];
-  if (segments.length <= MAX_HEADER_GRAPHEMES) {
-    return header;
-  }
-  return segments
-    .slice(0, MAX_HEADER_GRAPHEMES)
-    .map((part) => part.segment)
-    .join("");
-}
 
 export function parseQuestion(value: unknown): Question | null {
   if (!isRecord(value)) {
@@ -30,7 +20,7 @@ export function parseQuestion(value: unknown): Question | null {
   // Clamp instead of reject: the gateway enforces the 12-cap with grapheme
   // semantics, and any re-count here (UTF-16, code points, or a second grapheme
   // impl) can disagree at the boundary and silently drop the whole prompt.
-  const clampedHeader = clampHeaderGraphemes(header);
+  const clampedHeader = takeGraphemes(header, MAX_HEADER_GRAPHEMES);
   if (!Array.isArray(value.options) || value.options.length > 4) {
     return null;
   }

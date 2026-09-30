@@ -34,27 +34,6 @@ function normalizeRouteThreadId(value: unknown): string | number | null {
   return normalizeOptionalString(value) ?? null;
 }
 
-function resolveNodeInvokeTurnSourceFields(
-  turnSource:
-    | {
-        channel?: unknown;
-        to?: unknown;
-        accountId?: unknown;
-        threadId?: unknown;
-      }
-    | undefined,
-): Pick<
-  PluginApprovalRequestPayload,
-  "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
-> {
-  return {
-    turnSourceChannel: normalizeOptionalString(turnSource?.channel) ?? null,
-    turnSourceTo: normalizeOptionalString(turnSource?.to) ?? null,
-    turnSourceAccountId: normalizeOptionalString(turnSource?.accountId) ?? null,
-    turnSourceThreadId: normalizeRouteThreadId(turnSource?.threadId),
-  };
-}
-
 export function createPluginNodeInvokeApprovalRuntime(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
@@ -97,7 +76,12 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
   return {
     async request(input) {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
-      const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
+      const turnSource = {
+        turnSourceChannel: normalizeOptionalString(params.turnSource?.channel) ?? null,
+        turnSourceTo: normalizeOptionalString(params.turnSource?.to) ?? null,
+        turnSourceAccountId: normalizeOptionalString(params.turnSource?.accountId) ?? null,
+        turnSourceThreadId: normalizeRouteThreadId(params.turnSource?.threadId),
+      };
       const callerIdentity = params.callerIdentity;
       const invocationSessionKey =
         params.client?.internal?.pluginRuntimeOwnerId === params.pluginId
@@ -176,10 +160,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
           null,
         runId: callerIdentity?.operationalRunInstance.runId ?? scopedAuthority?.runId ?? null,
         placementGrant,
-        turnSourceChannel: turnSource.turnSourceChannel,
-        turnSourceTo: turnSource.turnSourceTo,
-        turnSourceAccountId: turnSource.turnSourceAccountId,
-        turnSourceThreadId: turnSource.turnSourceThreadId,
+        ...turnSource,
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       if (callerIdentity) {

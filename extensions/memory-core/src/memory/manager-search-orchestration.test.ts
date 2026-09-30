@@ -29,7 +29,6 @@ describe("memory index", () => {
     getFreshManager,
     getPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
-    trackManager,
   } = fixture;
 
   it("keeps a dirty status manager read-only while searching published results", async () => {
@@ -483,7 +482,6 @@ describe("memory index", () => {
       minScore: 0,
     });
     const manager = await getFreshManager(cfg);
-    trackManager(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -671,10 +669,8 @@ describe("memory index", () => {
     const servingFields = manager as unknown as {
       dirty: boolean;
       memoryFullRetryDirty: boolean;
-      fileWatcher: { closeNativeMemoryWatchPairs: () => void };
       awaitManagerIdle: () => Promise<void>;
     };
-    servingFields.fileWatcher.closeNativeMemoryWatchPairs();
 
     const sessionId = "automatic-maintenance-purge";
     const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
@@ -682,7 +678,7 @@ describe("memory index", () => {
       memoryPath,
       "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",
     );
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
         {

@@ -1,4 +1,3 @@
-// Session and transcript event subscription handlers.
 import {
   ErrorCodes,
   errorShape,
@@ -105,6 +104,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         sessionMutationAuthorization,
         hasCurrentClientAuthority,
         signal,
+        markSessionSubscribePhase: mark,
       } = options;
 
       const connId = client?.connId?.trim();
@@ -140,14 +140,15 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       let read: ReturnType<typeof retainSessionScopedRead>;
       let prepared: PreparedSessionApprovalReplay | undefined;
       try {
+        mark?.("retainedReadAdmission");
         sessionMutationAuthorization?.assertCurrent();
         read = retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
           requireMaterialized:
             readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
         });
-        read?.assertCurrent();
         options.sessionMutationCommitGuard?.();
         if (connId) {
+          mark?.("observerCommit");
           let approvalReplay;
           if (p.includeApprovals === true) {
             // Subscribe before the authoritative snapshot so a transition cannot
@@ -155,9 +156,15 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
             const rollbackSubscription = context.subscribeSessionMessageEvents(
               connId,
               subscriptionKey,
-              { includeApprovals: true, provisional: true },
+              {
+                includeApprovals: true,
+                provisional: true,
+                mode: p.mode,
+                subscriptionId: p.subscriptionId,
+              },
             );
             try {
+              mark?.("replayPreparation");
               prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
               read?.assertCurrent();
               sessionMutationAuthorization?.assertCurrent();
@@ -170,6 +177,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               if (prepared && !prepared.isCurrent()) {
                 throw new Error("session approval replay changed during preparation");
               }
+              mark?.("observerCommit");
               approvalReplay = prepared?.replay;
               read?.assertCurrent();
               sessionMutationAuthorization?.assertCurrent();
@@ -210,6 +218,8 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           } else {
             const rollback = context.subscribeSessionMessageEvents(connId, subscriptionKey, {
               provisional: true,
+              mode: p.mode,
+              subscriptionId: p.subscriptionId,
             });
             try {
               read?.assertCurrent();
@@ -220,11 +230,13 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               throw error;
             }
           }
+          mark?.("response");
           respond(
             true,
             {
               subscribed: true,
               key: canonicalKey,
+              agentId: requestedAgentId,
               ...(p.includeApprovals === true
                 ? {
                     approvalReplay,
@@ -235,13 +247,19 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        respond(true, { subscribed: false, key: canonicalKey }, undefined);
+        mark?.("response");
+        respond(
+          true,
+          { subscribed: false, key: canonicalKey, agentId: requestedAgentId },
+          undefined,
+        );
       } catch (error) {
         if (!(error instanceof SessionMutationAuthorizationChangedError)) {
           throw error;
         }
         respond(false, undefined, error.error);
       } finally {
+        mark?.("cleanup");
         prepared?.release();
         read?.release();
       }
@@ -271,7 +289,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       });
       const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
       if (connId) {
-        context.unsubscribeSessionMessageEvents(connId, subscriptionKey);
+        context.unsubscribeSessionMessageEvents(connId, subscriptionKey, p.subscriptionId);
       }
       respond(true, { subscribed: false, key: canonicalKey }, undefined);
     },

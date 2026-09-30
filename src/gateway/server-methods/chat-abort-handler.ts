@@ -9,7 +9,7 @@ import { discardSessionPendingInput } from "../../config/sessions/session-pendin
 import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
-import { createChatAbortOps } from "../chat-abort-ops.js";
+import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
 import {
   abortChatRunById,
   isChatAbortControllerEntryAbortable,
@@ -21,7 +21,7 @@ import {
   type QueuedChatTurnEntry,
 } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
-import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { pendingChatSendDedupeKey, type DedupeEntry } from "../server-shared.js";
 import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -38,7 +38,6 @@ import {
 } from "./chat-abort-authorization.js";
 import {
   abortChatRunsForSessionKeyWithPartials,
-  captureWorkerInferenceForSession,
   abortControlledSubagents,
   descendantAbortError,
 } from "./chat-abort-runtime.js";
@@ -51,7 +50,7 @@ import {
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
@@ -71,9 +70,11 @@ export async function handleChatAbortRequestWithLifecycle(
 ): Promise<void> {
   const { params, respond, context, client, sessionMutationAuthorization } = options;
   const authority = readGatewayRequestMutationAuthority(options);
+  const requester = resolveChatAbortRequester(client, sessionMutationAuthorization);
   const assertCurrent = () => {
     authority.assertCurrent();
     sessionMutationAuthorization?.assertCurrent();
+    requester.sessionAuthority?.assertCurrent();
   };
   if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
     return;
@@ -152,7 +153,9 @@ export async function handleChatAbortRequestWithLifecycle(
     );
     return;
   }
-  const narrow = authority.sessionScope === "operator.sessions.write";
+  const narrow =
+    authority.sessionScope === "operator.sessions.write" ||
+    requester.sessionAuthority !== undefined;
   const admittedTarget = sessionMutationAuthorization?.admittedTarget;
   if (
     narrow &&
@@ -169,7 +172,6 @@ export async function handleChatAbortRequestWithLifecycle(
   }
   const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
   const ops = createChatAbortOps(context);
-  const requester = resolveChatAbortRequester(client);
 
   const abortSession: Result<ReturnType<typeof loadSessionEntry>, unknown> = (() => {
     try {
@@ -420,9 +422,7 @@ export async function handleChatAbortRequestWithLifecycle(
     });
   };
   if (!active) {
-    const readPendingRunForAbort = (
-      entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never,
-    ) => {
+    const readPendingRunForAbort = (entry: DedupeEntry | undefined) => {
       for (const sessionKey of new Set([canonicalAbortSessionKey, rawSessionKey])) {
         const payload = readPreRegisteredAgentDedupePayloadForSession({
           entry,

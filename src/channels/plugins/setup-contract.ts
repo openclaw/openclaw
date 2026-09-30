@@ -1,5 +1,6 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { Option } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -12,48 +13,17 @@ type ChannelSetupCliOption = {
   defaultValue?: boolean | string;
 };
 
-type ChannelSetupStringField = {
-  kind: "string";
-  sensitive?: boolean;
+type ChannelSetupField = {
   cli: ChannelSetupCliOption;
-};
+} & (
+  | { kind: "string"; sensitive?: boolean }
+  | { kind: "boolean"; envVars?: readonly string[]; envVarMode?: "all" | "any" }
+  | { kind: "integer" }
+  | { kind: "string-list"; sensitive?: boolean }
+  | { kind: "choice"; choices: readonly string[] }
+);
 
-type ChannelSetupBooleanField = {
-  kind: "boolean";
-  cli: ChannelSetupCliOption;
-  envVars?: readonly string[];
-  envVarMode?: "all" | "any";
-};
-
-type ChannelSetupIntegerField = {
-  kind: "integer";
-  cli: ChannelSetupCliOption;
-};
-
-type ChannelSetupStringListField = {
-  kind: "string-list";
-  sensitive?: boolean;
-  cli: ChannelSetupCliOption;
-};
-
-type ChannelSetupChoiceField<Choices extends readonly string[] = readonly string[]> = {
-  kind: "choice";
-  choices: Choices;
-  cli: ChannelSetupCliOption;
-};
-
-type ChannelSetupField =
-  | ChannelSetupStringField
-  | ChannelSetupBooleanField
-  | ChannelSetupIntegerField
-  | ChannelSetupStringListField
-  | ChannelSetupChoiceField;
-
-type ChannelSetupFieldMetadataFor<Field extends ChannelSetupField> = Field extends ChannelSetupField
-  ? Field & { key: string }
-  : never;
-
-export type ChannelSetupFieldMetadata = ChannelSetupFieldMetadataFor<ChannelSetupField>;
+export type ChannelSetupFieldMetadata = ChannelSetupField & { key: string };
 
 export type ChannelSetupMetadata = {
   fields: readonly ChannelSetupFieldMetadata[];
@@ -99,7 +69,7 @@ type ChannelSetupInputForFields<Fields extends Record<string, ChannelSetupField>
   [Key in keyof Fields]?: ChannelSetupFieldValue<Fields[Key]>;
 };
 
-type ChannelSetupParseResult = { ok: true; value: unknown } | { ok: false; error: string };
+type ChannelSetupParseResult = Result<unknown, string>;
 
 type ChannelSetupContractAdapterParams<Fields extends Record<string, ChannelSetupField>> =
   | {
@@ -111,10 +81,15 @@ type ChannelSetupContractAdapterParams<Fields extends Record<string, ChannelSetu
       legacyAdapter: ChannelSetupAdapter;
     };
 
-export type ChannelOwnedSetupContract = {
+export type ChannelOwnedSetupContract = Omit<
+  ChannelSetupAdapter<{ name?: string }>,
+  | "resolveAccountId"
+  | "prepareAccountConfigInput"
+  | "applyAccountConfig"
+  | "afterAccountConfigWritten"
+  | "validateInput"
+> & {
   kind: "channel-owned";
-  accountKeyPolicy?: ChannelSetupAdapter["accountKeyPolicy"];
-  configPromotion?: ChannelSetupAdapter["configPromotion"];
   metadata: ChannelSetupMetadata;
   parseInput: (input: unknown) => ChannelSetupParseResult;
   resolveAccountId?: (params: {
@@ -128,10 +103,6 @@ export type ChannelOwnedSetupContract = {
     input: unknown;
     runtime: RuntimeEnv;
   }) => Promise<object> | object;
-  resolveBindingAccountId?: ChannelSetupAdapter<{
-    name?: string;
-  }>["resolveBindingAccountId"];
-  applyAccountName?: ChannelSetupAdapter<{ name?: string }>["applyAccountName"];
   applyAccountConfig: (params: {
     cfg: OpenClawConfig;
     accountId: string;
@@ -149,11 +120,6 @@ export type ChannelOwnedSetupContract = {
     accountId: string;
     input: unknown;
   }) => string | null;
-  singleAccountKeysToMove?: readonly string[];
-  namedAccountPromotionKeys?: readonly string[];
-  resolveSingleAccountPromotionTarget?: ChannelSetupAdapter<{
-    name?: string;
-  }>["resolveSingleAccountPromotionTarget"];
 };
 
 type ChannelSetupExecutionAdapter = Omit<
@@ -188,44 +154,35 @@ function parseFieldValue(
   key: string,
   field: ChannelSetupField,
   value: unknown,
-): { ok: true; value: unknown } | { ok: false; error: string } {
+): ChannelSetupParseResult {
   if (field.kind === "string") {
-    return typeof value === "string"
-      ? { ok: true, value }
-      : { ok: false, error: `${key} must be a string.` };
+    return typeof value === "string" ? ok(value) : err(`${key} must be a string.`);
   }
   if (field.kind === "boolean") {
-    return typeof value === "boolean"
-      ? { ok: true, value }
-      : { ok: false, error: `${key} must be true or false.` };
+    return typeof value === "boolean" ? ok(value) : err(`${key} must be true or false.`);
   }
   if (field.kind === "integer") {
     const parsed = parseStrictNonNegativeInteger(value);
-    return parsed === undefined
-      ? { ok: false, error: `${key} must be a non-negative integer.` }
-      : { ok: true, value: parsed };
+    return parsed === undefined ? err(`${key} must be a non-negative integer.`) : ok(parsed);
   }
   if (field.kind === "string-list") {
     const parsed = parseStringList(value);
-    return parsed
-      ? { ok: true, value: parsed }
-      : { ok: false, error: `${key} must be a comma-separated list of strings.` };
+    return parsed ? ok(parsed) : err(`${key} must be a comma-separated list of strings.`);
   }
   if (typeof value !== "string" || !field.choices.includes(value)) {
-    return {
-      ok: false,
-      error: `${key} must be one of: ${field.choices.map((choice) => JSON.stringify(choice)).join(", ")}.`,
-    };
+    return err(
+      `${key} must be one of: ${field.choices.map((choice) => JSON.stringify(choice)).join(", ")}.`,
+    );
   }
-  return { ok: true, value };
+  return ok(value);
 }
 
 function parseSetupInput<Fields extends Record<string, ChannelSetupField>>(
   fields: Fields,
   rawInput: unknown,
-): { ok: true; value: ChannelSetupInputForFields<Fields> } | { ok: false; error: string } {
+): Result<ChannelSetupInputForFields<Fields>, string> {
   if (!isRecord(rawInput)) {
-    return { ok: false, error: "Channel setup input must be an object." };
+    return err("Channel setup input must be an object.");
   }
   const value: Record<string, unknown> = {};
   for (const [key, rawValue] of Object.entries(rawInput)) {
@@ -234,14 +191,14 @@ function parseSetupInput<Fields extends Record<string, ChannelSetupField>>(
     }
     if (key === "name") {
       if (typeof rawValue !== "string") {
-        return { ok: false, error: "name must be a string." };
+        return err("name must be a string.");
       }
       value.name = rawValue;
       continue;
     }
     const field = fields[key];
     if (!field) {
-      return { ok: false, error: `Unsupported setup option: ${key}` };
+      return err(`Unsupported setup option: ${key}`);
     }
     const parsed = parseFieldValue(key, field, rawValue);
     if (!parsed.ok) {
@@ -251,7 +208,7 @@ function parseSetupInput<Fields extends Record<string, ChannelSetupField>>(
   }
   // Every property was checked against the field map above. This assertion is
   // the single dynamic-object boundary; plugin callbacks remain fully typed.
-  return { ok: true, value: value as ChannelSetupInputForFields<Fields> };
+  return ok(value as ChannelSetupInputForFields<Fields>);
 }
 
 function requireParsedInput<Fields extends Record<string, ChannelSetupField>>(

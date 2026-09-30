@@ -6,6 +6,7 @@ import {
 import {
   runChannelIngressDeadLettersHealth,
   runAgentMemorySchemaHealth,
+  runCodexBwrapHealth,
   runCodexSessionRouteHealth,
   runConfigAuditScrubHealth,
   runDatabaseBloatHealth,
@@ -515,6 +516,12 @@ export function resolveInitialDoctorHealthContributions(params: {
         }, "legacy doctor sandbox contribution owns registry migration"),
       },
       run: runSandboxHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:codex-bwrap",
+      label: "Codex bwrap sandbox",
+      updateWork: { kind: "standalone" },
+      run: runCodexBwrapHealth,
     }),
   ];
 }

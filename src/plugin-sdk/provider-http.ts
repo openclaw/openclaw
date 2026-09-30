@@ -31,6 +31,7 @@ export {
 export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,

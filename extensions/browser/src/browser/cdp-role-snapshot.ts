@@ -11,11 +11,15 @@ import {
   buildRoleTree,
   renderRoleTree,
   type CdpRoleRef,
-  type CdpRoleSnapshotOptions,
   type CursorInteractiveInfo,
 } from "./cdp-role-snapshot-tree.js";
 import { withCdpSocket } from "./cdp.helpers.js";
-import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
+import {
+  finalizeRoleSnapshot,
+  type RoleSnapshotIdentityMode,
+  type RoleSnapshotOptions,
+  type RoleSnapshotResult,
+} from "./pw-role-snapshot.js";
 import { appendRoleSnapshotDepthTruncationMarker } from "./snapshot-depth-limit.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES } from "./snapshot-roles.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
@@ -73,7 +77,7 @@ async function buildCdpRoleSnapshot(params: {
   rootBackendNodeId?: number;
   sessionId?: string;
   frameId?: string;
-  options: CdpRoleSnapshotOptions;
+  options: RoleSnapshotOptions;
   urls?: boolean;
   recurseIframes?: boolean;
   nextRef: { value: number };
@@ -218,7 +222,7 @@ async function buildCdpRoleSnapshot(params: {
 /** Build a role/name text snapshot with stable refs from CDP DOM and AX data. */
 type CdpRoleSnapshotRequest = {
   urlEntries?: SnapshotUrlEntry[];
-  options?: CdpRoleSnapshotOptions;
+  options?: RoleSnapshotOptions;
   urls?: boolean;
   recurseIframes?: boolean;
   timeoutMs?: number;
@@ -232,13 +236,7 @@ export async function snapshotRoleViaCdpSession(
     send: CdpProtocolSend;
     rootBackendNodeId?: number;
   },
-): Promise<{
-  snapshot: string;
-  truncated?: boolean;
-  refs: Record<string, CdpRoleRef>;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-  newElements?: number;
-}> {
+): Promise<RoleSnapshotResult<CdpRoleRef>> {
   await prepareCdpPageSession(opts.send);
   const built = await buildCdpRoleSnapshot({
     send: opts.send,

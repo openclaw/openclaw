@@ -193,11 +193,18 @@ export class ChatPageRetainedSessions {
   }
 
   discardPane(paneId: string): void {
-    this.unbound.delete(paneId);
+    // Retire every mounted presentation before clearing its handoff so a delayed
+    // disconnect cannot restage attachments under a later reused logical pane id.
+    for (const pane of this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
+      if (pane.paneId === paneId) {
+        pane.discardStagedAttachments?.();
+      }
+    }
     const context = this.bindings.context();
+    context?.chatAttachmentHandoff.clearPane(paneId);
+    this.unbound.delete(paneId);
     if (context) {
       clearPaneSessionHandoffs(context, paneId);
-      context.chatAttachmentHandoff.clearPane(paneId);
     }
     this.sessionsByPane.delete(paneId);
   }

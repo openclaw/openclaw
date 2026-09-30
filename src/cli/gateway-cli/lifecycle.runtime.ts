@@ -45,11 +45,7 @@ export {
   writeRestartSentinelIfUnchanged,
 } from "../../infra/restart-sentinel.js";
 export { waitForGatewayHealthyRestart } from "../daemon-cli/restart-health.js";
-export {
-  detectGatewayRespawnSupervisor,
-  detectGatewayRespawnSupervisorIdentity,
-  detectRespawnSupervisor,
-} from "../../infra/supervisor-markers.js";
+export { detectGatewayRespawnSupervisorIdentity } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 export {
   createGatewayActiveWorkSnapshot,

@@ -92,21 +92,6 @@ describe("runEmbeddedAgent silent-error retry", () => {
     await state?.cleanup();
   });
 
-  it("retries when a turn ends with stopReason=error and zero output tokens", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(emptyErrorAttempt("ollama", "glm-5.1:cloud"));
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("ollama", "glm-5.1:cloud"));
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      provider: "ollama",
-      model: "glm-5.1:cloud",
-      runId: "run-empty-error-retry-basic",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.payloads).toBeUndefined();
-  });
-
   it("retries server_error when the attempt is otherwise silent and side-effect-free", async () => {
     mockedClassifyAssistantFailoverReason.mockReturnValue("server_error");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(

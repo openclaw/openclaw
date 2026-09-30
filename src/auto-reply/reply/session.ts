@@ -1,4 +1,3 @@
-// Manages reply session records, labels, ids, and route persistence.
 import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
@@ -52,10 +51,8 @@ import {
 import {
   DEFAULT_RESET_TRIGGERS,
   SESSION_TOTAL_TOKENS_VERSION,
-  type GroupKeyResolution,
   type InternalSessionEntry,
   type SessionEntry,
-  type SessionScope,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -132,10 +129,7 @@ import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveSessionDeliveryRoute,
 } from "./session-delivery.js";
-import {
-  createReplySessionEntryHandle,
-  type ReplySessionEntryHandle,
-} from "./session-entry-handle.js";
+import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
@@ -146,12 +140,13 @@ import {
   ReplySessionInitConflictError,
   runWithSessionInitConflictRetry,
 } from "./session-init-conflict-retry.js";
+import type { SessionInitResult } from "./session-init.types.js";
 import {
   canReplaceRestartTombstoneFromParent,
   prepareReplySessionParentFork,
 } from "./session-parent-fork-prepare.js";
 import {
-  clearSessionResetRuntimeState,
+  clearCommittedSessionResetRuntimeState,
   createSessionResetCleanupGuard,
   stopSessionResetSubagents,
 } from "./session-reset-cleanup.js";
@@ -164,29 +159,6 @@ function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
   return Boolean(provider && getCliSessionBinding(entry, provider));
 }
-
-export type SessionInitResult = {
-  sessionCtx: TemplateContext;
-  sessionEntry: SessionEntry;
-  initialSessionEntry?: SessionEntry;
-  previousSessionEntry?: SessionEntry;
-  previousSessionMemory?: SessionMemoryTranscript;
-  previousSessionResetMessages?: unknown[];
-  sessionEntryHandle: ReplySessionEntryHandle;
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  sessionId: string;
-  isNewSession: boolean;
-  resetTriggered: boolean;
-  systemSent: boolean;
-  abortedLastRun: boolean;
-  storePath: string;
-  sessionScope: SessionScope;
-  groupResolution?: GroupKeyResolution;
-  isGroup: boolean;
-  bodyStripped?: string;
-  triggerBodyNormalized: string;
-};
 
 type InitSessionStateParams = {
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
@@ -208,6 +180,7 @@ type InitSessionStateAttemptContext = {
   isSystemEvent: boolean;
   retargetedSession: boolean;
   sessionKey: string;
+  storeWriterIdentity?: string;
   sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
@@ -331,6 +304,7 @@ function resolveReplySessionRolloverState(
     label: entry.label,
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,
+    category: entry.category,
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
     pendingDeliveryNotice: entry.pendingDeliveryNotice,
@@ -361,16 +335,12 @@ function resolveReplySessionRolloverState(
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
   prepareChannelParticipantObservation(params.ctx);
-  return await runWithSessionInitConflictRetry(
-    async () => await initSessionStateAttempt(params, false),
-    { signal: params.signal },
-  );
+  return await runWithSessionInitConflictRetry(async () => await initSessionStateAttempt(params), {
+    signal: params.signal,
+  });
 }
 
-async function initSessionStateAttempt(
-  params: InitSessionStateParams,
-  staleSnapshotRetried: boolean,
-): Promise<SessionInitResult> {
+async function initSessionStateAttempt(params: InitSessionStateParams): Promise<SessionInitResult> {
   const attemptContext = await resolveInitSessionStateAttemptContext(params, "initialization");
   params.signal?.throwIfAborted();
   const binding = attemptContext.conversationBinding;
@@ -426,12 +396,26 @@ async function initSessionStateAttempt(
     }
   }
   params.signal?.throwIfAborted();
+  // Creation hooks, parent forks, and legacy-main retirement can touch other sessions.
+  const storeWriterIdentity =
+    snapshot.currentEntry &&
+    params.newlyCreatedSessionId !== snapshot.currentEntry.sessionId &&
+    !parentSessionKey &&
+    (params.cfg.session?.dmScope ?? "main") === "main"
+      ? attemptContext.sessionKey
+      : undefined;
   // Guarded revision checks only serialize correctly when the snapshot and
   // commit share the same writer lane.
   const attempt = await runExclusiveSessionStoreWrite(
     attemptContext.storePath,
     async () =>
-      await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried, undefined),
+      await initSessionStateAttemptLocked(
+        params,
+        { ...attemptContext, storeWriterIdentity },
+        false,
+        undefined,
+      ),
+    { identities: storeWriterIdentity ? [storeWriterIdentity] : undefined },
   );
   if (attempt.kind === "complete") {
     return attempt.result;
@@ -608,10 +592,6 @@ async function initSessionStateAttemptLocked(
     );
 
   params.signal?.throwIfAborted();
-  // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
-  // Stale cache (especially with multiple gateway processes or on Windows where
-  // mtime granularity may miss rapid writes) can cause incorrect sessionId
-  // generation, leading to orphaned transcript files. See #17971.
   const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
   const relatedSessionKeys = [
     buildAgentMainSessionKey({ agentId, mainKey }),
@@ -647,6 +627,13 @@ async function initSessionStateAttemptLocked(
     ctx,
   });
   const entry = initializationSnapshot.currentEntry;
+  if (
+    attemptContext.storeWriterIdentity &&
+    (!entry || params.newlyCreatedSessionId === entry.sessionId)
+  ) {
+    // Reacquire store-wide before a newly observed creation can invoke arbitrary hooks.
+    throw new ReplySessionInitConflictError(sessionKey);
+  }
   const createdNewEntry = entry === undefined;
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const parentForkSourceEntry =
@@ -787,10 +774,7 @@ async function initSessionStateAttemptLocked(
   // Keep the owed reset pending until the active writer completes.
   const retainPendingResetMarker =
     deferImplicitRolloverForActiveRun && !isNewSession && entry?.updatedAt === 0;
-  // Capture the current session entry before any reset so its transcript can be
-  // archived afterward.  We need to do this for both explicit resets (/new, /reset)
-  // and for scheduled/daily resets where the session has become stale (!freshEntry).
-  // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
+  // Explicit and scheduled resets both retain the prior entry for lifecycle hooks.
   const previousSessionEntry =
     (resetTriggered || !effectiveFreshEntry) && entry ? { ...entry } : undefined;
   const previousSessionEndReason = resetTriggered
@@ -835,23 +819,9 @@ async function initSessionStateAttemptLocked(
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
-    // Preserve user-driven model/auth overrides across ANY rollover that mints
-    // a new session from an existing entry — explicit /new and /reset AND
-    // implicit stale rollovers (daily/idle reset boundary). Auto-created
-    // fallback overrides (rate-limit auth rotation, model auto-pin) are still
-    // cleared by resolveResetPreservedSelection so resets return to the
-    // configured default. Previously this was gated on `resetTriggered`, so a
-    // user `/model` override set after the daily reset hour was silently
-    // dropped on the next turn (the rollover took this branch with
-    // resetTriggered === false), reverting the session to the default model
-    // despite the `Model set to ... for this session` ack (#90119, #69301).
+    // Explicit and implicit resets preserve user selections; automatic fallback
+    // overrides are filtered by resolveResetPreservedSelection.
     if (entry) {
-      // Behavior overrides carry across ANY new-session mint (explicit /new AND
-      // implicit daily/idle rollover), mirroring the model/auth carry above
-      // (#90119). Any persisted level is safe to forward — user `/think` or a
-      // spawn-applied default (subagent-spawn-thinking.ts) — so unlike model
-      // overrides these need no fallback-provenance filtering (#92562).
-      // Explicit /new and /reset rotate CLI conversation bindings elsewhere.
       preservedState = resolveReplySessionRolloverState(entry, sessionKey);
       // Implicit rollover keeps the worker workspace; explicit resets keep their detachment policy.
       if (!resetTriggered) {
@@ -878,14 +848,9 @@ async function initSessionStateAttemptLocked(
         ]),
       )
     : baseEntry?.usageFamilySessionIds;
-  // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
   const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
-  // Automated heartbeat/cron/exec turns run inside the conversation session,
-  // but they must not rewrite the session's remembered external delivery route.
-  // Otherwise a heartbeat target like "group:..." or a synthetic sender like
-  // "heartbeat" leaks into the shared session and later user replies route to
-  // the wrong chat.
+  // Automated turns must not replace the conversation's external delivery route.
   const baseDeliveryContext = deliveryContextFromSession(baseEntry);
   const baseDeliveryRoute = sessionDeliveryRoute(baseEntry);
   const baseDeliveryOrigin = sessionDeliveryOrigin(baseEntry);
@@ -1146,18 +1111,14 @@ async function initSessionStateAttemptLocked(
     // outside the store writer lane instead of surfacing this to the caller.
     throw new ReplySessionInitConflictError(sessionKey);
   }
-  if (previousSessionEntry) {
-    try {
-      clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
-        activeReplySessionId: previousSessionEntry.sessionId,
-        agentId,
-      });
-    } catch (error) {
-      // The replacement is already durable. Runtime cleanup is best-effort and
-      // must not turn a committed reset into a reported initialization failure.
-      log.warn(`failed to clear reset runtime state for session ${sessionKey}: ${String(error)}`);
-    }
-  }
+  clearCommittedSessionResetRuntimeState({
+    previousSessionEntry,
+    agentId,
+    sessionKey,
+    signal: params.signal,
+    onError: (error) =>
+      log.warn(`failed to clear reset runtime state for session ${sessionKey}: ${String(error)}`),
+  });
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
   // Admission may commit the first row before dispatch. Preserve its Goal and generation
@@ -1260,12 +1221,9 @@ async function initSessionStateAttemptLocked(
     IsNewSession: isFirstSessionTurn ? "true" : "false",
   };
 
-  // Run session plugin hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
   if (hookRunner && isFirstSessionTurn) {
-    const effectiveSessionId = sessionId ?? "";
-
-    // If replacing an existing session, fire session_end for the old one
+    const effectiveSessionId = sessionId;
     if (previousSessionEntry?.sessionId) {
       // The shutdown finalizer must not re-fire session_end for a session
       // that is being replaced here; forget unconditionally so the next drain
@@ -1287,7 +1245,6 @@ async function initSessionStateAttemptLocked(
       }
     }
 
-    // Fire session_start for the new session
     if (effectiveSessionId) {
       // Track the new session so the shutdown finalizer fires a typed
       // session_end with reason="shutdown"/"restart" if the gateway stops
@@ -1325,7 +1282,7 @@ async function initSessionStateAttemptLocked(
       previousSessionMemory,
       previousSessionResetMessages,
       sessionKey,
-      sessionId: sessionId ?? crypto.randomUUID(),
+      sessionId,
       isNewSession: isFirstSessionTurn,
       resetTriggered,
       systemSent,

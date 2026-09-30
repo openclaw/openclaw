@@ -17,6 +17,7 @@ import {
 import { createSessionOwnerMenuHarness } from "../../../test-helpers/session-owner-menu.ts";
 import {
   createGatewayBrowserClientFixture,
+  createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
@@ -28,7 +29,6 @@ import type {
 } from "./chat-header-session-menu.ts";
 import "./chat-header-session-menu.ts";
 import type { ChatSessionSharingProps } from "./chat-session-sharing.ts";
-import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
@@ -257,7 +257,7 @@ describe("chat header session menu", () => {
       containers.push(container);
       render(
         pane.renderPaneHeader(
-          createSessionWorkspaceProps(state),
+          createPaneHeaderWorkspaceFixture(state),
           session,
           false,
           undefined,
@@ -336,7 +336,7 @@ describe("chat header session menu", () => {
     containers.push(container);
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         session,
         false,
         undefined,

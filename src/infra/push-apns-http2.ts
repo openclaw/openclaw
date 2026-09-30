@@ -1,4 +1,3 @@
-// Opens APNs HTTP/2 sessions with optional managed proxy tunneling.
 import { once } from "node:events";
 import http2 from "node:http2";
 import tls from "node:tls";

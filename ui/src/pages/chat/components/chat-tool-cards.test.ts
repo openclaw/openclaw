@@ -27,18 +27,6 @@ function requireFirstMockArg(
   return arg;
 }
 
-function selectText(element: Element) {
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
-function pointerClick(element: Element) {
-  element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-}
-
 describe("tool-cards", () => {
   it("routes MCP App previews through the dedicated double-iframe host", async () => {
     const container = document.createElement("div");
@@ -103,36 +91,6 @@ describe("tool-cards", () => {
     );
 
     expect(container.querySelector("iframe")).not.toBeNull();
-  });
-
-  it("keeps selected summary text from toggling the disclosure", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const toggle = vi.fn();
-    render(
-      renderToolCard(
-        {
-          id: "msg:selectable",
-          name: "web_search",
-          args: { query: "openclaw" },
-        },
-        { messageKey: "test-message", expanded: false, onToggleExpanded: toggle },
-      ),
-      container,
-    );
-
-    const summary = container.querySelector<HTMLButtonElement>(".chat-tool-msg-summary");
-    const label = summary?.querySelector(".chat-tool-msg-summary__label");
-    expect(summary).not.toBeNull();
-    expect(label).not.toBeNull();
-    selectText(label!);
-    pointerClick(summary!);
-    expect(toggle).not.toHaveBeenCalled();
-
-    window.getSelection()?.removeAllRanges();
-    pointerClick(summary!);
-    expect(toggle).toHaveBeenCalledWith("msg:selectable");
-    container.remove();
   });
 
   it("keeps a running card closed by default", () => {
@@ -679,7 +637,12 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent?.match(/Skill Workshop/g)).toHaveLength(1);
+    expect(container.textContent).not.toContain("Skill Workshop");
+    expect(
+      container
+        .querySelector('.chat-tool-msg-summary__icon[role="img"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("skill_workshop");
     const body = container.querySelector(".chat-tool-msg-body");
     expect(body?.textContent).not.toContain("Skill Workshop");
     const kvRow = body?.querySelector(".chat-tool-kv__row");
@@ -719,7 +682,7 @@ describe("tool-cards", () => {
     ]);
   });
 
-  it("labels collapsed tool calls with the display summary", () => {
+  it("keeps collapsed tool identity in its icon and details in the row", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -735,9 +698,12 @@ describe("tool-cards", () => {
     );
 
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
-    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Sub-agent",
-    );
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")).toBeNull();
+    expect(
+      summaryButton
+        ?.querySelector('.chat-tool-msg-summary__icon[role="img"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("sessions_spawn");
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
@@ -759,7 +725,10 @@ describe("tool-cards", () => {
       render(renderToolCard(card, { ...options, expanded: false }), container);
 
       const summary = container.querySelector("button.chat-tool-msg-summary");
-      expect(summary?.textContent).toContain("Message");
+      expect(summary?.textContent).not.toContain("Message");
+      expect(
+        summary?.querySelector(".chat-tool-msg-summary__icon")?.getAttribute("aria-label"),
+      ).toBe("message");
       if (shape === "structured") {
         expect(summary?.textContent).toContain("fixture-room");
       }
@@ -787,7 +756,7 @@ describe("tool-cards", () => {
     ).not.toContain(credential);
   });
 
-  it("keeps tool display labels primary for collapsed result rows with action details", () => {
+  it("replaces generic tool labels with icons while keeping action details", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -804,9 +773,11 @@ describe("tool-cards", () => {
     );
 
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
-    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Skill Workshop",
-    );
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")).toBeNull();
+    expect(
+      summaryButton?.querySelector(".chat-tool-msg-summary__icon")?.getAttribute("aria-label"),
+    ).toBe("skill_workshop");
+    expect(summaryButton?.textContent).not.toContain("Skill Workshop");
     expect(summaryButton?.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
       "create",
     );

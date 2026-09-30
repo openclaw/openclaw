@@ -549,6 +549,7 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
     });
   const result = await deleteAccessorSessionEntryLifecycle({
     ...(agentId !== undefined ? { agentId } : {}),
+    ...(params.env !== undefined ? { env: params.env } : {}),
     archiveTranscript: params.archiveTranscript ?? false,
     ...(params.expectedSessionId !== undefined
       ? { expectedSessionId: params.expectedSessionId }

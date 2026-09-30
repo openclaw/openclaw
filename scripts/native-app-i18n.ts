@@ -6,6 +6,7 @@ import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
+import { decodeXml } from "../src/shared/xml.ts";
 import { selectDeterministicTranslation } from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
@@ -262,15 +263,6 @@ function isAsciiAlphaNumeric(character: string): boolean {
     isAsciiUppercaseLetter(character) ||
     (character >= "0" && character <= "9")
   );
-}
-
-function decodeXml(value: string): string {
-  return value
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&");
 }
 
 function isLocalizableApplePlistKey(key: string): boolean {

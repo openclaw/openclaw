@@ -649,7 +649,7 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
   };
 }
 
-export function setupRunAttemptTestHooks(): void {
+export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}): void {
   // Keep unique test roots alive while the suite reuses native database workers.
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
@@ -687,7 +687,9 @@ export function setupRunAttemptTestHooks(): void {
     await context.codexAttemptRuntime.start();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.
-    await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
+    if (options.sessionOwner !== null) {
+      await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
+    }
   });
 
   afterEach(async (context) => {

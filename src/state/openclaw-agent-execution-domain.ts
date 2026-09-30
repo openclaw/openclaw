@@ -7,6 +7,39 @@ import {
   type SqliteWorkerCommand,
   type SqliteWorkerOperations,
 } from "../infra/sqlite-worker-contract.js";
+import {
+  requestSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
+} from "../infra/sqlite-worker-operation-admission.js";
+
+export type AgentDatabaseAdmissionRestriction = (
+  request: SqliteWorkerAdmissionRequest,
+  dispatch: (request: SqliteWorkerAdmissionRequest) => void,
+) => void;
+
+/** A domain restriction must obtain exactly one grant for the original native stage. */
+export function requestRestrictedAgentDatabaseAdmission(
+  request: SqliteWorkerAdmissionRequest,
+  restriction?: AgentDatabaseAdmissionRestriction,
+): void {
+  const { stage } = request;
+  let admitted = false;
+  const dispatch = (restricted: SqliteWorkerAdmissionRequest) => {
+    if (admitted || restricted.stage !== stage) {
+      throw new Error("Agent admission restriction changed its native stage");
+    }
+    requestSqliteWorkerOperationAdmission(restricted);
+    admitted = true;
+  };
+  if (restriction) {
+    restriction(request, dispatch);
+  } else {
+    dispatch(request);
+  }
+  if (!admitted) {
+    throw new Error("Agent admission restriction omitted its native grant");
+  }
+}
 
 export type AgentDatabaseDomainOperations = {
   "database.domain.bind": {
@@ -34,7 +67,10 @@ export function createAgentDatabaseDomainOwner(context: {
   databasePath: string;
   assertCurrent(): DatabaseSync;
   assertCleanupCurrent(): void;
-  admit(stage: "transaction" | "commit"): void;
+  admit(
+    stage: "transaction" | "commit",
+    requestAdmission?: AgentDatabaseAdmissionRestriction,
+  ): void;
 }) {
   let binding:
     | {
@@ -66,11 +102,14 @@ export function createAgentDatabaseDomainOwner(context: {
       const backend = factory(input.input, {
         databasePath: context.databasePath,
         database,
-        admit: (stage: "transaction" | "commit") => {
+        admit: (
+          stage: "transaction" | "commit",
+          requestAdmission?: AgentDatabaseAdmissionRestriction,
+        ) => {
           if (!authority.active) {
             throw new Error("Agent publication cleanup cannot admit a transaction");
           }
-          context.admit(stage);
+          context.admit(stage, requestAdmission);
         },
       });
       if (isPromise(backend)) {

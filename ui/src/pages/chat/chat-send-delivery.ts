@@ -40,6 +40,7 @@ import {
   finishChatDeliveryAdmission,
   finishScopedChatSending,
   reconnectSafeQueuedSendState,
+  rejectOversizedQueuedChatDelivery,
   prepareQueuedChatPayload,
   publishPendingSendMessage,
   resolveQueuedChatLeaf,
@@ -303,6 +304,10 @@ async function sendPreparedChatMessage(
       surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
     }
     return "pending";
+  }
+
+  if (rejectOversizedQueuedChatDelivery(host, prepared, attachments, sessionKey, options)) {
+    return "failed";
   }
 
   const requestConnectionIsCurrent = captureChatConnectionOwner(host);
@@ -716,5 +721,4 @@ export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
       target: options.target,
     });
   },
-  setChatError,
 };

@@ -397,6 +397,7 @@ describe("streamOpenAICodexResponses transport", () => {
   it.each([
     { id: "gpt-5.6-sol", withCatalog: true },
     { id: "gpt-5.6-sol", withCatalog: false },
+    { id: "gpt-6.1-sol", withCatalog: false },
     { id: "gpt-6-astra", withCatalog: true },
     { id: "gpt-6-astra", withCatalog: false },
     { id: "gpt-6-sol", withCatalog: false },
@@ -438,6 +439,8 @@ describe("streamOpenAICodexResponses transport", () => {
   );
 
   it.each([
+    { id: "gpt-6.1-sol", effort: "none", map: undefined, expected: undefined },
+    { id: "gpt-6.1-sol", effort: "minimal", map: undefined, expected: "low" },
     { id: "gpt-6-astra", effort: "none", map: undefined, expected: undefined },
     { id: "gpt-6-astra", effort: "none", map: { off: null }, expected: undefined },
     { id: "gpt-6-astra", effort: "minimal", map: undefined, expected: "low" },
@@ -589,14 +592,8 @@ describe("streamOpenAICodexResponses transport", () => {
       throw new Error("fetch should not run");
     });
     vi.stubGlobal("fetch", fetchMock);
-    class FailingWebSocket {
-      constructor() {
-        throw new Error("websocket connect failed");
-      }
-      send(): void {}
-      close(): void {}
-      addEventListener(): void {}
-      removeEventListener(): void {}
+    function FailingWebSocket() {
+      throw new Error("websocket connect failed");
     }
     vi.stubGlobal("WebSocket", FailingWebSocket);
 

@@ -1,4 +1,3 @@
-// Assistant message component renders assistant responses and spacing in the TUI log.
 import { tuiTheme as theme } from "../theme/theme.js";
 import { MarkdownMessageComponent } from "./markdown-message.js";
 import type { TuiImageRenderer } from "./message-images.js";

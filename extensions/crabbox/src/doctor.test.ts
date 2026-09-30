@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { HealthCheck, HealthRepairContext } from "openclaw/plugin-sdk/health";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -42,6 +43,7 @@ function captureCrabboxDoctorCheck(id = CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID): 
 }
 
 describe("Crabbox worker doctor", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => vi.restoreAllMocks());
   const context = (target = "linux"): HealthRepairContext => ({
     mode: "fix",
@@ -66,7 +68,7 @@ describe("Crabbox worker doctor", () => {
   it("accepts a supported configured executable without downloading", async () => {
     const probe = vi
       .spyOn(managedBinary, "probeCrabboxVersion")
-      .mockResolvedValue({ status: "supported", version: "0.56.0" });
+      .mockResolvedValue({ status: "supported", version: managedBinary.CRABBOX_MIN_VERSION });
     const install = vi.spyOn(managedBinary, "ensureManagedCrabboxBinary");
     await expect(captureCrabboxDoctorCheck().detect(context())).resolves.toEqual([]);
     expect(probe).toHaveBeenCalledOnce();
@@ -85,7 +87,7 @@ describe("Crabbox worker doctor", () => {
         expect.objectContaining({
           severity: "warning",
           target: "worker",
-          requirement: "Crabbox 0.56.0 or newer",
+          requirement: `Crabbox ${managedBinary.CRABBOX_MIN_VERSION} or newer`,
           fixHint: expect.stringContaining("openclaw doctor --fix"),
         }),
       ]);
@@ -93,16 +95,54 @@ describe("Crabbox worker doctor", () => {
     },
   );
 
-  it("accepts the existing managed executable when the configured one is outdated", async () => {
-    vi.spyOn(managedBinary, "resolveManagedCrabboxBinaryPath").mockReturnValue(process.execPath);
-    vi.spyOn(managedBinary, "probeCrabboxVersion").mockResolvedValue({
-      status: "supported",
-      version: "0.56.0",
-    });
-    const ctx = context();
-    ctx.cfg.cloudWorkers!.profiles!.worker!.settings = { binary: "/nonexistent/crabbox" };
-    await expect(captureCrabboxDoctorCheck().detect(ctx)).resolves.toEqual([]);
-  });
+  it.each(["0.56.0", managedBinary.CRABBOX_MIN_VERSION])(
+    "detects whether managed-only %s needs an upgrade without downloading",
+    async (version) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("crabbox-doctor-managed-"), PATH: "" };
+      const target = path.basename(
+        path.dirname(managedBinary.resolveManagedCrabboxBinaryPath(env)),
+      );
+      const binary = path.join(
+        env.OPENCLAW_STATE_DIR,
+        "tools",
+        "crabbox",
+        version,
+        target,
+        process.platform === "win32" ? "crabbox.exe" : "crabbox",
+      );
+      await mkdir(path.dirname(binary), { recursive: true });
+      await writeFile(binary, version);
+      const command = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
+        stdout: version,
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+      const install = vi.spyOn(managedBinary, "ensureManagedCrabboxBinary");
+      const ctx: HealthRepairContext = { ...context(), env };
+      ctx.cfg.cloudWorkers!.profiles!.worker!.settings = { binary: "/nonexistent/crabbox" };
+      const check = captureCrabboxDoctorCheck();
+      const findings = await check.detect(ctx);
+      if (version === managedBinary.CRABBOX_MIN_VERSION) {
+        expect(findings).toEqual([]);
+        await expect(check.repair!(ctx, findings)).resolves.toMatchObject({ status: "skipped" });
+        await expect(check.detect(ctx)).resolves.toEqual([]);
+        expect(command).toHaveBeenCalledWith([binary, "--version"], expect.anything());
+      } else {
+        expect(findings).toEqual([
+          expect.objectContaining({
+            severity: "warning",
+            requirement: `Crabbox ${managedBinary.CRABBOX_MIN_VERSION} or newer`,
+            fixHint: expect.stringContaining("openclaw doctor --fix"),
+          }),
+        ]);
+        expect(command).not.toHaveBeenCalled();
+      }
+      expect(install).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports an indeterminate executable as repairable", async () => {
     vi.spyOn(managedBinary, "probeCrabboxVersion").mockResolvedValue({
@@ -123,7 +163,7 @@ describe("Crabbox worker doctor", () => {
       .spyOn(managedBinary, "ensureManagedCrabboxBinary")
       .mockImplementation(async ({ binary } = {}) => ({
         binary: binary ?? "crabbox",
-        version: "0.56.0",
+        version: managedBinary.CRABBOX_MIN_VERSION,
       }));
     const check = captureCrabboxDoctorCheck();
     const findings = [{ checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID }] as never;
@@ -161,6 +201,7 @@ describe("Crabbox warm-image doctor", () => {
     { name: "long-running scrub", operation: "stale-scrub", severity: "warning" },
     { name: "failed capture", operation: "uncertain", severity: "warning" },
     { name: "pending retirement", operation: "retire", severity: "warning" },
+    { name: "unsupported native capture", operation: "unsupported", severity: "info" },
   ] as const)(
     "reports $name without repairing state or probing providers",
     async ({ operation, severity }) => {
@@ -190,28 +231,36 @@ describe("Crabbox warm-image doctor", () => {
           purpose: null,
           lastDemandAtMs: now,
         },
-        ...(operation
+        ...(operation === "unsupported"
           ? {
-              operation:
-                operation === "retire"
-                  ? { type: "retire" as const, checkpointId: "chk_predecessor" }
-                  : {
-                      type: "capture" as const,
-                      id: "capture-selector",
-                      startedAtMs:
-                        now -
-                        (operation === "stale" || operation === "stale-scrub" ? 1_200_000 : 0),
-                      leaseId: "cbx_capture",
-                      provider: "aws",
-                      phase:
-                        operation === "uncertain"
-                          ? ("uncertain" as const)
-                          : operation === "stale-scrub"
-                            ? ("scrubbing" as const)
-                            : ("creating" as const),
-                    },
+              captureUnsupported: {
+                atMs: now,
+                provider: "aws",
+                message: "Native capture is unsupported by this coordinator.",
+              },
             }
-          : {}),
+          : operation
+            ? {
+                operation:
+                  operation === "retire"
+                    ? { type: "retire" as const, checkpointId: "chk_predecessor" }
+                    : {
+                        type: "capture" as const,
+                        id: "capture-selector",
+                        startedAtMs:
+                          now -
+                          (operation === "stale" || operation === "stale-scrub" ? 1_200_000 : 0),
+                        leaseId: "cbx_capture",
+                        provider: "aws",
+                        phase:
+                          operation === "uncertain"
+                            ? ("uncertain" as const)
+                            : operation === "stale-scrub"
+                              ? ("scrubbing" as const)
+                              : ("creating" as const),
+                      },
+              }
+            : {}),
       };
       store.register("profile", record);
       const probe = vi.spyOn(managedBinary, "probeCrabboxVersion");
@@ -238,12 +287,24 @@ describe("Crabbox warm-image doctor", () => {
                 message: expect.stringContaining(
                   "linux-development · aws · standard · linux · github.com/example/project",
                 ),
-                fixHint: expect.stringContaining("openclaw crabbox warm-images"),
+                fixHint: expect.stringContaining(
+                  operation === "unsupported"
+                    ? "settings.warmImage: false"
+                    : "openclaw crabbox warm-images",
+                ),
               }),
             ]
           : [],
       );
-      if (operation === "uncertain") {
+      if (operation === "unsupported") {
+        expect(findings[0]?.message).toContain(record.captureUnsupported!.message);
+        expect(findings[0]?.fixHint).toContain("otherwise provision cold");
+        expect(findings[0]?.fixHint).toContain("each eligible worker retries capture");
+        expect(findings[0]?.fixHint).toContain(
+          "Crabbox configuration changes apply to the next dispatch",
+        );
+        expect(findings[0]?.fixHint).toContain("supports native checkpoints");
+      } else if (operation === "uncertain") {
         expect(findings[0]?.fixHint).toContain(
           "--recover capture-selector --acknowledge-provider-cleanup",
         );

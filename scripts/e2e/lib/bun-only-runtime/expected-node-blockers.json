@@ -1,24 +1,6 @@
 {
   "blockers": [
     {
-      "id": "package-preinstall-node-engine",
-      "origin": "found-by-lane",
-      "feature": "Package lifecycle",
-      "owner": "Unowned: needs an owner (scripts/preinstall-package-manager-warning.mjs)",
-      "callSite": "scripts/preinstall-package-manager-warning.mjs enforceSupportedNodeRuntime -> probePackageCliNodeRuntime",
-      "step": "install",
-      "evidence": [
-        "spawn",
-        "failure"
-      ],
-      "failure": "detected Node missing",
-      "match": {
-        "stack": [
-          "probePackageCliNodeRuntime"
-        ]
-      }
-    },
-    {
       "id": "terminal-pty",
       "origin": "known-blocker",
       "feature": "Terminals",
@@ -35,15 +17,6 @@
           "spawnNodeTerminalPty"
         ]
       }
-    },
-    {
-      "id": "node-host-auto-update-install",
-      "origin": "known-blocker",
-      "feature": "Node host updater",
-      "owner": "Unowned: needs an owner (src/node-host/auto-update-install.ts)",
-      "callSite": "src/node-host/auto-update-install.ts prepareNodeRuntimeUpdate -> npm view, npm pack, and npm global install into the private runtime prefix",
-      "step": null,
-      "notExercisedReason": "The candidate is newer than every published release, so the node host never prepares an update."
     }
   ]
 }

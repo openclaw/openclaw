@@ -1,10 +1,9 @@
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
-  isCodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import {
@@ -69,7 +68,6 @@ type CodexLiveThreadReleaseParams = {
   abandonClient?: () => Promise<void>;
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
   threadId: string;
-  cause?: unknown;
   assertCurrent?: () => void;
 };
 
@@ -105,7 +103,7 @@ export async function releaseCodexConsumedLiveThread(
   if (released) {
     return;
   }
-  return await abandonCodexLiveThreadRelease(options, options.cause);
+  return await abandonCodexLiveThreadRelease(options);
 }
 
 async function abandonCodexLiveThreadRelease(
@@ -130,7 +128,7 @@ async function releaseCodexRetainedLiveThread(
     );
   } catch (error) {
     // An owner callback may already have retired the client; do not close it twice.
-    if (isCodexAppServerUnsafeSubscriptionError(error)) {
+    if (error instanceof CodexAppServerUnsafeSubscriptionError) {
       throw error;
     }
     return await abandonCodexLiveThreadRelease(options, error);
@@ -408,6 +406,13 @@ export async function tryReuseCodexLiveThread(
     const modelProvider = binding.preserveNativeModel
       ? nativeThread?.modelProvider?.trim() || binding.modelProvider
       : binding.modelProvider;
+    const bindingPatch = {
+      cwd: params.cwd,
+      model,
+      modelProvider,
+      nativeHookRelayGeneration,
+      environmentSelectionFingerprint,
+    };
     // Validate ownership even when relay generation is unchanged; reset may
     // have replaced the persisted binding since it was first read. Model and
     // cwd are sticky turn settings, so future turns and /btw need current facts.
@@ -421,13 +426,7 @@ export async function tryReuseCodexLiveThread(
             threadId: binding.threadId,
             // Environment selection is sticky turn/start state, like cwd/model;
             // recording its new value must not recreate the approval-bearing thread.
-            patch: {
-              cwd: params.cwd,
-              model,
-              modelProvider,
-              nativeHookRelayGeneration,
-              environmentSelectionFingerprint,
-            },
+            patch: bindingPatch,
           },
           assertWarmOwner,
         ),
@@ -449,15 +448,7 @@ export async function tryReuseCodexLiveThread(
       kind: "ready",
       binding: {
         ...binding,
-        ...(!incognito
-          ? {
-              cwd: params.cwd,
-              model,
-              modelProvider,
-              nativeHookRelayGeneration,
-              environmentSelectionFingerprint,
-            }
-          : {}),
+        ...(!incognito ? bindingPatch : {}),
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy: ephemeralPolicy && {
           ...ephemeralPolicy,

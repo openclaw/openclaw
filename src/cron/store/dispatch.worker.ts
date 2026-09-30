@@ -23,14 +23,43 @@ const loadRecovery = createLazyRuntimeModule(() => import("./run-recovery.worker
 let recovery: typeof import("./run-recovery.worker.js") | undefined;
 const loadMaintenance = createLazyRuntimeModule(() => import("./runtime-maintenance.worker.js"));
 let maintenance: typeof import("./runtime-maintenance.worker.js") | undefined;
+const loadMutation = createLazyRuntimeModule(() => import("./guarded-mutation.worker.js"));
+let mutation: typeof import("./guarded-mutation.worker.js") | undefined;
+const loadScratch = createLazyRuntimeModule(() => import("./scratch.worker.js"));
+let scratch: typeof import("./scratch.worker.js") | undefined;
+const loadExternalState = createLazyRuntimeModule(() => import("./external-state.worker.js"));
+let externalState: typeof import("./external-state.worker.js") | undefined;
+const loadScheduler = createLazyRuntimeModule(() => import("./scheduler-state.worker.js"));
+let scheduler: typeof import("./scheduler-state.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
+  if ((type === "cron.recordSkippedRuns" || type === "cron.planStartup") && !scheduler) {
+    return loadScheduler().then((loaded) => {
+      scheduler = loaded;
+    });
+  }
+  if (type === "cron.mutateExternalState" && !externalState) {
+    return loadExternalState().then((loaded) => {
+      externalState = loaded;
+    });
+  }
+  if (type === "cron.writeScratch" && !scratch) {
+    return loadScratch().then((loaded) => {
+      scratch = loaded;
+    });
+  }
+  if (type === "cron.mutateJobs" && !mutation) {
+    return loadMutation().then((loaded) => {
+      mutation = loaded;
+    });
+  }
   if (
     [
       "cron.reserveRuns",
       "cron.activateRun",
       "cron.releaseReservations",
       "cron.finishReceipt",
+      "cron.finalizeRuns",
       "cron.removeStaleFamily",
     ].includes(String(type)) &&
     !admission
@@ -62,11 +91,17 @@ export function isCronStateWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<CronStateWorkerOperations> {
   switch (command.type) {
+    case "cron.recordSkippedRuns":
+    case "cron.planStartup":
+    case "cron.mutateExternalState":
+    case "cron.writeScratch":
+    case "cron.mutateJobs":
     case "cron.reserveRuns":
     case "cron.recordRun":
     case "cron.activateRun":
     case "cron.releaseReservations":
     case "cron.finishReceipt":
+    case "cron.finalizeRuns":
     case "cron.removeStaleFamily":
     case "cron.loadMutable":
     case "cron.initializeRunReceipts":
@@ -88,6 +123,29 @@ export function executeCronStateCommand(
   database: OpenClawStateDatabase,
 ): CronStateWorkerOperations[keyof CronStateWorkerOperations]["output"] {
   switch (command.type) {
+    case "cron.recordSkippedRuns":
+    case "cron.planStartup":
+      if (!scheduler) {
+        throw new Error("Cron scheduler worker is not prepared");
+      }
+      return command.type === "cron.recordSkippedRuns"
+        ? scheduler.recordSkippedCronRunsInWorker(database, command.input)
+        : scheduler.planCronStartupInWorker(database, command.input);
+    case "cron.mutateExternalState":
+      if (!externalState) {
+        throw new Error("Cron external-state worker is not prepared");
+      }
+      return externalState.mutateCronExternalStateInWorker(database, command.input);
+    case "cron.writeScratch":
+      if (!scratch) {
+        throw new Error("Cron scratch worker is not prepared");
+      }
+      return scratch.writeCronScratchInWorker(database, command.input);
+    case "cron.mutateJobs":
+      if (!mutation) {
+        throw new Error("Cron mutation worker is not prepared");
+      }
+      return mutation.mutateCronJobsInWorker(database, command.input);
     case "cron.recordRun":
       return runOpenClawStateWriteTransaction(
         ({ db }) => {
@@ -103,6 +161,7 @@ export function executeCronStateCommand(
     case "cron.activateRun":
     case "cron.releaseReservations":
     case "cron.finishReceipt":
+    case "cron.finalizeRuns":
     case "cron.removeStaleFamily":
       if (!admission) {
         throw new Error("Cron admission worker is not prepared");
@@ -116,6 +175,8 @@ export function executeCronStateCommand(
           return admission.releaseCronReservationsInWorker(database, command.input);
         case "cron.finishReceipt":
           return admission.finishCronReceiptInWorker(database, command.input);
+        case "cron.finalizeRuns":
+          return admission.finalizeCronRunsInWorker(database, command.input);
         case "cron.removeStaleFamily":
           return admission.removeStaleCronFamilyInWorker(database, command.input);
       }

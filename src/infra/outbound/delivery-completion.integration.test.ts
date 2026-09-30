@@ -3,8 +3,14 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
+import {
+  setReplyPayloadMetadata,
+  type SessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply-payload.js";
 import { clearPendingFinalDeliveryAfterSuccess } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
+import { sendDurableMessageBatchCore } from "../../channels/message/send.js";
+import { createDirectPendingFinalCustody } from "../../channels/turn/direct-delivery-custody.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -112,6 +118,80 @@ describe("pending-final durable delivery completion", () => {
       expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
     },
   );
+
+  it("retains the writer in queued custody after a channel transforms a direct final", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:matrix:direct:rendered-final",
+      storePath: path.join(tmpDir, "sessions.json"),
+    };
+    const authority = {
+      ...scope,
+      expectedSessionId: "rendered-session",
+      expectedLifecycleRevision: "rendered-revision",
+      expectedWriterRunId: "rendered-writer",
+    };
+    await replaceSessionEntry(scope, {
+      sessionId: authority.expectedSessionId,
+      lifecycleRevision: authority.expectedLifecycleRevision,
+      activeWriterRunId: authority.expectedWriterRunId,
+      updatedAt: 1,
+    });
+    const entry = loadSessionEntry(scope);
+    if (!entry) {
+      throw new Error("Expected the direct delivery session");
+    }
+    const payload = setReplyPayloadMetadata(
+      { text: "original final" },
+      { sessionWriterDeliveryAuthority: authority },
+    );
+    await persistPendingFinalDeliveryMarker({
+      ...scope,
+      deliver: true,
+      sessionStore: { [scope.sessionKey]: entry },
+      sessionEntry: entry,
+      suppressVisibleSessionEffects: false,
+      sessionReboundDuringRun: false,
+      payloads: [payload],
+      deliveryContext: { channel: "matrix", to: "!room:example" },
+      runOwnedSessionId: entry.sessionId,
+    });
+    const custody = createDirectPendingFinalCustody(payload, scope.storePath);
+    const completion = resolvePendingFinalDeliveryCompletion([payload]);
+    if (!custody || !completion) {
+      throw new Error("Expected direct custody and its durable pending final");
+    }
+    let queuedAuthority: SessionWriterDeliveryAuthority | undefined;
+    const sendMatrix = vi.fn(async () => {
+      const queued = (await loadPendingDeliveries(tmpDir))[0]?.deliveryCompletion;
+      queuedAuthority =
+        queued?.kind === "pending-final" ? queued.sessionWriterDeliveryAuthority : undefined;
+      return { messageId: "rendered-final-message" };
+    });
+    const rendered = custody.bindPendingFinalDelivery?.({ text: "channel-rendered final" });
+    if (!rendered) {
+      throw new Error("Expected the direct owner to bind the rendered payload");
+    }
+
+    const result = await sendDurableMessageBatchCore({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [rendered],
+      onPlatformSendDispatch: custody.onPlatformSendDispatch,
+      assertDirectAdapterHandoff: custody.assertPlatformSendAuthorized,
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(result.status).toBe("sent");
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(queuedAuthority).toEqual(authority);
+    expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
+      { id: completion.deliveryId, state: "delivered" },
+    ]);
+    expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
+  });
 
   it("recovers an older serialized completion with its original locator semantics", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;

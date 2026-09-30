@@ -1,4 +1,3 @@
-/** Formatting helpers for gateway runtime summaries and doctor repair hints. */
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import {
@@ -25,7 +24,6 @@ type RuntimeHintOptions = {
   env?: Record<string, string | undefined>;
 };
 
-/** Builds follow-up hints for stopped, missing, or unhealthy gateway service runtimes. */
 export function buildGatewayRuntimeHints(
   runtime: GatewayServiceRuntime | undefined,
   options: RuntimeHintOptions = {},

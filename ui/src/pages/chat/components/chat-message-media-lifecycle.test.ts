@@ -49,6 +49,7 @@ function managedImageResourceKey(source: string): string {
     "",
     `${source.replace(/\/full$/u, "/thumbnail")}?v=2`,
     "",
+    "thumbnail",
   ]);
 }
 
@@ -191,9 +192,9 @@ describe("chat media resource lifecycle", () => {
       rerender();
       await vi.advanceTimersByTimeAsync(0);
       expect(resolveArtifactDownload.mock.calls.map(([params]) => params)).toEqual([
-        { sessionKey: "first-session", artifactId },
-        { sessionKey: "second-session", artifactId },
-        { sessionKey: "second-session", artifactId },
+        { sessionKey: "first-session", artifactId, variant: "thumbnail" },
+        { sessionKey: "second-session", artifactId, variant: "thumbnail" },
+        { sessionKey: "second-session", artifactId, variant: "thumbnail" },
       ]);
       expect(fetchMock).toHaveBeenCalledTimes(http ? 0 : 2);
       if (!http) {

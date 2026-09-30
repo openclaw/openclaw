@@ -68,6 +68,20 @@ describe("pinned pnpm cold bootstrap", () => {
       succeeds: true,
     },
     {
+      name: "recovers a connection reset",
+      status: null,
+      failures: 1,
+      attempts: 2,
+      succeeds: true,
+    },
+    {
+      name: "bounds persistent connection resets",
+      status: null,
+      failures: 4,
+      attempts: 3,
+      succeeds: false,
+    },
+    {
       name: "bounds persistent transient failures",
       status: 503,
       failures: 4,
@@ -100,6 +114,10 @@ describe("pinned pnpm cold bootstrap", () => {
         server.on("request", (request, response) => {
           const name = path.basename(request.url ?? "");
           if (name === "pnpm-12.5.1.tgz" && ++wrapperAttempts <= failures) {
+            if (status === null) {
+              request.socket.destroy();
+              return;
+            }
             response.writeHead(status).end();
             return;
           }

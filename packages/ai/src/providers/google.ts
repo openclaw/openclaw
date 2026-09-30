@@ -6,6 +6,7 @@ import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js
 import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
@@ -47,11 +48,7 @@ export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleSt
   context: Context,
   options?: SimpleStreamOptions,
 ) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
-
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
   const base = buildBaseOptions(model, options, apiKey);
   return streamGoogle(model, context, {
     ...base,

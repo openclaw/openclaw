@@ -1,5 +1,4 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-// Plugin synchronization and convergence after the core update.
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {

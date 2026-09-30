@@ -1,4 +1,3 @@
-// Main interactive configure/update wizard implementation.
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

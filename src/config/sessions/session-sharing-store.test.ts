@@ -18,7 +18,7 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import { isSessionMember, listSessionMembers } from "./session-sharing-store.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 

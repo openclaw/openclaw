@@ -4,6 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { recordPersistedContextEngineQuarantine } from "../context-engine/quarantine-health.js";
 import { resolveGatewayStartupPluginActivationConfig } from "../gateway/plugin-activation-runtime-config.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
@@ -95,6 +96,13 @@ describe("installed plugin health should-run drift", () => {
       const registry = createEmptyPluginRegistry();
       registry.plugins.push({ id: "runtime-ok", status: "loaded", enabled: true } as never);
       setActivePluginRegistry(registry, "runtime-ok", "default", "/tmp/ws");
+      const quarantine = {
+        engineId: "quarantined-engine",
+        operation: "bootstrap",
+        reason: "startup failed",
+        failedAt: new Date(123),
+      };
+      await recordPersistedContextEngineQuarantine(quarantine);
 
       const rawConfig = {} as never;
       const snapshot = await collectInstalledPluginHealthSnapshot({
@@ -108,6 +116,7 @@ describe("installed plugin health should-run drift", () => {
         expect.objectContaining({ config: rawConfig, activationSourceConfig: rawConfig }),
       );
       expect(snapshot.shouldRunPluginIds).toEqual(["planned-missing", "runtime-ok"]);
+      expect(snapshot.contextEngineQuarantines).toEqual([quarantine]);
 
       const text = formatDetailedPluginHealth(snapshot);
       expect(text).toContain("Loaded: 1 (runtime-ok)");

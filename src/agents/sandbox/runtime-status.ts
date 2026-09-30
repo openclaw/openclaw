@@ -1,8 +1,3 @@
-/**
- * Sandbox runtime status and tool-policy diagnostics.
- *
- * Resolves whether a session is sandboxed and explains policy blocks before tool execution.
- */
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -97,7 +92,6 @@ type SandboxRuntimeStatusParams = {
   preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
 };
 
-/** Resolves sandbox mode, effective session scope, and tool policy for a session. */
 export function resolveSandboxRuntimeStatus(params: SandboxRuntimeStatusParams) {
   return resolveSandboxRuntimeStatusWithRead(params, resolveSessionEntry);
 }
@@ -322,7 +316,6 @@ function shellEscapeSingleArg(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-/** Formats the user-facing denial message when sandbox tool policy blocks a tool. */
 export function formatSandboxToolPolicyBlockedMessage(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;

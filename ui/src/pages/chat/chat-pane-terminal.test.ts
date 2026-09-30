@@ -5,8 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import {
+  createPaneHeaderWorkspaceFixture,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+} from "./chat-pane.test-support.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
 function desktopHello(methods: string[], scopes: string[]): GatewayHelloOk {
@@ -26,7 +29,7 @@ function createTerminalPane(client: GatewayBrowserClient) {
   const container = document.createElement("div");
   const paint = (
     row: GatewaySessionRow | undefined,
-    workspace = createSessionWorkspaceProps(state),
+    workspace = createPaneHeaderWorkspaceFixture(state),
   ) => render(pane.renderPaneHeader(workspace, row, false, undefined, false, null), container);
   return { pane, state, container, paint };
 }
@@ -117,7 +120,7 @@ describe("chat pane terminal action", () => {
     state.terminalAvailable = true;
     const renderHeader = () =>
       paint(session, {
-        ...createSessionWorkspaceProps(state),
+        ...createPaneHeaderWorkspaceFixture(state),
         onToggleTerminal: state.terminalAvailable
           ? () => state.updateSidebarLayout(openSlot(state.sidebarLayout, "terminal"))
           : undefined,
@@ -162,7 +165,7 @@ describe("chat pane terminal action", () => {
     snapshot.hello = desktopHello(["desktop.observe"], ["operator.admin"]);
     const onToggleDesktop = vi.fn();
     const renderDesktopHeader = (session: GatewaySessionRow | undefined) =>
-      paint(session, { ...createSessionWorkspaceProps(state), onToggleDesktop });
+      paint(session, { ...createPaneHeaderWorkspaceFixture(state), onToggleDesktop });
     {
       const targetCases: Array<{
         name: string;
@@ -243,7 +246,7 @@ describe("chat pane terminal action", () => {
 
     state.browserPanelAvailable = true;
     const onToggleBrowser = vi.fn();
-    paint(session, { ...createSessionWorkspaceProps(state), onToggleBrowser });
+    paint(session, { ...createPaneHeaderWorkspaceFixture(state), onToggleBrowser });
     container.querySelector<HTMLButtonElement>(".chat-browser-panel-toggle")?.click();
     expect(onToggleBrowser).toHaveBeenCalledOnce();
     expect(panelActionIds()).toContain("browser");

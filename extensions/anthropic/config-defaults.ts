@@ -20,6 +20,7 @@ import {
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
 const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = [
+  "anthropic/claude-sonnet-5-5",
   "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
 ] as const;

@@ -23,8 +23,13 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import * as gitRunner from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -253,7 +258,12 @@ it.each(["guidance", "staging"])(
   },
 );
 
-it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned/candidate"])(
+it.each([
+  "1.0.0",
+  "https://example.invalid/candidate.tgz",
+  "openclaw@file:/owned/candidate",
+  "openclaw@file:../candidate",
+])(
   "honors the explicit package artifact without changing registry no-op semantics: %s",
   async (tag) => {
     // Swap bounds tests own deadline progression; artifact selection keeps real filesystem work.
@@ -275,6 +285,7 @@ it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned
         ...params,
         tag: tag.startsWith("openclaw@") ? "latest" : tag,
         installEnv: tag.startsWith("openclaw@") ? { OPENCLAW_UPDATE_PACKAGE_SPEC: tag } : {},
+        invocationCwd: base,
         validateCandidate,
         beforeActivate,
         onTransaction,
@@ -287,6 +298,12 @@ it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned
         await expect(update).rejects.toBe(stopped);
         expect(validateCandidate).toHaveBeenCalledOnce();
         expect(beforeActivate).toHaveBeenCalledOnce();
+      }
+      if (tag === "openclaw@file:../candidate") {
+        const install = vi
+          .mocked(processRunner.runCommandWithTimeout)
+          .mock.calls.find(([argv]) => argv.includes(tag));
+        expect(install?.[1]).toMatchObject({ cwd: base });
       }
       expect(onTransaction).not.toHaveBeenCalled();
       await expectOriginalInstallation();
@@ -518,6 +535,71 @@ it.each(["run", "close"] as const)(
       await expectOriginalInstallation();
       for (const prefix of installedPrefixes) {
         await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    });
+  },
+);
+
+it.each([false, true])(
+  "joins a concurrent stage close while preserving cleanup uncertainty=%s",
+  async (uncertain) => {
+    await withTestDir({ prefix: "update-stage-close-" }, async (base) => {
+      const { params, installedPrefixes, expectOriginalInstallation } =
+        await createPackageInstallFixture(base, "2.0.0");
+      const staged = await stagePackageInstallUpdate(params);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const refused = uncertain
+        ? new CommandProcessCleanupError()
+        : new Error("fixture publication refused");
+      const running = staged.run({
+        ...params,
+        validateCandidate: async () => [],
+        beforeActivate: async () => {
+          entered.resolve();
+          await release.promise;
+          throw refused;
+        },
+        onTransaction: vi.fn(),
+      });
+      const runOutcome = running.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await Promise.race([
+        entered.promise,
+        runOutcome.then((cause) => {
+          throw new Error("Staged update completed before activation", { cause });
+        }),
+      ]);
+      let closeSettled = false;
+      const closing = staged.close().finally(() => {
+        closeSettled = true;
+      });
+      const closeOutcome = closing.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await Promise.resolve();
+      const waitedForOperation = !closeSettled;
+      release.resolve();
+      const [failure, cleanupFailure] = await Promise.all([runOutcome, closeOutcome]);
+      expect(waitedForOperation).toBe(true);
+      if (uncertain) {
+        expect(hasCommandProcessCleanupError(failure)).toBe(true);
+        expect(cleanupFailure).toBe(failure);
+        await expect(staged.close()).rejects.toBe(failure);
+      } else {
+        expect(failure).toBe(refused);
+        expect(cleanupFailure).toBeUndefined();
+      }
+      await expectOriginalInstallation();
+      for (const prefix of installedPrefixes) {
+        if (uncertain) {
+          expect((await fs.stat(prefix)).isDirectory()).toBe(true);
+        } else {
+          await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
+        }
       }
     });
   },

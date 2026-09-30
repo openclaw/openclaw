@@ -11,7 +11,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, delimiter, join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -77,6 +76,7 @@ import {
 } from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath, spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
+import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const WRAPPERS = {
@@ -271,21 +271,6 @@ function createMacosGuest(phases: PhaseRunner): MacosGuest {
   );
 }
 
-async function unusedLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  if (!address || typeof address === "string") {
-    throw new Error("Expected TCP server address.");
-  }
-  return address.port;
-}
-
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -397,15 +382,19 @@ async function runFailingHostServer(fakePythonSource: string) {
   const fakePython = join(tempDir, "python3");
   writeFileSync(fakePython, fakePythonSource);
   chmodSync(fakePython, 0o755);
-  const port = await unusedLoopbackPort();
-  return spawnNodeEvalSync(
-    `import { startHostServer } from "./${TS_PATHS.hostServer}"; await startHostServer({ dir: ".", hostIp: "127.0.0.1", port: ${port}, label: "artifact" });`,
-    {
-      env: { ...process.env, PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}` },
-      imports: ["tsx"],
-      maxBuffer: 1024 * 1024,
-    },
-  );
+  const claim = await acquireTestPortBlock({ offsets: [0] });
+  try {
+    return spawnNodeEvalSync(
+      `import { startHostServer } from "./${TS_PATHS.hostServer}"; await startHostServer({ dir: ".", hostIp: "127.0.0.1", port: ${claim.port}, label: "artifact" });`,
+      {
+        env: { ...process.env, PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}` },
+        imports: ["tsx"],
+        maxBuffer: 1024 * 1024,
+      },
+    );
+  } finally {
+    await claim.release();
+  }
 }
 
 function drainableProcessTreeScript(delayMs: number): string {
@@ -674,10 +663,10 @@ ensure_vm_running`,
 
   it("resets Linux product state before both install lanes", () => {
     for (const lane of ["fresh", "upgrade"]) {
-      const restoreIndex = linux.indexOf(`this.phase("${lane}.restore-snapshot"`);
-      const resetIndex = linux.indexOf(`this.phase("${lane}.reset-state"`);
+      const restoreIndex = linux.indexOf(`"${lane}.restore-snapshot"`);
+      const resetIndex = linux.indexOf(`"${lane}.reset-state"`);
       const installIndex = linux.indexOf(
-        `this.phase("${lane}.${lane === "fresh" ? "install-main" : "install-latest"}"`,
+        `"${lane}.${lane === "fresh" ? "install-main" : "install-latest"}"`,
       );
       expect(restoreIndex).toBeGreaterThanOrEqual(0);
       expect(resetIndex).toBeGreaterThan(restoreIndex);
@@ -963,9 +952,7 @@ ensure_vm_running`,
       const script = readFileSync(scriptPath, "utf8");
 
       expect(script, scriptPath).toContain("resolveSnapshot");
-      expect(script, scriptPath).toContain(
-        scriptPath === TS_PATHS.macos ? "runSmokeLane" : "SmokeRunController",
-      );
+      expect(script, scriptPath).toContain("SmokeRunController");
       expect(script, scriptPath).not.toContain("def aliases(name: str)");
     }
   });
@@ -1692,7 +1679,7 @@ if (commandArgs[0] === "list") {
 
       expect(script, scriptPath).toContain("PhaseRunner");
       expect(script, scriptPath).toContain("validateSnapshotRestoreMode(this.options.mode");
-      expect(script, scriptPath).toContain("remainingPhaseTimeoutMs");
+      expect(script, scriptPath).toContain("this.phases.remainingTimeoutMs");
       expect(script, scriptPath).toContain("timeoutMs:");
     }
 
@@ -1700,10 +1687,10 @@ if (commandArgs[0] === "list") {
     expect(macos).toContain("shouldSkipSnapshotRestore()");
     expect(macos).toContain("Skip snapshot restore; using current running VM");
 
-    expect(linux).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
-    expect(windows).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
-    expect(macos).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
-    expect(macos).toContain("timeoutMs: this.remainingPhaseTimeoutMs(360_000)");
+    expect(linux).toContain("probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000)");
+    expect(windows).toContain("probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000)");
+    expect(macos).toContain("probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000)");
+    expect(macos).toContain("timeoutMs: this.phases.remainingTimeoutMs(360_000)");
   });
 
   it("cleans POSIX guest scripts after the phase deadline is exhausted", () => {

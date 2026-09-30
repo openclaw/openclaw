@@ -1,4 +1,3 @@
-// Shared reply dispatcher type contracts for visible and message-tool delivery.
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import type { ReplyPayload } from "../types.js";

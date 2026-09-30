@@ -75,13 +75,11 @@ function decodeUploadFileMediaPayload(params: {
   contentType?: string;
   fileName?: string;
   maxBytes?: number;
-}):
-  | {
-      buffer: Buffer;
-      contentType?: string;
-      fileName?: string;
-    }
-  | undefined {
+}): {
+  buffer: Buffer;
+  contentType?: string;
+  fileName?: string;
+} {
   const dataUrl = /^data:([^;]+);base64,(.*)$/is.exec(params.encoded.trim());
   const payload = dataUrl?.[2] ?? params.encoded;
   if (params.maxBytes !== undefined) {

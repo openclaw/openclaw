@@ -1,5 +1,9 @@
 import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveChatFastModeSelectState,
+  type ChatFastModeSelectState,
+} from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
@@ -20,9 +24,11 @@ async function fixture(
   levels: Array<string | { id: string; label: string }>,
   value: string,
   inherited = false,
+  fastMode?: ChatFastModeSelectState,
 ) {
   host ??= document.body.appendChild(document.createElement("div"));
   const onThinkingSelect = vi.fn(async () => undefined);
+  const onFastModeSelect = vi.fn(async () => undefined);
   render(
     renderChatEffortPicker({
       disabled: false,
@@ -40,7 +46,7 @@ async function fixture(
           ),
         },
       }),
-      fastMode: {
+      fastMode: fastMode ?? {
         active: false,
         currentOverride: "",
         disabled: true,
@@ -48,7 +54,7 @@ async function fixture(
         nextValue: "on",
         supported: false,
       },
-      onFastModeSelect: async () => undefined,
+      onFastModeSelect,
       onThinkingSelect,
     }),
     host,
@@ -58,6 +64,7 @@ async function fixture(
   return {
     input: host.querySelector<HTMLInputElement>("input[type=range]")!,
     onThinkingSelect,
+    onFastModeSelect,
   };
 }
 
@@ -69,6 +76,69 @@ function appearance(input: HTMLInputElement) {
 }
 
 describe("effort bar colour and flow", () => {
+  it("keeps Standard implicit in the chip and only exposes entitled speed choices", async () => {
+    const state = (mode: boolean | "ultrafast", tiers?: string[], supportsFastMode = true) =>
+      resolveChatFastModeSelectState({
+        activeRunId: null,
+        connected: true,
+        gatewayAvailable: true,
+        loading: false,
+        sending: false,
+        stream: null,
+        sessionsResult: null,
+        currentModelOverride: "openai/model",
+        fastModeTarget: { model: "model", modelProvider: "openai", fastMode: mode },
+        catalog: [
+          {
+            id: "model",
+            name: "Model",
+            provider: "openai",
+            available: true,
+            supportsFastMode,
+            serviceTiers: tiers,
+          },
+        ],
+      });
+    await fixture(["low", "medium", "high"], "high", false, state(false));
+    expect(host!.querySelector("summary")!.textContent?.trim()).toBe("High");
+    expect(host!.querySelectorAll("[data-chat-speed-option]")).toHaveLength(2);
+    expect(host!.textContent).not.toContain("higher usage");
+    const { onFastModeSelect } = await fixture(
+      ["low", "medium", "high"],
+      "high",
+      false,
+      state("ultrafast", ["priority", "ultrafast"]),
+    );
+    expect(host!.querySelector("summary")!.textContent).toContain("Ultrafast");
+    expect(
+      [...host!.querySelectorAll("[data-chat-speed-option]")].map((option) =>
+        option.textContent?.trim(),
+      ),
+    ).toEqual(["Standard", "Fast", "Ultrafast"]);
+    const ultra = host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!;
+    expect(ultra.getAttribute("aria-checked")).toBe("true");
+    ultra.focus();
+    ultra.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(onFastModeSelect).toHaveBeenLastCalledWith("on", "effort-preview");
+    const standard = host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!;
+    standard.click();
+    expect(onFastModeSelect).toHaveBeenLastCalledWith("off", "effort-preview");
+    await fixture(
+      ["low", "medium", "high"],
+      "high",
+      false,
+      state("ultrafast", ["priority", "ultrafast"], false),
+    );
+    expect(host!.querySelector('[data-chat-speed-option="ultrafast"]')).toBeNull();
+    expect(host!.querySelector('[data-chat-speed-option="on"]')).toBeNull();
+    await fixture(["low", "medium", "high"], "high", false, state("ultrafast"));
+    expect(host!.querySelector('[data-chat-speed-option="ultrafast"]')).toBeNull();
+    expect(host!.querySelector("summary")!.textContent).not.toContain("Ultrafast");
+    expect(host!.querySelector('[data-chat-speed-option="on"]')?.getAttribute("aria-checked")).toBe(
+      "true",
+    );
+  });
+
   it.each(["dark", "light"])("highlights the highest discrete effort in %s mode", async (theme) => {
     document.documentElement.dataset.themeMode = theme;
     for (const maximum of ["high", "xhigh", "max"]) {

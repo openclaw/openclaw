@@ -5,9 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { createRetainedOperation } from "./retained-operation.js";
 import {
   cleanupSnapshotOperations,
-  registerAsyncSnapshotTempDirectory,
+  registerRetainedSnapshotTempDirectory,
   registerSnapshotTempDirectory,
 } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "./sqlite-readonly-location.js";
@@ -51,7 +52,16 @@ beforeEach(() => {
   mocks.allocate.mockReset().mockImplementation(async (_root, _legacy, _signal, asynchronous) => {
     fs.mkdirSync(directory);
     if (asynchronous) {
-      registerAsyncSnapshotTempDirectory(directory, mocks.retire);
+      registerRetainedSnapshotTempDirectory(directory, () => {
+        const cleanup = createRetainedOperation<void>(() => {});
+        void mocks
+          .retire()
+          .then(async () => {
+            await fs.promises.rm(directory, { recursive: true, force: true });
+          })
+          .then(() => cleanup.resolve(), cleanup.reject);
+        return cleanup.operation;
+      });
     } else {
       registerSnapshotTempDirectory(directory, synchronousToken);
     }
@@ -73,7 +83,7 @@ it("keeps the existing default snapshot cleanup synchronous", async () => {
   expect(database.isOpen).toBe(true);
 });
 
-it("joins asynchronous token retirement before removing the published private bytes", async () => {
+it("joins retained cleanup before releasing the published private bytes", async () => {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   mocks.retire.mockImplementation(async () => {

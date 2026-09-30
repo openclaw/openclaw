@@ -1,4 +1,5 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
@@ -49,7 +50,7 @@ export function createComposerKeyDownHandler({
     if (!(target instanceof HTMLTextAreaElement)) {
       return;
     }
-    if (state.composerComposing || event.isComposing || event.keyCode === 229) {
+    if (state.composerComposing || isComposingKeyboardEvent(event)) {
       return;
     }
 
@@ -99,7 +100,6 @@ export function createComposerKeyDownHandler({
         key: event.key,
         selectionStart: target.selectionStart,
         selectionEnd: target.selectionEnd,
-        valueLength: target.value.length,
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,

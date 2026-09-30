@@ -385,10 +385,7 @@ export async function buildDiscordMessageProcessContext(params: {
   if (!isHistoryCurrent()) {
     return null;
   }
-  const deliverTarget = replyPlan.deliverTarget;
-  const replyTarget = replyPlan.replyTarget;
-  const replyReference = replyPlan.replyReference;
-  const autoThreadContext = replyPlan.autoThreadContext;
+  const { deliverTarget, replyTarget, replyReference, autoThreadContext } = replyPlan;
   const conversationParentId = threadChannel
     ? threadParentId
     : autoThreadContext

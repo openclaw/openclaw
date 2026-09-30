@@ -1,4 +1,4 @@
-// Node location commands: invokes location.get on a paired node and formats the location payload.
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
@@ -57,11 +57,7 @@ export function registerNodesLocationCommands(nodes: Command) {
           });
 
           const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-          const payload =
-            res.payload && typeof res.payload === "object"
-              ? (res.payload as Record<string, unknown>)
-              : {};
+          const payload = asRecord(asRecord(raw).payload);
 
           if (opts.json) {
             defaultRuntime.writeJson(payload);

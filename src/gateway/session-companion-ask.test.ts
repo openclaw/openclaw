@@ -133,6 +133,44 @@ describe("session companion embedded invocation", () => {
     });
   });
 
+  it("passes a selected-text comment to the model without persisting it as a file", async () => {
+    const companion = createCompanion();
+    const respond = vi.fn();
+    try {
+      await sessionCompanionHandlers["sessions.companion.ask"]!({
+        params: {
+          sessionKey: question.sessionKey,
+          question: "What changed?",
+          selectionContext: "Selected text:\n<untrusted passage>\n\nUser comment:\nCheck this.",
+        },
+        client: { connId: "selection-connection" },
+        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ answer: expect.any(String) }),
+      );
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining("&lt;untrusted passage&gt;"),
+          images: undefined,
+        }),
+      );
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
+      expect(
+        companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges,
+      ).toEqual([
+        { question: "What changed?", answer: expect.any(String), ts: expect.any(Number) },
+      ]);
+      await companion.ask({ ...question, question: "What next?" });
+      expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toBe("What next?");
+      expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Check this.");
+    } finally {
+      companion.dispose();
+    }
+  });
+
   it.each([0, 2_000_001])(
     "delivers an image with %i padding bytes from the registered RPC to the read-only model run",
     async (padding) => {

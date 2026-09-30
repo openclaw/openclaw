@@ -1,3 +1,8 @@
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentFacts,
+} from "../../../config/sessions/session-entry-current.types.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
@@ -10,6 +15,18 @@ import type {
   SubagentCompletionDeliveryState,
   SubagentRunReadRecord,
 } from "./subagent-registry-read.types.js";
+
+export type SubagentSessionEffects = {
+  isCurrent(): Promise<boolean>;
+  assertHostCurrent(): void;
+  assertCurrentEntry(this: void, facts: SessionEntryCurrentFacts | undefined): void;
+  nativeCheck?: SessionEntryCurrentCheck;
+};
+
+export type SubagentRecoveryCurrent = {
+  prepare(): Promise<boolean>;
+  isHostCurrent(): boolean;
+};
 
 export type SubagentCompletionRequest = {
   runId: string;
@@ -24,10 +41,10 @@ export type SubagentCompletionRequest = {
   startedAt?: number;
   suppressSessionEffects?: boolean;
   recoverInterrupted?: true;
-  /** Revalidates orphan ownership after waiting for the terminal completion lock. */
-  isRecoveryCurrent?: () => boolean;
+  /** Prepare database currency asynchronously; publication rechecks live host authority. */
+  recoveryCurrent?: SubagentRecoveryCurrent;
   /** Child effects may be fenced while the recorded result still owes requester delivery. */
-  isChildSessionEffectsCurrent?: () => boolean;
+  sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
   terminalReply?: AgentRunTerminalReplySnapshot;
 };
@@ -102,6 +119,8 @@ type SwarmQueuedLaunch = {
 
 /** Durable outbox state for the top-level requester settle wake. */
 export type RequesterSettleWakeState = {
+  /** Pending message-wait notice; consuming it leaves the completion cohort armed. */
+  pauseNotice?: { acknowledgment: string };
   status: "pending" | "dispatching";
   /** Number of delivery attempts already admitted. */
   attemptCount: number;
@@ -148,6 +167,8 @@ type SubagentKillIntent = {
 
 /** Persisted execution, completion, delivery, and attachment state for child runs. */
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
+  /** Child identity stays fixed when recovery redirects transcript writes. */
+  childSessionIdentity?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
   /** Exact requester attempt for cancellation, independent of completion messaging. */
   requesterTurnRunId?: string;
   /** Durable proof that this requester attempt invoked sessions_yield. */
@@ -246,6 +267,8 @@ export type SubagentRegistrationScope = {
 };
 
 export type RegisterSubagentRunOptions = {
+  persistence?: "worker";
   assertCurrent?: () => void;
+  assertPublicationCurrent?: () => void;
   retainOwnership?: (scope: SubagentRegistrationScope) => void;
 };

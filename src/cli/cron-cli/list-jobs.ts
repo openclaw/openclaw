@@ -160,10 +160,6 @@ export async function listCronJobsFromGateway(
           ...firstPage,
           jobs,
           ...(Object.keys(deliveryPreviews).length > 0 ? { deliveryPreviews } : {}),
-          ...(total !== undefined ? { total } : {}),
-          ...(snapshotRevision !== undefined ? { snapshotRevision } : {}),
-          ...(firstPage.offset !== undefined ? { offset: firstPage.offset } : {}),
-          ...(firstPage.limit !== undefined ? { limit: firstPage.limit } : {}),
           ...(firstPage.hasMore !== undefined ? { hasMore: false, nextOffset: null } : {}),
         };
       }

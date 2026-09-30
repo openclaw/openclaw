@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { Static } from "typebox";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -305,16 +305,14 @@ export function normalizeChatSendRequest(params: {
   const modelMessage = workContext
     ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
     : rawMessage;
-  const requestIdentity = createHash("sha256")
-    .update(
-      JSON.stringify([
-        p.message,
-        p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
-        ...(workContext ? [workContext.snapshot] : []),
-        ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
-      ]),
-    )
-    .digest("hex");
+  const requestIdentity = sha256Hex(
+    JSON.stringify([
+      p.message,
+      p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
+      ...(workContext ? [workContext.snapshot] : []),
+      ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+    ]),
+  );
 
   return {
     ok: true,

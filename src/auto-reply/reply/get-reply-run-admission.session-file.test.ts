@@ -67,7 +67,6 @@ function createAdmissionFixture() {
     useFastReplyRuntime: false,
     thinkingRuntime: "embedded",
     getInboundContext: () => ({ inboundUserContext: "" }),
-    getSessionEntry: () => entry,
   } as unknown as PreparedReplyRunContext;
   return { context, entry, sessionKey, sessionId };
 }

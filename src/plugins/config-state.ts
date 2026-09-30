@@ -26,14 +26,10 @@ export type PluginActivationConfigSource = {
 
 export type NormalizedPluginsConfig = SharedNormalizedPluginsConfig;
 
-const BUILT_IN_PLUGIN_ALIAS_FALLBACKS: ReadonlyArray<readonly [alias: string, pluginId: string]> = [
+const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
   ["google-gemini-cli", "google"],
   ["minimax-portal", "minimax"],
   ["minimax-portal-auth", "minimax"],
-] as const;
-const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
-  ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS,
-  ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS.map(([, pluginId]) => [pluginId, pluginId] as const),
 ]);
 const RETIRED_PLUGIN_IDS = new Set([
   "google-antigravity-auth",
@@ -139,25 +135,14 @@ export function hasExplicitPluginConfig(plugins?: OpenClawConfig["plugins"]): bo
   if (!plugins) {
     return false;
   }
-  if (typeof plugins.enabled === "boolean") {
-    return true;
-  }
-  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
-    return true;
-  }
-  if (plugins.load?.paths && Array.isArray(plugins.load.paths) && plugins.load.paths.length > 0) {
-    return true;
-  }
-  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
-    return true;
-  }
-  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
-    return true;
-  }
-  return false;
+  return (
+    typeof plugins.enabled === "boolean" ||
+    (Array.isArray(plugins.allow) && plugins.allow.length > 0) ||
+    (Array.isArray(plugins.deny) && plugins.deny.length > 0) ||
+    (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) ||
+    Boolean(plugins.slots && Object.keys(plugins.slots).length > 0) ||
+    Boolean(plugins.entries && Object.keys(plugins.entries).length > 0)
+  );
 }
 
 export function applyTestPluginDefaults(
@@ -229,18 +214,8 @@ export const resolveEnableState = (
     resolveEffectivePluginActivationState({ id, origin, config, enabledByDefault }),
   );
 
-type EffectiveActivationParams = {
-  id: string;
-  origin: PluginOrigin;
-  config: NormalizedPluginsConfig;
-  rootConfig?: OpenClawConfig;
-  enabledByDefault?: boolean;
-  activationSource?: PluginActivationConfigSource;
-  channelIds?: readonly string[];
-};
-
 export const resolveEffectiveEnableState = (
-  params: EffectiveActivationParams,
+  params: Omit<Parameters<typeof resolveEffectivePluginActivationState>[0], "autoEnabledReason">,
 ): { enabled: boolean; reason?: string } =>
   toEnableStateResult(resolveEffectivePluginActivationState(params));
 

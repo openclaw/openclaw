@@ -1,4 +1,3 @@
-// Bundles MCP metadata exposed by plugins for package output.
 import path from "node:path";
 import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
@@ -50,6 +49,7 @@ type EnabledBundleMcpConfigResult = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
   prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
+  pluginIdsByServer: Record<string, string>;
 };
 type BundleMcpRuntimeSupport = {
   hasSupportedStdioServer: boolean;
@@ -537,27 +537,52 @@ export function loadEnabledBundleMcpConfig(params: {
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
-    createEmptyConfig: (): BundleMcpRuntimeConfig => ({
+    createEmptyConfig: (): BundleMcpRuntimeConfig & {
+      pluginIdsByServer: Record<string, string>;
+    } => ({
       mcpServers: {},
       prepareDataDirsByServer: {},
+      pluginIdsByServer: {},
     }),
-    loadBundleConfig: loadBundleMcpConfig,
+    loadBundleConfig: (bundle) =>
+      withMcpPluginOwnership(bundle.pluginId, loadBundleMcpConfig(bundle)),
     loadNativePluginConfig: ({ record }) =>
       record.mcpServers
-        ? loadRootRelativeMcpConfig({
-            rootDir: record.rootDir,
-            mcpServers: record.mcpServers,
-          })
+        ? withMcpPluginOwnership(
+            record.id,
+            loadRootRelativeMcpConfig({
+              rootDir: record.rootDir,
+              mcpServers: record.mcpServers,
+            }),
+          )
         : undefined,
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),
   });
   return {
     config: { mcpServers: loaded.config.mcpServers },
     diagnostics: loaded.diagnostics,
+    pluginIdsByServer: loaded.config.pluginIdsByServer,
     prepareDataDirsByServer: Object.fromEntries(
       Object.entries(loaded.config.prepareDataDirsByServer).filter(
         (entry): entry is [string, BundleMcpDataDirOwnership] => entry[1] !== null,
       ),
     ),
+  };
+}
+
+function withMcpPluginOwnership(
+  pluginId: string,
+  loaded: { config: BundleMcpRuntimeConfig; diagnostics: string[] },
+) {
+  // Merge provenance alongside the server map so a later declaration owns both.
+  // Reconstructing ownership from inspection names would attribute shadowed servers twice.
+  return {
+    ...loaded,
+    config: {
+      ...loaded.config,
+      pluginIdsByServer: Object.fromEntries(
+        Object.keys(loaded.config.mcpServers).map((name) => [name, pluginId]),
+      ),
+    },
   };
 }

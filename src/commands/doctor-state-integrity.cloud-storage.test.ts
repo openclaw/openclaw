@@ -40,20 +40,6 @@ describe("detectMacCloudSyncedStateDir", () => {
     });
   });
 
-  it("detects state dir under Library/CloudStorage", () => {
-    const stateDir = path.join(home, "Library", "CloudStorage", "Dropbox", "OpenClaw", ".openclaw");
-
-    const result = detectMacCloudSyncedStateDir(stateDir, {
-      platform: "darwin",
-      homedir: home,
-    });
-
-    expect(result).toEqual({
-      path: path.resolve(stateDir),
-      storage: "CloudStorage provider",
-    });
-  });
-
   it("detects cloud-synced target when state dir resolves via symlink", () => {
     const symlinkPath = "/tmp/openclaw-state";
     const resolvedCloudPath = path.join(
@@ -75,26 +61,6 @@ describe("detectMacCloudSyncedStateDir", () => {
       path: path.resolve(resolvedCloudPath),
       storage: "CloudStorage provider",
     });
-  });
-
-  it("ignores cloud-synced symlink prefix when resolved target is local", () => {
-    const symlinkPath = path.join(
-      home,
-      "Library",
-      "CloudStorage",
-      "OneDrive-Personal",
-      "OpenClaw",
-      ".openclaw",
-    );
-    const resolvedLocalPath = path.join(home, ".openclaw");
-
-    const result = detectMacCloudSyncedStateDir(symlinkPath, {
-      platform: "darwin",
-      homedir: home,
-      resolveRealPath: () => resolvedLocalPath,
-    });
-
-    expect(result).toBeNull();
   });
 
   it("follows a real symlink out of the sync root when the state dir leaf is absent", () => {

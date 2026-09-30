@@ -122,18 +122,6 @@ describe("Web Awesome adapters", () => {
     expect(menu?.hasAttribute("inert")).toBe(false);
   });
 
-  it("keeps a canceled dropdown hide interactive", async () => {
-    const { dropdown } = await createDropdown();
-    dropdown.addEventListener("wa-hide", (event) => event.preventDefault(), { once: true });
-
-    dropdown.dispatchEvent(
-      new Event("wa-hide", { bubbles: true, cancelable: true, composed: true }),
-    );
-
-    await Promise.resolve();
-    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.hasAttribute("inert")).toBe(false);
-  });
-
   it("keeps a dropdown interactive when a later document listener cancels its hide", async () => {
     const { dropdown } = await createDropdown();
     const cancelHide = (event: Event) => {

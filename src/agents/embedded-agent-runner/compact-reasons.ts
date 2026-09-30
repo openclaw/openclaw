@@ -1,6 +1,3 @@
-/**
- * Normalizes and classifies compaction failure reasons for diagnostics.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -42,7 +39,6 @@ export function resolveCompactionFailure(params: {
   return { reason: cancellation?.reason ?? reason, error: cancellation?.error ?? params.error };
 }
 
-/** Bucket a raw compaction reason into stable telemetry/status classes. */
 export function classifyCompactionReason(reason?: string): string {
   const text = normalizeLowercaseStringOrEmpty(reason);
   if (!text) {
@@ -93,13 +89,11 @@ export function classifyCompactionReason(reason?: string): string {
   return "unknown";
 }
 
-/** Return whether a classified reason represents an intentional compaction no-op. */
 export function isBenignCompactionSkipReason(reason?: string): boolean {
   const classification = classifyCompactionReason(reason);
   return classification === "below_threshold" || classification === "already_compacted";
 }
 
-/** Return whether a compaction result is an intentional no-op rather than a failure. */
 export function isBenignCompactionSkipResult(result: {
   ok: boolean;
   compacted: boolean;
@@ -114,7 +108,6 @@ export function isBenignCompactionSkipResult(result: {
   );
 }
 
-/** Sanitize an unknown reason into a short log/metric-safe detail suffix. */
 export function formatUnknownCompactionReasonDetail(reason?: string): string | undefined {
   const sanitized = sanitizeForLog((reason ?? "").replace(/\s+/g, " "))
     .trim()

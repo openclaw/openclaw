@@ -264,8 +264,8 @@ export async function prepareAgentCommandExecution(
     agentId: sessionAgentId,
     sessionKey,
   });
-  const workspaceDirRaw =
-    normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const agentWorkspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const workspaceDirRaw = normalizedSpawned.workspaceDir ?? agentWorkspaceDir;
   const workspaceDir = resolveUserPath(workspaceDirRaw);
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
@@ -376,13 +376,13 @@ export async function prepareAgentCommandExecution(
     const workspaceProvisioning = await resolveAcpAgentWorkspaceProvisioningForTurn({
       cfg,
       agentId: sessionAgentId,
-      workspaceDir,
+      workspaceDir: agentWorkspaceDir,
       cwd: resolvedCwd,
       sessionKey: sessionKey ?? undefined,
       sessionEntry: sessionEntryRaw ?? undefined,
     });
     await ensureAgentWorkspace({
-      dir: workspaceDirRaw,
+      dir: agentWorkspaceDir,
       ensureBootstrapFiles: !agentCfg?.skipBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       provisioning: workspaceProvisioning,

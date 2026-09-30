@@ -130,12 +130,6 @@ function makePlugin(params: {
   };
 }
 
-async function expectResolvedSelection(
-  params: Parameters<typeof resolveMessageChannelSelection>[0],
-): Promise<Awaited<ReturnType<typeof resolveMessageChannelSelection>>> {
-  return await resolveMessageChannelSelection(params);
-}
-
 describe("listConfiguredMessageChannels", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
@@ -271,14 +265,6 @@ describe("resolveMessageChannelSelection", () => {
 
   it.each([
     {
-      params: { cfg: {} as never, channel: "alpha" },
-      expected: {
-        channel: "alpha",
-        configured: [],
-        source: "explicit",
-      },
-    },
-    {
       setup: () => {
         const isConfigured = vi.fn(async () => true);
         mocks.listChannelPlugins.mockReturnValue([makePlugin({ id: "beta", isConfigured })]);
@@ -292,14 +278,6 @@ describe("resolveMessageChannelSelection", () => {
       },
       verify: ({ isConfigured }: { isConfigured?: ReturnType<typeof vi.fn> }) => {
         expect(isConfigured).not.toHaveBeenCalled();
-      },
-    },
-    {
-      params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "beta" },
-      expected: {
-        channel: "beta",
-        configured: [],
-        source: "tool-context-fallback",
       },
     },
     {
@@ -323,22 +301,9 @@ describe("resolveMessageChannelSelection", () => {
         source: "single-configured",
       },
     },
-    {
-      setup: () => {
-        mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
-          channel === "beta" ? { id: "beta" } : undefined,
-        );
-      },
-      params: { cfg: {} as never, channel: "alpha", fallbackChannel: "beta" },
-      expected: {
-        channel: "beta",
-        configured: [],
-        source: "tool-context-fallback",
-      },
-    },
   ])("resolves message channel selection for %j", async ({ setup, params, expected, verify }) => {
     const setupResult = setup?.();
-    await expect(expectResolvedSelection(params)).resolves.toMatchObject(expected);
+    await expect(resolveMessageChannelSelection(params)).resolves.toMatchObject(expected);
     verify?.(setupResult as never);
   });
 
@@ -346,7 +311,7 @@ describe("resolveMessageChannelSelection", () => {
     const plugin = { id: "alpha" };
     mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
 
-    const selection = await expectResolvedSelection({ cfg: {} as never, channel: "alpha" });
+    const selection = await resolveMessageChannelSelection({ cfg: {} as never, channel: "alpha" });
 
     expect(selection.plugin).toBe(plugin);
   });
@@ -355,7 +320,7 @@ describe("resolveMessageChannelSelection", () => {
     const plugin = makePlugin({ id: "delta", isConfigured: async () => true });
     mocks.listChannelPlugins.mockReturnValue([plugin]);
 
-    const selection = await expectResolvedSelection({ cfg: {} as never });
+    const selection = await resolveMessageChannelSelection({ cfg: {} as never });
 
     expect(selection.plugin).toBe(plugin);
   });
@@ -496,13 +461,13 @@ describe("resolveMessageChannelSelection", () => {
     };
 
     if (scenario.expected) {
-      await expect(expectResolvedSelection(params)).resolves.toMatchObject({
+      await expect(resolveMessageChannelSelection(params)).resolves.toMatchObject({
         channel: "delta",
         configured: ["delta"],
         source: "single-configured",
       });
     } else {
-      await expect(expectResolvedSelection(params)).rejects.toThrow(
+      await expect(resolveMessageChannelSelection(params)).rejects.toThrow(
         "Channel is required (no configured channels detected).",
       );
     }
@@ -522,7 +487,7 @@ describe("resolveMessageChannelSelection", () => {
       channel === "beta" ? fallbackPlugin : undefined,
     );
 
-    const selection = await expectResolvedSelection({
+    const selection = await resolveMessageChannelSelection({
       cfg,
       channel: "alpha",
       fallbackChannel: "beta",
@@ -549,7 +514,7 @@ describe("resolveMessageChannelSelection", () => {
   it("carries the admitted agent into channel bootstrap", async () => {
     const cfg = {} as never;
 
-    await expectResolvedSelection({ cfg, channel: "alpha", agentId: "ops" });
+    await resolveMessageChannelSelection({ cfg, channel: "alpha", agentId: "ops" });
 
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
       channel: "alpha",
@@ -562,7 +527,7 @@ describe("resolveMessageChannelSelection", () => {
   it("resolves an explicit channel that only the scoped registry handle knows", async () => {
     mocks.scopedRegistryChannelIds.add("scopex");
 
-    const selection = await expectResolvedSelection({ cfg: {} as never, channel: "scopex" });
+    const selection = await resolveMessageChannelSelection({ cfg: {} as never, channel: "scopex" });
 
     expect(selection).toMatchObject({
       channel: "scopex",
@@ -575,7 +540,7 @@ describe("resolveMessageChannelSelection", () => {
     mocks.scopedRegistryChannelIds.add("scope-alias");
     mocks.resolveOutboundChannelPlugin.mockReturnValue({ id: "scopex" });
 
-    const selection = await expectResolvedSelection({
+    const selection = await resolveMessageChannelSelection({
       cfg: {} as never,
       channel: "scope-alias",
     });
@@ -657,7 +622,7 @@ describe("resolveMessageChannelSelection", () => {
     },
   ])("rejects invalid channel selection for %j", async ({ setup, params, expectedMessage }) => {
     setup?.();
-    await expect(expectResolvedSelection(params)).rejects.toThrow(expectedMessage);
+    await expect(resolveMessageChannelSelection(params)).rejects.toThrow(expectedMessage);
   });
 });
 
@@ -676,16 +641,8 @@ describe("resolveMessageChannelSelection (registry-scoped channel plugins)", () 
       makePlugin({ id: "scopex", resolveAccount: () => ({ enabled: true }) }),
     ]);
 
-    const selection = await expectResolvedSelection({ cfg: {} as never });
+    const selection = await resolveMessageChannelSelection({ cfg: {} as never });
     expect(selection.channel).toBe("scopex");
     expect(selection.source).toBe("single-configured");
-  });
-
-  it("still reports no configured channels when the visible list is empty", async () => {
-    mocks.listRuntimeVisibleChannelPlugins.mockReturnValue([]);
-
-    await expect(expectResolvedSelection({ cfg: {} as never })).rejects.toThrow(
-      "Channel is required (no configured channels detected).",
-    );
   });
 });

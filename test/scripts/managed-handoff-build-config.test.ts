@@ -147,6 +147,14 @@ it.each(
         path.resolve("src/infra/update-managed-service-handoff-native-loader.ts"),
       );
       expect(modules).not.toContain(path.resolve("src/shared/freebsd-process-identity-native.ts"));
+    } else {
+      // Lease observation and error-code metadata must not capture execution controllers.
+      for (const module of [
+        "src/infra/update-managed-service-handoff.ts",
+        "src/flows/doctor-health-contributions.ts",
+      ]) {
+        expect(modules.includes(path.resolve(module)), module).toBe(false);
+      }
     }
     vi.mocked(resolveRuntimeWorkerUrl).mockReturnValue(
       pathToFileURL(path.join(outDir, runtimeEntry)),

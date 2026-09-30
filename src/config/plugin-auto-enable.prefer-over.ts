@@ -44,19 +44,13 @@ function resolveExternalCatalogPaths(env: NodeJS.ProcessEnv): string[] {
 }
 
 function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChannelEntry[] {
-  const list = (() => {
-    if (Array.isArray(raw)) {
-      return raw;
-    }
-    if (!isRecord(raw)) {
-      return [];
-    }
-    const entries = raw.entries ?? raw.packages ?? raw.plugins;
-    return Array.isArray(entries) ? entries : [];
-  })();
-
+  const list = Array.isArray(raw)
+    ? raw
+    : isRecord(raw)
+      ? (raw.entries ?? raw.packages ?? raw.plugins)
+      : undefined;
   const channels: ExternalCatalogChannelEntry[] = [];
-  for (const entry of list) {
+  for (const entry of Array.isArray(list) ? list : []) {
     if (!isRecord(entry) || !isRecord(entry.openclaw) || !isRecord(entry.openclaw.channel)) {
       continue;
     }
@@ -113,14 +107,6 @@ function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.Process
   return [];
 }
 
-function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
-  const builtInChannelId = normalizeChatChannelId(channelId);
-  if (!builtInChannelId) {
-    return [];
-  }
-  return findChatChannelMeta(builtInChannelId)?.preferOver ?? [];
-}
-
 function resolvePreferredOverIds(
   candidate: PluginAutoEnableCandidate,
   env: NodeJS.ProcessEnv,
@@ -137,15 +123,14 @@ function resolvePreferredOverIds(
   if (installedChannelMeta?.preferOver?.length) {
     return [...installedChannelMeta.preferOver];
   }
-  const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(channelId);
-  if (builtInChannelPreferOver.length) {
+  const builtInChannelId = normalizeChatChannelId(channelId);
+  const builtInChannelPreferOver = builtInChannelId
+    ? findChatChannelMeta(builtInChannelId)?.preferOver
+    : undefined;
+  if (builtInChannelPreferOver?.length) {
     return [...builtInChannelPreferOver];
   }
   return resolveExternalCatalogPreferOver(channelId, env);
-}
-
-function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {
-  return `${candidate.pluginId}:${candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId}`;
 }
 
 export function shouldSkipPreferredPluginAutoEnable(params: {
@@ -159,7 +144,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   preferOverCache: Map<string, string[]>;
 }): boolean {
   const getPreferredOverIds = (candidate: PluginAutoEnableCandidate): string[] => {
-    const cacheKey = getPluginAutoEnableCandidateCacheKey(candidate);
+    const cacheKey = `${candidate.pluginId}:${candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId}`;
     const cached = params.preferOverCache.get(cacheKey);
     if (cached) {
       return cached;
@@ -169,19 +154,11 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     return resolved;
   };
 
-  for (const other of params.configured) {
-    if (other.pluginId === params.entry.pluginId) {
-      continue;
-    }
-    if (
-      params.isPluginDenied(params.config, other.pluginId) ||
-      params.isPluginExplicitlyDisabled(params.config, other.pluginId)
-    ) {
-      continue;
-    }
-    if (getPreferredOverIds(other).includes(params.entry.pluginId)) {
-      return true;
-    }
-  }
-  return false;
+  return params.configured.some(
+    (other) =>
+      other.pluginId !== params.entry.pluginId &&
+      !params.isPluginDenied(params.config, other.pluginId) &&
+      !params.isPluginExplicitlyDisabled(params.config, other.pluginId) &&
+      getPreferredOverIds(other).includes(params.entry.pluginId),
+  );
 }

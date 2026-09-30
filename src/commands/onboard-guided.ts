@@ -543,7 +543,7 @@ async function runGuidedOnboardingFlow(
         ),
       );
       if (applied.lines.length > 0) {
-        await prompter.note(applied.lines.join("\n"), t("wizard.guided.appliedTitle"));
+        await prompter.note(applied.lines.join("\n"), t("wizard.guided.localSetupTitle"));
       }
       if (!applied.workspaceReady) {
         failureTitle = t("wizard.guided.workspaceSetupFailed");

@@ -20,7 +20,9 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   collectServiceInspectionFailureFacts,
@@ -55,6 +57,10 @@ it.each(["direct", "authority-lost", "ordinary"] as const)(
       const assertAdmission = () => assert.ok(current, lost);
       vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue({
         assertCurrent: assertAdmission,
+        readContinuation: () => {
+          assertAdmission();
+          return undefined;
+        },
         recordContinuation: assertAdmission,
       });
       const service = createMockGatewayService({
@@ -155,12 +161,15 @@ it.each([
       }
       await stop();
     });
+    const updateRun = runId ? { runId, env: process.env } : undefined;
+    const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, process.cwd());
     const params = {
       root: process.cwd(),
       updateInstallKind: "package" as const,
       shouldRestart: operation !== "no-restart",
       jsonMode: true,
-      ...(runId ? { updateRun: { runId, env: process.env } } : {}),
+      updateRun,
+      recordPhase,
     };
     const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
       ...params,
@@ -170,46 +179,50 @@ it.each([
     if (operation === "doctor" && inspected.serviceUpdateVerdict?.kind === "owned") {
       inspected.serviceUpdateVerdict.refreshDefinition = false;
     }
-    const stop = maybeStopManagedServiceBeforeMutableUpdate({
-      ...params,
-      expectedService: inspected,
-      ...(operation === "refresh" ? { phase: "refresh" as const } : {}),
-    });
-    if (operation === "refused" || operation === "changed-during-refresh") {
-      await expect(stop).rejects.toThrow(
-        operation === "refused" ? "owner phase session-mutation" : "definition changed",
-      );
-      expect(service.stop).not.toHaveBeenCalled();
-      return;
+    try {
+      const stop = maybeStopManagedServiceBeforeMutableUpdate({
+        ...params,
+        expectedService: inspected,
+        ...(operation === "refresh" ? { phase: "refresh" as const } : {}),
+      });
+      if (operation === "refused" || operation === "changed-during-refresh") {
+        await expect(stop).rejects.toThrow(
+          operation === "refused" ? "owner phase session-mutation" : "definition changed",
+        );
+        expect(service.stop).not.toHaveBeenCalled();
+        return;
+      }
+      const stopped = await stop;
+      if (["offline", "refresh", "no-restart"].includes(operation)) {
+        expect(timeout).toBe(330);
+        expect(stopped.stopped).toBe(false);
+        expect(service.stop).not.toHaveBeenCalled();
+        expect(service.start).not.toHaveBeenCalled();
+        expect(service.restart).not.toHaveBeenCalled();
+        return;
+      }
+      expect(service.stop).toHaveBeenCalledOnce();
+      expect(mocks.drain).toHaveBeenCalledOnce();
+      if (runId) {
+        expect(getUpdateRun(runId)?.steps).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              step: expect.stringMatching(/^warning:gateway-maintenance:/),
+              detail: warning,
+            }),
+          ]),
+        );
+      }
+      expect(stopped.serviceDefinitionEnv?.OPENCLAW_SERVICE_VERSION).toBe("2026.7.1-2");
+      const restored = await revalidateManagedGatewayServiceAfterUpdate({
+        root: params.root,
+        state: await readGatewayServiceState(service, { env: stopped.serviceEnv }),
+        preManagedServiceStop: stopped,
+      });
+      expect(restored).toMatchObject({ kind: "owned", refreshDefinition: operation !== "doctor" });
+    } finally {
+      await closeStateDatabaseForTest();
     }
-    const stopped = await stop;
-    if (["offline", "refresh", "no-restart"].includes(operation)) {
-      expect(timeout).toBe(330);
-      expect(stopped.stopped).toBe(false);
-      expect(service.stop).not.toHaveBeenCalled();
-      expect(service.start).not.toHaveBeenCalled();
-      expect(service.restart).not.toHaveBeenCalled();
-      return;
-    }
-    expect(service.stop).toHaveBeenCalledOnce();
-    expect(mocks.drain).toHaveBeenCalledOnce();
-    if (runId) {
-      expect(getUpdateRun(runId)?.steps).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            step: expect.stringMatching(/^warning:gateway-maintenance:/),
-            detail: warning,
-          }),
-        ]),
-      );
-    }
-    expect(stopped.serviceDefinitionEnv?.OPENCLAW_SERVICE_VERSION).toBe("2026.7.1-2");
-    const restored = await revalidateManagedGatewayServiceAfterUpdate({
-      root: params.root,
-      state: await readGatewayServiceState(service, { env: stopped.serviceEnv }),
-      preManagedServiceStop: stopped,
-    });
-    expect(restored).toMatchObject({ kind: "owned", refreshDefinition: operation !== "doctor" });
   }),
 );
 
@@ -630,25 +643,32 @@ it.each(["before stop", "after stop"] as const)(
         }),
       );
       let nativeFailure: unknown;
-      await expect(
-        withUpdateCommandExecutor(runId, async (executor) => {
-          const executorFence = await executor.enter(root);
-          try {
-            await maybeStopManagedServiceBeforeMutableUpdate({
-              updateRun: { runId, env: { ...process.env }, executorFence },
-              updateInstallKind: "package",
-              root,
-              shouldRestart: true,
-              jsonMode: true,
-              phase: "prepare",
-            });
-          } catch (error) {
-            nativeFailure = error;
-          }
-        }),
-      ).rejects.toThrow(/executor/);
-      expect(String(nativeFailure)).toMatch(/executor/);
-      expect(stop).toHaveBeenCalledTimes(when === "before stop" ? 0 : 1);
-      expect(store.read(root).kind).toBe("current");
+      try {
+        await expect(
+          withUpdateCommandExecutor(runId, async (executor) => {
+            const executorFence = await executor.enter(root);
+            const updateRun = { runId, env: { ...process.env }, executorFence };
+            const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, root);
+            try {
+              await maybeStopManagedServiceBeforeMutableUpdate({
+                updateRun,
+                recordPhase,
+                updateInstallKind: "package",
+                root,
+                shouldRestart: true,
+                jsonMode: true,
+                phase: "prepare",
+              });
+            } catch (error) {
+              nativeFailure = error;
+            }
+          }),
+        ).rejects.toThrow(/executor/);
+        expect(String(nativeFailure)).toMatch(/executor/);
+        expect(stop).toHaveBeenCalledTimes(when === "before stop" ? 0 : 1);
+        expect(store.read(root).kind).toBe("current");
+      } finally {
+        await closeStateDatabaseForTest();
+      }
     }),
 );

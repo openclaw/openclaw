@@ -1,9 +1,8 @@
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
-import { teamsMeetingsConfig } from "./config.js";
-import { createTeamsMeetingsNodeInvokePolicy } from "./node-invoke-policy.js";
+import { teamsMeetingsPlugin } from "../index.js";
 
-const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+const resolveTeamsMeetingsConfig = teamsMeetingsPlugin.config.resolveConfig;
 
 describe("Microsoft Teams meetings node invoke policy", () => {
   it("replaces setup probe commands with trusted configured commands", async () => {
@@ -15,7 +14,7 @@ describe("Microsoft Teams meetings node invoke policy", () => {
       },
     });
     const invokeNode = vi.fn(async () => ({ ok: true as const }));
-    const policy = createTeamsMeetingsNodeInvokePolicy(config);
+    const policy = teamsMeetingsPlugin.createNodePolicy(config);
 
     await policy.handle({
       command: "teamsmeetings.chrome",

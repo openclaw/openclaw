@@ -11,7 +11,6 @@ import type {
 import { ReasoningEffort$inboundSchema } from "@mistralai/mistralai/models/components/reasoningeffort.js";
 import { Chat } from "@mistralai/mistralai/sdk/chat";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
-import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
@@ -45,6 +44,7 @@ import {
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -120,10 +120,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
     const output = createAssistantOutput(model);
 
     try {
-      const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-      if (!apiKey) {
-        throw new Error(`No API key for provider: ${model.provider}`);
-      }
+      const apiKey = requireApiKey(model.provider, options?.apiKey);
 
       const boundedFetcher = createBoundedMistralFetcher(
         MISTRAL_STREAM_BODY_MAX_BYTES,
@@ -200,10 +197,7 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
   context: Context,
   options?: SimpleStreamOptions,
 ) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = {
     ...buildBaseOptions(model, options, apiKey),
@@ -392,6 +386,17 @@ async function consumeChatStream(
   const intersectCandidates = (left: Set<number>, right: Set<number>): Set<number> =>
     new Set([...left].filter((contentIndex) => right.has(contentIndex)));
 
+  const filterIdentityCandidates = (
+    candidates: Set<number>,
+    matches: (identity: ToolBlockIdentity) => boolean,
+  ): Set<number> =>
+    new Set(
+      [...candidates].filter((contentIndex) => {
+        const identity = toolBlockIdentities.get(contentIndex);
+        return identity !== undefined && matches(identity);
+      }),
+    );
+
   const requireSingleCandidate = (candidates: Set<number>): number | undefined => {
     if (candidates.size > 1) {
       throw new Error(
@@ -441,14 +446,9 @@ async function consumeChatStream(
     }
 
     if (nameCandidates.size > 0) {
-      const idCompatibleCandidates = new Set(
-        [...nameCandidates].filter((contentIndex) => {
-          const identity = toolBlockIdentities.get(contentIndex);
-          if (!identity) {
-            return false;
-          }
-          return !explicitId || identity.explicitIds.size === 0;
-        }),
+      const idCompatibleCandidates = filterIdentityCandidates(
+        nameCandidates,
+        (identity) => !explicitId || identity.explicitIds.size === 0,
       );
       if (
         idCompatibleCandidates.size <= 1 &&
@@ -459,22 +459,13 @@ async function consumeChatStream(
         // different call even when the provider repeats a function name.
         return requireSingleCandidate(idCompatibleCandidates);
       }
-      const indexCompatibleCandidates = new Set(
-        [...idCompatibleCandidates].filter((contentIndex) => {
-          const identity = toolBlockIdentities.get(contentIndex);
-          if (!identity) {
-            return false;
-          }
-          return (
-            toolCallIndex === undefined ||
-            identity.indexes.size === 0 ||
-            identity.indexes.has(toolCallIndex)
-          );
-        }),
+      const indexCompatibleCandidates = filterIdentityCandidates(
+        idCompatibleCandidates,
+        (identity) =>
+          toolCallIndex === undefined ||
+          identity.indexes.size === 0 ||
+          identity.indexes.has(toolCallIndex),
       );
-      if (indexCompatibleCandidates.size === 0) {
-        return undefined;
-      }
       return requireSingleCandidate(indexCompatibleCandidates);
     }
 
@@ -490,13 +481,10 @@ async function consumeChatStream(
       // A new name normally starts a sibling call even when the SDK's omitted
       // index default aliases an earlier block. It is a continuation only when
       // one nameless block can safely adopt the name.
-      const namelessCandidates = new Set(
-        [...indexCandidates].filter((contentIndex) => {
-          const identity = toolBlockIdentities.get(contentIndex);
-          return (
-            identity?.functionNames.size === 0 && (!explicitId || identity.explicitIds.size === 0)
-          );
-        }),
+      const namelessCandidates = filterIdentityCandidates(
+        indexCandidates,
+        (identity) =>
+          identity.functionNames.size === 0 && (!explicitId || identity.explicitIds.size === 0),
       );
       return requireSingleCandidate(namelessCandidates);
     }
@@ -504,10 +492,9 @@ async function consumeChatStream(
     if (explicitId) {
       // A provider id may arrive after an idless opening fragment. Adopt it
       // only when one indexed block still lacks an explicit id.
-      const idlessCandidates = new Set(
-        [...indexCandidates].filter(
-          (contentIndex) => toolBlockIdentities.get(contentIndex)?.explicitIds.size === 0,
-        ),
+      const idlessCandidates = filterIdentityCandidates(
+        indexCandidates,
+        (identity) => identity.explicitIds.size === 0,
       );
       return requireSingleCandidate(idlessCandidates);
     }
@@ -517,33 +504,22 @@ async function consumeChatStream(
     return requireSingleCandidate(indexCandidates);
   };
 
-  const finishCurrentBlock = (block?: typeof currentBlock) => {
-    if (!block) {
+  const finishCurrentBlock = () => {
+    if (!currentBlock) {
       return;
     }
-    if (block.type === "text") {
-      stream.push({
-        type: "text_end",
-        contentIndex: blockIndex(),
-        content: block.text,
-        partial: output,
-      });
-      return;
-    }
-    if (block.type === "thinking") {
-      stream.push({
-        type: "thinking_end",
-        contentIndex: blockIndex(),
-        content: block.thinking,
-        partial: output,
-      });
-    }
+    stream.push({
+      type: currentBlock.type === "text" ? "text_end" : "thinking_end",
+      contentIndex: blockIndex(),
+      content: currentBlock.type === "text" ? currentBlock.text : currentBlock.thinking,
+      partial: output,
+    });
   };
 
   const appendTextDelta = (text: string) => {
     const textDelta = sanitizeSurrogates(text);
     if (!currentBlock || currentBlock.type !== "text") {
-      finishCurrentBlock(currentBlock);
+      finishCurrentBlock();
       currentBlock = { type: "text", text: "" };
       output.content.push(currentBlock);
       stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
@@ -614,7 +590,7 @@ async function consumeChatStream(
             continue;
           }
           if (!currentBlock || currentBlock.type !== "thinking") {
-            finishCurrentBlock(currentBlock);
+            finishCurrentBlock();
             currentBlock = { type: "thinking", thinking: "" };
             output.content.push(currentBlock);
             stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
@@ -642,7 +618,7 @@ async function consumeChatStream(
     const usedToolBlockIndexes = new Set<number>();
     for (const toolCall of toolCalls) {
       if (currentBlock) {
-        finishCurrentBlock(currentBlock);
+        finishCurrentBlock();
         currentBlock = null;
       }
       const toolCallIndex =
@@ -729,7 +705,7 @@ async function consumeChatStream(
     }
   }
 
-  finishCurrentBlock(currentBlock);
+  finishCurrentBlock();
   // Only an authoritative tool terminal can make strictly parsed arguments executable.
   if (!terminalFinishReason || output.stopReason !== "toolUse") {
     blocks.splice(0, blocks.length, ...blocks.filter((block) => block.type !== "toolCall"));

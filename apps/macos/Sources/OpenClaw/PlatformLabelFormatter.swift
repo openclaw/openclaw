@@ -22,7 +22,7 @@ enum PlatformLabelFormatter {
         default: prefix.prefix(1).uppercased() + prefix.dropFirst()
         }
         guard let version, !version.isEmpty else { return name }
-        let parts = version.split(separator: ".").map(String.init)
+        let parts = version.split(separator: ".")
         if parts.count >= 2 {
             return "\(name) \(parts[0]).\(parts[1])"
         }

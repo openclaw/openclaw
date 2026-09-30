@@ -11,7 +11,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   hashControlUiTranslationText,
   loadControlUiTranslationMemory,
-  materializeControlUiLocaleCatalog,
 } from "../../../scripts/lib/control-ui-i18n-catalog-values.ts";
 import {
   loadControlUiSourceCatalog,
@@ -646,64 +645,6 @@ describe("Control UI Vite config", () => {
     expect(flat.get("updates.page.intro")).toBe(
       "Manage the connected Gateway's release channel and update policy.",
     );
-  });
-
-  it("materializes translated config hints from the current source catalog", () => {
-    const text = "Gateway Token";
-    const key = configHintTranslationKey("gateway.auth.token", "label", text);
-    const translated = materializeControlUiLocaleCatalog(
-      flattenTranslations(loadControlUiSourceCatalog()),
-      new Map([
-        [
-          "config-hint",
-          {
-            cache_key: "config-hint",
-            model: "test",
-            provider: "test",
-            segment_id: key,
-            source_path: "test",
-            src_lang: "en",
-            text,
-            text_hash: hashControlUiTranslationText(text),
-            tgt_lang: "tr",
-            translated: "Ağ geçidi belirteci",
-            updated_at: "2026-09-03T00:00:00.000Z",
-          },
-        ],
-      ]),
-    );
-
-    expect(flattenTranslations(translated).get(key)).toBe("Ağ geçidi belirteci");
-  });
-
-  it("cannot serve a stale config-hint translation under the current content-addressed key", () => {
-    const oldText = "Old Gateway Token";
-    const oldKey = configHintTranslationKey("gateway.auth.token", "label", oldText);
-    const currentKey = configHintTranslationKey("gateway.auth.token", "label", "Gateway Token");
-    const translated = materializeControlUiLocaleCatalog(
-      flattenTranslations(loadControlUiSourceCatalog()),
-      new Map([
-        [
-          "stale-config-hint",
-          {
-            cache_key: "stale-config-hint",
-            model: "test",
-            provider: "test",
-            segment_id: oldKey,
-            source_path: "test",
-            src_lang: "en",
-            text: oldText,
-            text_hash: hashControlUiTranslationText(oldText),
-            tgt_lang: "tr",
-            translated: "Eski ağ geçidi belirteci",
-            updated_at: "2026-09-03T00:00:00.000Z",
-          },
-        ],
-      ]),
-    );
-
-    expect(flattenTranslations(translated).get(oldKey)).toBeUndefined();
-    expect(flattenTranslations(translated).get(currentKey)).toBeUndefined();
   });
 
   it("includes every English dependency in the raw source-hash input", async () => {

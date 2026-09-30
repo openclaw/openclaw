@@ -16,9 +16,7 @@ extension MacGatewayChatTransport {
         try await OpenClawChatAgentsListResponse.load(
             request: { request in
                 try await self.connection.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
+                    request,
                     ifCurrentServerLease: serverLease)
             },
             isCurrent: { await self.connection.isCurrentServerLease(serverLease) },
@@ -30,9 +28,7 @@ extension MacGatewayChatTransport {
         guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
         let request: @Sendable (OpenClawChatGatewayRequest) async throws -> Data = { request in
             try await self.connection.request(
-                method: request.method,
-                params: request.params,
-                timeoutMs: request.timeoutMs,
+                request,
                 ifCurrentServerLease: serverLease)
         }
         return OpenClawChatNewSessionRouteLease(
@@ -60,9 +56,7 @@ extension MacGatewayChatTransport {
         guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
         let request: @Sendable (OpenClawChatGatewayRequest) async throws -> Data = { request in
             try await self.connection.request(
-                method: request.method,
-                params: request.params,
-                timeoutMs: request.timeoutMs,
+                request,
                 ifCurrentServerLease: serverLease)
         }
         return OpenClawChatSessionGroupsRouteLease(
@@ -94,11 +88,10 @@ extension MacGatewayChatTransport {
         return OpenClawChatSessionMutationRouteLease(
             sessionTarget: { transport.sessionTarget(for: $0) },
             unreadAckContract: unreadAckContract,
+            receivesPatchReceipts: true,
             request: { request in
                 try await self.connection.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
+                    request,
                     ifCurrentServerLease: serverLease)
             })
     }
@@ -109,9 +102,7 @@ extension MacGatewayChatTransport {
         }
         try await self.requireCurrentOutboxGateway()
         return try await self.connection.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
+            request,
             ifCurrentServerLease: serverLease)
     }
 

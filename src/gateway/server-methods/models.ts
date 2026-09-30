@@ -3,7 +3,6 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-// Models gateway methods expose prepared, cached, and explicitly refreshed catalog views.
 import {
   ErrorCodes,
   errorShape,
@@ -17,6 +16,7 @@ import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { authorizeCurrentOperatorRoleScopes } from "../operator-role-policy.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";
+import { projectModelFastModeCatalog } from "../session-fast-mode-presentation.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
@@ -107,7 +107,8 @@ export const modelsHandlers: GatewayRequestHandlers = {
           GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
         ),
         requesterProfileId: publicationScope.requesterProfileId,
-        ...(scope ? { readScope: scope } : {}),
+        readScope: scope,
+        publicationScope,
       });
       publicationScope.draftAccountSelection?.assertCurrent();
       publicationScope.assertCurrent?.();
@@ -124,7 +125,11 @@ export const modelsHandlers: GatewayRequestHandlers = {
         policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,
         client,
       })?.forAgent(resolved.agentId, projected.models);
-      respond(true, policy ? policy.catalog(projected) : projected, undefined);
+      respond(
+        true,
+        projectModelFastModeCatalog(policy ? policy.catalog(projected) : projected, client),
+        undefined,
+      );
     } catch (error) {
       if (error instanceof UnknownModelCatalogProviderError) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));

@@ -12,7 +12,7 @@ import { saveCronStore } from "../store.js";
 import { bindCronRunReceiptExecution } from "./run-receipt-execution-binding.js";
 import {
   bindCronRunReceiptExecutionInDatabase,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "./run-receipt-store.js";
@@ -96,7 +96,7 @@ describe("cron receipt execution-binding admission", () => {
         ).toBe("mismatch");
         retainedDb.exec("DROP TABLE execution_owner_lifecycle_bindings");
         expect(bind()).toBe("bound");
-        finishCronRunReceipt({ handle: receipt, status: "ok", finishedAtMs: 110 });
+        await finishCronRunReceiptAsync({ handle: receipt, status: "ok", finishedAtMs: 110 });
       },
     );
   });

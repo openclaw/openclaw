@@ -21,6 +21,21 @@ describe("buildSlackBlocksFallbackText", () => {
     ).toBe("Latency chart");
   });
 
+  it.each([
+    ["image", "Alt &lt;@U123&gt;", "Alt &lt;@U123&gt;"],
+    ["video", "Title &lt;@U123&gt;", "Title <@U123>"],
+  ])("preserves %s title/alt precedence and formatting", (type, escaped, plain) => {
+    const block = {
+      type,
+      alt_text: " Alt <@U123> ",
+      title: { type: "plain_text", text: " Title <@U123> " },
+    };
+    expect(renderSlackBlockFallbackText(block)).toBe(escaped);
+    expect(renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" })).toBe(plain);
+    expect(renderSlackBlockFallbackText({ ...block, alt_text: "" })).toBe("Title &lt;@U123&gt;");
+    expect(renderSlackBlockFallbackText({ ...block, title: null })).toBe("Alt &lt;@U123&gt;");
+  });
+
   it("renders inbound table cells as bounded delimiter-safe TSV", () => {
     const table = {
       type: "table",

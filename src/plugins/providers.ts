@@ -379,10 +379,6 @@ function resolveManifestRegistry(params: {
   });
 }
 
-function stripModelProfileSuffix(value: string): string {
-  return splitTrailingAuthProfile(value).model;
-}
-
 function splitExplicitModelRef(rawModel: string): { provider?: string; modelId: string } | null {
   const trimmed = rawModel.trim();
   if (!trimmed) {
@@ -390,11 +386,11 @@ function splitExplicitModelRef(rawModel: string): { provider?: string; modelId: 
   }
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
-    const modelId = stripModelProfileSuffix(trimmed);
+    const modelId = splitTrailingAuthProfile(trimmed).model;
     return modelId ? { modelId } : null;
   }
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const modelId = stripModelProfileSuffix(trimmed.slice(slash + 1));
+  const modelId = splitTrailingAuthProfile(trimmed.slice(slash + 1)).model;
   if (!provider || !modelId) {
     return null;
   }
@@ -402,13 +398,8 @@ function splitExplicitModelRef(rawModel: string): { provider?: string; modelId: 
 }
 
 function matchesModelPattern(plugin: PluginManifestRecord, modelId: string): boolean {
-  const patterns = plugin.modelSupport?.modelPatterns ?? [];
-  for (const patternSource of patterns) {
-    // compileSafeRegex rejects patterns with nested repetition (ReDoS risk)
-    // and returns null. Rejected patterns are silently skipped: the plugin
-    // will not match via that pattern but other patterns/prefixes still apply.
-    const regex = compileSafeRegex(patternSource, "u");
-    if (regex?.test(modelId)) {
+  for (const pattern of plugin.modelSupport?.modelPatterns ?? []) {
+    if (compileSafeRegex(pattern, "u")?.test(modelId)) {
       return true;
     }
   }
@@ -681,6 +672,28 @@ export function resolveOwningPluginIdsForModelRefs(params: {
   );
 }
 
+function resolveHookProviderPluginIds(
+  params: ProviderManifestLoadParams & {
+    registry: PluginRegistrySnapshot;
+    manifestRegistry: PluginManifestRegistry;
+  },
+  hasHook: (pluginId: string) => boolean,
+  normalizedConfig: NormalizedPluginsConfig,
+): string[] {
+  const enabledPluginIds = listRegistryPluginIds(
+    params.registry,
+    (plugin) =>
+      hasHook(plugin.pluginId) &&
+      resolveEffectiveRegistryPluginActivation({
+        plugin,
+        normalizedConfig,
+        rootConfig: params.config,
+      }).activated,
+  );
+  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds(params).filter(hasHook);
+  return sortUniqueStrings([...enabledPluginIds, ...bundledCompatPluginIds]);
+}
+
 export function resolveCatalogHookProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -701,23 +714,11 @@ export function resolveCatalogHookProviderPluginIds(params: {
       manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
     ),
   );
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
-  const enabledProviderPluginIds = listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      providerSurfacePluginIds.has(plugin.pluginId) &&
-      runtimeAugmentPluginIds.has(plugin.pluginId) &&
-      resolveEffectiveRegistryPluginActivation({
-        plugin,
-        normalizedConfig,
-        rootConfig: params.config,
-      }).activated,
+  return resolveHookProviderPluginIds(
+    { ...params, registry, manifestRegistry },
+    (pluginId) => providerSurfacePluginIds.has(pluginId) && runtimeAugmentPluginIds.has(pluginId),
+    normalizePluginsConfigWithRegistry(params.config?.plugins, registry),
   );
-  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds({
-    ...params,
-    manifestRegistry,
-  }).filter((pluginId) => runtimeAugmentPluginIds.has(pluginId));
-  return sortUniqueStrings([...enabledProviderPluginIds, ...bundledCompatPluginIds]);
 }
 
 type UsageHookProviderPluginContract = {
@@ -743,24 +744,11 @@ export function resolveUsageHookProviderPluginContracts(params: {
       plugin.contracts?.usageProviders?.length ? [plugin.id] : [],
     ),
   );
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
-    manifestRegistry,
-  });
-  const enabledPluginIds = listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      usagePluginIds.has(plugin.pluginId) &&
-      resolveEffectiveRegistryPluginActivation({
-        plugin,
-        normalizedConfig,
-        rootConfig: params.config,
-      }).activated,
+  const pluginIds = resolveHookProviderPluginIds(
+    { ...params, registry, manifestRegistry },
+    (pluginId) => usagePluginIds.has(pluginId),
+    normalizePluginsConfigWithRegistry(params.config?.plugins, registry, { manifestRegistry }),
   );
-  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds({
-    ...params,
-    manifestRegistry,
-  }).filter((pluginId) => usagePluginIds.has(pluginId));
-  const pluginIds = sortUniqueStrings([...enabledPluginIds, ...bundledCompatPluginIds]);
   const manifestsById = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
   return pluginIds.flatMap((pluginId) => {
     const providerIds = sortUniqueStrings(

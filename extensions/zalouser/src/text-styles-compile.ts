@@ -245,26 +245,14 @@ export function collectBlockEdits(
           text: marker,
         });
       }
-    } else if (block.kind === "heading" && sourceBlock.headingOrigin === "setext") {
-      const lineIndex = (sourceBlock.sourceEndLine ?? 1) - 1;
-      const line = sourceLines[lineIndex] ?? "";
-      const projection = sourceContainerProjection(
-        line,
-        lineIndex,
-        sourceIR,
-        sourceLineStarts,
-        sourceLines,
-        sourceBlock.blockquoteDepth ?? 0,
-      );
-      const marker = `${" ".repeat(projection.residual)}${line.slice(projection.offset)}`;
-      const offset = projectOffset(offsets, block.end);
-      edits.push({
-        start: offset,
-        end: offset,
-        text: `\n${marker}`,
-      });
-    } else if (block.kind === "thematic_break") {
-      const lineIndex = sourceBlock.sourceStartLine ?? 0;
+    } else if (
+      (block.kind === "heading" && sourceBlock.headingOrigin === "setext") ||
+      block.kind === "thematic_break"
+    ) {
+      const isHeading = block.kind === "heading";
+      const lineIndex = isHeading
+        ? (sourceBlock.sourceEndLine ?? 1) - 1
+        : (sourceBlock.sourceStartLine ?? 0);
       const line = sourceLines[lineIndex] ?? "";
       const projection = sourceContainerProjection(
         line,
@@ -275,14 +263,21 @@ export function collectBlockEdits(
         sourceBlock.blockquoteDepth ?? 0,
       );
       edits.push({
-        start: projectOffset(offsets, block.start),
+        start: projectOffset(offsets, isHeading ? block.end : block.start),
         end: projectOffset(offsets, block.end),
-        text: `${" ".repeat(projection.residual)}${line.slice(projection.offset)}`,
+        text: `${isHeading ? "\n" : ""}${" ".repeat(projection.residual)}${line.slice(projection.offset)}`,
       });
     }
   }
   edits.push(
-    ...collectSourceSpacingEdits(ir, sourceIR, offsets, projectedText, source).filter(
+    ...collectSourceSpacingEdits(
+      ir,
+      sourceIR,
+      offsets,
+      projectedText,
+      sourceLines,
+      sourceLineStarts,
+    ).filter(
       (spacingEdit) =>
         !edits.some((edit) => spacingEdit.start < edit.end && spacingEdit.end > edit.start),
     ),
@@ -337,15 +332,9 @@ function collectSourceSpacingEdits(
   sourceIR: MarkdownIRWithBlockMetadata,
   offsets: number[],
   text: string,
-  source: string,
+  sourceLines: string[],
+  sourceLineStarts: number[],
 ): TextEdit[] {
-  const sourceLines = source.split("\n");
-  const sourceLineStarts = sourceLines.reduce<number[]>((starts, _line, index) => {
-    starts.push(
-      index === 0 ? 0 : (starts[index - 1] ?? 0) + (sourceLines[index - 1]?.length ?? 0) + 1,
-    );
-    return starts;
-  }, []);
   const boundaries = [
     ...(ir.blocks ?? []).map((block) =>
       Object.assign({}, block, {

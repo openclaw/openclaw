@@ -7,13 +7,9 @@ enum CommandResolver {
     static let versionProbeTimeout: TimeInterval = 10
 
     static func gatewayEntrypoint(in root: URL) -> String? {
-        let distEntry = root.appendingPathComponent("dist/index.js").path
-        if FileManager().isReadableFile(atPath: distEntry) { return distEntry }
-        let openclawEntry = root.appendingPathComponent("openclaw.mjs").path
-        if FileManager().isReadableFile(atPath: openclawEntry) { return openclawEntry }
-        let binEntry = root.appendingPathComponent("bin/openclaw.js").path
-        if FileManager().isReadableFile(atPath: binEntry) { return binEntry }
-        return nil
+        ["dist/index.js", "openclaw.mjs", "bin/openclaw.js"]
+            .lazy.map { root.appendingPathComponent($0).path }
+            .first { FileManager().isReadableFile(atPath: $0) }
     }
 
     static func runtimeResolution(searchPaths: [String]?) async -> Result<RuntimeResolution, RuntimeResolutionError> {
@@ -35,11 +31,9 @@ enum CommandResolver {
         profile: AppProfile = .current,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL
     {
-        if let stored = defaults.string(forKey: projectRootDefaultsKey),
-           let url = expandPath(stored),
-           FileManager().fileExists(atPath: url.path)
-        {
-            return url
+        if let stored = defaults.string(forKey: projectRootDefaultsKey) {
+            let url = self.expandPath(stored)
+            if FileManager().fileExists(atPath: url.path) { return url }
         }
         if profile.isActive {
             return profile.stateDirectoryURL(homeDirectory: homeDirectory)
@@ -151,35 +145,16 @@ enum CommandResolver {
     }
 
     private static func openclawManagedPaths(home: URL, profile: AppProfile) -> [String] {
-        let bases = [profile.stateDirectoryURL(homeDirectory: home)]
-        var paths: [String] = []
-        for base in bases {
-            let bin = base.appendingPathComponent("bin")
-            let nodeBin = base.appendingPathComponent("tools/node/bin")
-            if FileManager().fileExists(atPath: bin.path) {
-                paths.append(bin.path)
-            }
-            if FileManager().fileExists(atPath: nodeBin.path) {
-                paths.append(nodeBin.path)
-            }
-        }
-        return paths
+        let base = profile.stateDirectoryURL(homeDirectory: home)
+        return ["bin", "tools/node/bin"]
+            .map { base.appendingPathComponent($0).path }
+            .filter { FileManager().fileExists(atPath: $0) }
     }
 
     private static func nodeManagerBinPaths(home: URL) -> [String] {
-        var bins: [String] = []
-
-        // Volta
-        let volta = home.appendingPathComponent(".volta/bin")
-        if FileManager().fileExists(atPath: volta.path) {
-            bins.append(volta.path)
-        }
-
-        // asdf
-        let asdf = home.appendingPathComponent(".asdf/shims")
-        if FileManager().fileExists(atPath: asdf.path) {
-            bins.append(asdf.path)
-        }
+        var bins = [".volta/bin", ".asdf/shims"]
+            .map { home.appendingPathComponent($0).path }
+            .filter { FileManager().fileExists(atPath: $0) }
 
         // fnm
         bins.append(contentsOf: self.versionedNodeBinPaths(
@@ -196,12 +171,7 @@ enum CommandResolver {
 
     private static func versionedNodeBinPaths(base: URL, suffix: String) -> [String] {
         guard FileManager().fileExists(atPath: base.path) else { return [] }
-        let entries: [String]
-        do {
-            entries = try FileManager().contentsOfDirectory(atPath: base.path)
-        } catch {
-            return []
-        }
+        guard let entries = try? FileManager().contentsOfDirectory(atPath: base.path) else { return [] }
 
         let sorted = entries.compactMap { entry -> (name: String, version: RuntimeVersion)? in
             guard let version = RuntimeVersion.from(string: entry),
@@ -263,7 +233,7 @@ enum CommandResolver {
         // Packaging and optimization are independent: even DEBUG apps must use
         // their signed payload, including after relocation or checkout removal.
         if bundle.bundleURL.pathExtension == "app" {
-            return try BundledNodeWorker.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
+            return try BundledRuntime.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
         }
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
@@ -493,7 +463,7 @@ enum CommandResolver {
         return nil
     }
 
-    private static func expandPath(_ path: String) -> URL? {
+    private static func expandPath(_ path: String) -> URL {
         var expanded = path
         if expanded.hasPrefix("~") {
             let home = FileManager().homeDirectoryForCurrentUser.path
@@ -511,9 +481,9 @@ enum CommandResolver {
         return trimmed
     }
 
-    private static func isValidSSHComponent(_ value: String, allowLeadingDash: Bool = false) -> Bool {
+    private static func isValidSSHComponent(_ value: String) -> Bool {
         if value.isEmpty { return false }
-        if !allowLeadingDash, value.hasPrefix("-") { return false }
+        if value.hasPrefix("-") { return false }
         let invalid = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
         return value.rangeOfCharacter(from: invalid) == nil
     }
@@ -522,15 +492,9 @@ enum CommandResolver {
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.isValidSSHComponent(trimmedHost) else { return nil }
         let trimmedUser = user?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedUser: String?
-        if let trimmedUser {
-            guard self.isValidSSHComponent(trimmedUser) else { return nil }
-            normalizedUser = trimmedUser.isEmpty ? nil : trimmedUser
-        } else {
-            normalizedUser = nil
-        }
+        if let trimmedUser, !self.isValidSSHComponent(trimmedUser) { return nil }
         guard port > 0, port <= 65535 else { return nil }
-        return SSHParsedTarget(user: normalizedUser, host: trimmedHost, port: port)
+        return SSHParsedTarget(user: trimmedUser, host: trimmedHost, port: port)
     }
 
     private static func sshTargetString(_ target: SSHParsedTarget) -> String {

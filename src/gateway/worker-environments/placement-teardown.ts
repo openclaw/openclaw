@@ -19,30 +19,27 @@ export function completeRecoveredWorkspaceTeardown(params: {
   turnClaim: WorkerSessionTurnClaim;
 }) {
   const move = params.placements.getPlacementMove(params.placement.sessionId);
+  const owner = {
+    placements: params.placements,
+    turnClaim: params.turnClaim,
+    environmentId: params.placement.environmentId,
+    ownerEpoch: params.placement.activeOwnerEpoch,
+  };
   return move
     ? completeMovedWorkspaceTeardown({
-        placements: params.placements,
-        turnClaim: params.turnClaim,
-        environmentId: params.placement.environmentId,
-        ownerEpoch: params.placement.activeOwnerEpoch,
+        ...owner,
         operationId: move.operationId,
       })
-    : completeReclaimedWorkspaceTeardown({
-        placements: params.placements,
-        turnClaim: params.turnClaim,
-        environmentId: params.placement.environmentId,
-        ownerEpoch: params.placement.activeOwnerEpoch,
-      });
+    : completeReclaimedWorkspaceTeardown(owner);
 }
 
 /** Close the workspace-result fence, then advance the exact drained owner into reconciliation. */
-function completeDrainedWorkspaceTeardown(params: {
+function startDrainedWorkspaceReconciliation(params: {
   placements: PlacementTeardownStore;
   turnClaim: WorkerSessionTurnClaim;
   environmentId: string;
   ownerEpoch: number;
-  complete: (placement: ReconcilingPlacement) => WorkerSessionPlacementRecord;
-}): WorkerSessionPlacementRecord {
+}): ReconcilingPlacement {
   const drained = params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
   if (
     drained.state !== "draining" ||
@@ -60,7 +57,7 @@ function completeDrainedWorkspaceTeardown(params: {
   if (reconciling.state !== "reconciling") {
     throw new Error(`Session ${params.turnClaim.sessionId} did not enter reconciliation`);
   }
-  return params.complete(reconciling);
+  return reconciling;
 }
 
 export function completeMovedWorkspaceTeardown(params: {
@@ -70,14 +67,11 @@ export function completeMovedWorkspaceTeardown(params: {
   ownerEpoch: number;
   operationId: string;
 }): Extract<WorkerSessionPlacementRecord, { state: "local" }> {
-  const completed = completeDrainedWorkspaceTeardown({
-    ...params,
-    complete: (reconciling) =>
-      params.placements.completePlacementMoveSourceToLocal({
-        operationId: params.operationId,
-        sessionId: reconciling.sessionId,
-        expectedGeneration: reconciling.generation,
-      }),
+  const reconciling = startDrainedWorkspaceReconciliation(params);
+  const completed = params.placements.completePlacementMoveSourceToLocal({
+    operationId: params.operationId,
+    sessionId: reconciling.sessionId,
+    expectedGeneration: reconciling.generation,
   });
   if (completed.state !== "local") {
     throw new Error(`Session ${params.turnClaim.sessionId} move did not finish local`);
@@ -91,15 +85,12 @@ export function completeReclaimedWorkspaceTeardown(params: {
   environmentId: string;
   ownerEpoch: number;
 }): Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }> {
-  const completed = completeDrainedWorkspaceTeardown({
-    ...params,
-    complete: (reconciling) =>
-      params.placements.transition({
-        sessionId: reconciling.sessionId,
-        from: "reconciling",
-        to: "reclaimed",
-        expectedGeneration: reconciling.generation,
-      }),
+  const reconciling = startDrainedWorkspaceReconciliation(params);
+  const completed = params.placements.transition({
+    sessionId: reconciling.sessionId,
+    from: "reconciling",
+    to: "reclaimed",
+    expectedGeneration: reconciling.generation,
   });
   if (completed.state !== "reclaimed") {
     throw new Error(`Session ${params.turnClaim.sessionId} teardown did not finish reclaimed`);

@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements bot preflight behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -47,13 +46,6 @@ function normalizeUrlForMatch(value: string | undefined): string {
   } catch {
     return value.trim().replace(/\/$/, "");
   }
-}
-
-function coerceFeatureMask(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
-    return value;
-  }
-  return parseStrictNonNegativeInteger(value);
 }
 
 function formatMissingResponseFeatureMessage(bot: NextcloudTalkBotAdminEntry, features?: number) {
@@ -148,7 +140,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
         };
       }
 
-      const features = coerceFeatureMask(bot.features);
+      const features = parseStrictNonNegativeInteger(bot.features);
       if (features == null || (features & BOT_FEATURE_RESPONSE) !== BOT_FEATURE_RESPONSE) {
         return {
           ok: false,

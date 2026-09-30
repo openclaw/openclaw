@@ -25,6 +25,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { PRESENCE_QUERY_TIMEOUT_MS } from "../agents/tools/presence-tool-contract.js";
 import {
   WorkerAdmissionDeadlineExceededError,
   WorkerAdmissionError,
@@ -33,6 +34,7 @@ import {
 } from "./worker-connection-contract.js";
 import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
+import { registerWorkerGatewayToolTransportTests } from "./worker-connection-gateway-tools.suite.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 
 const FRAME_CONNECT_PARAMS: WorkerConnectParams = {
@@ -207,11 +209,15 @@ describe("worker admission write completion", () => {
       await f.starting;
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const received = once(attempt.peer, "message");
-      const pending = f.connection.requestPresence({
-        toolCallId: "cold-presence",
-        action: "list",
-        include: ["location"],
-      });
+      const pending = f.connection.invokeGatewayTool(
+        {
+          generation: "presence-surface",
+          toolId: "presence",
+          toolCallId: "cold-presence",
+          arguments: { action: "list", include: ["location"] },
+        },
+        { timeoutMs: PRESENCE_QUERY_TIMEOUT_MS },
+      );
       let settled = false;
       void pending.then(
         () => {
@@ -230,7 +236,7 @@ describe("worker admission write completion", () => {
           type: "res",
           id: frame.id,
           ok: true,
-          payload: { resultJson: JSON.stringify({ content: [], details: { status: "ok" } }) },
+          payload: { content: [], details: { status: "ok" } },
         }),
       );
       await expect(pending).resolves.toMatchObject({ ok: true });
@@ -995,3 +1001,5 @@ describe("WorkerConnection inference listener isolation", () => {
     expect(observed).toEqual([1, 2]);
   });
 });
+
+registerWorkerGatewayToolTransportTests(FRAME_CONNECT_PARAMS);

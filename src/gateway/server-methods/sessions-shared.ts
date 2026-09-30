@@ -1,4 +1,3 @@
-// Shared session-handler target resolution and mutation guards.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -10,7 +9,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
@@ -22,7 +20,7 @@ import type { SessionWorkerPlacementContext } from "../worker-environments/sessi
 import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-export const sessionLog = createSubsystemLogger("gateway/sessions");
+export { sessionLog } from "../session-log.js";
 
 export function resolveSessionWorkerPlacementPatchError(params: {
   agentId: string;
@@ -87,15 +85,11 @@ export const loadSessionsRuntimeModule = createLazyRuntimeModule(
 );
 
 export function requireSessionKey(key: unknown, respond: RespondFn): string | null {
-  const raw =
-    typeof key === "string"
-      ? key
-      : typeof key === "number"
-        ? String(key)
-        : typeof key === "bigint"
-          ? String(key)
-          : "";
-  const normalized = normalizeOptionalString(raw) ?? "";
+  const normalized = normalizeOptionalString(
+    typeof key === "string" || typeof key === "number" || typeof key === "bigint"
+      ? String(key)
+      : undefined,
+  );
   if (!normalized) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
     return null;

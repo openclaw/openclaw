@@ -1,4 +1,3 @@
-// Setup gateway config helpers build gateway config from onboarding answers.
 import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatPortRangeHint } from "../cli/error-format.js";

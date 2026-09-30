@@ -1,4 +1,3 @@
-// Defines the Gateway config labels exposed by schema metadata.
 export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   gateway: "Gateway",
   "gateway.port": "Gateway Port",

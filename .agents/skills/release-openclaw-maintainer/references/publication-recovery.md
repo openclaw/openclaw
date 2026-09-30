@@ -24,8 +24,6 @@ Extended-stable direct npm workflow recovery also uses a protected tooling tag;
 follow [trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery)
 for plugin source inputs and the matching core evidence handoff. It does not use
 the shared publish parent or authorize ClawHub publication.
-The Tideclaw alpha branch route is currently blocked by the protected-tag
-publication contract; see its owning skill. Do not widen the environment policy.
 
 Publication promotes previously qualified bytes. Bind the successful Full
 Release Validation manifest, exact target SHA, successful attempt, and npm
@@ -84,6 +82,12 @@ attempts and required approvals. Do not substitute a manual child approval for
 the parent's authorization. See `$release-openclaw-ci` Publish children for
 stale-child cleanup.
 
+The parent waits up to 50 minutes for its own `sync_beta_to_stable` run
+(`RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS`). If it is still running at the
+deadline, the parent reports its URL and stops before verification judges the
+beta floor. Inspect that existing run before resuming; do not dispatch another
+sync merely because the parent's wait expired.
+
 Follow the [release policy](../../../../docs/reference/RELEASING.md): once a beta tag has been pushed, use the
 next beta number rather than deleting or recreating it, even before npm
 publication. Published npm versions and final stable/extended-stable tags remain
@@ -130,12 +134,79 @@ rerun only failed verification jobs when the publisher succeeded; otherwise
 inspect its children and follow the recovery route above. Never repeat an
 uncertain dispatch or rerun all publication jobs to fix a download failure.
 
+ClawHub v2 publishes stage immutable bytes before the parent succeeds. With
+`wait_for_clawhub=true`, one plugin failure fails the child and parent, stranding
+staged siblings. Recover their attempts before resuming the parent. The release
+plan checks the public version publication-state endpoint: pending and failed
+versions are excluded from republishing, while only absent versions become
+candidates. Pending attempts wait for their original parent; failed attempts
+appear in the workflow summary with a recovery command when eligible, or an
+operator-action notice otherwise. Edit the pinned-checkout and reason placeholders
+before running recovery with a human publisher token. Recovery eligibility is
+advisory and is revalidated by ClawHub. A version 404 alone does not prove absence;
+older servers fall back to that probe until the publication endpoint is deployed.
+
+Download the original child's `*-publish-json` artifacts (retain its exact run
+and attempt), then render recovery commands for that release version:
+
+```bash
+gh run download <original-clawhub-child-run> --repo openclaw/openclaw \
+  --pattern '*-publish-json' --dir /path/to/child-publish-json
+pnpm release:clawhub-recovery -- --version <published-version> \
+  --reason 'Recover staged packages after parent <run>/<attempt> failed' \
+  --clawhub-source /path/to/isolated-pinned-clawhub \
+  /path/to/child-publish-json/*/package-publish.json
+```
+
+Use isolated ClawHub source at `7e2aa3cec5d35c91bb6163aa6676541d795876c5`
+with frozen Bun dependencies; npm `clawhub@0.23.3` lacks `package recover`.
+The helper only prints commands. Review artifact IDs, original child/parent
+attempts, and current state before execution under explicit recovery authority
+and the approved credential workflow. Each command is
+`bun <checkout>/packages/clawhub/src/cli.ts --no-input package recover <attemptId> --manual-override-reason '<reason>' --wait --wait-timeout 1800 --json`.
+ClawHub reuses staged bytes and records a successor attempt; retain its response
+as release evidence. It requires an authorized publisher API token, the current
+failed attempt with a pending release, no active claims, and valid original v2
+authorization/artifact bindings. Stored `pending` is historical evidence;
+running, blocked, or expired attempts need diagnosis. Missing artifacts/IDs
+require original-child log/owner reconciliation, never guessed republishing:
+JSON uploads currently run only after successful publish steps. Review commands
+before executing; never automatically override scan failures. Verify recovered
+versions publicly before final release verification.
+
+With `wait_for_clawhub=false` the parent authorizes the ClawHub child and
+does not wait for it. The child publishes on its own and needs no approval.
+It revalidates that the parent is still active or succeeded, so a parent that
+fails first strands it. Watch the child until every package's
+`versions/<version>` returns 200. Seen in 2026.9.6: Convex 512 MB out-of-memory
+errors, runner ENOSPC, and curl timeouts. Recover only the failed packages,
+with `publish_scope=selected` and `plugins=<failed subset>`, from the original
+tooling tag and child identity, after reconciling any staged attempts above.
+The shell publisher retries only an unchanged, rehashed packed artifact,
+including after timeout exits 124/137; source-tree publishes stop for reconciliation.
+Retry sleeps grow exponentially from 60 seconds to a 300-second cap, honor a
+reported server delay within that cap, and stop at 900 cumulative sleep
+seconds. The old npm CLI can omit Retry-After headers; absent a printed delay,
+the backoff applies. A package the ClawHub LLM scan flags
+`suspicious` still publishes; record it for the ClawHub owner. A bootstrap
+child (`plugin-clawhub-new.yml`) always waits for `clawhub-plugin-bootstrap`
+approval, once for validation and once for publication.
+
 Explicit ClawHub recovery uses `recovered_clawhub_run_id` and
 `recovered_clawhub_run_attempt` to name the original child. Keep the original
 parent's tooling, inputs, run ID, and attempt. Do not reuse an approval from another
 child. Docker-only recovery does not recover canceled ClawHub publication;
 verify and recover that surface separately. Recover a failed Plugin ClawHub New
 bootstrap child through its [direct route](first-package.md), not a rerun.
+
+## Docker mirror
+
+The Vercel Container Registry mirror is advisory and fails without failing the
+parent. 2026.9.6 hit a stale 500 MB layer cap, which #156954 raised to 2 GB.
+After a failed mirror, dispatch `vercel-container-registry-publish.yml` from
+`main` with `version`, `include_browser`, and the `source_digests` block copied
+from the parent's mirror job log. Verify the `latest`, `main`, `slim`, and
+`browser` tags carry the version.
 
 ## Registry selectors
 

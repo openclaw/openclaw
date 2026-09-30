@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
   bindCronJobAdmittedRun,
   type CronActiveJobMarker,
@@ -9,6 +10,7 @@ import {
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronAgentExecutionStarted, CronJob } from "../types.js";
 import {
   registerActiveCronTaskRun,
@@ -29,11 +31,11 @@ import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
   type CronJobRunResult,
   type ExecuteJobCoreOptions,
-  type IsolatedAgentSetupTimeoutSignal,
   runsDetachedFromMainSession,
 } from "./timer-execution-timeout.js";
 import { executeJobCore } from "./timer-execution.js";
 import {
+  type CronCoreRunOutcome,
   type CronRunProgress,
   resolveInterruptedRunProgress,
   withPrimaryWebhookInterruption,
@@ -41,9 +43,6 @@ import {
 } from "./timer-job-runner.interruption.js";
 import { resolveDeliveryState } from "./timer-trigger.js";
 
-type CronCoreRunOutcome = Awaited<ReturnType<typeof executeJobCore>> & {
-  isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
-};
 type CronRunTimeout = { timeoutMs: number; reason: string };
 type CronCoreRunOptions = {
   runId?: string;
@@ -52,9 +51,11 @@ type CronCoreRunOptions = {
   streamBatch?: string;
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
-  runReceipt?: import("../store/run-receipt.types.js").CronRunReceiptHandle;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
-};
+} & (
+  | { runReceipt: CronRunReceiptHandle; runReceiptContext: OpenClawStateWorkerContext }
+  | { runReceipt?: undefined; runReceiptContext?: undefined }
+);
 
 async function deliverPrimaryWebhook(
   state: CronServiceState,
@@ -62,7 +63,8 @@ async function deliverPrimaryWebhook(
   result: CronCoreRunOutcome,
   abortSignal: AbortSignal,
   progress: CronRunProgress,
-  assertRunCurrent?: () => void,
+  assertRunCurrent?: () => Promise<void>,
+  activeJobMarker?: CronActiveJobMarker,
 ): Promise<CronCoreRunOutcome> {
   const settle = (settledResult: CronCoreRunOutcome) => {
     // Publish the terminal delivery fact before this async function resolves;
@@ -98,7 +100,18 @@ async function deliverPrimaryWebhook(
     return undelivered(interruptionError());
   }
 
-  assertRunCurrent?.();
+  if (assertRunCurrent) {
+    await assertRunCurrent();
+    if (activeJobMarker?.cancellation?.kind === "requested") {
+      return undelivered(`cron webhook delivery cancelled: ${activeJobMarker.cancellation.reason}`);
+    }
+    if (!isCronActiveJobMarkerCurrent(activeJobMarker)) {
+      return undelivered("Gateway restarting.");
+    }
+    if (abortSignal.aborted) {
+      return undelivered(interruptionError());
+    }
+  }
 
   const startedAt = job.state.runningAtMs;
   const deliveredResult = withPrimaryWebhookTrace({
@@ -171,8 +184,18 @@ async function executeJobCoreWithTimeoutUnfinalized(
   const runAbortController = new AbortController();
   const progress: CronRunProgress = {};
   let commandSettlement: Promise<CronCoreRunOutcome> | undefined;
-  const assertRunCurrent = opts?.runReceipt
-    ? () => assertServiceCronRunReceiptCurrent(state, opts.runReceipt!, opts.activeJobMarker)
+  const receiptSource = opts?.runReceipt
+    ? { handle: opts.runReceipt, context: opts.runReceiptContext }
+    : undefined;
+  const assertRunCurrent = receiptSource
+    ? () =>
+        assertServiceCronRunReceiptCurrent(
+          state,
+          receiptSource.handle,
+          opts?.activeJobMarker,
+          receiptSource.context,
+          runAbortController.signal,
+        )
     : undefined;
   const operatorCancellationMarker = Symbol("cron-operator-cancelled");
   const operatorCancellation = createDeferredCore<typeof operatorCancellationMarker>();
@@ -339,6 +362,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         runAbortController.signal,
         progress,
         assertRunCurrent,
+        opts?.activeJobMarker,
       );
     });
     // Timeout/cancel projects an outcome before an abort-ignoring core settles;

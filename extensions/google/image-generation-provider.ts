@@ -19,13 +19,14 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
 import { toStandardGoogleProviderBase64 } from "./base64.js";
 import {
   createGoogleImageGenerationProviderMetadata,
   DEFAULT_GOOGLE_IMAGE_MODEL,
   GOOGLE_MAX_IMAGE_RESULTS,
 } from "./generation-provider-metadata.js";
+import { resolveGoogleGenerativeAiHttpRequestConfig } from "./http-request.js";
+import { normalizeGoogleModelId } from "./model-id.js";
 
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";

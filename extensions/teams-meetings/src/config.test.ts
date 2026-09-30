@@ -1,10 +1,10 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
-import { teamsMeetingsConfig } from "./config.js";
+import { teamsMeetingsPlugin } from "../index.js";
 
-const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+const resolveTeamsMeetingsConfig = teamsMeetingsPlugin.config.resolveConfig;
 const resolveTeamsMeetingsGatewayOperationTimeoutMs =
-  teamsMeetingsConfig.resolveGatewayOperationTimeoutMs;
+  teamsMeetingsPlugin.config.resolveGatewayOperationTimeoutMs;
 
 describe("Microsoft Teams meetings config", () => {
   it("keeps sparse and legacy audio config compatible", () => {

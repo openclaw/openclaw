@@ -1,5 +1,4 @@
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
-/** Shared helpers for gateway status target selection, auth, summaries, and probe rendering. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayPort } from "../../config/config.js";
@@ -14,7 +13,6 @@ const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
-/** Concrete websocket endpoint that gateway status should probe. */
 export type GatewayStatusTarget = {
   id: string;
   kind: TargetKind;
@@ -29,7 +27,6 @@ export type GatewayStatusTarget = {
   };
 };
 
-/** Sanitized config subset rendered by the deep gateway status view. */
 export type GatewayConfigSummary = ReturnType<typeof extractConfigSummary>;
 
 function parseIntOrNull(value: unknown): number | null {
@@ -56,7 +53,6 @@ function normalizeWsUrl(value: string): string | null {
   return trimmed;
 }
 
-/** Builds the deduplicated ordered gateway probe targets from CLI input and config. */
 export function resolveTargets(
   cfg: OpenClawConfig,
   explicitUrl?: string,
@@ -145,7 +141,6 @@ export function sanitizeSshTarget(value: unknown): string | null {
   return trimmed.replace(/^ssh\s+/, "");
 }
 
-/** Resolves auth for the probe surface represented by the selected status target. */
 export async function resolveAuthForTarget(
   cfg: OpenClawConfig,
   target: GatewayStatusTarget,
@@ -168,7 +163,6 @@ export async function resolveAuthForTarget(
   };
 }
 
-/** Extracts the config fields displayed by `openclaw gateway status --deep`. */
 export function extractConfigSummary(snapshotUnknown: unknown) {
   const snap = snapshotUnknown as Partial<ConfigFileSnapshot> | null;
   const path = typeof snap?.path === "string" ? snap.path : null;
@@ -236,7 +230,6 @@ export function extractConfigSummary(snapshotUnknown: unknown) {
   };
 }
 
-/** Builds local and tailnet gateway URL hints for the selected gateway port. */
 export function buildNetworkHints(cfg: OpenClawConfig, localPortOverride?: number) {
   const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
   const port = localPortOverride ?? resolveGatewayPort(cfg);
@@ -248,7 +241,6 @@ export function buildNetworkHints(cfg: OpenClawConfig, localPortOverride?: numbe
   };
 }
 
-/** Renders the status heading for a single gateway probe target. */
 export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
   const kindLabel =
     target.kind === "localLoopback"

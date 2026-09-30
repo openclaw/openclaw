@@ -1,5 +1,3 @@
-// Send gateway methods route operator/tool messages and poll actions through
-// channel plugins, outbound session state, durable delivery, and transcript mirrors.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -193,12 +191,12 @@ export const sendHandlers: GatewayRequestHandlers = {
       },
       work: async ({ cfg, channel, plugin, canonicalAction, accountId, dedupeKey, authorize }) => {
         try {
-          const completed = await withChannelReadAuthority(
+          return await withChannelReadAuthority(
             request.action === "download-file" || messageAuthority.assertReadCurrent
               ? assertDirectAdapterHandoff
               : undefined,
             async () => {
-              const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+              const sessionKey = normalizeOptionalString(request.sessionKey);
               const requestedAgentId =
                 normalizeOptionalString(request.agentId) ?? trustedContext.runtimeAgentId;
               const sessionOwner = sessionKey
@@ -348,7 +346,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   : false,
                 conversationReadOrigin,
                 sessionKey,
-                sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
+                sessionId: normalizeOptionalString(request.sessionId),
                 inboundEventKind,
                 agentId,
                 mediaAccess,
@@ -468,7 +466,6 @@ export const sendHandlers: GatewayRequestHandlers = {
               }
             },
           );
-          return completed;
         } catch (err) {
           if (!isChannelPartialDeliveryError(err) && !authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
@@ -616,8 +613,8 @@ export const sendHandlers: GatewayRequestHandlers = {
             mediaUrl,
             mediaUrls,
             buffer,
-            filename: normalizeOptionalString(request.filename) ?? undefined,
-            contentType: normalizeOptionalString(request.contentType) ?? undefined,
+            filename: normalizeOptionalString(request.filename),
+            contentType: normalizeOptionalString(request.contentType),
           };
           await hydrateAttachmentParamsForAction({
             cfg,
@@ -642,9 +639,8 @@ export const sendHandlers: GatewayRequestHandlers = {
             },
           ];
           const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
-          const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
-          const mirrorText = mirrorProjection.text;
-          const mirrorMediaUrls = mirrorProjection.mediaUrls;
+          const { text: mirrorText, mediaUrls: mirrorMediaUrls } =
+            projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
           const derivedRoute = await resolveOutboundSessionRoute({
             cfg,
             channel,

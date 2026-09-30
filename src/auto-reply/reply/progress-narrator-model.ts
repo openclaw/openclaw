@@ -1,4 +1,3 @@
-// Utility-model preparation and completion for progress narration.
 import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
 import { prepareUtilityCompletionForAgent } from "../../agents/utility-completion.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

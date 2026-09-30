@@ -1,4 +1,3 @@
-// Setup finalize helpers write onboarding output and follow-up state.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
@@ -421,6 +420,8 @@ export async function ensureGatewayServiceForOnboarding(params: {
           env: selection.env,
           port: settings.port,
           runtime: selection.runtime,
+          runtimeExplicit: selection.runtimeExplicit,
+          runtimePath: selection.runtimePath,
           pinnedRuntimePath: selection.pinnedRuntimePath,
           existingCommand,
           warn: (message, title) => {
@@ -429,6 +430,16 @@ export async function ensureGatewayServiceForOnboarding(params: {
           config: nextConfig,
         });
         await flushInstallWarnings();
+        if (flow === "quickstart" && !selection.pinnedRuntimePath) {
+          await prompter.note(
+            t(
+              plan.runtime === "bun"
+                ? "wizard.finalize.quickstartBunRuntime"
+                : "wizard.finalize.quickstartNodeRuntime",
+            ),
+            t("wizard.finalize.daemonRuntime"),
+          );
+        }
 
         progress.update(t("wizard.finalize.gatewayServiceInstalling"));
         await service.install({

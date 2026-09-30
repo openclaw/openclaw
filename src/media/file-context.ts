@@ -1,18 +1,6 @@
 import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
-// File context helpers build user-visible context for media file references.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-
-const XML_ESCAPE_MAP: Record<string, string> = {
-  "<": "&lt;",
-  ">": "&gt;",
-  "&": "&amp;",
-  '"': "&quot;",
-  "'": "&apos;",
-};
-
-function xmlEscapeAttr(value: string): string {
-  return value.replace(/[<>&"']/g, (char) => XML_ESCAPE_MAP[char] ?? char);
-}
+import { escapeXml } from "../shared/xml.js";
 
 function escapeFileBlockContent(value: string): string {
   return value.replace(/<\s*\/\s*file\s*>/gi, "&lt;/file&gt;").replace(/<\s*file\b/gi, "&lt;file");
@@ -39,8 +27,8 @@ export function renderFileContextBlock(params: {
   const safeContent = escapeFileBlockContent(params.content);
   const mimeType = normalizeOptionalString(params.mimeType);
   const attrs = [
-    `name="${xmlEscapeAttr(safeName)}"`,
-    mimeType ? `mime="${xmlEscapeAttr(mimeType)}"` : undefined,
+    `name="${escapeXml(safeName)}"`,
+    mimeType ? `mime="${escapeXml(mimeType)}"` : undefined,
   ]
     .filter(Boolean)
     .join(" ");

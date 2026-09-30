@@ -86,9 +86,7 @@ internal class ChatMediaPlaybackClaims<T>(
 
   fun claim(value: T) {
     if (active === value) return
-    val previous = active
-    active = null
-    previous?.let(release)
+    releaseActive()
     active = value
   }
 
@@ -99,10 +97,8 @@ internal class ChatMediaPlaybackClaims<T>(
     return true
   }
 
-  fun pauseIf(predicate: (T) -> Boolean): Boolean {
-    val current = active?.takeIf(predicate) ?: return false
-    pause(current)
-    return true
+  fun pauseIf(predicate: (T) -> Boolean) {
+    active?.takeIf(predicate)?.let(pause)
   }
 
   fun releaseActive() {
@@ -130,10 +126,8 @@ internal class ChatMediaSessionLifecycle<T : Any, S : Any>(
     }
   }
 
-  fun release(owner: T): Boolean {
-    if (activeOwner !== owner) return false
-    releaseActive()
-    return true
+  fun release(owner: T) {
+    if (activeOwner === owner) releaseActive()
   }
 
   private fun releaseActive() {
@@ -264,7 +258,7 @@ private object ChatMediaPlaybackArbiter {
   }
 
   @Synchronized
-  fun pause(player: ExoPlayer): Boolean = claims.pauseIf { it.player === player }
+  fun pause(player: ExoPlayer) = claims.pauseIf { it.player === player }
 
   @Synchronized
   fun release(player: ExoPlayer): Boolean = claims.releaseIf { it.player === player }
@@ -336,17 +330,6 @@ internal fun ChatMediaPlayerCard(
       player = requested,
       intentGeneration = intentGeneration,
       onReleased = { clearPlayerState(requested, requestedFile) },
-    )
-
-  fun registerPrepared(
-    prepared: ExoPlayer,
-    preparedFile: File?,
-    intentGeneration: Long,
-  ): Boolean =
-    ChatMediaPlaybackArbiter.registerPrepared(
-      player = prepared,
-      intentGeneration = intentGeneration,
-      onReleased = { clearPlayerState(prepared, preparedFile) },
     )
 
   fun pause() {
@@ -440,7 +423,13 @@ internal fun ChatMediaPlayerCard(
       )
       player = created
       if (content.playback != "transcode") loading = false
-      if (!registerPrepared(created, prepared.tempFile, intentGeneration)) {
+      if (
+        !ChatMediaPlaybackArbiter.registerPrepared(
+          player = created,
+          intentGeneration = intentGeneration,
+          onReleased = { clearPlayerState(created, prepared.tempFile) },
+        )
+      ) {
         disposeUnclaimedPlayer(created, prepared.tempFile)
         return@launch
       }

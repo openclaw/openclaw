@@ -17,6 +17,7 @@ import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
 import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
+import { collectPublishableCorePackages } from "./npm-core-release-packages.mjs";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
 import { npmRegistryReadbackDeadline } from "./npm-publish-plan.mjs";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
@@ -24,6 +25,14 @@ import {
   collectPublishablePluginPackages,
   parsePluginReleaseSelection,
 } from "./plugin-npm-release.ts";
+import {
+  DIAGNOSTIC_MAX_PACKAGES,
+  diagnosticStates,
+  diagnosticError,
+  diagnosticPackage,
+  diagnosticStage,
+  diagnosticStageNames,
+} from "./release-postpublish-diagnostic-schema.mts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -106,60 +115,6 @@ const RELEASE_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
 const DIAGNOSTIC_FILE = "release-postpublish-diagnostics.json";
 const DIAGNOSTIC_MAX_BYTES = 128 * 1024;
-const DIAGNOSTIC_MAX_PACKAGES = 256;
-const diagnosticStates = z.enum([
-  "unattempted",
-  "skipped",
-  "started",
-  "success",
-  "failure",
-  "unknown",
-]);
-const diagnosticError = z.object({
-  class: z.enum([
-    "registry-not-visible",
-    "selector-mismatch",
-    "identity-mismatch",
-    "transport",
-    "malformed-response",
-    "command-failure",
-    "evidence-write-failure",
-  ]),
-  status: z.number().int().min(0).max(255).nullable(),
-});
-const diagnosticPackage = z.object({
-  name: z
-    .string()
-    .max(128)
-    .regex(/^@openclaw\/[a-z0-9][a-z0-9._-]*$/u),
-  state: diagnosticStates,
-  publication: z.enum(["unknown", "observed"]),
-  error: diagnosticError.nullable(),
-});
-const diagnosticStage = z.object({
-  state: diagnosticStates,
-  publication: z.enum(["unknown", "observed"]),
-  error: diagnosticError.nullable(),
-  packages: z.array(diagnosticPackage).max(DIAGNOSTIC_MAX_PACKAGES),
-  packagesTruncated: z.boolean(),
-});
-const diagnosticStageNames = [
-  "checkout",
-  "githubRelease",
-  "coreNpm",
-  "postpublish",
-  "pluginNpm",
-  "clawHub",
-  "fullReleaseValidation",
-  "pluginNpmRun",
-  "pluginClawHubRun",
-  "pluginClawHubBootstrap",
-  "openclawNpm",
-  "npmTelegram",
-  "evidence",
-  "binding",
-  "assets",
-] as const;
 const diagnosticChildNames = [
   "fullReleaseValidation",
   "openclawNpm",
@@ -1998,16 +1953,23 @@ export async function verifyBetaRelease(
     diagnostic.start("coreNpm");
     const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
     diagnostic.observeNpmPublication({ stage: "coreNpm" });
-    const coreBetaFloorError = await readNpmBetaFloorError("openclaw", args.version);
-    if (coreBetaFloorError !== undefined) {
-      betaFloorErrors.push({ scope: { stage: "coreNpm" }, message: coreBetaFloorError });
-      diagnostic.fail(createNpmBetaFloorError([coreBetaFloorError]));
-    } else {
+    const corePackages = collectPublishableCorePackages(rootDir);
+    // Core versions can be reused without retagging; only enforce their beta floor.
+    for (const name of ["openclaw", ...corePackages.map((pkg) => pkg.name)]) {
+      const error = await readNpmBetaFloorError(name, args.version);
+      if (error !== undefined) {
+        betaFloorErrors.push({ scope: { stage: "coreNpm" }, message: error });
+        diagnostic.fail(createNpmBetaFloorError([error]));
+      }
+    }
+    const coreBetaFloorFailed = betaFloorErrors.length > 0;
+    if (!coreBetaFloorFailed) {
       diagnostic.success("coreNpm");
       lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
+      lines.push(`core npm beta floors OK: ${corePackages.length}`);
     }
 
-    if (!args.skipPostpublish && coreBetaFloorError === undefined) {
+    if (!args.skipPostpublish && !coreBetaFloorFailed) {
       diagnostic.start("postpublish");
       const postpublishVerifier = resolveOpenClawNpmPostpublishVerifier(
         rootDir,

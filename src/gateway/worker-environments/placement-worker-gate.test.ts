@@ -1,14 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "./placement-session-tool-operations.js";
 import {
@@ -27,19 +24,15 @@ const ENVIRONMENT_ID = "environment-worker-gate";
 const OWNER_EPOCH = 7;
 
 describe("worker session placement gate", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-gate-"));
+  beforeEach(() => {
+    root = tempDirs.make("openclaw-worker-gate-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database });
-  });
-
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   function activate(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
@@ -199,7 +192,7 @@ describe("worker session placement gate", () => {
 
   it("rejects restart-inherited claims while preserving workspace recovery authority", async () => {
     const claim = await preclaim("run-inherited-worker");
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     store.updateAckCursors({ claim, liveEvent: 1 });
 
     const restartedStore = createWorkerSessionPlacementStore({ database });
@@ -264,7 +257,7 @@ describe("worker session placement gate", () => {
       owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
     });
     const secondBinding = bindingFor(second);
-    store.authorizeWorkerTurnTools(second, ["sessions_send"]);
+    await store.authorizeWorkerTurnTools(second, ["sessions_send"]);
 
     expect(gate.validateWorkerTurn(firstBinding)).toBe(false);
     expect(gate.validateWorkerTurn(secondBinding)).toBe(true);
@@ -356,7 +349,7 @@ describe("worker session placement gate", () => {
       owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
     });
     store.markWorkspaceResultPending(claim);
-    store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/local-staged");
+    await store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/local-staged");
 
     createWorkerSessionPlacementGate(store).prepareWorkspaceResultOwnerRevocation(
       { sessionId: claim.sessionId, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
@@ -402,12 +395,12 @@ describe("worker session placement gate", () => {
   it("drains running session-tool operations before revoking their durable state", async () => {
     const claim = await preclaim("run-worker-tools");
     const binding = bindingFor(claim);
-    store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
 
     expect(store.isWorkerTurnToolAuthorized(binding, "sessions_spawn")).toBe(true);
     expect(store.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_spawn",
         toolCallId: "call-spawn",
@@ -418,7 +411,7 @@ describe("worker session placement gate", () => {
       operationSeed: expect.any(String),
     });
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_spawn",
         toolCallId: "call-spawn",
@@ -428,7 +421,7 @@ describe("worker session placement gate", () => {
     const closing = store.closeWorkerTurnToolState(claim);
     expect(store.isWorkerTurnToolAuthorized(binding, "sessions_spawn")).toBe(false);
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_spawn",
         toolCallId: "call-after-close",
@@ -437,7 +430,7 @@ describe("worker session placement gate", () => {
     ).toEqual({ kind: "unauthorized" });
 
     expect(
-      store.completeWorkerSessionToolOperation({
+      await store.completeWorkerSessionToolOperation({
         sourceSessionId: claim.sessionId,
         sourceClaimId: claim.claimId,
         toolCallId: "call-spawn",
@@ -460,9 +453,9 @@ describe("worker session placement gate", () => {
   it("does not reconcile away a claim while its session operation is running", async () => {
     const claim = await preclaim("run-worker-reconcile-tools");
     const binding = bindingFor(claim);
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "call-reconcile-send",
@@ -490,7 +483,7 @@ describe("worker session placement gate", () => {
     });
 
     expect(
-      store.completeWorkerSessionToolOperation({
+      await store.completeWorkerSessionToolOperation({
         sourceSessionId: claim.sessionId,
         sourceClaimId: claim.claimId,
         toolCallId: "call-reconcile-send",
@@ -517,10 +510,10 @@ describe("worker session placement gate", () => {
   it("caps running session operations across connection incarnations", async () => {
     const claim = await preclaim("run-worker-tool-capacity");
     const binding = bindingFor(claim);
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     for (let index = 0; index < MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS; index += 1) {
       expect(
-        store.beginWorkerSessionToolOperation({
+        await store.beginWorkerSessionToolOperation({
           claim: binding,
           toolName: "sessions_send",
           toolCallId: `capacity-call-${index}`,
@@ -531,7 +524,7 @@ describe("worker session placement gate", () => {
 
     const reconnectedStore = createWorkerSessionPlacementStore({ database });
     expect(
-      reconnectedStore.beginWorkerSessionToolOperation({
+      await reconnectedStore.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "capacity-overflow",
@@ -539,7 +532,7 @@ describe("worker session placement gate", () => {
       }),
     ).toEqual({ kind: "capacity" });
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "capacity-call-0",
@@ -551,9 +544,9 @@ describe("worker session placement gate", () => {
   it("does not let a foreign store steal a live operation fence", async () => {
     const claim = await preclaim("run-worker-restart");
     const binding = bindingFor(claim);
-    store.authorizeWorkerTurnTools(claim, ["sessions_spawn", "sessions_send"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_spawn", "sessions_send"]);
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_spawn",
         toolCallId: "call-before-restart",
@@ -563,7 +556,7 @@ describe("worker session placement gate", () => {
 
     const restarted = createWorkerSessionPlacementStore({ database });
     expect(
-      restarted.beginWorkerSessionToolOperation({
+      await restarted.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_spawn",
         toolCallId: "call-before-restart",
@@ -571,7 +564,7 @@ describe("worker session placement gate", () => {
       }),
     ).toEqual({ kind: "unknown" });
     expect(
-      restarted.beginWorkerSessionToolOperation({
+      await restarted.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_spawn",
         toolCallId: "call-before-restart",
@@ -580,7 +573,7 @@ describe("worker session placement gate", () => {
     ).toEqual({ kind: "conflict" });
     await expect(restarted.releaseTurn(claim)).rejects.toThrow("running worker session operation");
     expect(
-      store.completeWorkerSessionToolOperation({
+      await store.completeWorkerSessionToolOperation({
         sourceSessionId: claim.sessionId,
         sourceClaimId: claim.claimId,
         toolCallId: "call-before-restart",
@@ -589,7 +582,7 @@ describe("worker session placement gate", () => {
       }),
     ).toBe(true);
     expect(
-      restarted.beginWorkerSessionToolOperation({
+      await restarted.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_spawn",
         toolCallId: "call-before-restart",
@@ -602,9 +595,9 @@ describe("worker session placement gate", () => {
   it("makes crash-ambiguous operations terminal before restart reconciliation", async () => {
     const claim = await preclaim("run-worker-crash-recovery");
     const binding = bindingFor(claim);
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "call-before-crash",
@@ -613,9 +606,9 @@ describe("worker session placement gate", () => {
     ).toMatchObject({ kind: "execute" });
 
     const restarted = createWorkerSessionPlacementStore({ database });
-    expect(restarted.recoverWorkerSessionToolOperationsAfterRestart()).toBe(1);
+    expect(await restarted.recoverWorkerSessionToolOperationsAfterRestart()).toBe(1);
     expect(
-      restarted.beginWorkerSessionToolOperation({
+      await restarted.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "call-before-crash",

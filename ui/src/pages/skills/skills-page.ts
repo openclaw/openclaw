@@ -38,7 +38,7 @@ import {
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
+import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
 import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "../plugins/plugins-hub.ts";
 import { SkillLibraryController } from "./library-controller.ts";
@@ -121,15 +121,7 @@ class SkillsPage extends OpenClawLightDomElement {
   });
   private readonly clawhubIcons = new PluginIconController({
     kind: "catalog",
-    getFetchContext: () => ({
-      resourceBasePath: this.context.resourceBasePath,
-      gatewayUrl: this.context.gateway.connection.gatewayUrl,
-      auth: {
-        hello: this.context.gateway.snapshot.hello,
-        settings: { token: this.context.gateway.connection.token },
-        password: this.context.gateway.connection.password,
-      },
-    }),
+    getFetchContext: () => pluginIconFetchContext(this.context),
     isConnected: () => this.gateway.connected,
     onUrlsChange: (urls) => {
       this.clawhubIconUrls = urls;
@@ -155,10 +147,7 @@ class SkillsPage extends OpenClawLightDomElement {
       client ? searchClawHub(client, query, signal) : initialState,
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    )
+    .watchStore(() => this.context?.config)
     .effect(
       () => this.context?.agents,
       (agents) => {
@@ -172,9 +161,8 @@ class SkillsPage extends OpenClawLightDomElement {
         return cleanup;
       },
     )
-    .watch(
+    .watchStore(
       () => this.context && this.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => {
         const previous = this.skillsAgentId;
         this.reconcileAgentState();

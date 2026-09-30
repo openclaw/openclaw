@@ -187,7 +187,6 @@ export function renderAgentChannels(params: {
 export function renderAgentCron(params: {
   basePath: string;
   context: AgentContext;
-  agentId: string;
   jobs: CronJob[];
   jobsTotal: number;
   jobsHasMore: boolean;
