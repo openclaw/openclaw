@@ -53,7 +53,6 @@ import { renderAssistantAttachments } from "./components/chat-message-attachment
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
-import { createRealtimeTalkConversationState } from "./talk/conversation.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.ts";
 
@@ -3007,27 +3006,6 @@ describe("ChatStateController render lifecycle", () => {
     } satisfies ReactiveControllerHost;
   }
 
-  function createInputHistoryState(
-    renderLifecycle: NonNullable<ChatPageHost["renderLifecycle"]>,
-    navigateHistory: ReturnType<typeof vi.fn>,
-  ) {
-    return {
-      settings: undefined,
-      assistantAgentId: null,
-      agentsList: null,
-      hello: null,
-      sessionKey: "agent:main:current",
-      chatLoading: false,
-      chatMessages: [],
-      chatQueue: [],
-      realtimeTalkConversationState: createRealtimeTalkConversationState(),
-      renderLifecycle,
-      handleSendChat: vi.fn().mockResolvedValue(undefined),
-      handleChatDraftChange: vi.fn(),
-      handleChatInputHistoryKey: navigateHistory,
-    } as unknown as ChatPageHost;
-  }
-
   function createInputHistoryKey(selectionStart: number, selectionEnd: number) {
     return {
       key: "ArrowUp" as const,
@@ -3794,17 +3772,26 @@ describe("ChatStateController render lifecycle", () => {
         preventDefault: handled,
         restoreCaret: handled ? "up" : null,
       });
-      const state = createInputHistoryState(renderLifecycle, navigateHistory);
-      controller.attach(state);
-      const input = createInputHistoryKey(selection, selection);
-      const result = state.handleChatInputHistoryKey!(input);
+      const state = createPageState(createChatPageStateContext(), renderLifecycle, {
+        sessionKey: "agent:main:current",
+        dispatchEvent: () => true,
+        querySelector: () => null,
+      });
+      state.handleChatInputHistoryKey = navigateHistory;
+      try {
+        controller.attach(state);
+        const input = createInputHistoryKey(selection, selection);
+        const result = state.handleChatInputHistoryKey!(input);
 
-      expect(result.handled).toBe(handled);
-      expect(navigateHistory).toHaveBeenCalledWith(input);
-      if (handled) {
-        expect(requestUpdate).toHaveBeenCalled();
-      } else {
-        expect(requestUpdate).not.toHaveBeenCalled();
+        expect(result.handled).toBe(handled);
+        expect(navigateHistory).toHaveBeenCalledWith(input);
+        if (handled) {
+          expect(requestUpdate).toHaveBeenCalled();
+        } else {
+          expect(requestUpdate).not.toHaveBeenCalled();
+        }
+      } finally {
+        controller.hostDisconnected();
       }
     },
   );

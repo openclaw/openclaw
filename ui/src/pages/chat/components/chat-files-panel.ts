@@ -16,9 +16,14 @@ import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 let filesPanelSequence = 0;
 
+function nextFilesPanelId(): string {
+  filesPanelSequence += 1;
+  return `chat-files-content-${filesPanelSequence}`;
+}
+
 /** Projection of the workspace controller; tab order and selection have no second store here. */
 class ChatFilesPanel extends OpenClawLightDomElement {
-  private readonly contentId = `chat-files-content-${++filesPanelSequence}`;
+  private readonly contentId = nextFilesPanelId();
   private hostedTabsChangeKey = "";
   @property({ attribute: false }) previews: SessionWorkspacePreview[] = [];
   @property({ attribute: false }) activeId: string | null = null;
