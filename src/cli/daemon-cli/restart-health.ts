@@ -354,15 +354,23 @@ export async function waitForGatewayHealthyRestart(
       if (snapshot.buildIdMismatch) {
         return withWaitContext(snapshot, "build-id-mismatch", elapsedMs);
       }
-      if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
-        // Foreign port detection: when diagnostics need a quick verdict and
-        // the port is busy but nothing Gateway-related owns it, report the
-        // conflict immediately instead of treating it as stale pids.
-        if (
-          params.detectForeignPort &&
-          snapshot.portUsage.status === "busy" &&
-          !params.supervisorKeepsAlive
-        ) {
+      // Foreign port detection: when diagnostics need a quick verdict and
+      // the port is busy but nothing Gateway-related owns it, report the
+      // conflict immediately rather than waiting out the readiness budget.
+      if (
+        params.detectForeignPort &&
+        snapshot.portUsage.status === "busy" &&
+        snapshot.runtime.status !== "running" &&
+        !params.supervisorKeepsAlive
+      ) {
+        const runtimePid = snapshot.runtime.pid;
+        const hasRuntimeOwnedListener = snapshot.portUsage.listeners.some(
+          (listener) =>
+            typeof listener.pid === "number" &&
+            Number.isFinite(listener.pid) &&
+            (listener.pid === runtimePid || listener.ppid === runtimePid),
+        );
+        if (!hasRuntimeOwnedListener) {
           const listenerPids = snapshot.portUsage.listeners
             .map((l) => l.pid)
             .filter((pid): pid is number => pid !== undefined);
@@ -376,6 +384,8 @@ export async function waitForGatewayHealthyRestart(
             elapsedMs,
           );
         }
+      }
+      if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
         return withWaitContext(snapshot, "stale-pids", elapsedMs);
       }
       const stoppedFree =
