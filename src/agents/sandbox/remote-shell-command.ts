@@ -5,7 +5,7 @@ export function shellEscape(value: string): string {
 
 /** Build a remote shell command from literal argv entries. */
 export function buildRemoteCommand(argv: string[]): string {
-  return argv.map((entry) => shellEscape(entry)).join(" ");
+  return argv.map(shellEscape).join(" ");
 }
 
 type ExecCommandQuoteState = "plain" | "single" | "double";
@@ -221,11 +221,9 @@ export function buildExecRemoteCommand(params: {
 }
 
 /** Validate and build a remote exec command for untrusted model input. */
-export function buildValidatedExecRemoteCommand(params: {
-  command: string;
-  workdir?: string;
-  env: Record<string, string>;
-}): string {
+export function buildValidatedExecRemoteCommand(
+  params: Parameters<typeof buildExecRemoteCommand>[0],
+): string {
   assertValidExecRemoteCommand(params.command);
   return buildExecRemoteCommand(params);
 }

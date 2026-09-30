@@ -32,8 +32,9 @@ const {
 const { fetchNpmPackageTargetStatus } = await import("../infra/update-check-package-target.js");
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
   await import("../infra/update-control-plane-sentinel.js");
-const { runExec, runUtf8CommandWithTimeout } = await import("../process/exec.js");
+const { runUtf8CommandWithTimeout } = await import("../process/exec.js");
 const doctorChild = await import("./update-cli/update-command-doctor-child.js");
+const runExec: typeof import("../process/exec.js").runExec = commandTransport.exec;
 const runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout =
   commandTransport.run;
 const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");

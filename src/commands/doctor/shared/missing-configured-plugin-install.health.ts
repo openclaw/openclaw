@@ -183,20 +183,11 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
       staleDescriptorPluginIds,
     });
     const installPath = resolveRecordInstallPath(record, env);
-    if (kind === "stale-channel-config-descriptor") {
-      issues.push({
-        kind,
-        pluginId,
-        ...(installPath ? { installPath } : {}),
-      });
-      reportedPluginIds.add(pluginId);
-      continue;
-    }
     issues.push({
       kind,
       pluginId,
       ...(installPath ? { installPath } : {}),
-      ...recordedInstallIdentity(record),
+      ...(kind === "stale-channel-config-descriptor" ? {} : recordedInstallIdentity(record)),
     });
     reportedPluginIds.add(pluginId);
   }
@@ -238,22 +229,14 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     }
     const record = records[candidate.pluginId];
     const installSpec = resolvePluginInstallSources(candidate)[0]?.spec;
-    if (repair.shouldReplaceBrokenOfficialInstall) {
+    if (repair.shouldReplaceBrokenOfficialInstall || record) {
       const installPath = resolveRecordInstallPath(record, env);
       issues.push({
-        kind: staleVersionBoundRuntimePluginIds.has(candidate.pluginId)
-          ? "stale-version-bound-runtime"
-          : "repairable-installed-plugin",
-        pluginId: candidate.pluginId,
-        ...(installPath ? { installPath } : {}),
-        ...recordedInstallIdentity(record),
-      });
-      continue;
-    }
-    if (record) {
-      const installPath = resolveRecordInstallPath(record, env);
-      issues.push({
-        kind: "missing-installed-payload",
+        kind: repair.shouldReplaceBrokenOfficialInstall
+          ? staleVersionBoundRuntimePluginIds.has(candidate.pluginId)
+            ? "stale-version-bound-runtime"
+            : "repairable-installed-plugin"
+          : "missing-installed-payload",
         pluginId: candidate.pluginId,
         ...(installPath ? { installPath } : {}),
         ...recordedInstallIdentity(record),

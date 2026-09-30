@@ -15,9 +15,8 @@ import {
   normalizeTrimmedStringList,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
-import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import {
   commandApprovalAllowedDecisions,
   commandApprovalCapabilities,
@@ -37,6 +36,7 @@ import {
 } from "./plugin-approval-roundtrip.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import { CodexServerRequestResolvedError } from "./server-requests.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 const PERMISSION_DESCRIPTION_MAX_LENGTH = 700;
 const PERMISSION_SAMPLE_LIMIT = 2;
@@ -92,13 +92,17 @@ export async function handleCodexAppServerApprovalRequest(params: {
     method: params.method,
     requestParams,
   });
-  const emitEvent = (data: Omit<AgentApprovalEventData, "kind" | "title">) =>
-    emitApprovalEvent(params.paramsForRun, {
-      kind: context.kind,
-      title: context.title,
-      ...context.eventDetails,
-      ...data,
+  const emitEvent = (data: Omit<AgentApprovalEventData, "kind" | "title">) => {
+    void params.paramsForRun.onAgentEvent?.({
+      stream: "approval",
+      data: {
+        kind: context.kind,
+        title: context.title,
+        ...context.eventDetails,
+        ...data,
+      },
     });
+  };
   if (params.signal?.aborted) {
     if (params.signal.reason instanceof CodexServerRequestResolvedError) {
       return undefined;
@@ -716,8 +720,11 @@ function readNativeRelayPreToolUseDecision(response: NativeHookRelayProcessRespo
   if (!stdout) {
     return { blocked: false };
   }
-  const parsed = parseRelayJsonResponse(stdout);
-  const output = isJsonObject(parsed?.hookSpecificOutput) ? parsed.hookSpecificOutput : undefined;
+  const parsed = safeParseJson<unknown>(stdout);
+  const output =
+    isJsonObject(parsed) && isJsonObject(parsed.hookSpecificOutput)
+      ? parsed.hookSpecificOutput
+      : undefined;
   if (output?.permissionDecision === "deny") {
     return {
       blocked: true,
@@ -736,15 +743,6 @@ function readNativeRelayPreToolUseDecision(response: NativeHookRelayProcessRespo
       : "OpenClaw native hook relay returned an unreadable Codex app-server approval result.",
     failureDisposition: "failed",
   };
-}
-
-function parseRelayJsonResponse(text: string): JsonObject | undefined {
-  try {
-    const parsed = JSON.parse(text) as JsonValue;
-    return isJsonObject(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function sanitizeRelayDecisionReason(value: string | undefined): string | undefined {
@@ -1132,13 +1130,6 @@ function approvalEventScope(
   return method === "item/permissions/requestApproval"
     ? { scope: outcome === "approved-session" ? "session" : "turn" }
     : {};
-}
-
-function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {
-  void params.onAgentEvent?.({
-    stream: "approval",
-    data: { ...data },
-  });
 }
 
 function readPolicyCommand(record: JsonObject | undefined): string | undefined {

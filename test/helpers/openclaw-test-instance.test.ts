@@ -361,6 +361,10 @@ if (kind === "near") { process.stderr.write(refusal.slice(0, -1) + " fixture\\n"
 if (kind === "stdout") { process.stdout.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "status2") { process.stderr.write(refusal + " fixture\\n"); process.exit(2); }
 if (kind === "signal") { process.stderr.write(refusal + " fixture\\n"); process.kill(process.pid, "SIGTERM"); }
+if (kind === "late-unrelated") {
+  spawnInheritedWriter("stderr", "unrelated startup failure\\n");
+  process.exit(1);
+}
 if (kind === "held-unrelated") await waitForControl(controlUrl + "/wait");
 if (kind === "unrelated" || kind === "held-unrelated") { process.stderr.write("unrelated startup failure\\n"); process.exit(1); }
 const server = createServer(async (req, res) => {
@@ -406,6 +410,7 @@ writeFileSync("dist/.runtime-postbuildstamp", "");
       .split(",")
       .some(
         (kind) =>
+          kind === "late-unrelated" ||
           kind === "late-refuse" ||
           kind === "late-legacy-refuse" ||
           kind === "startup-late-legacy-refuse" ||
@@ -609,40 +614,54 @@ describe("openclaw test instance", () => {
     }
   });
 
-  it("preserves the refusal when reacquiring the same port fails", async () => {
-    const control = await createGatewayControl();
-    const { instance } = await createFakeGateway("held-unrelated", 1_000, 1_500, control);
-    const competitor = net.createServer((socket) => socket.destroy());
-    const startup = trackOperation(instance.startGateway());
-    const outcome = startup.catch((error: unknown) => error);
-    try {
-      await Promise.race([control.reached, startup]);
-      await new Promise<void>((resolve, reject) => {
-        competitor.once("error", reject);
-        competitor.listen(instance.port, "127.0.0.1", resolve);
-      });
-      await control.release();
-      const error = await outcome;
-      expect(error).toBeInstanceOf(AggregateError);
-      expect((error as AggregateError).errors).toEqual([
-        expect.objectContaining({ message: expect.stringContaining("unrelated startup failure") }),
-        expect.objectContaining({ code: "EADDRINUSE" }),
-      ]);
-      expect(instance.child).toBeUndefined();
-      await instance.cleanup();
-      await instance.stopGateway();
-      expect(competitor.listening).toBe(true);
-      await expectPathMissing(instance.state.root);
-    } finally {
-      control.unblock();
-      await outcome;
-      if (competitor.listening) {
+  it.each(["held-unrelated", "late-unrelated"])(
+    "preserves the refusal when reacquiring the same port fails (%s)",
+    async (action) => {
+      const control = await createGatewayControl();
+      const { instance } = await createFakeGateway(action, 1_000, 1_500, control);
+      const exited = createDeferred();
+      control.observers.onLaunch = () => {
+        instance.child?.once("exit", () => exited.resolve());
+      };
+      const competitor = net.createServer((socket) => socket.destroy());
+      const startup = trackOperation(instance.startGateway());
+      const outcome = startup.catch((error: unknown) => error);
+      try {
+        await Promise.race([control.reached, startup]);
         await new Promise<void>((resolve, reject) => {
-          competitor.close((error) => (error ? reject(error) : resolve()));
+          competitor.once("error", reject);
+          competitor.listen(instance.port, "127.0.0.1", resolve);
         });
+        if (action === "late-unrelated") {
+          await Promise.race([exited.promise, outcome]);
+          expect(instance.child?.stderr.closed).toBe(false);
+          expect(instance.logs()).not.toContain("unrelated startup failure");
+        }
+        await control.release();
+        const error = await outcome;
+        expect(error).toBeInstanceOf(AggregateError);
+        expect((error as AggregateError).errors).toEqual([
+          expect.objectContaining({
+            message: expect.stringContaining("unrelated startup failure"),
+          }),
+          expect.objectContaining({ code: "EADDRINUSE" }),
+        ]);
+        expect(instance.child).toBeUndefined();
+        await instance.cleanup();
+        await instance.stopGateway();
+        expect(competitor.listening).toBe(true);
+        await expectPathMissing(instance.state.root);
+      } finally {
+        control.unblock();
+        await outcome;
+        if (competitor.listening) {
+          await new Promise<void>((resolve, reject) => {
+            competitor.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
       }
-    }
-  });
+    },
+  );
 
   it("leaves explicitly supplied ports owned by the caller", async () => {
     const caller = net.createServer();

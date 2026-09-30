@@ -97,16 +97,7 @@ extension NodeServiceManager {
     private struct CommandResult {
         let success: Bool
         let message: String?
-        let parsed: ParsedServiceJson?
-    }
-
-    private struct ParsedServiceJson {
-        let object: [String: Any]
-        let ok: Bool?
-        let result: String?
-        let message: String?
-        let error: String?
-        let hints: [String]
+        let parsed: JSONObjectExtractionSupport.ExtractedObject?
     }
 
     private static func runServiceCommandResult(
@@ -132,9 +123,10 @@ extension NodeServiceManager {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
-        let parsed = self.parseServiceJson(from: response.stdout) ?? self.parseServiceJson(from: response.stderr)
-        let ok = parsed?.ok
-        let message = parsed?.error ?? parsed?.message
+        let parsed = JSONObjectExtractionSupport.extract(from: response.stdout)
+            ?? JSONObjectExtractionSupport.extract(from: response.stderr)
+        let ok = parsed?.object["ok"] as? Bool
+        let message = (parsed?.object["error"] as? String) ?? (parsed?.object["message"] as? String)
         let success = response.success && (ok ?? true)
         if success {
             return CommandResult(success: true, message: nil, parsed: parsed)
@@ -155,14 +147,13 @@ extension NodeServiceManager {
 
     private static func errorMessage(from result: CommandResult, treatNotLoadedAsError: Bool) -> String? {
         if !result.success {
-            return result.parsed.flatMap {
-                JSONObjectExtractionSupport.mergeHints(message: $0.error ?? $0.message, hints: $0.hints)
-            } ?? result.message ?? "Node service command failed"
+            return result.parsed?.message ?? result.message ?? "Node service command failed"
         }
         guard let parsed = result.parsed else { return nil }
-        if treatNotLoadedAsError, parsed.result == "not-loaded" {
-            let base = parsed.message ?? "Node service not loaded."
-            return JSONObjectExtractionSupport.mergeHints(message: base, hints: parsed.hints)
+        if treatNotLoadedAsError, parsed.object["result"] as? String == "not-loaded" {
+            return JSONObjectExtractionSupport.mergeHints(
+                message: (parsed.object["message"] as? String) ?? "Node service not loaded.",
+                hints: (parsed.object["hints"] as? [String]) ?? [])
         }
         return nil
     }
@@ -170,23 +161,6 @@ extension NodeServiceManager {
     private static func withJsonFlag(_ args: [String]) -> [String] {
         if args.contains("--json") { return args }
         return args + ["--json"]
-    }
-
-    private static func parseServiceJson(from raw: String) -> ParsedServiceJson? {
-        guard let parsed = JSONObjectExtractionSupport.extract(from: raw) else { return nil }
-        let object = parsed.object
-        let ok = object["ok"] as? Bool
-        let result = object["result"] as? String
-        let message = object["message"] as? String
-        let error = object["error"] as? String
-        let hints = (object["hints"] as? [String]) ?? []
-        return ParsedServiceJson(
-            object: object,
-            ok: ok,
-            result: result,
-            message: message,
-            error: error,
-            hints: hints)
     }
 
     private static func launchdProgramArguments(

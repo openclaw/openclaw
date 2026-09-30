@@ -403,7 +403,7 @@ extension ChatMessageBubble {
                     self.messageContent(text: text, textColor: textColor)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 12)
-                        .background(self.bubbleBackground)
+                        .background(AnyShapeStyle(self.bubbleFillColor))
                         .clipShape(self.bubbleShape)
                         .overlay(self.bubbleBorder)
                         .shadow(
@@ -507,7 +507,11 @@ extension ChatMessageBubble {
                 .foregroundStyle(textColor)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            self.userMarkdown(text: text, textColor: textColor)
+            ChatMarkdownRenderer(
+                text: text,
+                context: .user,
+                variant: self.markdownVariant,
+                textColor: textColor)
         }
 
         if preview != nil {
@@ -533,14 +537,6 @@ extension ChatMessageBubble {
                 localized: self.userMessageExpanded ? "Expanded" : "Collapsed"))
             .accessibilityIdentifier("chat-user-message-disclosure-toggle")
         }
-    }
-
-    private func userMarkdown(text: String, textColor: Color) -> some View {
-        ChatMarkdownRenderer(
-            text: text,
-            context: .user,
-            variant: self.markdownVariant,
-            textColor: textColor)
     }
 
     @ViewBuilder
@@ -577,7 +573,7 @@ extension ChatMessageBubble {
     }
 
     private var shouldRenderBubble: Bool {
-        guard !self.isToolResultMessage else { return false }
+        guard !self.message.isToolResult else { return false }
         return !self.primaryText.isEmpty ||
             !self.inlineAttachments.isEmpty ||
             !self.inlineWidgets.isEmpty ||
@@ -589,7 +585,7 @@ extension ChatMessageBubble {
         // Results normally reach us merged into the calling assistant message
         // (ChatTranscriptRow.mergeToolResults); this branch is the orphan
         // fallback for results whose call is not in the preceding message.
-        if self.isToolResultMessage {
+        if self.message.isToolResult {
             return [ChatToolActivityItem(
                 id: self.message.content.first?.id ?? "result-0",
                 name: self.message.toolName,
@@ -661,11 +657,6 @@ extension ChatMessageBubble {
         self.message.content.filter(\.isToolResult)
     }
 
-    private var isToolResultMessage: Bool {
-        let role = self.message.role.lowercased()
-        return role == "toolresult" || role == "tool_result"
-    }
-
     private var usagePresentation: ChatMessageUsagePresentation? {
         ChatMessageUsagePresentation.make(
             message: self.message,
@@ -694,10 +685,6 @@ extension ChatMessageBubble {
             return OpenClawChatTheme.onboardingAssistantBubble
         }
         return OpenClawChatTheme.assistantBubble
-    }
-
-    private var bubbleBackground: AnyShapeStyle {
-        AnyShapeStyle(self.bubbleFillColor)
     }
 
     private var bubbleBorderColor: Color {
@@ -1147,26 +1134,6 @@ extension ChatStreamingAssistantBubble: @MainActor Equatable {
             lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.isClean == rhs.isClean
-    }
-}
-
-@MainActor
-struct ChatPendingToolsBubble: View {
-    let toolCalls: [OpenClawChatPendingToolCall]
-
-    var body: some View {
-        ChatToolActivityList(items: self.items)
-            .padding(4)
-    }
-
-    private var items: [ChatToolActivityItem] {
-        self.toolCalls.map(ChatToolActivityItem.init(live:))
-    }
-}
-
-extension ChatPendingToolsBubble: @MainActor Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.toolCalls == rhs.toolCalls
     }
 }
 

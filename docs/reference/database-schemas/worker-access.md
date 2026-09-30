@@ -67,6 +67,21 @@ policy read obtains current rows; it does not retain migration exclusions across
 later operations. The updater's synchronous effect guards retain their existing
 fresh-read contract in their CLI or child-process owners.
 
+Candidate update validation records snapshot, startup, and temporary-copy cleanup
+progress through the shared-state worker. The updater retains the original
+database and executor authority, awaits accepted receipts before advancing, and
+drains them before signal cleanup releases the executor. The worker uses the
+existing synchronous step mutation and checks recovery policy inside its
+transaction. An uncertain write keeps its cleanup error and prevents further
+rehearsal cleanup; it does not become an ordinary validation failure. Signal
+cleanup leaves history pending when an accepted write's outcome is unknown; a
+later successful receipt does not clear that uncertainty. Stored formats,
+schemas, and path-redaction rules are unchanged.
+
+The installed updater still owns its first upgrade hop. Shipped synchronous
+ledger APIs, effect guards, general command progress, and finalization writes
+remain with their existing owners until their separate worker cutovers.
+
 Plugin requirement batches prepare their final installed index through the existing
 metadata worker after installation and compensation settle. Preparation seals
 collection, reads an uncached row from the captured database, and retains the
@@ -219,6 +234,18 @@ including when ordinary reply delivery fails. Local forced completion and final
 cleanup join the same pending release. Restart recovery, schemas, persisted
 fields, and update behavior are unchanged.
 
+Staged workspace-result pointers also commit through that placement worker. The
+same transaction checks the pending-result claim, immutable staged ref, and exact
+repository session owner, with live caller guards rechecked at admission and
+commit. Repository publication awaits the durable pointer before accepting its
+reconciliation journal. Local worktree reconciliation preserves its applied
+journal and final-verification ordering, then awaits durable pointer publication.
+Commit receipts
+invalidate pending-result read observations without revoking separate turn
+claims; uncertain writes retain recovery custody and are not replayed. Other
+placement lifecycle methods and their synchronous guards remain separate
+migration work. Schemas, stored fields, and update behavior are unchanged.
+
 Memory session preparation retains only export text, provenance, timestamps, and
 classification/reset facts from each decoded SQLite event. Full-message observers
 retain their original snapshot, and callbacks run after its read transaction closes.
@@ -267,6 +294,15 @@ existing reconciliation custody: do not replay the write. Cancellation before
 dispatch can refuse work; cancellation after execution must still join its native
 settlement. Close and shutdown join accepted work and cleanup before releasing
 the store or replacing its generation.
+
+Cold session reclamation opens and validates its captured existing file in the
+reclamation worker, leaving the foreground executor available during integrity
+checks. Opening expectations do not grant native authority: the host accepts the
+worker's actual file identity and retained lease before dispatching the mutation.
+Both directions preserve revocable validation proof. Caller permission refusal
+does not retire an otherwise healthy actor; source replacement or lifetime
+retirement still refuses work and joins cleanup. Schemas, stored bytes, retention,
+and update behavior are unchanged.
 
 Session-reclamation retirement honors settled cleanup reported by its worker,
 including after a failed request. After an unsettled native exit, the shared-state
@@ -363,6 +399,17 @@ shared-state writer. Normal terminal exit closes persistence admission and joins
 accepted writes. A newer conversation choice or reset invalidates a pending
 remembered-session restore. The existing scope keys, heartbeat filtering,
 SQLite rows, missing-store behavior, and update behavior are unchanged.
+
+Repository workspace lookup, creation, base binding, checkpoint acceptance, and
+deletion execute in the shared-state worker. Revision comparisons and immutable
+base checks remain in its synchronous transactions. Native commit receipts publish
+current repository facts before session observers run; a lost ordinary reply does
+not discard a committed workspace identity. File cleanup follows settled row
+deletion. Synchronous Git, placement, and publication guards consume prepared
+facts bound to the original database lifecycle, refusing unsettled mutations.
+Session presentation prepares repository rows alongside its other metadata;
+private rows retain facts only for the request's synchronous publication frame.
+Schemas, stored values, permissions, retention, and update behavior are unchanged.
 
 ## Migrate a caller
 
@@ -706,9 +753,16 @@ through native settlement; only committed receipts transfer to callers, and a
 conflict retries only after confirmed rollback. Owner edits observe receipts
 through the read worker before their existing synchronous authority capture.
 Pending work retains the partition queue and fences retired service generations,
-including deferred startup jobs. Remaining manual or timer finalizers retain
-their native implementation as migration debt. Schemas, retention, configuration,
-and update behavior are unchanged.
+including deferred startup jobs. Manual and timer finalization use that same
+worker owner to update authoritative job rows and terminal receipts in one
+transaction. The host prepares outcome policy from transaction-held facts and
+rechecks it at commit. Reservation custody retains the original physical store
+through execution, finalization, supersession, and deferred runner settlement.
+Retirement suppresses live publication without abandoning the exact receipt's
+durable result. Unknown outcomes are not replayed. Guarded configuration edits,
+current-authority reads, scratch operations, and Doctor maintenance remain
+separate migration work. Schemas, retention, configuration, and update behavior
+are unchanged.
 
 Direct compaction hydrates durable transcripts through the existing read worker
 before preparing hooks or model calls. The read retains the captured transcript

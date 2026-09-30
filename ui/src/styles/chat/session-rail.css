@@ -314,10 +314,7 @@ openclaw-chat-session-rail {
   margin-inline-start: auto;
 }
 
-.chat-session-rail__timestamp {
-  font-size: var(--control-ui-text-sm);
-}
-
+.chat-session-rail__timestamp,
 .chat-session-rail__hint {
   font-size: var(--control-ui-text-sm);
 }

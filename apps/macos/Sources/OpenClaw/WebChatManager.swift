@@ -598,7 +598,7 @@ final class WebChatManager {
     {
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28), pullsDown: false)
         if let local { popup.addItem(withTitle: local.name) }
-        popup.addItems(withTitles: profiles.map(Self.profilePickerTitle))
+        popup.addItems(withTitles: profiles.map { "\($0.name) — \($0.url.absoluteString)" })
         let offset = local == nil ? 0 : 1
         popup.selectItem(at: profiles.isEmpty || (preferredID == "local" && local != nil) ? 0
             : Self.preferredProfileIndex(profiles: profiles, preferredID: preferredID) + offset)
@@ -625,10 +625,6 @@ final class WebChatManager {
 
     nonisolated static func preferredProfileIndex(profiles: [MacGatewayProfile], preferredID: String?) -> Int {
         profiles.firstIndex { $0.id == preferredID } ?? 0
-    }
-
-    private static func profilePickerTitle(_ profile: MacGatewayProfile) -> String {
-        "\(profile.name) — \(profile.url.absoluteString)"
     }
 
     private static func showProfileError(_ error: Error, message: String) {

@@ -303,8 +303,11 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async readJob(id) {
       return await (await load()).state.cron.readJob(id);
     },
-    async readScratch(id) {
-      return await (await load()).state.cron.readScratch(id);
+    async readScratch(id, options) {
+      options?.assertCurrent?.();
+      const current = await load();
+      options?.assertCurrent?.();
+      return await current.state.cron.readScratch(id, options);
     },
     async writeScratch(id, write) {
       return await (await load()).state.cron.writeScratch(id, write);

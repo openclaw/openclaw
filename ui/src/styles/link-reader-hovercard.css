@@ -330,10 +330,6 @@ a.link-reader-hovercard__error-open {
     padding: 14px;
   }
 
-  .link-reader-hovercard__header {
-    flex-wrap: wrap;
-  }
-
   .link-reader-hovercard__error-header {
     margin: -14px -14px 0;
     padding: 12px 14px;

@@ -178,7 +178,6 @@ function createWhatsAppScenarioContext(
     sutPhoneE164: "+15550000002",
     target: "+15550000002",
     targetKind: "dm",
-    waitForReady: async () => {},
     ...contextOverrides,
   };
 }

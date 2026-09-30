@@ -126,6 +126,30 @@ export function observeCronJobWrites(
       SELECT ${functionName}(NEW.job_id, NEW.state_json);
     END;
   `);
+  const changedJobsByNonce = new Map<string, Set<unknown>>();
+  // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
+  const originalPost = Worker.prototype.postMessage;
+  const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    request: SqliteWorkerRequest,
+    transferList,
+  ) {
+    if (request.type === "execute") {
+      const command: unknown = deserialize(request.input);
+      if (
+        isRecord(command) &&
+        command.type === "cron.mutateJobs" &&
+        isRecord(command.input) &&
+        typeof command.input.nonce === "string" &&
+        !command.input.replacement &&
+        isRecord(command.input.changes) &&
+        command.input.changes.changedIds instanceof Set
+      ) {
+        changedJobsByNonce.set(command.input.nonce, command.input.changes.changedIds);
+      }
+    }
+    return originalPost.call(this, request, transferList);
+  });
   // TEMP triggers cover native scheduling writes. Worker mutations
   // supply their actual rows after SQL has run but before their retained commit
   // admission. Observe that boundary without replacing SQL, grants, or outcomes.
@@ -141,15 +165,26 @@ export function observeCronJobWrites(
         ) {
           const outcome: unknown = deserialize(request.facts.bytes);
           if (isRecord(outcome)) {
+            const changedJobs =
+              typeof request.facts.nonce === "string"
+                ? changedJobsByNonce.get(request.facts.nonce)
+                : undefined;
             const jobs = isRecord(outcome.activation)
               ? [outcome.activation.job]
-              : Array.isArray(outcome.jobs)
-                ? outcome.jobs
-                : Array.isArray(outcome.reservations)
-                  ? outcome.reservations.filter(isRecord).map((reservation) => reservation.job)
-                  : [];
+              : isRecord(outcome.store) && Array.isArray(outcome.store.jobs)
+                ? outcome.store.jobs
+                : Array.isArray(outcome.jobs)
+                  ? outcome.jobs
+                  : Array.isArray(outcome.reservations)
+                    ? outcome.reservations.filter(isRecord).map((reservation) => reservation.job)
+                    : [];
             for (const job of jobs) {
-              if (isRecord(job) && job.id === jobId && isRecord(job.state)) {
+              if (
+                isRecord(job) &&
+                job.id === jobId &&
+                isRecord(job.state) &&
+                (!changedJobs || changedJobs.has(jobId))
+              ) {
                 observer({
                   ...(typeof job.state.queuedAtMs === "number"
                     ? { queuedAtMs: job.state.queuedAtMs }
@@ -166,6 +201,7 @@ export function observeCronJobWrites(
       }, attachment),
     );
   return () => {
+    post.mockRestore();
     admission.mockRestore();
     database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
   };

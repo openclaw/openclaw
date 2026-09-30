@@ -28,6 +28,7 @@ import {
 } from "../../infra/update-global.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
+import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runStep } from "../../infra/update-runner-command.js";
@@ -61,6 +62,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
   /** Internal orchestration context, shared across update phases and child processes. */
   run?: {
     runId: string;
+    /** Immutable original bytes for this invocation; never restoration authority. */
+    originalRecoveryCapture?: UpdateRecoveryBaselineRef;
     defaultStepTimeoutMs?: number;
     activationTimeoutMs?: number;
     env: NodeJS.ProcessEnv;
@@ -74,6 +77,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     requesterAuthority?: UpdateRequesterAuthority;
     /** Live local executor only. A child must independently acquire its owner. */
     executorFence?: UpdateRecoveryFence;
+    /** A signal closes forward admission while accepted receipts settle. */
+    interrupted?: true;
     sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
   };
   acceptCapabilities?: boolean;
@@ -201,7 +206,7 @@ export async function resolveTargetVersion(
   if (direct) {
     return { version: direct };
   }
-  const res = await fetchNpmTagVersion({
+  return await fetchNpmTagVersion({
     tag,
     timeoutMs,
     spec: options.spec,
@@ -209,7 +214,6 @@ export async function resolveTargetVersion(
     cwd: options.cwd,
     env: options.env,
   });
-  return res;
 }
 
 export async function isGitCheckout(root: string): Promise<boolean> {

@@ -228,7 +228,7 @@ async function copyLegacyCronFileAcrossDevices(
         reason: `${formatErrorMessage(err)}; the durable archive is preserved at ${archivePath} because the source was already removed`,
       };
     }
-    const cleanupFailures: string[] = [];
+    let cleanupReason = "";
     if (archiveCreated) {
       let archiveRemoved = false;
       try {
@@ -242,14 +242,11 @@ async function copyLegacyCronFileAcrossDevices(
         archiveRemoved = true;
         await syncDirectoryIfSupported(path.dirname(archivePath));
       } catch (cleanupErr) {
-        cleanupFailures.push(
-          archiveRemoved
-            ? `the partial archive was removed, but cleanup directory sync failed: ${formatErrorMessage(cleanupErr)}`
-            : `partial archive remains at ${archivePath} because cleanup failed: ${formatErrorMessage(cleanupErr)}`,
-        );
+        cleanupReason = archiveRemoved
+          ? `; the partial archive was removed, but cleanup directory sync failed: ${formatErrorMessage(cleanupErr)}`
+          : `; partial archive remains at ${archivePath} because cleanup failed: ${formatErrorMessage(cleanupErr)}`;
       }
     }
-    const cleanupReason = cleanupFailures.length > 0 ? `; ${cleanupFailures.join("; ")}` : "";
     return { ok: false, reason: `${formatErrorMessage(err)}${cleanupReason}` };
   }
 }
@@ -455,7 +452,6 @@ function resolveCronStateId(job: Record<string, unknown>): string | undefined {
   return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
 }
 
-/** Return true when legacy cron JSON or state files exist for a store path. */
 export async function legacyCronStoreFilesExist(storePath: string): Promise<boolean> {
   const resolvedStorePath = path.resolve(storePath);
   return (
@@ -531,7 +527,6 @@ export async function archiveLegacyCronStoreForMigration(
   return failures.length === 0 ? { ok: true } : { ok: false, failures };
 }
 
-/** Load legacy cron JSON/state files into the current loaded-store shape for migration. */
 export async function loadLegacyCronStoreForMigration(
   storePath: string,
 ): Promise<LoadedCronStore & { migrationSource?: LegacyCronMigrationSource }> {
@@ -589,14 +584,14 @@ export async function loadLegacyCronStoreForMigration(
         configJobRuntimeEntries.push(isRecord(entry) ? structuredClone(entry) : {});
         mergeStateFileEntry(job, entry);
       }
-    } else if (!hasLegacyInlineState) {
+    } else {
       for (const job of jobs) {
-        backfillMissingRuntimeFields(job);
+        if (hasLegacyInlineState) {
+          ensureJobStateObject(job);
+        } else {
+          backfillMissingRuntimeFields(job);
+        }
       }
-    }
-
-    for (const job of jobs) {
-      ensureJobStateObject(job);
     }
 
     return {

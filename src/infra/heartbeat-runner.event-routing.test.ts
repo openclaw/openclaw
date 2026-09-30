@@ -13,7 +13,8 @@ import {
   markCronJobWaitingForHeartbeat,
   resetCronActiveJobs,
 } from "../cron/active-jobs.js";
-import { readHeartbeatMonitorScratch, writeCronJobScratch } from "../cron/scratch-store.js";
+import { readCronScratchSnapshot } from "../cron/scratch-read.js";
+import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -778,11 +779,18 @@ describe("Heartbeat cron and exec event ownership", () => {
             heartbeatIsolatedBaseSessionKey: f.sessionKey,
           });
           const cronStore = resolveCronJobsStorePathFromConfig(f.cfg);
-          const monitor = readHeartbeatMonitorScratch(cronStore, "main");
+          const monitor = await readCronScratchSnapshot(cronStore, {
+            kind: "heartbeat",
+            agentId: "main",
+          });
           if (!monitor) {
             throw new Error("Expected the sandbox heartbeat monitor");
           }
-          writeCronJobScratch({ storePath: cronStore, jobId: monitor.jobId, content: "" });
+          writeCronJobScratchForMaintenance({
+            storePath: cronStore,
+            jobId: monitor.jobId,
+            content: "",
+          });
           const text = noise ? "HEARTBEAT_OK" : reminder;
           enqueueSystemEvent(text, {
             sessionKey: queueKey,

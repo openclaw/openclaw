@@ -206,11 +206,9 @@ export type SlackQaScenarioContext = {
   channelId: string;
   driverClient: WebClient;
   gateway: QaGatewayChild;
-  postSlackMessage: (params: { text: string; threadTs?: string }) => Promise<{ ts: string }>;
   sentTs: string;
   sutIdentity: SlackAuthIdentity;
   sutReadClient: WebClient;
-  waitForReady: () => Promise<void>;
 };
 
 export type SlackQaScenarioImplementation = {

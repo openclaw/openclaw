@@ -1,4 +1,3 @@
-// Cloud-worker dispatch for session-owned workspaces.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -13,6 +12,7 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { resolveDevicePlacementEligibility } from "../worker-environments/device-placement-eligibility.js";
 import { selectDevicePlacementCandidates } from "../worker-environments/device-placement-selector.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "../worker-environments/device-provider-identity.js";
@@ -93,16 +93,26 @@ function resolveWorkerSessionTarget(params: {
   return { cfg, target, entry, sessionId, dispatchTarget: destination.value };
 }
 
-function resolveSessionWorkspace(params: {
+async function resolveSessionWorkspace(params: {
   entry: NonNullable<ReturnType<typeof loadAccessorSessionEntryForGatewayTarget>["entry"]>;
   sessionKey: string;
   agentId: string;
   method: "sessions.dispatch" | "sessions.move" | "sessions.reclaim";
   respond: RespondFn;
-}): WorkerSessionWorkspace | undefined {
+}): Promise<WorkerSessionWorkspace | undefined> {
   if (params.entry.repositoryWorkspaceId) {
-    const repository = getSessionRepositoryWorkspaceStore().get(params.entry.repositoryWorkspaceId);
+    const repository = await getSessionRepositoryWorkspaceStore().get(
+      params.entry.repositoryWorkspaceId,
+    );
+    const current = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
     if (
+      current.agentId === params.agentId &&
+      current.canonicalKey === params.sessionKey &&
+      current.entry?.sessionId === params.entry.sessionId &&
+      current.entry?.lifecycleRevision === params.entry.lifecycleRevision &&
+      current.entry?.archivedAt === params.entry.archivedAt &&
+      current.entry?.repositoryWorkspaceId === params.entry.repositoryWorkspaceId &&
+      !current.entry.worktree &&
       repository &&
       repository.agentId === params.agentId &&
       repository.sessionKey === params.sessionKey &&
@@ -363,7 +373,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const workspace = resolveSessionWorkspace({
+    const workspace = await resolveSessionWorkspace({
       entry,
       sessionKey: target.canonicalKey,
       agentId: target.target.agentId,
@@ -549,13 +559,13 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      !resolveSessionWorkspace({
+      !(await resolveSessionWorkspace({
         entry,
         sessionKey: target.canonicalKey,
         agentId: target.target.agentId,
         method: "sessions.move",
         respond,
-      })
+      }))
     ) {
       return;
     }
@@ -641,13 +651,13 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     };
     if (
       existingPlacement?.state !== "failed" &&
-      !resolveSessionWorkspace({
+      !(await resolveSessionWorkspace({
         entry,
         sessionKey: target.canonicalKey,
         agentId: target.target.agentId,
         method: "sessions.reclaim",
         respond,
-      })
+      }))
     ) {
       return;
     }

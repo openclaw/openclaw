@@ -63,6 +63,26 @@ export function createSubagentPersistenceMock(
     };
   return {
     onSubagentRegistryPersisted: (listener: () => void) => registerListener(listeners, listener),
+    // Policy fixtures supply retained rows in memory; worker custody uses the real state owner.
+    withSubagentRunReadSnapshot: (async (runs, select, consume) => {
+      await Promise.resolve();
+      const selected = select(new Map(runs));
+      const runIds = new Set(selected.runIds);
+      const sessionKeys = new Set(selected.sessionKeys);
+      return consume(
+        selected,
+        new Map(
+          [...runs].filter(
+            ([runId, entry]) =>
+              runIds.has(runId) ||
+              sessionKeys.has(entry.requesterSessionKey.trim()) ||
+              Boolean(
+                entry.controllerSessionKey && sessionKeys.has(entry.controllerSessionKey.trim()),
+              ),
+          ),
+        ),
+      );
+    }) satisfies typeof RegistryPersistence.withSubagentRunReadSnapshot,
     persistSubagentRunsToDisk: publishAfter(methods.persistSubagentRunsToDisk),
     persistSubagentRunsToDiskOrThrow: publishAfter(methods.persistSubagentRunsToDiskOrThrow),
     restoreSubagentRunsFromDisk: async (

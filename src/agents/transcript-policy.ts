@@ -100,25 +100,15 @@ function buildUnownedProviderTransportReplayFallback(params: {
   const isGoogle = isGoogleModelApi(params.modelApi);
   const isAnthropic = isAnthropicApi(params.modelApi);
   const isStrictOpenAiCompatible = params.modelApi === "openai-completions";
-  const requiresOpenAiCompatibleToolIdSanitization =
-    params.modelApi === "openai-completions" ||
-    params.modelApi === "openai-responses" ||
-    params.modelApi === "openai-chatgpt-responses" ||
-    params.modelApi === "azure-openai-responses";
+  const isOpenAiResponses = isOpenAiResponsesCompatibleApi(params.modelApi);
+  const requiresOpenAiCompatibleToolIdSanitization = isStrictOpenAiCompatible || isOpenAiResponses;
 
-  if (
-    !isGoogle &&
-    !isAnthropic &&
-    !isStrictOpenAiCompatible &&
-    !requiresOpenAiCompatibleToolIdSanitization
-  ) {
+  if (!isGoogle && !isAnthropic && !requiresOpenAiCompatibleToolIdSanitization) {
     return undefined;
   }
 
   const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
-  const isClaudeOpenAiResponses = isOpenAiResponsesCompatibleApi(params.modelApi)
-    ? isClaudeFamilyModelId(modelId)
-    : false;
+  const isClaudeOpenAiResponses = isOpenAiResponses && isClaudeFamilyModelId(modelId);
   return {
     ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
     ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization
@@ -144,23 +134,21 @@ function buildUnownedProviderTransportReplayFallback(params: {
           },
         }
       : {}),
-    ...(isAnthropic && shouldDropClaudeThinkingBlocks(modelId, params.model)
-      ? { dropThinkingBlocks: true }
-      : {}),
-    ...(isAnthropic && modelDisablesReasoningEffort(params.model)
+    ...(isAnthropic &&
+    (shouldDropClaudeThinkingBlocks(modelId, params.model) ||
+      modelDisablesReasoningEffort(params.model))
       ? { dropThinkingBlocks: true }
       : {}),
     ...(isStrictOpenAiCompatible
       ? { dropReasoningFromHistory: !shouldPreserveReasoningContentReplay(params) }
       : {}),
-    ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
-    ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
+    ...(isGoogle || isStrictOpenAiCompatible
+      ? { applyAssistantFirstOrderingFix: true, validateGeminiTurns: true }
+      : {}),
     ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses
       ? { validateAnthropicTurns: true }
       : {}),
-    ...(isGoogle || isAnthropic || isOpenAiResponsesCompatibleApi(params.modelApi)
-      ? { allowSyntheticToolResults: true }
-      : {}),
+    ...(isGoogle || isAnthropic || isOpenAiResponses ? { allowSyntheticToolResults: true } : {}),
   };
 }
 

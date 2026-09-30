@@ -6,6 +6,7 @@ import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   acquireSqliteStagingToken,
   SQLITE_STAGING_TOKEN_FILES,
@@ -485,12 +486,10 @@ function createCaptureDirectory(instance: Instance, prefix: string, kind = "capt
         if (directory) {
           ownedRoots.add(directory);
         }
-        throw new AggregateError(
+        throw createSqliteLifecycleAggregateError(
           [error, releaseError],
           "Plugin source preparation cleanup failed",
-          {
-            cause: releaseError,
-          },
+          error,
         );
       }
       if (directory) {

@@ -533,17 +533,18 @@ export async function handleApprovalResolve<
   const recordFilter = custody
     ? (record: ExecApprovalRecord<TPayload>) => custody.authorizes(record)
     : undefined;
+  const lookup = {
+    manager: params.manager,
+    authority: params.authority,
+    getCfg: params.context.getRuntimeConfig,
+    inputId: params.inputId,
+    client: params.client,
+    exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
+    recordFilter,
+  };
   let resolved: ApprovalRecordLookupResult<TPayload>;
   try {
-    resolved = await resolvePendingApprovalRecord({
-      manager: params.manager,
-      authority: params.authority,
-      getCfg: params.context.getRuntimeConfig,
-      inputId: params.inputId,
-      client: params.client,
-      exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
-      recordFilter,
-    });
+    resolved = await resolvePendingApprovalRecord(lookup);
   } catch (err) {
     respondFailure(err);
     return;
@@ -555,15 +556,7 @@ export async function handleApprovalResolve<
   if (!resolved.ok) {
     let resolvedRepeat: ApprovalRecordLookupResult<TPayload>;
     try {
-      resolvedRepeat = await resolveResolvedApprovalRecord({
-        manager: params.manager,
-        authority: params.authority,
-        getCfg: params.context.getRuntimeConfig,
-        inputId: params.inputId,
-        client: params.client,
-        exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
-        recordFilter,
-      });
+      resolvedRepeat = await resolveResolvedApprovalRecord(lookup);
     } catch (err) {
       respondFailure(err);
       return;

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -7,6 +8,7 @@ import {
   SqliteCoordinatorError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
+import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
@@ -34,6 +36,14 @@ import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.
 
 export type OpenClawStateReadConnection = {
   database: Pick<OpenClawStateDatabase, "db" | "path">;
+  snapshotSource?: {
+    retain(): {
+      location: string;
+      cleanupRoot?: string;
+      assertCurrent(): void;
+      release(): void;
+    };
+  };
   close: (retain?: boolean) => boolean;
 };
 
@@ -394,6 +404,7 @@ function openStateReadConnectionResult(
   }
   const db = native.database;
   let closed = false;
+  let closing = false;
   const database = {
     db,
     path: pathname,
@@ -407,10 +418,31 @@ function openStateReadConnectionResult(
   };
   const connection: OpenClawStateReadConnection = {
     database: { db, path: pathname },
+    snapshotSource: snapshot
+      ? {
+          retain() {
+            const assertCurrent = () => {
+              if (closing || closed) {
+                throw new Error("Shared-state snapshot source is closing or closed");
+              }
+            };
+            assertCurrent();
+            return {
+              location: snapshot.location,
+              cleanupRoot: snapshot.cleanupRoot,
+              assertCurrent,
+              release: retainSnapshotTempDirectory(
+                snapshot.cleanupRoot ?? path.dirname(snapshot.location),
+              ),
+            };
+          },
+        }
+      : undefined,
     close() {
       if (closed) {
         return false;
       }
+      closing = true;
       // A failed close remains owned for retry, including private snapshot handles.
       const errors = openClawStateDatabaseCache.closeOpenClawStateDatabaseHandle(database);
       if (errors.length === 1 && errors[0] instanceof SnapshotCleanupIncompleteError) {

@@ -1,4 +1,3 @@
-// Gateway methods expose session files and workspace browsing.
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -62,7 +61,6 @@ type TouchedFilesCacheEntry = {
   files: Map<string, TouchedFile>;
 };
 
-const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 // Control UI requests fan out per visible session; keep enough folds to avoid
 // eviction and full-transcript reparsing across realistic concurrent viewers.
 const TOUCHED_FILES_CACHE_LIMIT = 256;
@@ -299,7 +297,7 @@ async function loadSessionFiles(params: {
   agentId?: string;
   context: GatewayRequestContext;
 }): Promise<
-  LoadedSessionFiles & { repository?: ReturnType<typeof resolveRepositoryWorkspaceAccess> }
+  LoadedSessionFiles & { repository?: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>> }
 > {
   const loaded = loadSessionFileRoot(params);
   const { storePath, entry, canonicalKey, agentId } = loaded;
@@ -326,7 +324,7 @@ async function loadSessionFiles(params: {
       async () => {},
     );
   }
-  const repository = resolveRepositoryWorkspaceAccess(loaded, params.context);
+  const repository = await resolveRepositoryWorkspaceAccess(loaded, params.context);
   const scope = {
     agentId,
     sessionEntry: entry,
@@ -368,7 +366,7 @@ function respondSessionFileTooLarge(respond: RespondFn, file: SessionFileEntry, 
     false,
     undefined,
     sessionFilesError("session_file_too_large", "session file is too large to preview", {
-      maxPreviewBytes: MAX_PREVIEW_BYTES,
+      maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
       path: file.path || filePath,
       size: file.size,
     }),
@@ -480,7 +478,6 @@ async function handleSessionFilesRead(
   }
 }
 
-/** Gateway handlers for session files and workspace browsing. */
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
   "sessions.files.list": defineValidatedGatewayHandler(
     "sessions.files.list",
@@ -510,7 +507,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileNotFound(respond, params.path);
       return;
     }
-    const repository = resolveRepositoryWorkspaceAccess(loaded, context);
+    const repository = await resolveRepositoryWorkspaceAccess(loaded, context);
     if (repository?.kind === "stored") {
       throw new Error("Start this cloud session before editing its repository files.");
     }
@@ -536,7 +533,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         sessionFilesError("session_file_too_large", "session file content is too large", {
-          maxPreviewBytes: MAX_PREVIEW_BYTES,
+          maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
           path: params.path,
           size: update.size,
         }),

@@ -315,11 +315,7 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   readonly hookInvocation?: Readonly<{ assertActive(): void }>;
 };
 
-export type PluginHookContextWindowSource =
-  | "model"
-  | "modelsConfig"
-  | "agentContextTokens"
-  | "default";
+type PluginHookContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
 
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;

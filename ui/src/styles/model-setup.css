@@ -158,7 +158,8 @@
   font-size: 12px;
 }
 
-.model-setup__icon--recommendation {
+.model-setup__icon--recommendation,
+.model-setup__icon--picker {
   width: 28px;
   height: 28px;
   flex-basis: 28px;
@@ -352,12 +353,6 @@
 
 .model-setup-provider-select__option .model-setup-provider-select__copy {
   padding: 3px 0;
-}
-
-.model-setup__icon--picker {
-  width: 28px;
-  height: 28px;
-  flex-basis: 28px;
 }
 
 .model-setup__manual-help {

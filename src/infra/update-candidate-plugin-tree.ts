@@ -29,9 +29,6 @@ import {
 } from "./update-runtime-relocation.js";
 import { isGitRuntimeStagingName } from "./update-runtime-staging.js";
 
-export { UpdateCandidatePluginTreePlanSchema } from "./update-candidate-plugin-tree-schema.js";
-export type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
-
 async function dependencyOwner(
   target: string,
   withinRetainedHost = false,

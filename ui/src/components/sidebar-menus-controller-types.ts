@@ -1,5 +1,5 @@
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
-import type { AgentIdentityResult } from "../api/types.ts";
+import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
@@ -7,7 +7,6 @@ import type { GatewayStatus } from "../lib/gateway-status.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import type { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
 import type {
   SidebarEmptyGroupsMode,
   SidebarRecentSession,
@@ -19,8 +18,6 @@ import type {
   SessionOrganizerControllerHost,
 } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
-
-type SidebarMenuAgent = Parameters<typeof renderSidebarAgentMenu>[0]["agents"][number];
 
 export interface SidebarMenusControllerHost extends SessionOrganizerControllerHost {
   readonly querySelector: HTMLElement["querySelector"];
@@ -75,8 +72,8 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   pluginNavigation(): ControlUiRegistration<ControlUiNavigationItem>[];
   activeChipAgent(): {
     activeId: string;
-    agent: SidebarMenuAgent | undefined;
-    agents: readonly SidebarMenuAgent[];
+    agent: GatewayAgentRow | undefined;
+    agents: readonly GatewayAgentRow[];
     identity: AgentIdentityResult | null;
     identities: ReadonlyMap<string, AgentIdentityResult>;
   };

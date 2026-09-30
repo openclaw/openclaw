@@ -3,8 +3,6 @@ import type { OpenClawConfig } from "../config/types.js";
 import {
   canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
-  parseVideoProviderFilter,
-  parseProviderModelMap,
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoResolution,
 } from "./live-test-helpers.js";
@@ -20,25 +18,6 @@ describe("video-generation live-test helpers", () => {
     ["google", "google/veo-3.1-fast-generate-preview", "480P"],
   ] as const)("uses a supported %s live resolution", (providerId, modelRef, expected) => {
     expect(resolveLiveVideoResolution({ providerId, modelRef })).toBe(expected);
-  });
-
-  it("parses provider filters and treats empty/all as unfiltered", () => {
-    expect(parseVideoProviderFilter()).toBeNull();
-    expect(parseVideoProviderFilter("all")).toBeNull();
-    expect(parseVideoProviderFilter(" google , xai ")).toEqual(new Set(["google", "xai"]));
-  });
-
-  it("parses provider model overrides by provider id", () => {
-    expect(
-      parseProviderModelMap(
-        "google/veo-3.1-fast-generate-preview, xai/grok-imagine-video, invalid",
-      ),
-    ).toEqual(
-      new Map([
-        ["google", "google/veo-3.1-fast-generate-preview"],
-        ["xai", "xai/grok-imagine-video"],
-      ]),
-    );
   });
 
   it("collects configured models from primary and fallbacks", () => {

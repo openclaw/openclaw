@@ -28,10 +28,8 @@ import {
   selectConnectedSettledSubagentWave,
 } from "../registry/subagent-registry-queries.js";
 import {
-  countActiveDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
-  hasDescendantRunAwaitingSettle,
   listSubagentRunsForRequester,
 } from "../registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -57,9 +55,11 @@ import {
   readChildCompletionFindings,
 } from "./subagent-announce-output.js";
 import { hasUsableSessionEntry } from "./subagent-announce.js";
+import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
 import {
   readSharedBatchState,
+  retainedYieldIdentity,
   type RequesterSettleWakeBatchState,
   type RequesterSettleWakeBatchCallbacks,
 } from "./subagent-announce.requester-settle-state.js";
@@ -69,14 +69,6 @@ const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
-
-function retainedYieldIdentity(state: RequesterSettleWakeBatchState) {
-  return {
-    ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true as const } : {}),
-    ...(state.afterRequesterYield === true ? { afterRequesterYield: true as const } : {}),
-    ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
-  };
-}
 
 /**
  * Wakes a top-level or explicitly yielded nested requester once its batch's last
@@ -217,16 +209,21 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const batchCreatedAt = Math.min(...settledBatch.map((entry) => entry.createdAt));
   // Keep the batch members themselves in the settle check, including paused work.
   const rootRunIds = frozenBatchRunIds?.length ? new Set(frozenBatchRunIds) : undefined;
-  const requesterHasUnsettledDescendants = () =>
-    hasDescendantRunAwaitingSettle(
-      requesterSessionKey,
-      currentSettledEntry.runId,
-      requesterAgentId,
-      requesterStorePath,
-      batchCreatedAt,
-      rootRunIds,
-    );
-  const hasUnsettledDescendants = requesterHasUnsettledDescendants();
+  const readRequesterDescendants = createRequesterDescendantReader({
+    requesterSessionKey,
+    requesterAgentId,
+    requesterStorePath,
+    settledEntry: currentSettledEntry,
+    settledBefore: batchCreatedAt,
+    rootRunIds,
+    signal: params.signal,
+    isSourceCurrent: params.isSourceCurrent,
+  });
+  const initialDescendants = await readRequesterDescendants();
+  if (!initialDescendants) {
+    return false;
+  }
+  const hasUnsettledDescendants = initialDescendants.unsettled;
   if ((!frozenBatchRunIds || frozenBatchRunIds.length === 0) && hasUnsettledDescendants) {
     return false;
   }
@@ -291,13 +288,16 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   }
   async function deferBatch(
     state: RequesterSettleWakeBatchState,
-    countTowardsLimit = countActiveDescendantRuns(
-      requesterSessionKey,
-      requesterAgentId,
-      requesterStorePath,
-      rootRunIds,
-    ) === 0,
+    countTowardsLimitOverride?: boolean,
   ): Promise<void> {
+    let countTowardsLimit = countTowardsLimitOverride;
+    if (countTowardsLimit === undefined) {
+      const descendants = await readRequesterDescendants();
+      if (!descendants) {
+        return;
+      }
+      countTowardsLimit = descendants.active === 0;
+    }
     const now = Date.now();
     if ((state.nextAttemptAt ?? 0) > now) {
       return;
@@ -455,7 +455,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       return false;
     }
     // Recheck owned descendants after loading findings and before dispatch.
-    if (requesterHasUnsettledDescendants()) {
+    const currentDescendants = await readRequesterDescendants();
+    if (!currentDescendants) {
+      return false;
+    }
+    if (currentDescendants.unsettled) {
       await deferBatch(state);
       return false;
     }
@@ -595,10 +599,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
               deliverSubagentAnnouncement({
                 requesterSessionKey,
                 requesterAgentId,
-                requesterRunTimeoutSeconds:
-                  requesterDepth >= 1 && requesterRun
-                    ? (requesterRun.runTimeoutSeconds ?? 0)
-                    : undefined,
                 triggerMessage: wakeMessage,
                 steerMessage: wakeMessage,
                 requesterSessionOrigin,

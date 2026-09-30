@@ -81,16 +81,13 @@ describe("queued collector native admission", () => {
             },
             {
               ...currentControl,
-              preparePublication: {
-                needsPreparation: () => preparation.needsPreparation(),
-                prepare: async () => {
-                  publicationEntered.resolve();
-                  await releasePublication.promise;
-                  if (publicationFailure) {
-                    throw new Error("publication preparation failed");
-                  }
-                  await preparation.prepare();
-                },
+              preparePublication: async (publishPrepared) => {
+                publicationEntered.resolve();
+                await releasePublication.promise;
+                if (publicationFailure) {
+                  throw new Error("publication preparation failed");
+                }
+                return await preparation(publishPrepared);
               },
             },
           );

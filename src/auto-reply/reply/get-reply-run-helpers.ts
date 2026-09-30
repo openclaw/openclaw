@@ -1,4 +1,3 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -11,8 +10,6 @@ import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyExecOverrides } from "./get-reply-exec-overrides.js";
-
-const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
 export function buildPersistedMediaImageLayout(params: {
   ctx: MsgContext;
@@ -112,16 +109,6 @@ export function routeThreadIdsMatch(
     return true;
   }
   return String(activeThreadId) === String(currentThreadId);
-}
-
-export function normalizeMessageTimestampMs(value: unknown): number | undefined {
-  const timestamp = typeof value === "number" && Number.isFinite(value) ? value : undefined;
-  if (timestamp === undefined || timestamp <= 0) {
-    return undefined;
-  }
-  const timestampMs =
-    timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
-  return asDateTimestampMs(timestampMs);
 }
 
 export async function updateRoomEventAmbientTranscriptWatermark(params: {

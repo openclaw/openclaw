@@ -11,8 +11,7 @@ import { WorkerSkillWorkshopParamsSchema } from "../../../packages/gateway-proto
 import type { WorkerSessionToolName } from "../../worker/tool-authority.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
-  serializeWorkerSessionToolResult,
-  workerSessionToolErrorResult,
+  serializeWorkerSessionToolError,
   type WorkerSessionToolExecutor,
   type WorkerSessionToolRequest,
 } from "./worker-session-tool-result.js";
@@ -70,9 +69,7 @@ export function createWorkerSessionToolRpc(options: {
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
-      result = {
-        resultJson: serializeWorkerSessionToolResult(workerSessionToolErrorResult(error)),
-      };
+      result = { resultJson: serializeWorkerSessionToolError(error) };
     }
     // The tool may have awaited provider provisioning or another session turn.
     // Neither success nor failure may return after the source turn or placement was revoked.

@@ -20,6 +20,7 @@ import {
 } from "../../infra/update-run-step.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
@@ -138,6 +139,7 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
       const { revalidateUpdateDatabaseContext } = await vi.importActual<
         typeof import("./update-command-managed-context.js")
       >("./update-command-managed-context.js");
+      const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
       let current = schemaContext("default");
       mocks.captureSchemaContext.mockImplementation(async () => current);
       mocks.captureManagedPreflight.mockImplementation(async () => current);
@@ -177,14 +179,16 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
 
       const execution = await executeMutableUpdate(executionParams(kind));
 
-      expect(execution?.result.status).toBe(changed ? "error" : "ok");
-      expect(mocks.validateCanary).toHaveBeenCalledTimes(changed ? 0 : 1);
+      expect(execution?.result.status).toBe("ok");
+      expect(mocks.validateCanary).toHaveBeenCalledTimes(1);
       expect(mocks.serviceStopped).toBe(false);
       expect(execution?.mutationStarted).toBe(false);
       if (changed) {
-        expect(execution?.result.reason).toBe("database-schema-preflight");
-        expect(execution?.failure?.detail).toContain(
-          "configuration changed during database admission",
+        expect(mocks.validateCanary.mock.calls[0]?.[0].config).toEqual({
+          gateway: { port: 19002 },
+        });
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringContaining("Configuration changed during database admission"),
         );
       }
     },

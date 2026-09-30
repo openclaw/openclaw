@@ -42,7 +42,7 @@ const TAVILY_EXTRACT_MAX_RESULTS = 20;
 const TAVILY_RESULT_URL_MAX_CHARS = 2_048;
 const TAVILY_PUBLISHED_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
-export type TavilySearchParams = {
+type TavilySearchParams = {
   cfg?: OpenClawConfig;
   query: string;
   searchDepth?: string;
@@ -56,7 +56,7 @@ export type TavilySearchParams = {
   signal?: AbortSignal;
 };
 
-export type TavilyExtractParams = {
+type TavilyExtractParams = {
   cfg?: OpenClawConfig;
   urls: string[];
   query?: string;
@@ -184,25 +184,13 @@ export async function runTavilySearch(
   const body: Record<string, unknown> = {
     query: params.query,
     max_results: count,
+    ...(params.searchDepth ? { search_depth: params.searchDepth } : {}),
+    ...(params.topic ? { topic: params.topic } : {}),
+    ...(params.includeAnswer ? { include_answer: true } : {}),
+    ...(params.timeRange ? { time_range: params.timeRange } : {}),
+    ...(params.includeDomains?.length ? { include_domains: params.includeDomains } : {}),
+    ...(params.excludeDomains?.length ? { exclude_domains: params.excludeDomains } : {}),
   };
-  if (params.searchDepth) {
-    body.search_depth = params.searchDepth;
-  }
-  if (params.topic) {
-    body.topic = params.topic;
-  }
-  if (params.includeAnswer) {
-    body.include_answer = true;
-  }
-  if (params.timeRange) {
-    body.time_range = params.timeRange;
-  }
-  if (params.includeDomains?.length) {
-    body.include_domains = params.includeDomains;
-  }
-  if (params.excludeDomains?.length) {
-    body.exclude_domains = params.excludeDomains;
-  }
 
   const start = Date.now();
   const payload = await postTavilyJson({
@@ -299,19 +287,13 @@ export async function runTavilyExtract(
     return { ...cached.value, cached: true };
   }
 
-  const body: Record<string, unknown> = { urls: params.urls };
-  if (params.query) {
-    body.query = params.query;
-  }
-  if (params.extractDepth) {
-    body.extract_depth = params.extractDepth;
-  }
-  if (params.chunksPerSource) {
-    body.chunks_per_source = params.chunksPerSource;
-  }
-  if (params.includeImages) {
-    body.include_images = true;
-  }
+  const body: Record<string, unknown> = {
+    urls: params.urls,
+    ...(params.query ? { query: params.query } : {}),
+    ...(params.extractDepth ? { extract_depth: params.extractDepth } : {}),
+    ...(params.chunksPerSource ? { chunks_per_source: params.chunksPerSource } : {}),
+    ...(params.includeImages ? { include_images: true } : {}),
+  };
 
   const start = Date.now();
   const payload = await postTavilyJson({

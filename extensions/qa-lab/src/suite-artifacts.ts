@@ -51,7 +51,7 @@ export async function invalidateQaSuiteArtifactGeneration(outputDir: string) {
   }
 }
 
-export type QaSuiteSummaryJsonParams = {
+type QaSuiteSummaryJsonParams = {
   status?: QaSuiteSummaryJson["run"]["status"];
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;

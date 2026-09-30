@@ -33,6 +33,7 @@ import {
 } from "./worker-portal-tool-executor.js";
 import { applyWorkerSessionToolPolicy } from "./worker-session-tool-policy.js";
 import {
+  serializeWorkerSessionToolError as serializeError,
   serializeWorkerSessionToolResult as serializeResult,
   workerSessionToolErrorResult as errorResult,
   WorkerSessionToolOutcomeUnknownError,
@@ -509,24 +510,13 @@ export function createWorkerSessionToolExecutor(params: {
     if (started.kind === "completed") {
       return { resultJson: started.resultJson };
     }
-    if (started.kind === "unknown") {
-      return {
-        resultJson: serializeResult(
-          errorResult(new Error("The prior operation outcome is unknown; it was not replayed")),
-        ),
-      };
-    }
-    if (started.kind === "conflict") {
-      return {
-        resultJson: serializeResult(errorResult(new Error("Worker tool call id was reused"))),
-      };
-    }
-    if (started.kind === "capacity") {
-      return {
-        resultJson: serializeResult(
-          errorResult(new Error("Too many worker session operations are already in progress")),
-        ),
-      };
+    if (started.kind === "unknown" || started.kind === "conflict" || started.kind === "capacity") {
+      const message = {
+        unknown: "The prior operation outcome is unknown; it was not replayed",
+        conflict: "Worker tool call id was reused",
+        capacity: "Too many worker session operations are already in progress",
+      }[started.kind];
+      return { resultJson: serializeError(new Error(message)) };
     }
     if (started.kind === "unauthorized") {
       throw new Error("Worker session tool authority changed");
@@ -538,9 +528,7 @@ export function createWorkerSessionToolExecutor(params: {
       return {
         resultJson:
           (existing ? await existing : undefined) ??
-          serializeResult(
-            errorResult(new Error("Worker session operation is already in progress")),
-          ),
+          serializeError(new Error("Worker session operation is already in progress")),
       };
     }
     const completeOperation = (result: unknown, failed = false) => {
@@ -554,7 +542,7 @@ export function createWorkerSessionToolExecutor(params: {
         failed,
       })
         ? resultJson
-        : serializeResult(errorResult(new Error("Worker session operation lost ownership")));
+        : serializeError(new Error("Worker session operation lost ownership"));
     };
     const operation = (async () => {
       let operationRequest = request;
@@ -635,16 +623,12 @@ export function createWorkerSessionToolExecutor(params: {
               requestDigest,
             })
           ) {
-            return serializeResult(
-              errorResult(new Error("Worker session operation lost ownership")),
-            );
+            return serializeError(new Error("Worker session operation lost ownership"));
           }
-          return serializeResult(
-            errorResult(
-              error instanceof WorkerSessionToolOutcomeUnknownError
-                ? error
-                : new Error("Worker session operation outcome is unknown after cancellation"),
-            ),
+          return serializeError(
+            error instanceof WorkerSessionToolOutcomeUnknownError
+              ? error
+              : new Error("Worker session operation outcome is unknown after cancellation"),
           );
         }
         failed = true;

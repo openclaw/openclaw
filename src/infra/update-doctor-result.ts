@@ -170,6 +170,11 @@ export type UpdateDoctorWriteAuthority = {
   assertCurrent: () => void;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  originalRecoveryCapture?: {
+    runId: string;
+    installRoot: string;
+    ref?: import("./update-recovery-baseline-capture.js").UpdateRecoveryBaselineRef;
+  };
 };
 
 /** Receipts describe the caller's existing maintenance interval without owning its lifecycle. */

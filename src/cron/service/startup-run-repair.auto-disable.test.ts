@@ -141,7 +141,6 @@ describe("startup run repair auto-disable", () => {
           cfg,
           preflight,
           canRelayToUser: true,
-          startedAt: nowMs,
           scheduledTasks: [],
           useHeartbeatResponseTool: false,
         }).prompt,

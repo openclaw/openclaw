@@ -84,7 +84,7 @@ async function runWhenDue(cron: CronService, jobId: string) {
 function rejectCronRowWrite(jobId: string) {
   const database = openOpenClawStateDatabase().db;
   database.exec(`
-    CREATE TEMP TRIGGER reject_watcher_row
+    CREATE TRIGGER reject_watcher_row
     BEFORE UPDATE ON cron_jobs
     WHEN NEW.job_id = '${jobId.replaceAll("'", "''")}'
     BEGIN

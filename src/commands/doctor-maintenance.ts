@@ -1,4 +1,3 @@
-/** Coordinates explicit Doctor repair with the managed Gateway lifecycle. */
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
@@ -569,7 +568,7 @@ export async function beginDoctorMaintenance(
       retainStoppedInstallation =
         stopped?.serviceUpdateVerdict?.kind === "owned" &&
         stopped.serviceUpdateVerdict.requiresInstallRootRefresh === true;
-      await state.relocateLegacyRoot();
+      await state.prepareRepair();
     });
   } catch (error) {
     try {

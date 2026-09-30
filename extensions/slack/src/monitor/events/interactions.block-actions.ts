@@ -145,11 +145,7 @@ function summarizeRichTextPreview(value: unknown): string | undefined {
     return undefined;
   }
   const joined = fragments.join(" ").replace(/\s+/g, " ").trim();
-  if (!joined) {
-    return undefined;
-  }
-  const max = 120;
-  return joined.length <= max ? joined : truncateSlackText(joined, max);
+  return truncateSlackText(joined, 120);
 }
 
 export function summarizeAction(action: Record<string, unknown>): SlackActionSummary {
@@ -289,10 +285,7 @@ function formatInteractionSelectionLabel(params: {
 }
 
 function resolveSlackActionValue(summary: SlackActionSummary): string | undefined {
-  return (
-    normalizeOptionalString(summary.value) ??
-    summary.selectedValues?.map((value) => normalizeOptionalString(value)).find(Boolean)
-  );
+  return normalizeOptionalString(summary.value) ?? summary.selectedValues?.[0];
 }
 
 function buildSlackPluginInteractionData(params: {

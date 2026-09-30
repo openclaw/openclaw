@@ -1,10 +1,9 @@
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
-  isCodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import {
@@ -130,7 +129,7 @@ async function releaseCodexRetainedLiveThread(
     );
   } catch (error) {
     // An owner callback may already have retired the client; do not close it twice.
-    if (isCodexAppServerUnsafeSubscriptionError(error)) {
+    if (error instanceof CodexAppServerUnsafeSubscriptionError) {
       throw error;
     }
     return await abandonCodexLiveThreadRelease(options, error);

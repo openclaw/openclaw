@@ -737,7 +737,6 @@ export function renderUsage(props: UsageProps) {
                         displayActions.onSessionSortChange,
                         displayActions.onSessionSortDirChange,
                         displayActions.onSessionsTabChange,
-                        undefined,
                         totalSessions,
                         filterActions.onClearSessions,
                       )}

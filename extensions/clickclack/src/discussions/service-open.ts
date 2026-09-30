@@ -7,6 +7,7 @@ import {
   isClickClackChannelNameConflict,
   type ClickClackClient,
 } from "../http-client.js";
+import { findClickClackWorkspace } from "../resolve.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import {
   clearPendingDiscussionOpen,
@@ -62,7 +63,7 @@ function isDefinitiveNoCreateHttpError(error: unknown): boolean {
   return ![408, 409, 425, 429].includes(error.status);
 }
 
-export async function resolveAvailableChannelName(params: {
+async function resolveAvailableChannelName(params: {
   client: ClickClackClient;
   workspaceId: string;
   label: string;
@@ -131,6 +132,41 @@ export function assertChannelPatch(
   }
 }
 
+export async function renameDiscussionChannel(params: {
+  client: ClickClackClient;
+  workspaceId: string;
+  channelId: string;
+  label: string;
+  sessionKey: string;
+  agentId?: string;
+  patch: Parameters<ClickClackClient["updateChannel"]>[1];
+  assertCurrentAuthority?: () => void;
+}): Promise<Awaited<ReturnType<ClickClackClient["updateChannel"]>>> {
+  for (let attempt = 0; attempt < CHANNEL_NAME_MUTATION_ATTEMPTS; attempt += 1) {
+    const patch = {
+      ...params.patch,
+      name: await resolveAvailableChannelName({
+        ...params,
+        ownChannelId: params.channelId,
+      }),
+    };
+    try {
+      params.assertCurrentAuthority?.();
+      const channel = await params.client.updateChannel(params.channelId, patch);
+      assertChannelPatch(channel, patch);
+      return channel;
+    } catch (error) {
+      if (
+        !isClickClackChannelNameConflict(error) ||
+        attempt === CHANNEL_NAME_MUTATION_ATTEMPTS - 1
+      ) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("ClickClack discussion channel name retries were exhausted");
+}
+
 function assertManagedChannelContract(
   channel: Awaited<ReturnType<ClickClackClient["createChannel"]>>,
   expected: {
@@ -187,12 +223,7 @@ export async function openClickClackDiscussionBinding(
   }
   const client = params.clientFactory(account);
   const workspaces = await client.workspaces();
-  const workspace = workspaces.find(
-    (candidate) =>
-      candidate.id === account.discussions.workspace ||
-      candidate.slug === account.discussions.workspace ||
-      candidate.name === account.discussions.workspace,
-  );
+  const workspace = findClickClackWorkspace(workspaces, account.discussions.workspace);
   if (!workspace) {
     throw new Error(`ClickClack discussions workspace not found: ${account.discussions.workspace}`);
   }
@@ -459,35 +490,21 @@ export async function openClickClackDiscussionBinding(
       currentExternalUrl !== (externalUrl ?? "")
     ) {
       try {
-        for (let attempt = 0; attempt < CHANNEL_NAME_MUTATION_ATTEMPTS; attempt += 1) {
-          const latestManagedFields = {
+        currentChannel = await renameDiscussionChannel({
+          client,
+          workspaceId: workspace.id,
+          channelId: channel.id,
+          label: currentLabel,
+          sessionKey,
+          agentId,
+          patch: {
             ...managedFields,
-            name: await resolveAvailableChannelName({
-              client,
-              workspaceId: workspace.id,
-              label: currentLabel,
-              sessionKey,
-              agentId,
-              ownChannelId: channel.id,
-            }),
             external_url: currentExternalUrl,
             sidebar_section: currentSection,
             display_title: currentDisplayTitle,
-          };
-          try {
-            assertCurrentAuthority();
-            currentChannel = await client.updateChannel(channel.id, latestManagedFields);
-            assertChannelPatch(currentChannel, latestManagedFields);
-            break;
-          } catch (error) {
-            if (
-              !isClickClackChannelNameConflict(error) ||
-              attempt === CHANNEL_NAME_MUTATION_ATTEMPTS - 1
-            ) {
-              throw error;
-            }
-          }
-        }
+          },
+          assertCurrentAuthority,
+        });
       } catch (error) {
         await clearPendingDiscussionOpen({
           runtime,
@@ -585,11 +602,9 @@ export async function reconcilePendingDiscussionOpen(params: {
   ) {
     const retryClient = params.clientFactory(retryAccount);
     const workspaces = await retryClient.workspaces();
-    const configuredWorkspace = workspaces.find(
-      (candidate) =>
-        candidate.id === retryAccount.discussions.workspace ||
-        candidate.slug === retryAccount.discussions.workspace ||
-        candidate.name === retryAccount.discussions.workspace,
+    const configuredWorkspace = findClickClackWorkspace(
+      workspaces,
+      retryAccount.discussions.workspace,
     );
     if (configuredWorkspace?.id === pending.workspaceId) {
       await params.open(pending.sessionKey);

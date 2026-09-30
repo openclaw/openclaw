@@ -131,17 +131,6 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
     expect(sliced.styles).toEqual(
       expect.arrayContaining([expect.objectContaining({ style: "bold", end: sliced.text.length })]),
     );
-
-    const blocks = Reflect.get(ir, "blocks") as Array<{ start: number; end: number }>;
-    const slicedBlocks = Reflect.get(sliced, "blocks") as
-      | Array<{ start: number; end: number }>
-      | undefined;
-    if (blocks?.length) {
-      expect(slicedBlocks).toBeDefined();
-      expect(
-        slicedBlocks?.every((block) => block.start >= 0 && block.end <= sliced.text.length),
-      ).toBe(true);
-    }
   });
 
   it("rejoins the existing surrogate-safe transport chunks without duplicating emoji", () => {

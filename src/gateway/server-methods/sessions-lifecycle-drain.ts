@@ -6,7 +6,6 @@ import {
   type SessionWorkspaceRecoveryRequiredErrorDetails,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
-// Session-owned cancellation and authoritative lifecycle drains.
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunInProgress,

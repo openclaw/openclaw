@@ -509,7 +509,7 @@ private func routeIdentity(
     transport: AppState.RemoteTransport = .direct,
     url: String = "",
     target: String = "",
-    localStateDir: URL = OpenClawConfigFile.stateDirURL(),
+    localStateDir: URL = OpenClawPaths.stateDirURL,
     sshRemotePort: Int = 18789
 ) -> String? {
     OnboardingSystemAgentResumeStore.routeIdentity(

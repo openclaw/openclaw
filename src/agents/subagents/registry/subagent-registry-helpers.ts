@@ -301,7 +301,10 @@ export async function persistSubagentSessionTiming(
 }
 
 /** Best-effort async removal for a subagent attachment directory. */
-export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
+export async function safeRemoveAttachmentsDir(
+  entry: SubagentRunRecord,
+  isCurrent?: () => boolean,
+): Promise<boolean> {
   if (!entry.attachmentId) {
     // Legacy absolute/workspace paths are untrusted and intentionally retired without traversal.
     return true;
@@ -311,6 +314,7 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
     await cleanupMaterializedSubagentAttachments({
       childSessionKey: entry.childSessionKey,
       attachmentId: entry.attachmentId,
+      isCurrent,
     });
     return true;
   } catch {

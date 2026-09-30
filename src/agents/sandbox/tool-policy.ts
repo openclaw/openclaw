@@ -1,11 +1,7 @@
-/**
- * Sandbox tool policy resolver.
- *
- * Merges global, agent, and default allow/deny lists into normalized policy plus source diagnostics.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ToolAllowDenyPolicyConfig } from "../../config/types.tools.js";
 import { resolveAgentConfig } from "../agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
@@ -16,16 +12,10 @@ import type {
   SandboxToolPolicySource,
 } from "./types.js";
 
-type SandboxToolPolicyConfig = {
-  allow?: string[];
-  alsoAllow?: string[];
-  deny?: string[];
-};
-
 function pickConfiguredList(
-  field: keyof SandboxToolPolicyConfig,
-  agent?: SandboxToolPolicyConfig,
-  global?: SandboxToolPolicyConfig,
+  field: keyof ToolAllowDenyPolicyConfig,
+  agent?: ToolAllowDenyPolicyConfig,
+  global?: ToolAllowDenyPolicyConfig,
 ): {
   values?: string[];
   source: SandboxToolPolicySource;
@@ -182,8 +172,8 @@ export function resolveSandboxToolPolicyForAgent(
   options?: { containedToolNames?: readonly string[] },
 ): SandboxToolPolicyResolved {
   const agentConfig = cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-  const agentPolicy = agentConfig?.tools?.sandbox?.tools as SandboxToolPolicyConfig | undefined;
-  const globalPolicy = cfg?.tools?.sandbox?.tools as SandboxToolPolicyConfig | undefined;
+  const agentPolicy = agentConfig?.tools?.sandbox?.tools;
+  const globalPolicy = cfg?.tools?.sandbox?.tools;
 
   const allowConfig = pickConfiguredList("allow", agentPolicy, globalPolicy);
   const alsoAllowConfig = pickConfiguredList("alsoAllow", agentPolicy, globalPolicy);

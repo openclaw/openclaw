@@ -93,7 +93,9 @@ export async function recoverPendingWorkspaceResults(
     if (!pending.repositoryWorkspaceId) {
       return workspace;
     }
-    const repository = getSessionRepositoryWorkspaceStore().get(pending.repositoryWorkspaceId);
+    const repository = await getSessionRepositoryWorkspaceStore().get(
+      pending.repositoryWorkspaceId,
+    );
     if (
       !repository ||
       repository.agentId !== placement.agentId ||
@@ -234,6 +236,7 @@ export async function recoverPendingWorkspaceResults(
           try {
             let active: WorkerOwnedPendingPlacement = pendingPlacement;
             const workspace = await resolveWorkspace(active, pending, recovery.workspace);
+            recovery.assertCurrent();
             const root = sessionWorkspaceRoot(workspace);
             const priorWorkspaceResultConflict = await resolvePriorWorkspaceResultConflict(
               recovery.resolveConflict,
@@ -249,11 +252,13 @@ export async function recoverPendingWorkspaceResults(
               }))
             ) {
               recovery.assertCurrent();
-              placements.recordStagedWorkspaceResult(
+              await placements.recordStagedWorkspaceResult(
                 turnClaim,
                 canonicalStagedResultRef,
                 workspace.kind === "repository" ? workspace.repository.workspaceId : undefined,
+                recovery.assertCurrent,
               );
+              recovery.assertCurrent();
               stagedResultRef = canonicalStagedResultRef;
               stagedResultOwners.add(pending.sessionId);
             }
@@ -559,12 +564,13 @@ export async function recoverPendingWorkspaceResults(
                       ref: canonicalStagedResultRef,
                       record: (ref) => {
                         recovery.assertCurrent();
-                        placements.recordStagedWorkspaceResult(
+                        return placements.recordStagedWorkspaceResult(
                           turnClaim,
                           ref,
                           workspace.kind === "repository"
                             ? workspace.repository.workspaceId
                             : undefined,
+                          recovery.assertCurrent,
                         );
                       },
                     },

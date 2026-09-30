@@ -147,9 +147,7 @@ export function resetReplyRunSettleTimersForTesting(): void {
   for (const lease of activeLeases) {
     lease.clear();
   }
-  activeLeases.clear();
   for (const timer of activeSettleTimers) {
     timer.clear();
   }
-  activeSettleTimers.clear();
 }

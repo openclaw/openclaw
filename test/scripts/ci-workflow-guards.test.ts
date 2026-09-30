@@ -2366,6 +2366,29 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
     }
   });
 
+  it("keeps the full extension package boundary in its own job budget", () => {
+    const timeout = readCiWorkflow().jobs["check-additional-shard"]["timeout-minutes"];
+    for (const [group, expected] of [
+      ["extension-package-boundary", 30],
+      ["runtime-topology-architecture", 20],
+      ["plugin-sdk-api-diff", 20],
+      ["boundaries", 20],
+      [undefined, 20],
+    ] as const) {
+      expect(
+        typeof timeout === "number"
+          ? timeout
+          : evaluateWorkflowExpression(timeout, {
+              eventName: "pull_request",
+              repository: "openclaw/openclaw",
+              runAttempt: 2,
+              matrix: { group },
+            }),
+        group ?? "default additional check",
+      ).toBe(expected);
+    }
+  });
+
   it("resolves the pull request base and changed files from the shallow security checkout", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
     const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");

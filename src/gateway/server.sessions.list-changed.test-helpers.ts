@@ -72,6 +72,7 @@ export function expectChangedBroadcast(
   expect(options).toEqual({
     agentId: typeof expected.agentId === "string" ? expected.agentId : "main",
     dropIfSlow: true,
+    prepareSessionProjection: expect.any(Function),
     ...(typeof expected.sessionKey === "string" ? { sessionKeys: [expected.sessionKey] } : {}),
   });
   const payloadRecord = requireRecord(payload, "broadcast payload");
