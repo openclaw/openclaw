@@ -499,12 +499,6 @@ export function createAcpVisibleTextAccumulator() {
   };
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.attemptExecutionHelpersTestApi")
-  ] = { claudeCliSessionTranscriptPath, formatClaudeCliFallbackPrelude };
-}
-
 export function rebaseExecApprovalContinuationPromptRange(params: {
   body: string;
   prompt: string;

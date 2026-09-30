@@ -8,6 +8,7 @@ import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import {
   CronStreamOutput,
   type CronStreamFireDisposition,
@@ -101,23 +102,12 @@ async function stopManagedRun(run: ManagedRun): Promise<void> {
   // Detach first so pipe drains cannot enqueue after the owner starts stopping.
   run.detachOutput?.();
   run.cancel("manual-cancel");
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    const exited = await Promise.race([
-      run.wait().then(
-        () => true,
-        () => true,
-      ),
-      new Promise<false>((resolve) => {
-        timeout = setTimeout(() => resolve(false), STOP_SETTLE_TIMEOUT_MS);
-        timeout.unref?.();
-      }),
-    ]);
-    if (!exited) {
-      throw new Error(`stream source did not exit within ${STOP_SETTLE_TIMEOUT_MS}ms`);
-    }
-  } finally {
-    clearTimeout(timeout);
+  const exited = await settlesWithin(
+    run.wait().catch(() => undefined),
+    STOP_SETTLE_TIMEOUT_MS,
+  );
+  if (!exited) {
+    throw new Error(`stream source did not exit within ${STOP_SETTLE_TIMEOUT_MS}ms`);
   }
 }
 

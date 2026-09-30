@@ -28,7 +28,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Apply a release firebreak after the Code SHA is frozen. Admit only confirmed
   product defects, wrong or unverifiable package bytes, security
   defects, or failures that make publication impossible. Queue other findings
-  for postpublish confidence or the next beta.
+  for postpublish confidence or the next beta. Dependency advisories are never
+  firebreak admissions: record them as release evidence and queue the bump on
+  `main` after publication; only known malware stops publication.
 - Frozen CI children use the pinned Tooling SHA's Node shard planner and measured
   costs, while discovering and executing tests from the candidate checkout.
   Hosted full-release plans split measured rows above 12 minutes; preserve file
@@ -46,9 +48,12 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   mint or reuse that tag from `--workflow-sha <tooling-sha>`.
 - Touch `main` only for an operator-requested change or the smallest critical
   main-owned blocker that prevents this release and cannot be handled from the
-  release branch. If the required main landing policy is blocked by unrelated
-  main failures, report that blocker and keep independent release work moving
-  instead of healing broader main.
+  release branch. Main's CI health never gates a release. If a release-tooling
+  landing is blocked by `main` failures it does not cause, prove on a clean
+  `main` checkout that the failure already exists there, record it in the PR
+  body, and merge; during an active release an admin merge is allowed for that
+  exact case. A separate lane fixes red `main` in parallel, off the release's
+  critical path.
 - Land tooling-only fixes on `main` with the `release-fast-lane` label added
   before the push (see [Release tooling fast lane](#release-tooling-fast-lane)): `openclaw/ci-gate`
   then runs lint, types, guards, dependencies, docs, and the changed Node rows
@@ -270,9 +275,11 @@ until their dependent enforcement changes land.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
-- Never automatically rerun a failed or timed out test job. New dispatches reject
-  `known_flaky_jobs_json`; diagnose the original failure and fix its owner before
-  explicit operator recovery.
+- Rerun a failed or timed out test job only after the lead records its
+  real-blocker-or-flake decision (see the maintainer skill's shared release
+  boundaries). A flake gets at most two recorded reruns on the same Release SHA
+  plus a fix-in-parallel issue or PR on `main`; never a re-cut, tooling change,
+  or new FRV. New dispatches reject `known_flaky_jobs_json`.
 - For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
 "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.

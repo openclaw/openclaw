@@ -3586,7 +3586,6 @@ export const en: TranslationMap & {
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} sessions",
-      toolActivity: "Using {tool}",
       catalogDiscoveryHelp:
         "{error}. Configure automatic session discovery in Settings > Appearance > Session sources.",
       catalogPaginationFailed: "Session catalog returned a repeated page cursor",

@@ -28,7 +28,6 @@ import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import type { GatewayClient, PreparedSessionApprovalReplay } from "./server-methods/types.js";
 
 const MAX_SESSION_APPROVAL_REPLAY = 1_000;
-type ApprovalSessionClient = GatewayClient & { invalidated?: boolean };
 type ApprovalReplaySnapshot = Omit<PreparedSessionApprovalReplay, "release">;
 type ApprovalReplayScope = {
   sessionKey: string;
@@ -57,7 +56,7 @@ function resolveApprovalSourceStreamKeyForRecord(record: OperatorApprovalRecord)
 
 /** Project durable approval truth to exact, explicitly opted-in session audiences. */
 export function createOperatorApprovalSessionEventRuntime(params: {
-  clients: Iterable<ApprovalSessionClient>;
+  clients: Iterable<GatewayClient>;
   sessionMessageSubscribers: Pick<SessionMessageSubscriberRegistry, "getApprovals">;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   controlUiBasePath?: string;
@@ -72,12 +71,6 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
   const now = params.now ?? Date.now;
   const replayScopes = new Map<string, ApprovalReplayScope>();
-
-  const canAccessRecord = (client: GatewayClient | null, record: OperatorApprovalRecord): boolean =>
-    canAccessOperatorApproval({
-      client,
-      binding: { reviewerDeviceIds: record.reviewerDeviceIds },
-    });
 
   const authorizedRecipients = (
     sessionKey: string,
@@ -94,7 +87,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         !client.invalidated &&
         connId &&
         subscribed.has(connId) &&
-        canAccessRecord(client, record)
+        canAccessOperatorApproval({ client, binding: record })
       ) {
         recipients.add(connId);
       }

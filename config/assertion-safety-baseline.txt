@@ -614,7 +614,6 @@ extensions/memory-core/src/short-term-promotion-rehydrate.ts	1
 extensions/memory-core/src/short-term-promotion-utils.ts	4
 extensions/memory-core/src/short-term-promotion.ts	1
 extensions/memory-core/src/standing-intents-tool.ts	1
-extensions/memory-core/src/standing-intents.ts	2
 extensions/memory-core/src/tools.ts	2
 extensions/memory-lancedb/doctor-contract-api.ts	1
 extensions/memory-lancedb/embeddings.ts	1
@@ -1373,7 +1372,7 @@ src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode.ts	2
 src/agents/codex-mcp-config.ts	1
-src/agents/command/attempt-execution.helpers.ts	7
+src/agents/command/attempt-execution.helpers.ts	6
 src/agents/compaction-planning-projection.ts	6
 src/agents/compaction-planning-worker.ts	1
 src/agents/compaction-planning.ts	1
@@ -2190,11 +2189,9 @@ src/gateway/board-host-tools.ts	1
 src/gateway/board-view-ticket.ts	1
 src/gateway/boot.ts	1
 src/gateway/call.ts	5
-src/gateway/chat-attachments.ts	4
 src/gateway/chat-display-projection.core.ts	5
-src/gateway/chat-display-projection.helpers.ts	10
 src/gateway/chat-display-projection.history.ts	1
-src/gateway/chat-display-projection.sanitize.ts	13
+src/gateway/chat-display-projection.sanitize.ts	5
 src/gateway/chat-sanitize.ts	3
 src/gateway/cli-session-history.claude.ts	7
 src/gateway/cli-session-history.merge.ts	6
@@ -2216,7 +2213,7 @@ src/gateway/managed-image-attachments.ts	3
 src/gateway/mcp-app-operations.ts	1
 src/gateway/mcp-app-reconstruction.ts	1
 src/gateway/mcp-http.handlers.ts	4
-src/gateway/mcp-http.schema.ts	3
+src/gateway/mcp-http.schema.ts	2
 src/gateway/node-browser-proxy-policy.ts	1
 src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry.ts	1
@@ -2316,13 +2313,12 @@ src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	3
 src/gateway/server.auth.default-token.suite.ts	8
 src/gateway/server.auth.modes.suite.ts	1
 src/gateway/server/http-listen.ts	1
-src/gateway/server/plugins-http/route-capability.ts	1
 src/gateway/server/ws-connection-diagnostics.ts	3
 src/gateway/server/ws-connection.ts	1
 src/gateway/server/ws-connection/authenticated-request-dispatch.ts	1
 src/gateway/server/ws-connection/connect-device-metadata.ts	1
 src/gateway/server/ws-connection/connect-node-session.ts	1
-src/gateway/server/ws-connection/message-handler.ts	10
+src/gateway/server/ws-connection/message-handler.ts	1
 src/gateway/session-history-state.ts	2
 src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-recovery-service.ts	2
@@ -3008,7 +3004,7 @@ ui/src/components/app-sidebar-render.ts	4
 ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	1
 ui/src/components/app-sidebar-session-menu-renderers.ts	1
-ui/src/components/app-sidebar-session-narration.ts	5
+ui/src/components/app-sidebar-session-narration.ts	4
 ui/src/components/app-sidebar-session-row-render.ts	2
 ui/src/components/app-sidebar-session-section-header.ts	6
 ui/src/components/app-sidebar.ts	1

@@ -15,8 +15,11 @@ describe("AppSidebar outbox attention badges", () => {
     );
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = activeDraftKey;
-    sidebar.hasSessionDraft = (sessionKey) =>
-      sessionKey === draftKey || sessionKey === activeDraftKey;
+    sidebar.storedOutboxes = {
+      total: 0,
+      attentionCountForSession: () => 0,
+      hasSessionDraft: (sessionKey) => sessionKey === draftKey || sessionKey === activeDraftKey,
+    };
     await sidebar.updateComplete;
 
     const draftBadge = sidebar.querySelector<HTMLElement>(
@@ -36,9 +39,11 @@ describe("AppSidebar outbox attention badges", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", [sessionKey]));
     sidebar.connected = true;
-    sidebar.outboxAttentionCountForSession = (rowSessionKey) =>
-      rowSessionKey === sessionKey ? 3 : 0;
-    sidebar.requestUpdate();
+    sidebar.storedOutboxes = {
+      total: 3,
+      attentionCountForSession: (rowSessionKey) => (rowSessionKey === sessionKey ? 3 : 0),
+      hasSessionDraft: () => false,
+    };
     await sidebar.updateComplete;
 
     const badge = sidebar.querySelector<HTMLElement>(
@@ -47,8 +52,7 @@ describe("AppSidebar outbox attention badges", () => {
     expect(badge?.textContent).toContain("3");
     expect(badge?.getAttribute("aria-label")).toBe("3 messages need attention");
 
-    sidebar.outboxAttentionCountForSession = () => 0;
-    sidebar.requestUpdate();
+    sidebar.storedOutboxes = undefined;
     await sidebar.updateComplete;
     expect(
       sidebar.querySelector(`[data-session-key="${sessionKey}"] .session-row-badge--attention`),
@@ -68,9 +72,11 @@ describe("AppSidebar outbox attention badges", () => {
         agents: [{ id: "main" }],
       },
     );
-    sidebar.outboxAttentionCountForSession = () => 3;
-    sidebar.hasSessionDraft = () => true;
-    sidebar.requestUpdate();
+    sidebar.storedOutboxes = {
+      total: 3,
+      attentionCountForSession: () => 3,
+      hasSessionDraft: () => true,
+    };
     await sidebar.updateComplete;
 
     const badges = sidebar.querySelectorAll(".nav-item--home .session-row-badge--attention");
