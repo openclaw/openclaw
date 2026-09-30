@@ -609,7 +609,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       () => this.cancelScroll(),
       () => this.queueConnectedRowMeasure(),
     );
-    if (behavior !== "smooth") {
+    // A smooth no-op emits no native idle event to capture the end. Preserve
+    // that actual resting edge before a later row measurement grows the range.
+    if (behavior !== "smooth" || this.endAnchor.recordViewport(this.scrollElement)) {
       this.endAnchor.capture(this.scrollElement);
     }
     return true;
