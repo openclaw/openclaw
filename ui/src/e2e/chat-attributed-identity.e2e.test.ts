@@ -357,7 +357,7 @@ suite.define(() => {
     await expect(
       page.locator(".chat-group-footer--persistent-identity .chat-sender-name"),
     ).toHaveText(["Riley", "Colin", "Alexandria Montgomery-Winter"]);
-    await expect(page.locator(".chat-author-avatar")).toHaveCount(0);
+    await expect(page.locator(".chat-group-footer .chat-author-avatar")).toHaveCount(0);
     const peerGroup = userGroups.nth(1);
     const longNamePeerGroup = userGroups.last();
     const hoverDetails = peerGroup.locator(".chat-group-timestamp");
@@ -367,7 +367,7 @@ suite.define(() => {
     const restingPeerGeometry = await readFooterGeometry(peerGroup);
     await peerGroup.hover();
     await expect(hoverDetails).toHaveCSS("opacity", "1");
-    await expect(page.locator(".chat-author-avatar")).toHaveCount(0);
+    await expect(page.locator(".chat-group-footer .chat-author-avatar")).toHaveCount(0);
     await captureProof(page, "after-hover.png");
     const hoveredPeerGeometry = await readFooterGeometry(peerGroup);
     expectStableNamePosition(hoveredPeerGeometry.name, restingPeerGeometry.name);

@@ -3,6 +3,7 @@ import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harn
 import { describe, expect, it } from "vitest";
 import type { AgentsApiEvent, AgentsApiItem } from "./agentsapi-client.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
+import { createModel } from "./agentsapi.test-support.js";
 
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
 
@@ -169,18 +170,7 @@ function createTurn(id: string, usage: typeof observedUsageA) {
   } satisfies SDKTurn;
 }
 
-const usageModel = {
-  id: "model-fixture",
-  name: "Fixture Model",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1024,
-  maxTokens: 512,
-} satisfies AgentHarnessAttemptParamsV2["model"];
+const usageModel = createModel({ id: "model-fixture", reasoning: true });
 
 const observedUsageA = {
   input_tokens: 100,

@@ -106,13 +106,12 @@ function mockAvailableBridge(selectors: Record<string, boolean> = {}) {
   });
 }
 
-function imsgOptions(chatGuid = "") {
+function imsgOptions() {
   return {
     cliPath: "imsg",
     dbPath: "/tmp/messages.db",
     remoteHost: undefined,
     timeoutMs: undefined,
-    chatGuid,
   };
 }
 
@@ -267,7 +266,7 @@ describe("imessage message actions", () => {
           chatGuid: "iMessage;+;chat0000",
           question: "Lunch?",
           choices: ["Pizza", "Sushi"],
-          options: imsgOptions("iMessage;+;chat0000"),
+          options: imsgOptions(),
         },
       ],
     ]);
@@ -418,7 +417,7 @@ describe("imessage message actions", () => {
           optionIndex: 2,
           optionId: undefined,
           optionText: undefined,
-          options: imsgOptions("iMessage;+;chat0000"),
+          options: imsgOptions(),
         },
       ],
     ]);
@@ -756,11 +755,11 @@ describe("imessage message actions", () => {
     expect(runtimeMock.renameGroup).toHaveBeenCalledWith({
       chatGuid: "iMessage;+;chat0000",
       displayName: "Renamed group",
-      options: imsgOptions("iMessage;+;chat0000"),
+      options: imsgOptions(),
     });
     expect(runtimeMock.leaveGroup).toHaveBeenCalledWith({
       chatGuid: "iMessage;+;chat0000",
-      options: imsgOptions("iMessage;+;chat0000"),
+      options: imsgOptions(),
     });
   });
 
@@ -832,7 +831,7 @@ describe("imessage message actions", () => {
           reaction: "like",
           remove: undefined,
           partIndex: undefined,
-          options: imsgOptions("iMessage;+;chat0000"),
+          options: imsgOptions(),
         },
       ],
     ]);
@@ -1035,7 +1034,7 @@ describe("imessage message actions", () => {
           reaction: "like",
           remove: undefined,
           partIndex: undefined,
-          options: imsgOptions("iMessage;+;resolved"),
+          options: imsgOptions(),
         },
       ],
     ]);
@@ -1108,7 +1107,7 @@ describe("imessage message actions", () => {
           reaction: "like",
           remove: undefined,
           partIndex: undefined,
-          options: imsgOptions("iMessage;+;chat0000"),
+          options: imsgOptions(),
         },
       ],
     ]);
@@ -1147,7 +1146,7 @@ describe("imessage message actions", () => {
           replyToMessageId: "message-guid",
           partIndex: undefined,
           attachment: undefined,
-          options: imsgOptions("iMessage;+;resolved-ident"),
+          options: imsgOptions(),
         },
       ],
     ]);
@@ -1252,7 +1251,7 @@ describe("imessage message actions", () => {
               buffer: Uint8Array.from(Buffer.from("PNGDATA")),
               filename: "card.png",
             },
-            options: imsgOptions("iMessage;+;resolved-ident"),
+            options: imsgOptions(),
           },
         ],
       ]);
@@ -1402,7 +1401,7 @@ describe("imessage message actions", () => {
             reaction: "like",
             remove: undefined,
             partIndex: undefined,
-            options: imsgOptions("any;-;+12069106512"),
+            options: imsgOptions(),
           },
         ],
       ]);
@@ -1459,7 +1458,7 @@ describe("imessage message actions", () => {
             replyToMessageId: "parent-guid",
             partIndex: undefined,
             attachment: undefined,
-            options: imsgOptions("iMessage;-;+18001234567"),
+            options: imsgOptions(),
           },
         ],
       ]);
@@ -1538,7 +1537,7 @@ describe("imessage message actions", () => {
             chatGuid: "iMessage;+;chat0000",
             text: "boom",
             effectId: "com.apple.MobileSMS.expressivesend.impact",
-            options: imsgOptions("iMessage;+;chat0000"),
+            options: imsgOptions(),
           },
         ],
       ]);
@@ -1576,7 +1575,7 @@ describe("imessage message actions", () => {
               chatGuid: "iMessage;+;chat0000",
               text: "boom",
               effectId: canonical,
-              options: imsgOptions("iMessage;+;chat0000"),
+              options: imsgOptions(),
             },
           ],
         ]);
@@ -1627,7 +1626,7 @@ describe("imessage message actions", () => {
             buffer: Uint8Array.from(Buffer.from("image")),
             filename: "photo.jpg",
             asVoice: true,
-            options: imsgOptions("iMessage;+;chat0000"),
+            options: imsgOptions(),
           },
         ],
       ]);

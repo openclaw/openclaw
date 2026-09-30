@@ -34,12 +34,10 @@ const loadGoogleMeetGatewayRuntimeModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/gateway-runtime"),
 );
 
-type GoogleMeetGatewayRuntimeModule = Awaited<
-  ReturnType<typeof loadGoogleMeetGatewayRuntimeModule>
->;
-type CallGatewayFromCli = GoogleMeetGatewayRuntimeModule["callGatewayFromCli"];
-type GoogleMeetGatewayError = NonNullable<Parameters<GatewayRequestHandlerOptions["respond"]>[2]>;
-type GoogleMeetGatewayErrorCode = GoogleMeetGatewayError["code"];
+type CallGatewayFromCli = typeof import("openclaw/plugin-sdk/gateway-runtime").callGatewayFromCli;
+type GoogleMeetGatewayErrorCode = NonNullable<
+  Parameters<GatewayRequestHandlerOptions["respond"]>[2]
+>["code"];
 
 type LoadGoogleMeetNodeInvokePolicy = (
   config: GoogleMeetConfig,
@@ -152,13 +150,13 @@ export function readGoogleMeetParticipationParams(raw: Record<string, unknown>):
   };
 }
 
-function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
+export function assertGoogleMeetAgentToolActionSupported(params: {
   config: GoogleMeetConfig;
   raw: Record<string, unknown>;
-}): boolean {
+}): void {
   const platform = googleMeetToolDeps.platform();
   if (platform === "darwin" || platform === "linux") {
-    return false;
+    return;
   }
   const action = params.raw.action;
   if (
@@ -166,33 +164,19 @@ function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
     action !== "test_speech" &&
     !(action === "create" && shouldJoinCreatedMeet(params.raw))
   ) {
-    return false;
+    return;
   }
   const transport = normalizeTransport(params.raw.transport) ?? params.config.defaultTransport;
   const mode =
     action === "test_speech"
       ? "agent"
       : (normalizeMode(params.raw.mode) ?? params.config.defaultMode);
-  return transport === "chrome" && (mode === "agent" || mode === "bidi");
-}
-
-export function assertGoogleMeetAgentToolActionSupported(params: {
-  config: GoogleMeetConfig;
-  raw: Record<string, unknown>;
-}): void {
-  if (!isGoogleMeetAgentToolActionUnsupportedOnHost(params)) {
+  if (transport !== "chrome" || (mode !== "agent" && mode !== "bidi")) {
     return;
   }
   throw new Error(
     "Google Meet local Chrome talk-back audio requires macOS with BlackHole 2ch or Linux with PipeWire-Pulse. On this host, use mode: transcribe, transport: twilio, or a supported chrome-node.",
   );
-}
-
-function readGatewayErrorDetails(err: unknown): unknown {
-  if (!err || typeof err !== "object" || !("details" in err)) {
-    return undefined;
-  }
-  return (err as { details?: unknown }).details;
 }
 
 export async function callGoogleMeetGatewayFromTool(params: {
@@ -227,7 +211,7 @@ export async function callGoogleMeetGatewayFromTool(params: {
       { progress: false, scopes: ["operator.admin"] },
     );
   } catch (err) {
-    const details = readGatewayErrorDetails(err);
+    const details = err && typeof err === "object" && "details" in err ? err.details : undefined;
     if (details && typeof details === "object") {
       return details;
     }

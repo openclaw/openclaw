@@ -53,7 +53,7 @@ type ChannelCapabilitiesReport = {
   configured?: boolean;
   enabled?: boolean;
   support?: ChannelCapabilities;
-  actions?: string[];
+  actions: string[];
   probe?: unknown;
   diagnostics?: ChannelCapabilitiesDiagnostics;
 };
@@ -363,9 +363,7 @@ export async function channelsCapabilitiesCommand(
     });
     lines.push(theme.heading(label));
     lines.push(`Support: ${formatSupport(report.support)}`);
-    if (report.actions && report.actions.length > 0) {
-      lines.push(`Actions: ${report.actions.join(", ")}`);
-    }
+    lines.push(`Actions: ${report.actions.join(", ")}`);
     if (report.configured === false || report.enabled === false) {
       const configuredLabel = report.configured === false ? "not configured" : "configured";
       const enabledLabel = report.enabled === false ? "disabled" : "enabled";

@@ -12,6 +12,10 @@ import {
   resolveMessageRole,
   resolveMessageSender,
 } from "../../../lib/chat/message-normalizer.ts";
+import {
+  localParticipantIdentityKey,
+  sessionParticipantIdentityKey,
+} from "../../../lib/chat/sender-label.ts";
 import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import {
   isUiGlobalScopeConfigured,
@@ -19,6 +23,7 @@ import {
   parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
 } from "../../../lib/sessions/session-key.ts";
+import { agentRunFrameGroups } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
@@ -38,7 +43,6 @@ import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
-import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import {
   getChatMediaRenderVersion,
@@ -109,6 +113,18 @@ export function projectChatTranscript(
         );
       },
     );
+  // The session row counts every person who spoke, including rows not loaded yet.
+  // Grouping adds the loaded senders with the same keys, so one person counts once.
+  const sessionPeople = new Set(
+    [
+      activeSession?.owner?.actor.identity,
+      ...(activeSession?.expandedParticipants ?? activeSession?.participants ?? []).map(
+        ({ identity }) => identity,
+      ),
+    ].flatMap((identity) =>
+      identity && identity.type !== "agent" ? [sessionParticipantIdentityKey(identity)] : [],
+    ),
+  );
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   // Global-alias routing ignores the capped session list, which may omit the
   // canonical row. The scope gate keeps per-sender main threads direct.
@@ -174,6 +190,8 @@ export function projectChatTranscript(
     runActive: Boolean(props.runActive),
     questionPrompts: props.questionPrompts,
     loading: props.loading,
+    replyPeople: [...sessionPeople].toSorted(),
+    replyLocalPerson: localParticipantIdentityKey(props.userId),
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     messageRecovery:
@@ -360,6 +378,10 @@ export function projectChatTranscript(
     ...sharedMessageRenderOptions,
     branding: props.branding,
     assistant: assistantIdentity,
+    resolveReplyPreview,
+    onResolveReply: props.replyMessageAccess?.request,
+    onOpenReply: (replyToId: string) => state.transcriptRenderContext.onOpenReply?.(replyToId),
+    replyNavigationId: props.replyMessageAccess?.navigationId,
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
     runOutputTokens,
@@ -468,7 +490,27 @@ export function projectChatTranscript(
       item.key === latestAssistantItemKey ? "latest-assistant" : ""
     }|${searchFiltering ? "search-result" : ""}`;
   };
-  const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
+  const rowPresentationDependencies = (item: ChatRenderItem): readonly unknown[] => {
+    const dependencies: unknown[] = [liveStatusSignature(item)];
+    const groups =
+      item.kind === "group"
+        ? [item]
+        : item.kind === "agent-run-frame"
+          ? agentRunFrameGroups(item)
+          : item.kind === "work-group" || item.kind === "activity-run"
+            ? item.groups
+            : [];
+    for (const group of groups) {
+      for (const source of group.messages) {
+        if (source.replyTarget?.kind === "id") {
+          const loaded = loadedReplySources.get(source.replyTarget.id);
+          dependencies.push(source.replyTarget.id, loaded?.message, loaded?.senderLabel);
+        }
+      }
+    }
+    return dependencies;
+  };
+  const renderItem = guardChatRenderItems(state, rowPresentationDependencies, (item) => {
     if (item.kind === "divider") {
       return renderChatDivider(item);
     }
@@ -696,16 +738,40 @@ export function projectChatTranscript(
   );
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
-    const loaded = loadedReplySources.get(replyToId);
-    if (loaded && resolveMessageReplyText(loaded.message)) {
-      // Loaded targets also serve read-only views without reply-message access.
-      // Reveal waits for this expansion to commit before locating the bubble.
-      expandReplyTargetWork(transcriptItems, expandedToolCards, replyToId);
-      transcript.revealMessage(replyToId);
-      return;
+    // Search removes rows from the index, not from loaded history. Resolve the
+    // unfiltered projection only on navigation, using the same index/expansion
+    // owners as visible targets rather than requiring a history loader.
+    const targetChain = searchFiltering
+      ? projectTranscriptChain(
+          buildCachedChatItems({ ...chatItemsInput, searchOpen: false, searchQuery: "" }),
+          {
+            sessionKey: props.sessionKey,
+            runWorking: Boolean(props.runWorking),
+            searchActive: false,
+            session: activeSession,
+          },
+        )
+      : transcriptChain;
+    const targetSources =
+      targetChain === transcriptChain
+        ? loadedReplySources
+        : projectTranscriptIndex(targetChain, expandedToolCards, props).loadedReplySources;
+    const loaded = targetSources.has(replyToId);
+    if (loaded) {
+      expandReplyTargetWork(targetChain.transcriptItems, expandedToolCards, replyToId);
     }
     if (searchFiltering) {
       closeTranscriptSearch(state, requestUpdate);
+    }
+    if (loaded) {
+      // Closing search must commit the original's row before reveal can find it.
+      // Loaded originals also navigate in archived/read-only views.
+      if (searchFiltering) {
+        queueMicrotask(() => transcript.revealMessage(replyToId));
+      } else {
+        transcript.revealMessage(replyToId);
+      }
+      return;
     }
     props.replyMessageAccess?.open(replyToId);
   };

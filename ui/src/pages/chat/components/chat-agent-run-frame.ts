@@ -19,6 +19,7 @@ import {
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message.ts";
+import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
 import { renderChatSourcePreviews } from "./chat-source-previews.ts";
 import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 
@@ -46,14 +47,17 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
   const streamStarts = frame.parts.flatMap((part) =>
     part.kind === "stream-run" ? part.parts.map((streamPart) => streamPart.startedAt) : [],
   );
+  const streamRun = frame.parts.find((part) => part.kind === "stream-run");
   const shell: MessageGroup = {
     key: frame.key,
     kind: "group",
     role: "assistant",
     senderLabel: firstAssistant?.senderLabel,
-    replyToSender:
-      firstAssistant?.replyToSender ??
-      frame.parts.find((part) => part.kind === "stream-run")?.replyToSender,
+    replyToSender: firstAssistant?.replyToSender ?? streamRun?.replyToSender,
+    replyToMessage: firstAssistant?.replyToMessage ?? streamRun?.replyToMessage,
+    replyShared: firstAssistant?.replyShared,
+    replyTurnSource: firstAssistant?.replyTurnSource,
+    replyCurrentSource: firstAssistant?.replyCurrentSource,
     messages: representative?.messages ?? [],
     visibleContent: representative?.visibleContent ?? "none",
     timestamp:
@@ -62,6 +66,12 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
     isStreaming: frame.outcome.kind === "active",
     runId: frame.runId,
   };
+  // The frame's one line follows its final answer's target.
+  const frameReplyLine = resolveGroupReplyLine(
+    (actionOwner && groups.find((group) => group.messages.includes(actionOwner))) || shell,
+    opts.renderGroupOptions(shell).resolveReplyPreview,
+    groups.flatMap((group) => group.messages),
+  );
   const renderFrameGroup = (group: MessageGroup) =>
     renderMessageGroupContent(group, opts.renderGroupOptions(group));
   type BodyPart =
@@ -127,6 +137,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
   return renderMessageGroup(shell, {
     ...opts.renderGroupOptions(shell),
     frameContent,
+    frameReplyLine,
     frameActionOwner: actionOwner,
     turnRecap: opts.turnRecap,
   });

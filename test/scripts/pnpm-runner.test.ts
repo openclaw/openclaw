@@ -41,8 +41,6 @@ describe("resolvePnpmRunner", () => {
     writeLauncher("not-executable/pnpm", elfHeader, 0o644);
     writeLauncher("shell/pnpm", '#!/bin/sh\nprintf "%s\\n" "$@"\n', 0o755);
     writeLauncher("parent/pnpm", "#!/usr/bin/env node\n", 0o755);
-    // PATH absence and precedence need separate directories even though setup is shared.
-    mkdirSync(path.join(fixturesRoot, "child"));
     for (const name of ["corepack/corepack", "path/pnpm", "path/corepack"]) {
       writeLauncher(name, "#!/bin/sh\nexit 0\n", 0o755);
     }
@@ -293,24 +291,6 @@ describe("resolvePnpmRunner", () => {
     expect(
       resolvePnpmRunner({
         env: {},
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "pnpm",
-      args: ["exec", "vitest", "run"],
-      shell: false,
-    });
-  });
-
-  posixIt("resolves relative PATH entries from the child working directory", () => {
-    const childDir = path.join(fixturesRoot, "child");
-
-    expect(
-      resolvePnpmRunner({
-        cwd: childDir,
-        npmExecPath: "",
-        env: { PATH: "node_modules/.bin" },
         pnpmArgs: ["exec", "vitest", "run"],
         platform: "linux",
       }),

@@ -601,7 +601,7 @@ export function createHooksRequestHandler(
               dispatchScope.occurrence = occurrence;
             }
             const replayKey = buildHookReplayCacheKey({
-              pathKey: subPath || "mapping",
+              pathKey: subPath,
               token,
               // Fan-out producers (gog gmail) send no idempotency key, yet a
               // non-2xx batch response makes them redeliver the same batch.

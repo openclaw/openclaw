@@ -1,15 +1,12 @@
-import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import type { Worker, WorkerOptions } from "node:worker_threads";
+import type { WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
-import * as sqlite from "../../infra/node-sqlite.js";
-import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -18,7 +15,10 @@ import {
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
+import {
+  getOpenClawAgentDatabaseValidation,
+  invalidateOpenClawAgentDatabaseValidation,
+} from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
@@ -44,7 +44,14 @@ import {
   applySessionEntryMaintenance,
   finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
-import { holdReclamationAdmission } from "./session-accessor.sqlite-prepared-admission.test-support.js";
+import {
+  holdReclamationAdmission,
+  observePreparedAdmission,
+  observePreparedWorkerAdmission,
+  observeRetainedMaintenanceFinalizer,
+  type PreparedAdmissionHooks,
+  type PreparedIntegrityOwner,
+} from "./session-accessor.sqlite-prepared-admission.test-support.js";
 import {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
@@ -57,20 +64,14 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 
-const hooks = vi.hoisted(() => ({
-  fork: undefined as ((child: ChildProcess) => void) | undefined,
-  afterMaterialize: undefined as (() => Promise<void>) | undefined,
-  integrityChecks: undefined as SharedArrayBuffer | undefined,
-  integrityRelease: undefined as SharedArrayBuffer | undefined,
-  integrityPath: undefined as string | undefined,
-  worker: undefined as ((worker: Worker, phase: "checking" | "checked") => void) | undefined,
-}));
+const hooks = vi.hoisted((): PreparedAdmissionHooks => ({}));
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   return {
     ...actual,
     Worker: class extends actual.Worker {
-      private readonly integrityProbe: typeof hooks.worker;
+      private readonly integrityProbe: typeof hooks.integrityPhase;
+      private readonly integrityOwner: PreparedIntegrityOwner;
 
       constructor(filename: string | URL, options?: WorkerOptions) {
         super(
@@ -80,9 +81,20 @@ vi.mock("node:worker_threads", async (importOriginal) => {
             hooks.integrityChecks,
             hooks.integrityRelease,
             hooks.integrityPath,
+            hooks.integrityFirstCheck,
           ),
         );
-        this.integrityProbe = hooks.worker;
+        const data: unknown = options?.workerData;
+        this.integrityOwner = filename
+          .toString()
+          .replaceAll("\\", "/")
+          .includes("/infra/sqlite-store.worker.")
+          ? "executor"
+          : isRecord(data) && data.operation === "reclaim"
+            ? "reclamation"
+            : "other";
+        this.integrityProbe = hooks.integrityPhase;
+        hooks.worker?.(this, this.integrityOwner);
       }
 
       override emit(event: string | symbol, ...args: unknown[]): boolean {
@@ -92,11 +104,12 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           event === "message" &&
           args.length === 1 &&
           isRecord(message) &&
-          Object.keys(message).length === 2 &&
+          (Object.keys(message).length === 2 ||
+            (Object.keys(message).length === 3 && typeof message.held === "boolean")) &&
           message.type === "test-integrity-check" &&
           (message.phase === "checking" || message.phase === "checked")
         ) {
-          this.integrityProbe(this, message.phase);
+          this.integrityProbe(this, this.integrityOwner, message.phase, message.held === true);
           return true;
         }
         return super.emit(event, ...args);
@@ -133,8 +146,6 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
 const roots = createTempDirTracker();
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
-const realOpen = sqlite.openNodeSqliteDatabase;
-const realIntegrity = integrity.assertSqliteIntegrityInWorker;
 
 beforeEach(() => {
   resetConfigRuntimeState();
@@ -153,6 +164,8 @@ afterEach(async () => {
   hooks.integrityChecks = undefined;
   hooks.integrityRelease = undefined;
   hooks.integrityPath = undefined;
+  hooks.integrityFirstCheck = undefined;
+  hooks.integrityPhase = undefined;
   hooks.worker = undefined;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -196,157 +209,18 @@ async function closeWorkerForIntegrityAdmission(f: Fixture) {
 }
 
 function observeAdmission(databasePath: string, hold = false) {
-  let parentChecks = 0;
-  let admissions = 0;
-  let settled = 0;
-  let forkingIntegrity = false;
-  const entered = createDeferred();
-  const release = createDeferred();
-  releases.push(() => release.resolve());
-  if (!hold) {
-    release.resolve();
-  }
-  const children: Array<{
-    closed: boolean;
-    code: number | null;
-    signal: string | null;
-    phases: integrity.SqliteIntegrityWorkerPhase[];
-    resultOk?: boolean;
-  }> = [];
-  hooks.fork = (child) => {
-    if (!forkingIntegrity) {
-      return;
-    }
-    const row = {
-      closed: false,
-      code: null as number | null,
-      signal: null as string | null,
-      phases: [] as integrity.SqliteIntegrityWorkerPhase[],
-      resultOk: undefined as boolean | undefined,
-    };
-    children.push(row);
-    child.on("message", (message: integrity.SqliteIntegrityWorkerMessage) => {
-      if ("type" in message) {
-        row.phases.push(message.phase);
-      } else {
-        row.resultOk = message.ok;
-      }
-    });
-    void own(
-      new Promise<void>((resolve) => {
-        child.once("close", (code, signal) => {
-          row.closed = true;
-          row.code = code;
-          row.signal = signal;
-          resolve();
-        });
-      }),
-    );
-  };
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
-    const database = realOpen(pathname, options);
-    if (pathname !== databasePath || options?.readOnly) {
-      return database;
-    }
-    const prepare = database.prepare.bind(database);
-    database.prepare = (sql) => {
-      const statement = prepare(sql);
-      if (sql === "PRAGMA integrity_check;" || sql === "PRAGMA integrity_check('sqlite_schema');") {
-        const all = statement.all.bind(statement);
-        statement.all = () => {
-          parentChecks += 1;
-          return all();
-        };
-      }
-      return statement;
-    };
-    return database;
-  });
-  vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation(async (...args) => {
-    if (args[0] !== databasePath) {
-      return await realIntegrity(...args);
-    }
-    admissions += 1;
-    let check: Promise<void>;
-    forkingIntegrity = true;
-    try {
-      check = realIntegrity(...args);
-    } finally {
-      forkingIntegrity = false;
-    }
-    entered.resolve();
-    try {
-      await Promise.all([check, release.promise]);
-    } finally {
-      settled += 1;
-    }
-  });
-  return {
-    release,
-    async expectPending(operation: Promise<unknown>) {
-      expect(
-        await Promise.race([
-          entered.promise.then(() => "child"),
-          operation.then(
-            () => "completed",
-            () => "failed",
-          ),
-        ]),
-      ).toBe("child");
-    },
-    expectHealthy(count: number) {
-      expect(parentChecks, "integrity ran on the caller thread").toBe(0);
-      expect(admissions).toBe(count);
-      expect(settled).toBe(count);
-      expect(children.length).toBeGreaterThanOrEqual(count);
-      expect(children.length).toBeLessThanOrEqual(count * 4);
-      for (const child of children) {
-        expect(child).toEqual({
-          closed: true,
-          code: 0,
-          signal: null,
-          resultOk: true,
-          phases: ["opening", "checking", "closing"],
-        });
-      }
-    },
-  };
+  return observePreparedAdmission(databasePath, { hooks, releases, own }, hold);
 }
 
-function observeWorkerAdmission(databasePath: string, hold: boolean) {
+function observeWorkerAdmission(databasePath: string, mode: "warm" | "cold") {
   const parent = observeAdmission(databasePath);
-  const admission = holdReclamationAdmission(databasePath, "maintenance-finalize", "before-writer");
-  releases.push(() => admission.release.resolve());
-  if (!hold) {
-    admission.release.resolve();
-  }
-  const counts = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-  const release = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-  // Observe native integrity without parking the shared foreground command carrier.
-  Atomics.store(new Int32Array(release), 0, 1);
-  hooks.integrityChecks = counts;
-  hooks.integrityRelease = release;
-  hooks.integrityPath = databasePath;
-  const workers: Worker[] = [];
-  let completed = 0;
-  hooks.worker = (worker, phase) => {
-    if (phase === "checking") {
-      workers.push(worker);
-    } else {
-      completed += 1;
-    }
-  };
-  return {
-    release: admission.release,
-    expectPending: (operation: Promise<unknown>) => admission.expectPending(operation),
-    async expectHealthy(count: number) {
-      parent.expectHealthy(0);
-      expect(Atomics.load(new Int32Array(counts), 0)).toBe(count);
-      expect(completed).toBe(count);
-      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
-      expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
-    },
-  };
+  return observePreparedWorkerAdmission({
+    databasePath,
+    mode,
+    hooks,
+    releases,
+    expectParentHealthy: () => parent.expectHealthy(0),
+  });
 }
 
 const cases = (["whole-store", "lifecycle", "replacement"] as const).flatMap((owner) =>
@@ -631,11 +505,7 @@ it("reacquires the split lifecycle writer after archive materialization with ret
   const f = fixture();
   const transcript = seedTranscript(f);
   const probe = observeAdmission(f.databasePath);
-  const admission = holdReclamationAdmission(
-    f.databasePath,
-    "lifecycle-projection-commit",
-    "inside-writer",
-  );
+  const admission = holdReclamationAdmission(f.databasePath);
   releases.push(() => admission.release.resolve());
   let materializations = 0;
   let preparationWriterRan = false;
@@ -824,7 +694,7 @@ it.each(
   "keeps $owner maintenance commits after validation without blocking writers (cold: $cold)",
   async ({ owner, cold }) => {
     const f = maintenanceFixture();
-    const probe = observeWorkerAdmission(f.databasePath, cold);
+    const probe = observeWorkerAdmission(f.databasePath, cold ? "cold" : "warm");
     let preparationWriterRan = false;
     hooks.afterMaterialize = async () => {
       await runExclusiveSqliteSessionWrite(
@@ -875,7 +745,8 @@ it.each(
             }),
     );
     if (cold) {
-      await probe.expectPending(work);
+      expect(await probe.expectPending(work), "cold validation owner").toBe("reclamation");
+      expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
       expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
       const later = own(
         applySessionEntryReplacements({
@@ -904,7 +775,7 @@ it.each(
     expect(preparationWriterRan).toBe(true);
     expect(loadSessionEntryReadOnly(f.input)?.label).toBe(cold ? "foreground" : "kept");
     expectMaintenanceArchived(f);
-    await probe.expectHealthy(cold ? 1 : 0);
+    await probe.expectHealthy({ executor: cold ? 1 : 0, reclamation: cold ? 1 : 0, other: 0 });
   },
 );
 
@@ -920,10 +791,53 @@ function maintenancePlan(f: ReturnType<typeof maintenanceFixture>) {
   );
 }
 
+it("revalidates expired proof before the maintenance finalizer commits", async () => {
+  const f = maintenanceFixture();
+  const plan = maintenancePlan(f);
+  const database = openOpenClawAgentDatabase(f.options);
+  const retained = observeRetainedMaintenanceFinalizer(f.databasePath);
+  const probe = observeWorkerAdmission(f.databasePath, "cold");
+  hooks.afterMaterialize = async () => {
+    expect(getOpenClawAgentDatabaseIfOpen(f.options)).toBe(database);
+    expect(getOpenClawAgentDatabaseValidation(database)).toBeDefined();
+    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+    expect(database.db.isOpen).toBe(true);
+  };
+  const work = own(
+    finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(f.scope, [plan]),
+  );
+  expect(await probe.expectPending(work), "expired proof validation owner").toBe("reclamation");
+  retained.expectExpired(database);
+  expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
+  expect(loadTranscriptEventsSync(f.stale)).toEqual(f.events);
+  await own(
+    applySessionEntryReplacements({
+      storePath: f.databasePath,
+      sessionKeys: [f.input.sessionKey],
+      skipMaintenance: true,
+      update: (entries) => ({
+        result: undefined,
+        replacements: entries.map(({ entry, sessionKey }) => ({
+          sessionKey,
+          entry: { ...entry, label: "foreground" },
+        })),
+      }),
+    }),
+  );
+  expect(loadSessionEntryReadOnly(f.input)?.label).toBe("foreground");
+  expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
+  probe.release.resolve();
+  await expect(work).resolves.toMatchObject({ capped: 1 });
+  retained.expectExpired(database);
+  expectMaintenanceArchived(f);
+  await probe.expectHealthy({ executor: 1, reclamation: 1, other: 0 });
+});
+
 it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   const f = maintenanceFixture();
   const plan = maintenancePlan(f);
-  const probe = observeWorkerAdmission(f.databasePath, true);
+  const probe = observeWorkerAdmission(f.databasePath, "cold");
   hooks.afterMaterialize = async () => {
     closeForIntegrityAdmission(f);
   };
@@ -933,12 +847,12 @@ it("rechecks maintenance lifetime after cold finalizer admission", async () => {
       isCurrent: () => current,
     }),
   );
-  await probe.expectPending(work);
+  expect(await probe.expectPending(work), "cold validation owner").toBe("reclamation");
   current = false;
   probe.release.resolve();
   await expect(work).resolves.toMatchObject({ capped: 0, archivedTranscripts: [] });
   // The transcript postcondition reopens a writable reader and may validate on the caller.
-  await probe.expectHealthy(1);
+  await probe.expectHealthy({ executor: 0, reclamation: 1, other: 0 });
   expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
   expect(loadTranscriptEventsSync(f.stale)).toEqual(f.events);
 });

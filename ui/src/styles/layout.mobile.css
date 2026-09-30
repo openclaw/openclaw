@@ -387,11 +387,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   /* Chat */
-  .chat-session {
-    min-width: unset;
-    width: 100%;
-  }
-
   .chat-thread {
     margin-top: 0;
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
