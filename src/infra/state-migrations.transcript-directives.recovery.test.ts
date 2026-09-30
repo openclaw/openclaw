@@ -21,9 +21,14 @@ afterEach(() => {
 });
 
 describe("historical transcript directive archive recovery", () => {
-  it.each([false, true])(
-    "recovers a pending archive after the directive cursor is complete (copy missing: %s)",
-    async (copyMissing) => {
+  it.each([
+    { copyMissing: false, cursorPhase: "complete" },
+    { copyMissing: true, cursorPhase: "complete" },
+    { copyMissing: false, cursorPhase: "archives" },
+    { copyMissing: true, cursorPhase: "archives" },
+  ] as const)(
+    "recovers a pending archive with a $cursorPhase cursor (copy missing: $copyMissing)",
+    async ({ copyMissing, cursorPhase }) => {
       const stateDir = makeTempDir(tempDirs, "transcript-directive-complete-recovery-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
       const opened = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -60,7 +65,11 @@ describe("historical transcript directive archive recovery", () => {
         "agent",
         1,
         "main",
-        '{"phase":"complete"}',
+        JSON.stringify(
+          cursorPhase === "complete"
+            ? { phase: "complete" }
+            : { phase: "archives", generation: "generation", sessionId: "complete-recovery" },
+        ),
         1,
         1,
       );
@@ -90,6 +99,28 @@ describe("historical transcript directive archive recovery", () => {
       const archivePath = path.join(archiveDirectory, archiveName);
       if (!copyMissing) {
         fs.writeFileSync(archivePath, Buffer.from("stale file"));
+      }
+      if (cursorPhase === "archives") {
+        opened.db
+          .prepare(
+            `INSERT INTO session_transcript_archives(
+              session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
+              archive_name,created_at,published_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+          )
+          .run(
+            "later-recovery",
+            "generation",
+            "agent:main:later-recovery",
+            "deleted",
+            "identity",
+            archiveBytes,
+            archiveHash,
+            "later-recovery.jsonl",
+            40,
+            60,
+          );
+        fs.writeFileSync(path.join(archiveDirectory, "later-recovery.jsonl"), archiveBytes);
       }
       const databasePath = opened.path;
       closeOpenClawAgentDatabasesForTest();

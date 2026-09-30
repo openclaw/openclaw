@@ -565,19 +565,18 @@ export async function migrateCanonicalTranscriptArchives(
   },
 ): Promise<ArchiveMigrationResult> {
   let rewrittenArchives = 0;
-  const recoveryKey = ARCHIVE_RECOVERY_KEY;
   let cursor = params.start;
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
     agentId: params.agentId,
     path: params.pathname,
   });
-  recoverArchivePublication({
+  const recoveryWarnings = recoverArchivePublication({
     agentId: params.agentId,
     archiveDirectory,
     database: params.database,
     onArchive: params.onArchive,
     pathname: params.pathname,
-    recoveryKey,
+    recoveryKey: ARCHIVE_RECOVERY_KEY,
   });
   let missingCopies = 0;
   const missingCopyExamples: string[] = [];
@@ -598,18 +597,22 @@ export async function migrateCanonicalTranscriptArchives(
       );
       return {
         rewrittenArchives,
-        warnings:
-          missingCopies > 0
-            ? [
-                formatMigrationWarningSummary({
-                  summary: `${params.pathname}: Missing ${missingCopies} canonical transcript archive file(s)`,
-                  count: missingCopies,
-                  detail:
-                    "Canonical SQLite archive blobs remain retained. Migration completed without recreating the missing copies.",
-                }),
-                ...missingCopyExamples,
-              ]
-            : [],
+        warnings: [
+          ...new Set([
+            ...recoveryWarnings,
+            ...(missingCopies > 0
+              ? [
+                  formatMigrationWarningSummary({
+                    summary: `${params.pathname}: Missing ${missingCopies} canonical transcript archive file(s)`,
+                    count: missingCopies,
+                    detail:
+                      "Canonical SQLite archive blobs remain retained. Migration completed without recreating the missing copies.",
+                  }),
+                  ...missingCopyExamples,
+                ]
+              : []),
+          ]),
+        ],
       };
     }
     for (const planned of batch) {
@@ -622,10 +625,9 @@ export async function migrateCanonicalTranscriptArchives(
       () => {
         assertAgentDatabaseMaintenanceAuthority();
         const pending = new Map(
-          (readArchiveRecoveryJournal(params.database, recoveryKey)?.rows ?? []).map((row) => [
-            archiveRecoveryRowKey(row),
-            row,
-          ]),
+          (readArchiveRecoveryJournal(params.database, ARCHIVE_RECOVERY_KEY)?.rows ?? []).map(
+            (row) => [archiveRecoveryRowKey(row), row],
+          ),
         );
         const result = batch.map((planned) => rewriteArchiveRow(params.database, planned));
         let receiptsChanged = false;
@@ -650,7 +652,7 @@ export async function migrateCanonicalTranscriptArchives(
           receiptsChanged = true;
         }
         if (receiptsChanged) {
-          writeArchiveRecoveryJournal(params.database, params.agentId, recoveryKey, {
+          writeArchiveRecoveryJournal(params.database, params.agentId, ARCHIVE_RECOVERY_KEY, {
             rows: [...pending.values()],
           });
         }
@@ -684,7 +686,7 @@ export async function migrateCanonicalTranscriptArchives(
       params.database,
       () => {
         assertAgentDatabaseMaintenanceAuthority();
-        const journal = readArchiveRecoveryJournal(params.database, recoveryKey);
+        const journal = readArchiveRecoveryJournal(params.database, ARCHIVE_RECOVERY_KEY);
         const pending = new Map(
           (journal?.rows ?? []).map((row) => [archiveRecoveryRowKey(row), row]),
         );
@@ -705,11 +707,11 @@ export async function migrateCanonicalTranscriptArchives(
           }
         }
         if (pending.size > 0) {
-          writeArchiveRecoveryJournal(params.database, params.agentId, recoveryKey, {
+          writeArchiveRecoveryJournal(params.database, params.agentId, ARCHIVE_RECOVERY_KEY, {
             rows: [...pending.values()],
           });
         } else if (journal) {
-          clearArchiveRecoveryJournal(params.database, recoveryKey);
+          clearArchiveRecoveryJournal(params.database, ARCHIVE_RECOVERY_KEY);
         }
         assertAgentDatabaseMaintenanceAuthority();
       },
