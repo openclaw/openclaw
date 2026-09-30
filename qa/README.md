@@ -27,6 +27,15 @@ message returned by `sendInbound`. It waits for the channel's processing
 acknowledgment before reading the retained reply. QA-channel reset also waits for
 pending inbound turns before clearing observations.
 
+Reply-shape scenarios use `transport.waitForCompletedReply` with the inbound
+message and Gateway client. For Crabline Discord, the adapter waits for an
+observed delivery and the channel run queue to become idle, then reads retained
+native messages reflecting edits and deletions. It selects the last delivery
+before checking its text, destination, or quote relation, so a matching preview
+cannot hide a wrong final. QA-channel uses its processing acknowledgment instead.
+Adapters without a completion boundary fail explicitly rather than falling back
+to the first matching outbound observation.
+
 Generated-media scenarios count attachment deliveries separately from text
 progress and check the saved bytes plus the persisted completion reply.
 

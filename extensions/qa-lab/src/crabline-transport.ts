@@ -16,6 +16,7 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
+import { createCrablineDiscordReplyReader } from "./crabline-discord-replies.js";
 import {
   createCrablineProviderCorrelation,
   createCrablineProviderDelivery,
@@ -46,6 +47,7 @@ type QaCrablineTransportState = QaTransportState & {
   observeEvent: (event: unknown) => void;
   rememberProviderTarget: (providerTargetKey: string, target: QaCrablineTarget) => void;
   resetTransport: () => void;
+  waitForCompletedReply: NonNullable<QaTransportAdapter["waitForCompletedReply"]>;
 };
 
 type QaCrablineTarget = Pick<QaBusInboundMessageInput, "conversation" | "threadId">;
@@ -191,6 +193,8 @@ async function postCrablineInbound(params: {
     providerMessageId = readStringValue(result.event.event_id);
   } else if (params.adapter.channel === "slack" && isRecord(result) && isRecord(result.message)) {
     providerMessageId = readStringValue(result.message.ts);
+  } else if (params.adapter.channel === "discord" && isRecord(result) && isRecord(result.message)) {
+    providerMessageId = readStringValue(result.message.id);
   } else if (
     params.adapter.channel === "telegram" &&
     isRecord(result) &&
@@ -215,11 +219,13 @@ function createCrablineState(params: {
   const telegramMessageByProviderId = new Map<string, QaBusMessage>();
   const pendingTelegramMessagesByChat = new Map<string, QaBusMessage[]>();
   const outboundEvents: QaTransportOutboundEvent[] = [];
+  const discordTargets = new Map<string, QaCrablineTarget>();
   const resetTransport = () => {
     targetByProviderTarget.clear();
     telegramMessageByProviderId.clear();
     pendingTelegramMessagesByChat.clear();
     outboundEvents.length = 0;
+    discordTargets.clear();
   };
 
   return {
@@ -233,6 +239,11 @@ function createCrablineState(params: {
     async getOutboundEvents() {
       return outboundEvents;
     },
+    waitForCompletedReply: createCrablineDiscordReplyReader({
+      adapter: params.adapter,
+      state: baseState,
+      targets: discordTargets,
+    }),
     observeEvent(event) {
       if (params.adapter.channel === "telegram") {
         const lifecycle = readTelegramLifecycleEvent({
@@ -277,11 +288,34 @@ function createCrablineState(params: {
           ? { to: observation.fallbackTarget }
           : undefined;
       if (destination) {
+        const replyToId =
+          params.adapter.channel === "discord" &&
+          isRecord(event) &&
+          isRecord(event.body) &&
+          isRecord(event.body.message_reference)
+            ? readStringValue(event.body.message_reference.message_id)
+            : undefined;
+        if (params.adapter.channel === "discord" && isRecord(event)) {
+          const channelId = readStringValue(event.path)?.match(
+            /^\/api\/v10\/channels\/(\d+)\/messages$/u,
+          )?.[1];
+          if (channelId) {
+            const parsed = parseQaTarget(destination.to);
+            discordTargets.set(
+              channelId,
+              target ?? {
+                conversation: { id: parsed.conversationId, kind: parsed.chatType },
+                ...(parsed.threadId ? { threadId: parsed.threadId } : {}),
+              },
+            );
+          }
+        }
         baseState.addOutboundMessage({
           accountId: observation.accountId,
           senderId: observation.senderId,
           senderName: observation.senderName,
           text: observation.text,
+          ...(replyToId ? { replyToId } : {}),
           ...destination,
         });
       }
@@ -349,7 +383,11 @@ function createQaCrablineTransport(params: {
   const stateMethods = createQaTransportStateMethods({ state, accountId: adapter.accountId });
   const hooks: Pick<
     QaTransportAdapter,
-    "prepareFlow" | "cleanup" | "sendNativeCommand" | "waitForOutboundSequence"
+    | "prepareFlow"
+    | "cleanup"
+    | "sendNativeCommand"
+    | "waitForOutboundSequence"
+    | "waitForCompletedReply"
   > = {};
   let releaseDiscordQaApiBase: (() => void) | undefined;
   if (params.state.slackIngress) {
@@ -357,6 +395,7 @@ function createQaCrablineTransport(params: {
     hooks.cleanup = params.state.slackIngress.cleanup;
   }
   if (params.selection.channel === "discord" && params.adapter.manifest.provider === "discord") {
+    hooks.waitForCompletedReply = state.waitForCompletedReply;
     const manifest = params.adapter.manifest;
     let prepared:
       | Promise<
@@ -433,6 +472,7 @@ function createQaCrablineTransport(params: {
             ...config.channels,
             discord: {
               ...discord,
+              ...(transportPolicy?.topLevelReplies ? { replyToMode: "off" as const } : {}),
               allowFrom: [...dmAllowlist],
               ...(dmAllowlist.includes("*") ? {} : { dmPolicy: "allowlist" as const }),
               ...(senderAllowlist ? { groupPolicy: "allowlist" as const } : {}),
@@ -460,7 +500,11 @@ function createQaCrablineTransport(params: {
       const senderAllowlist = transportPolicy?.senderAllowlist?.map(
         (senderId) => adapter.createAgentDelivery({ target: `dm:${senderId}` }).providerTargetKey,
       );
-      if (!transportPolicy?.requireGroupMention && !senderAllowlist) {
+      if (
+        !transportPolicy?.requireGroupMention &&
+        !senderAllowlist &&
+        !transportPolicy?.topLevelReplies
+      ) {
         return config as QaTransportGatewayConfig;
       }
       return {
@@ -469,6 +513,7 @@ function createQaCrablineTransport(params: {
           ...config.channels,
           telegram: {
             ...config.channels?.telegram,
+            ...(transportPolicy?.topLevelReplies ? { replyToMode: "off" as const } : {}),
             ...(senderAllowlist
               ? {
                   allowFrom: [...senderAllowlist],
