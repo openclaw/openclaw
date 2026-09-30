@@ -1,7 +1,7 @@
 // Real SQLite path search, exact-file precedence, and candidate budgets.
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { bm25RankToScore, buildStrictFtsQuery } from "./keyword-query.js";
 import { searchPathKeyword } from "./manager-search.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
 
@@ -20,13 +20,31 @@ function searchPathKeywordFixture(
     limit: 1,
     snippetMaxChars: 200,
     sourceFilter: { sql: "", params: [] },
-    buildFtsQuery,
+    buildFtsQuery: buildStrictFtsQuery,
     bm25RankToScore,
     ...options,
   });
 }
 
 describe("searchPathKeyword", () => {
+  it("keeps filename token matching strict so foo.md does not match unrelated .md paths", async () => {
+    const { db, schema } = createMemorySearchDb({ ftsTokenizer: "unicode61" });
+    try {
+      if (!schema.ftsAvailable) {
+        return;
+      }
+      insertKeywordFixture(db, { id: "target", path: "memory/notes/foo.md" });
+      insertKeywordFixture(db, { id: "other-1", path: "memory/notes/bar.md" });
+      insertKeywordFixture(db, { id: "other-2", path: "memory/notes/baz.md" });
+
+      const results = await searchPathKeywordFixture(db, "foo.md", { limit: 10 });
+
+      expect(results.map((entry) => entry.id)).toEqual(["target"]);
+    } finally {
+      db.close();
+    }
+  });
+
   it.each([
     ["unicode61", "common"],
     ["unicode61", "README.md"],

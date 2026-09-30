@@ -219,7 +219,10 @@ describe("memory index", () => {
         expect(annotationHits).toEqual([]);
       }
 
-      const bodyHits = await manager.search("Alpha deploy preference", {
+      // Query Alpha-only tokens: "deploy preference" also matches the Beta and
+      // Global entries under OR recall, where Beta's higher curated importance
+      // (9 vs 4) legitimately wins the final ranking.
+      const bodyHits = await manager.search("Alpha gateway local", {
         lexicalOnly: true,
         maxResults: 10,
         minScore: 0,

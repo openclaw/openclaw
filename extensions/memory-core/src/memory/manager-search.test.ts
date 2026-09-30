@@ -1,7 +1,7 @@
 // Memory Core tests cover manager search plugin behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { bm25RankToScore, buildFtsQuery, buildStrictFtsQuery } from "./keyword-query.js";
 import { searchKeyword } from "./manager-search.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
 
@@ -21,6 +21,7 @@ function searchKeywordFixture(
     snippetMaxChars: 200,
     sourceFilter: { sql: "", params: [] },
     buildFtsQuery,
+    buildStrictFtsQuery,
     bm25RankToScore,
     ...options,
   });
@@ -326,6 +327,112 @@ describe("searchKeyword FTS MATCH fallback", () => {
       db.close();
     }
   });
+});
+
+describe("searchKeyword natural-language questions", () => {
+  function createFtsDb() {
+    const { db, schema } = createMemorySearchDb();
+    if (!schema.ftsAvailable) {
+      db.close();
+      throw new Error(`FTS5 unavailable: ${schema.ftsError ?? "unknown error"}`);
+    }
+    return db;
+  }
+
+  const itWithFts = supportsFts() ? it : it.skip;
+
+  itWithFts(
+    "matches a chunk that holds only some of the question's words (issue #160839)",
+    async () => {
+      const db = createFtsDb();
+      try {
+        insertKeywordFixture(db, {
+          id: "answer",
+          path: "notes/releases.md",
+          text: "Tag v0.78.42.0 is an annotated tag object 0b1698f pointing at the release commit.",
+          endLine: 3,
+        });
+        insertKeywordFixture(db, {
+          id: "unrelated",
+          path: "notes/other.md",
+          text: "What is the deployment process for the gateway service",
+          endLine: 3,
+        });
+
+        const results = await searchKeywordFixture(
+          db,
+          "What is the annotated tag object hash created for v0.78.42.0?",
+        );
+
+        expect(results.map((row) => row.id)).toContain("answer");
+        // BM25 must rank the rare-token answer above the stop-word-only row.
+        expect(results[0]?.id).toBe("answer");
+        expect(results[0]?.textScore).toBeGreaterThan(0);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  itWithFts("ranks a full-token match ahead of a shorter partial match", async () => {
+    const db = createFtsDb();
+    try {
+      // The full match is deliberately longer, so plain BM25 length
+      // normalization alone would favor the shorter partial match.
+      insertKeywordFixture(db, {
+        id: "full",
+        path: "notes/full.md",
+        text: "- Alpha deploy preference.\n  Keep the alpha gateway local.",
+        endLine: 3,
+      });
+      insertKeywordFixture(db, {
+        id: "partial",
+        path: "notes/partial.md",
+        text: "- Beta deploy preference.",
+        endLine: 3,
+      });
+
+      const results = await searchKeywordFixture(db, "Alpha deploy preference");
+
+      expect(results.map((row) => row.id)).toEqual(["full", "partial"]);
+      expect(results[0]?.textScore ?? 0).toBeGreaterThan(results[1]?.textScore ?? 0);
+    } finally {
+      db.close();
+    }
+  });
+
+  itWithFts(
+    "keeps a complete match inside the bounded window filled with partial hits",
+    async () => {
+      const db = createFtsDb();
+      try {
+        // A long complete match surrounded by many short partial matches: plain
+        // BM25 over a single ranked LIMIT could evict it, so the complete-match
+        // tier must be reserved before the window fills.
+        insertKeywordFixture(db, {
+          id: "complete",
+          path: "notes/complete.md",
+          text: "Alpha deploy preference. " + "Padding context around the entry. ".repeat(8),
+          endLine: 3,
+        });
+        for (let index = 0; index < 30; index += 1) {
+          insertKeywordFixture(db, {
+            id: `partial-${index}`,
+            path: `notes/partial-${index}.md`,
+            text: "deploy preference.",
+            endLine: 3,
+          });
+        }
+
+        const results = await searchKeywordFixture(db, "Alpha deploy preference", { limit: 5 });
+
+        expect(results[0]?.id).toBe("complete");
+        expect(results.filter((row) => row.id === "complete")).toHaveLength(1);
+      } finally {
+        db.close();
+      }
+    },
+  );
 });
 
 describe("searchKeyword ranked limits", () => {

@@ -10,7 +10,7 @@ import {
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { bm25RankToScore, buildFtsQuery, buildStrictFtsQuery } from "./keyword-query.js";
 import {
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
@@ -22,7 +22,7 @@ import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js
 
 type KeywordParameters = Omit<
   Parameters<typeof searchKeyword>[0],
-  "db" | "buildFtsQuery" | "bm25RankToScore"
+  "db" | "buildFtsQuery" | "buildStrictFtsQuery" | "bm25RankToScore"
 >;
 type PathParameters = Omit<
   Parameters<typeof searchPathKeyword>[0],
@@ -143,13 +143,19 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       return { kind: "vector", rows: await searchChunksByEmbedding({ ...request.query, db }) };
     }
     const indexState = request.includeIndexState ? readMemoryRetrievalIndexState(db) : undefined;
-    const body = await searchKeyword({ ...request.query.body, db, buildFtsQuery, bm25RankToScore })
+    const body = await searchKeyword({
+      ...request.query.body,
+      db,
+      buildFtsQuery,
+      buildStrictFtsQuery,
+      bm25RankToScore,
+    })
       .then((rows) => ({ rows }))
       .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
     const path = await searchPathKeyword({
       ...request.query.path,
       db,
-      buildFtsQuery,
+      buildFtsQuery: buildStrictFtsQuery,
       bm25RankToScore,
     })
       .then((rows) => ({ rows }))
