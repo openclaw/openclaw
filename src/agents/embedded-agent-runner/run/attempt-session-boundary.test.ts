@@ -26,6 +26,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { convertToLlm as convertHarnessMessages } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
@@ -133,7 +134,6 @@ async function withPersistedOrphanBoundary(
             : {}),
           prompt: "new request",
           suppressNextUserMessagePersistence: options.suppressNextUserMessagePersistence,
-          trigger: "user",
         },
         getUserTranscriptContexts: () => undefined,
         isRawModelRun: false,
@@ -162,7 +162,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       appendOnlyRuntimeContext: false,
-      attempt: { prompt: "next question", trigger: "user" },
+      attempt: { prompt: "next question" },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
@@ -187,7 +187,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         attempt: {
           config: { agents: { defaults: { userTimezone: "UTC" } } },
           prompt: "first question",
-          trigger: "user",
         },
         getUserTranscriptContexts: () => undefined,
         isRawModelRun: false,
@@ -251,6 +250,35 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         expect(next.at(-1)).toBe(nextCarrier);
         expect(next[0]!.content).not.toContain("Conversation info:");
       }
+    },
+  );
+
+  it.each([false, true])(
+    "records runtime-context cache retention at the LLM boundary (%s)",
+    async (appendOnlyRuntimeContext) => {
+      const { activeSession } = createActiveSession();
+      activeSession.agent.convertToLlm = convertHarnessMessages;
+      await prepareEmbeddedAttemptSessionBoundary({
+        activeSession,
+        appendOnlyRuntimeContext,
+        attempt: { prompt: "question" },
+        getUserTranscriptContexts: () => undefined,
+        isRawModelRun: false,
+        preparedUserTurnMessage: undefined,
+        sessionManager: createSessionManager(),
+        setActiveSessionSystemPrompt: vi.fn(),
+      });
+
+      const user = { role: "user" as const, content: "question", timestamp: 1 };
+      const carrier = buildRuntimeContextCustomMessage("context")!;
+      const converted = await activeSession.agent.convertToLlm(
+        appendOnlyRuntimeContext ? [user, carrier] : [carrier, user],
+      );
+      const message = converted.at(-1);
+      expect(message).toMatchObject({ role: "user", runtimeContextCarrier: true });
+      expect(
+        (message as { runtimeContextCarrierRetained?: boolean }).runtimeContextCarrierRetained,
+      ).toBe(appendOnlyRuntimeContext);
     },
   );
 
@@ -459,7 +487,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       attempt: {
         operation: "settled-tool-finalization",
         prompt: "finalize exactly",
-        trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
@@ -493,7 +520,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       attempt: {
         config: { agents: { defaults: { userTimezone: "UTC" } } },
         prompt: "Current ask",
-        trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
@@ -534,7 +560,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "The launch is Friday", trigger: "user" },
+      attempt: { prompt: "The launch is Friday" },
       getUserTranscriptContexts: () => [{ runtimeMessage, transcriptMessage }],
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
@@ -561,7 +587,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "The launch is Friday", trigger: "user" },
+      attempt: { prompt: "The launch is Friday" },
       getUserTranscriptContexts: () => [
         {
           runtimeMessage: initialRuntime,
@@ -608,7 +634,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "same", trigger: "user" },
+      attempt: { prompt: "same" },
       getUserTranscriptContexts: () => [
         {
           runtimeMessage: secondRuntime,
@@ -681,7 +707,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
           suppressNextUserMessagePersistence,
-          trigger: "user",
           userTurnTranscriptRecorder: recorder,
         },
         getUserTranscriptContexts: () => undefined,
@@ -753,7 +778,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         attempt: {
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
-          trigger: "user",
           userTurnTranscriptRecorder: recorder,
         },
         getUserTranscriptContexts: () => undefined,
@@ -817,7 +841,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         attempt: {
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
-          trigger: "user",
           userTurnTranscriptRecorder: recorder,
         },
         getUserTranscriptContexts: () => undefined,
@@ -883,7 +906,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         onUserMessagePersistenceInvalidated,
         prompt: "new",
         suppressNextUserMessagePersistence: true,
-        trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,

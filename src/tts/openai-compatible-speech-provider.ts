@@ -1,4 +1,3 @@
-// OpenAI-compatible speech provider sends speech synthesis requests to OpenAI-style APIs.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -96,10 +95,6 @@ function normalizeResponseFormat(params: {
     return next;
   }
   throw new Error(`Invalid ${params.providerLabel} speech responseFormat: ${next}`);
-}
-
-function responseFormatToFileExtension(format: string): `.${string}` {
-  return `.${format}`;
 }
 
 function trimTrailingBaseUrl(value: unknown, fallback: string): string {
@@ -403,7 +398,7 @@ export function createOpenAiCompatibleSpeechProvider<
             "audio",
           ),
           outputFormat: responseFormat,
-          fileExtension: responseFormatToFileExtension(responseFormat),
+          fileExtension: `.${responseFormat}`,
           voiceCompatible: options.voiceCompatibleResponseFormats.includes(responseFormat),
         };
       } finally {

@@ -5,11 +5,9 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { ensureWorkerEnvironmentNodeEnrollmentSchema } from "../../state/openclaw-state-db-schema-additive.js";
-import type { WorkerCredentialRecord } from "./credential.js";
 import type {
   WorkerEnvironmentIntentInput,
   WorkerEnvironmentRecord,
-  WorkerEnvironmentTeardownTerminalState,
 } from "./environment-record.js";
 import {
   createPreparedEnvironmentStoreOps,
@@ -17,7 +15,7 @@ import {
 } from "./prepared-environment-store.js";
 import { createWorkerEnvironmentSessionAttachmentStore } from "./session-attachment-store.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
-import type { WorkerEnvironmentState } from "./state.js";
+import { isTerminalWorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentKernelOptions } from "./store-kernel-options.js";
 import {
   credentialInsert,
@@ -39,10 +37,9 @@ import {
   normalizeExpiry,
   normalizeSessionId,
   requireWorkerEnvironmentString,
-  TERMINAL_STATES,
 } from "./store-validation.js";
 import type { WorkerEnvironmentMutationMethods } from "./store-worker-contract.js";
-import type { CredentialInput, CredentialRevocationInput } from "./store-write-types.js";
+import type { CredentialRevocationInput } from "./store-write-types.js";
 
 export function createWorkerEnvironmentStoreKernel(options: WorkerEnvironmentKernelOptions) {
   const database = options.database;
@@ -50,54 +47,6 @@ export function createWorkerEnvironmentStoreKernel(options: WorkerEnvironmentKer
   const now = options.now ?? Date.now;
   const read = () => database.db;
   const write = options.write;
-  const writeCredential = (
-    input: CredentialInput & {
-      environmentId: string;
-      expectedOwnerEpoch: number;
-      assertCurrent?: () => void;
-    },
-  ): WorkerCredentialRecord => {
-    const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
-    return write((db) => {
-      const current = getRequiredWorkerEnvironment(db, environmentId);
-      if (current.ownerEpoch !== input.expectedOwnerEpoch) {
-        throw new Error(`Worker environment ${environmentId} owner epoch changed`);
-      }
-      if (current.state !== "ready" && current.state !== "idle" && current.state !== "attached") {
-        throw new Error(`Cannot mint worker credential in state ${current.state}`);
-      }
-      if (current.destroyRequestedAtMs !== null) {
-        throw new Error("Cannot mint worker credential after destroy is requested");
-      }
-      if (!current.bootstrapReceipt) {
-        throw new Error("Worker environment has no admitted bootstrap identity");
-      }
-      const updatedAtMs = now();
-      const ownerEpoch = Math.max(1, current.ownerEpoch);
-      if (ownerEpoch !== current.ownerEpoch) {
-        updateWorkerEnvironmentRecord(db, environmentId, current.state, {
-          owner_epoch: ownerEpoch,
-          updated_at_ms: updatedAtMs,
-        });
-      }
-      upsertCredential(
-        db,
-        credentialInsert({
-          input,
-          environmentId,
-          bundleHash: current.bootstrapReceipt.bundleHash,
-          attachedSessionIds: current.attachedSessionIds,
-          ownerEpoch,
-          nowMs: updatedAtMs,
-        }),
-      );
-      const credential = findCredential(db, environmentId);
-      if (!credential) {
-        throw new Error("Worker credential persistence failed");
-      }
-      return credential;
-    });
-  };
   const createIntent = (
     db: DatabaseSync,
     input: WorkerEnvironmentIntentInput,
@@ -164,7 +113,10 @@ export function createWorkerEnvironmentStoreKernel(options: WorkerEnvironmentKer
       return write((db) => {
         ensureWorkerEnvironmentNodeEnrollmentSchema(db);
         const current = getRequiredWorkerEnvironment(db, environmentId);
-        if (TERMINAL_STATES.includes(current.state) || current.destroyRequestedAtMs !== null) {
+        if (
+          isTerminalWorkerEnvironmentState(current.state) ||
+          current.destroyRequestedAtMs !== null
+        ) {
           throw new Error(`Worker environment ${environmentId} cannot begin node enrollment`);
         }
         const setupId = current.nodeSetupId ?? randomUUID();
@@ -206,12 +158,7 @@ export function createWorkerEnvironmentStoreKernel(options: WorkerEnvironmentKer
         revokeCredential(db, environmentId);
       });
     },
-    reconcileSharedHost(input: {
-      environmentId: string;
-      state: WorkerEnvironmentState;
-      leaseId: string;
-      sharedHost: boolean;
-    }): WorkerEnvironmentRecord {
+    reconcileSharedHost(input): WorkerEnvironmentRecord {
       const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
       const leaseId = requireWorkerEnvironmentString(input.leaseId, "lease id");
       return write((db) => {
@@ -230,11 +177,7 @@ export function createWorkerEnvironmentStoreKernel(options: WorkerEnvironmentKer
         });
       });
     },
-    adoptProvisionCleanupFailure(input: {
-      environmentId: string;
-      leaseId: string;
-      lastError: string;
-    }): WorkerEnvironmentRecord {
+    adoptProvisionCleanupFailure(input): WorkerEnvironmentRecord {
       const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
       const leaseId = requireWorkerEnvironmentString(input.leaseId, "lease id");
       const lastError = requireWorkerEnvironmentString(input.lastError, "last error");
@@ -257,13 +200,7 @@ export function createWorkerEnvironmentStoreKernel(options: WorkerEnvironmentKer
         });
       });
     },
-    requestDestroy(input: {
-      environmentId: string;
-      state: WorkerEnvironmentState;
-      terminalState?: WorkerEnvironmentTeardownTerminalState;
-      assertCurrent?: () => void;
-      lastError?: string;
-    }) {
+    requestDestroy(input) {
       const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
       return write((db) => {
         const current = getRequiredWorkerEnvironment(db, environmentId);
@@ -285,23 +222,49 @@ export function createWorkerEnvironmentStoreKernel(options: WorkerEnvironmentKer
         });
       });
     },
-    renewCredential(
-      input: CredentialInput & {
-        environmentId: string;
-        expectedOwnerEpoch: number;
-        assertCurrent?: () => void;
-      },
-    ): WorkerCredentialRecord {
-      return writeCredential(input);
+    renewCredential(input) {
+      const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
+      return write((db) => {
+        const current = getRequiredWorkerEnvironment(db, environmentId);
+        if (current.ownerEpoch !== input.expectedOwnerEpoch) {
+          throw new Error(`Worker environment ${environmentId} owner epoch changed`);
+        }
+        if (current.state !== "ready" && current.state !== "idle" && current.state !== "attached") {
+          throw new Error(`Cannot mint worker credential in state ${current.state}`);
+        }
+        if (current.destroyRequestedAtMs !== null) {
+          throw new Error("Cannot mint worker credential after destroy is requested");
+        }
+        if (!current.bootstrapReceipt) {
+          throw new Error("Worker environment has no admitted bootstrap identity");
+        }
+        const updatedAtMs = now();
+        const ownerEpoch = Math.max(1, current.ownerEpoch);
+        if (ownerEpoch !== current.ownerEpoch) {
+          updateWorkerEnvironmentRecord(db, environmentId, current.state, {
+            owner_epoch: ownerEpoch,
+            updated_at_ms: updatedAtMs,
+          });
+        }
+        upsertCredential(
+          db,
+          credentialInsert({
+            input,
+            environmentId,
+            bundleHash: current.bootstrapReceipt.bundleHash,
+            attachedSessionIds: current.attachedSessionIds,
+            ownerEpoch,
+            nowMs: updatedAtMs,
+          }),
+        );
+        const credential = findCredential(db, environmentId);
+        if (!credential) {
+          throw new Error("Worker credential persistence failed");
+        }
+        return credential;
+      });
     },
-    markCredentialDelivered(input: {
-      environmentId: string;
-      credentialHash: string;
-      ownerEpoch: number;
-      sessionId: string | null;
-      deliveredAtMs: number;
-      assertCurrent?: () => void;
-    }): void {
+    markCredentialDelivered(input): void {
       const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
       return write((db) => {
         const environment = getRequiredWorkerEnvironment(db, environmentId);
@@ -337,12 +300,7 @@ export function createWorkerEnvironmentStoreKernel(options: WorkerEnvironmentKer
         }
       });
     },
-    recordError(input: {
-      environmentId: string;
-      state: WorkerEnvironmentState;
-      error: string;
-      assertCurrent?: () => void;
-    }) {
+    recordError(input) {
       return write((db) =>
         updateWorkerEnvironmentRecord(
           db,

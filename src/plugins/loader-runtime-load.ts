@@ -15,11 +15,13 @@ import { createPluginRuntimeRegistryResolver } from "./loader-runtime-registry.j
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
   createPluginCache,
+  getPluginCache,
   releasePluginCacheInstance,
   retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { inheritPluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
 import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { createProviderHookRuntime } from "./provider-hook-runtime-core.js";
@@ -74,15 +76,7 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
   },
 });
 
-type NativePluginBindings = {
-  providerRegistry: ReturnType<typeof createProviderRegistryResolver>;
-  providerHooks: ReturnType<typeof createProviderHookRuntime>;
-  externalProfiles: ReturnType<typeof createProviderExternalAuthResolver>;
-  externalAuth: ReturnType<typeof createExternalAuthRuntime>;
-  authStore: ReturnType<typeof createAuthProfileStoreRuntime>;
-  authAvailability: ReturnType<typeof createProviderAuthAvailability>;
-};
-export const nativePluginBindings: Readonly<NativePluginBindings> = Object.freeze({
+export const nativePluginBindings = Object.freeze({
   providerRegistry,
   providerHooks,
   externalProfiles,
@@ -120,7 +114,8 @@ async function acquireRegistryResources(
     const instances = new Set(cache.instances);
     for (const record of registry?.plugins ?? []) {
       const instance = getPluginInstance(record);
-      if (instance) {
+      // Borrowed records stay in the lending registry's custody.
+      if (instance && instance.owner?.registry === registry) {
         instances.add(instance);
       }
     }
@@ -131,17 +126,18 @@ async function acquireRegistryResources(
         .filter((instance) => !rollbackInstances.has(instance))
         .map((instance) => instance.dispose()),
     );
+    const failures: unknown[] = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : result.value.errors,
+    );
     for (const instance of instances) {
       releasePluginCacheInstance(instance, cache);
     }
     try {
-      await retirePluginCache(cache);
+      const retired = await retirePluginCache(cache);
+      failures.push(...retired.failures.map((failure) => failure.error));
     } catch (reason) {
-      results.push({ status: "rejected", reason });
+      failures.push(reason);
     }
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
     if (failures.length) {
       throw new PluginRuntimeCloseRetainedError(
         new AggregateError(failures, "Plugin inspection instances failed to retire"),
@@ -149,6 +145,7 @@ async function acquireRegistryResources(
     }
   });
   try {
+    inheritPluginNativeAdmissions(getPluginCache(), cache);
     const registry = withPluginCache(cache, () => load(resources));
     return { registry, release: () => resources.release() };
   } catch (error) {

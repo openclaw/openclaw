@@ -6,11 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { resumeQaLease } from "./qa-credential-lease.mjs";
+import { runCommand, runTelegramTestScenario } from "./run-mock-sut-user-e2e.mjs";
 import {
   acquireTelegramTestCredential,
   parseTelegramTestCredential,
   restoreTelegramTestCredential,
 } from "./telegram-test-credential.mjs";
+import { checkTelegramTestCredential } from "./telegram-test-doctor.mjs";
 
 function makeCredential() {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "tg-test-credential-fixture-"));
@@ -49,8 +51,9 @@ function makeCredential() {
   };
 }
 
-test("validates and restores one isolated Test Server credential", () => {
+test("validates and restores one isolated Test Server credential", (context) => {
   const { fixture, payload } = makeCredential();
+  context.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
   const stateRoot = path.join(fixture, "restored");
   const restored = restoreTelegramTestCredential(payload, stateRoot);
   assert.equal(restored.groupId, "-1001");
@@ -63,6 +66,25 @@ test("validates and restores one isolated Test Server credential", () => {
   assert.equal(restored.driverEnv.TELEGRAM_E2E_STATE_DIR, stateRoot);
   assert.equal(Object.hasOwn(restored.driverEnv, "TELEGRAM_E2E_SUT_BOT_TOKEN"), false);
   assert.equal(JSON.stringify(restored.driverEnv).includes(payload.sutToken), false);
+  for (const key of [
+    "HOME",
+    "OPENCLAW_HOME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "XDG_CACHE_HOME",
+    "UV_CACHE_DIR",
+    "TELEGRAM_USER_DRIVER_TDLIB_CACHE_DIR",
+  ]) {
+    const directory = restored.driverEnv[key];
+    assert.equal(typeof directory, "string", `${key} must be runner-owned`);
+    assert.equal(
+      path.relative(stateRoot, directory).startsWith(".."),
+      false,
+      `${key} escaped state`,
+    );
+    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+  }
   for (const directory of [stateRoot, restored.userDriverDir]) {
     assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
   }
@@ -74,6 +96,98 @@ test("validates and restores one isolated Test Server credential", () => {
   assert.equal(fs.existsSync(path.join(stateRoot, "user-driver", "db", "td_test.binlog")), true);
   fs.rmSync(fixture, { recursive: true, force: true });
 });
+
+test(
+  "scenario readiness runs the real UV launcher with shared temp ancestors confined",
+  {
+    skip: process.platform !== "darwin" || spawnSync("uv", ["--version"]).status !== 0,
+  },
+  async (context) => {
+    const { fixture, payload } = makeCredential();
+    const root = fs.mkdtempSync("/private/tmp/telegram-readiness-test-");
+    context.after(() => {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(fixture, { recursive: true, force: true });
+    });
+    const restored = restoreTelegramTestCredential(payload, path.join(root, "state"));
+    const script = path.join(root, "status.py");
+    // Import and initialize the real driver's private config, but never construct
+    // a TDLib client. Only the external authorization response is synthetic.
+    fs.writeFileSync(
+      script,
+      `# /// script\n# requires-python = ">=3.12"\n# ///\n
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("driver", ${JSON.stringify(path.join(import.meta.dirname, "user-driver.py"))})
+driver = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(driver)
+driver.load_config()
+print(json.dumps({"ok": True, "authorized": True, "testDc": True, "tdlibVersion": "1.8.67", "user": {"id": 42}}))
+`,
+    );
+    for (const name of ["home", "tmp", "uv-cache"]) {
+      fs.mkdirSync(path.join(root, name));
+    }
+    const policy = path.join(root, "isolation.sb");
+    fs.writeFileSync(
+      policy,
+      `(version 1)
+(allow default)
+(deny network*)
+(deny file-write*)
+(allow file-write* (subpath ${JSON.stringify(root)}))
+(deny file-read* (require-all (subpath "/private/tmp") (require-not (subpath ${JSON.stringify(root)}))))
+`,
+    );
+    let releases = 0;
+    let driven = false;
+    const credential = {
+      ...restored,
+      driverEnv: {
+        HOME: path.join(root, "home"),
+        TMPDIR: path.join(root, "tmp"),
+        UV_CACHE_DIR: path.join(root, "uv-cache"),
+        UV_OFFLINE: "1",
+        UV_PYTHON_DOWNLOADS: "never",
+        PYTHONDONTWRITEBYTECODE: "1",
+        ...restored.driverEnv,
+      },
+      assertLeaseHealthy() {},
+      whenLeaseUnhealthy: new Promise(() => {}),
+      async release() {
+        releases++;
+        fs.rmSync(restored.stateRoot, { recursive: true });
+      },
+    };
+    await runTelegramTestScenario({
+      args: { dm: true },
+      acquireCredential: async () => credential,
+      checkCredential: (leasedCredential) =>
+        checkTelegramTestCredential({
+          credential: leasedCredential,
+          dm: true,
+          runCommandImpl: (command, args, options) =>
+            runCommand(
+              "/usr/bin/sandbox-exec",
+              [
+                "-f",
+                policy,
+                command,
+                ...args.map((arg) => (arg.endsWith("user-driver.py") ? script : arg)),
+              ],
+              options,
+            ),
+          fetchImpl: async () =>
+            Response.json({ ok: true, result: { id: 100, username: "sut_bot" } }),
+        }),
+      driveScenario: async () => {
+        driven = true;
+      },
+    });
+    assert.equal(driven, true);
+    assert.equal(releases, 1);
+    assert.equal(fs.existsSync(restored.stateRoot), false);
+  },
+);
 
 test("rejects an archive hash mismatch and production credentials", () => {
   const { fixture, payload } = makeCredential();

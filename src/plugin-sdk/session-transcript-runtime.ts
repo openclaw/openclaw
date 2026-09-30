@@ -240,11 +240,10 @@ export async function resolveSessionTranscriptIdentity(
 export async function resolveSessionTranscriptTarget(
   params: SessionTranscriptTargetParams,
 ): Promise<SessionTranscriptTarget> {
-  const target = await resolveSessionTranscriptRuntimeTarget(params);
-  return projectPublicTarget({
-    ...target,
+  return {
+    ...(await resolveSessionTranscriptIdentity(params)),
     targetKind: "runtime-session",
-  });
+  };
 }
 
 /**
@@ -302,13 +301,7 @@ export async function readSessionTranscriptVisibleMessageDelta(
   const { events, ...page } = result;
   return {
     ...page,
-    entries: events.flatMap((entry) =>
-      projectVisibleMessageEntry({
-        event: entry.event,
-        parentId: entry.parentId,
-        seq: entry.seq,
-      }),
-    ),
+    entries: events.flatMap(projectVisibleMessageEntry),
   };
 }
 
@@ -655,20 +648,4 @@ function projectVisibleMessageEntry(entry: {
       ...(idempotencyKey ? { idempotencyKey } : {}),
     },
   ];
-}
-
-function projectPublicTarget(target: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  targetKind: SessionTranscriptTarget["targetKind"];
-}): SessionTranscriptTarget {
-  const agentId = normalizeAgentId(target.agentId);
-  return {
-    agentId,
-    memoryKey: formatSessionTranscriptMemoryHitKey({ agentId, sessionId: target.sessionId }),
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    targetKind: target.targetKind,
-  };
 }

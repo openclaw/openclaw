@@ -47,51 +47,38 @@ async function readStagedInputDirectories(rootDir: string): Promise<string[]> {
   return directories.toSorted();
 }
 
-async function writeChunk(value: string): Promise<void> {
-  await requestGitWorkerEffect({
-    type: "workspace.inventory.write",
-    input: { bytes: Uint8Array.from(Buffer.from(value)) },
-  });
+function createInventoryPathWriter() {
+  let records: string[] = [];
+  let bytes = 0;
+  const flush = async () => {
+    if (records.length === 0) {
+      return;
+    }
+    await requestGitWorkerEffect({
+      type: "workspace.inventory.write",
+      input: { bytes: Uint8Array.from(Buffer.from(records.join(""))) },
+    });
+    records = [];
+    bytes = 0;
+  };
+  return {
+    flush,
+    append(file: string): Promise<void> | undefined {
+      const record = `${file}\0`;
+      records.push(record);
+      bytes += Buffer.byteLength(record);
+      if (bytes >= 64 * 1024) {
+        return flush();
+      }
+      return undefined;
+    },
+  };
 }
 
 type WorkerWorkspaceInventoryEntry =
   | { path: string; type: "directory" }
   | { path: string; type: "file"; mode: number; size: number }
   | { path: string; type: "symlink"; target: string };
-
-function assertWorkerWorkspaceInventoryValues(
-  manifestEntries: number,
-  manifestPathBytes: number,
-  transferPathBytes: number,
-  manifestBytes: number,
-  eligibleBytes: number,
-): void {
-  if (manifestEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-    throw workspaceInventoryError(
-      `Cloud workspace inventory exceeds ${MAX_WORKSPACE_INVENTORY_ENTRIES} manifest entries; reduce eligible files or narrow .worktreeinclude`,
-    );
-  }
-  if (manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
-    throw workspaceInventoryError(
-      "Cloud workspace manifest paths exceed the 64 MiB metadata limit; reduce eligible files or shorten their paths",
-    );
-  }
-  if (transferPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
-    throw workspaceInventoryError(
-      "Cloud workspace eligible paths exceed the 64 MiB metadata limit; reduce eligible files or narrow .worktreeinclude",
-    );
-  }
-  if (manifestBytes > MAX_WORKSPACE_MANIFEST_BYTES) {
-    throw workspaceInventoryError(
-      "Cloud workspace manifest exceeds the 64 MiB limit; reduce eligible files or shorten their paths",
-    );
-  }
-  if (eligibleBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
-    throw workspaceInventoryError(
-      "Cloud workspace eligible content exceeds the 4 GiB limit; remove large eligible files or ignore them",
-    );
-  }
-}
 
 function inventoryEntryJson(entry: WorkerWorkspaceInventoryEntry): string {
   if (entry.type === "directory") {
@@ -126,13 +113,34 @@ class WorkerWorkspaceInventoryBudget {
 
   #assert(): void {
     const manifestEntries = this.#paths.size;
-    assertWorkerWorkspaceInventoryValues(
-      manifestEntries,
-      this.#manifestPathBytes,
-      this.#transferPathBytes,
-      this.#emptyManifestBytes + this.#manifestEntryBytes + Math.max(0, manifestEntries - 1),
-      this.#eligibleBytes,
-    );
+    if (manifestEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+      throw workspaceInventoryError(
+        `Cloud workspace inventory exceeds ${MAX_WORKSPACE_INVENTORY_ENTRIES} manifest entries; reduce eligible files or narrow .worktreeinclude`,
+      );
+    }
+    if (this.#manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+      throw workspaceInventoryError(
+        "Cloud workspace manifest paths exceed the 64 MiB metadata limit; reduce eligible files or shorten their paths",
+      );
+    }
+    if (this.#transferPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+      throw workspaceInventoryError(
+        "Cloud workspace eligible paths exceed the 64 MiB metadata limit; reduce eligible files or narrow .worktreeinclude",
+      );
+    }
+    if (
+      this.#emptyManifestBytes + this.#manifestEntryBytes + Math.max(0, manifestEntries - 1) >
+      MAX_WORKSPACE_MANIFEST_BYTES
+    ) {
+      throw workspaceInventoryError(
+        "Cloud workspace manifest exceeds the 64 MiB limit; reduce eligible files or shorten their paths",
+      );
+    }
+    if (this.#eligibleBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+      throw workspaceInventoryError(
+        "Cloud workspace eligible content exceeds the 4 GiB limit; remove large eligible files or ignore them",
+      );
+    }
   }
 
   addTransferPath(entryPath: string): void {
@@ -213,16 +221,7 @@ async function selectTransferPaths(params: {
   const isStagedInput = createStagedInputPathMatcher(await fsRoot(canonicalRoot));
   const budget = new WorkerWorkspaceInventoryBudget();
   const transferredPaths = new Set<string>();
-  let buffered: string[] = [];
-  let bufferedBytes = 0;
-  const flush = async () => {
-    if (buffered.length === 0) {
-      return;
-    }
-    await writeChunk(buffered.join(""));
-    buffered = [];
-    bufferedBytes = 0;
-  };
+  const writer = createInventoryPathWriter();
   const inspectFile = async (
     file: string,
   ): Promise<Exclude<WorkerWorkspaceInventoryEntry, { type: "directory" }> | undefined> => {
@@ -260,9 +259,6 @@ async function selectTransferPaths(params: {
   };
   const append = async (entry: Exclude<WorkerWorkspaceInventoryEntry, { type: "directory" }>) => {
     const file = entry.path;
-    if (transferredPaths.has(file)) {
-      return;
-    }
     transferredPaths.add(file);
     const segments = file.split("/");
     for (let index = 1; index < segments.length; index += 1) {
@@ -270,11 +266,9 @@ async function selectTransferPaths(params: {
     }
     budget.addEntry(entry);
     budget.addTransferPath(file);
-    const record = `${file}\0`;
-    buffered.push(record);
-    bufferedBytes += Buffer.byteLength(record);
-    if (bufferedBytes >= 64 * 1024) {
-      await flush();
+    const pendingWrite = writer.append(file);
+    if (pendingWrite) {
+      await pendingWrite;
     }
   };
   async function* candidates() {
@@ -306,22 +300,14 @@ async function selectTransferPaths(params: {
       await append(entry);
     }
   }
-  await flush();
+  await writer.flush();
 }
 
 async function filterExistingPaths(params: {
   gitRoot: string;
   preparedListPath: string;
 }): Promise<void> {
-  let records: string[] = [];
-  let bytes = 0;
-  const flush = async () => {
-    if (records.length) {
-      await writeChunk(records.join(""));
-      records = [];
-      bytes = 0;
-    }
-  };
+  const writer = createInventoryPathWriter();
   for await (const file of readBoundedGitPathCandidates(params.preparedListPath)) {
     let stats;
     try {
@@ -332,15 +318,13 @@ async function filterExistingPaths(params: {
       }
     }
     if (stats?.isFile() || stats?.isSymbolicLink()) {
-      const record = `${file}\0`;
-      records.push(record);
-      bytes += Buffer.byteLength(record);
-      if (bytes >= 64 * 1024) {
-        await flush();
+      const pendingWrite = writer.append(file);
+      if (pendingWrite) {
+        await pendingWrite;
       }
     }
   }
-  await flush();
+  await writer.flush();
 }
 
 export async function executeWorkspaceInventoryComputation(

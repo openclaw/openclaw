@@ -58,6 +58,27 @@ export function createClawHubArchiveFactory(
   };
 }
 
+export async function setClawHubArchiveEntryMode(
+  archivePath: string,
+  entryName: string,
+  mode: number,
+) {
+  const bytes = await fs.readFile(archivePath);
+  let offset = bytes.readUInt32LE(bytes.length - 6);
+  while (bytes.readUInt32LE(offset) === 0x02014b50) {
+    const nameLength = bytes.readUInt16LE(offset + 28);
+    if (bytes.subarray(offset + 46, offset + 46 + nameLength).toString() === entryName) {
+      // Encode physical type bits directly; JSZip coerces some unsupported types to directories.
+      bytes[offset + 5] = 3;
+      bytes.writeUInt32LE(mode * 0x10000, offset + 38);
+      await fs.writeFile(archivePath, bytes);
+      return;
+    }
+    offset += 46 + nameLength + bytes.readUInt16LE(offset + 30) + bytes.readUInt16LE(offset + 32);
+  }
+  throw new Error(`Archive fixture is missing ${entryName}`);
+}
+
 export function createLoggerSpies() {
   return {
     info: vi.fn(),

@@ -102,7 +102,7 @@ OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
-DEFAULT_NODE_VERSION="24.19.0"
+DEFAULT_NODE_VERSION="24.21.0"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
@@ -137,7 +137,7 @@ Usage: install-cli.sh [options]
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.19.0)
+  --node-version <ver>                Node version (default: 24.21.0)
   --node-only                         Install only a private Node runtime (no system package changes)
   --runtime-only                      Install CLI runtime without Gateway probes, service changes, or onboarding
   --onboard                           Run "openclaw onboard" after install
@@ -370,43 +370,31 @@ ensure_git() {
 
   case "$(os_detect)" in
     linux)
+      local -a git_cmd=()
       if command -v apt-get >/dev/null 2>&1; then
+        git_cmd=(apt-get install -y git)
         if is_root; then
           apt-get update -y
-          apt-get install -y git
         elif has_sudo; then
           sudo apt-get update -y
-          sudo apt-get install -y git
+          git_cmd=(sudo "${git_cmd[@]}")
         else
           fail "Git missing and sudo unavailable. Install git and retry."
         fi
       elif command -v dnf >/dev/null 2>&1; then
-        if is_root; then
-          dnf install -y git
-        elif has_sudo; then
-          sudo dnf install -y git
-        else
-          fail "Git missing and sudo unavailable. Install git and retry."
-        fi
+        git_cmd=(dnf install -y git)
       elif command -v yum >/dev/null 2>&1; then
-        if is_root; then
-          yum install -y git
-        elif has_sudo; then
-          sudo yum install -y git
-        else
-          fail "Git missing and sudo unavailable. Install git and retry."
-        fi
+        git_cmd=(yum install -y git)
       elif command -v apk >/dev/null 2>&1; then
-        if is_root; then
-          apk add --no-cache git
-        elif has_sudo; then
-          sudo apk add --no-cache git
-        else
-          fail "Git missing and sudo unavailable. Install git and retry."
-        fi
+        git_cmd=(apk add --no-cache git)
       else
         fail "Git missing and package manager not found. Install git and retry."
       fi
+      if [[ "${git_cmd[0]}" != "apt-get" && "${git_cmd[0]}" != "sudo" ]] && ! is_root; then
+        has_sudo || fail "Git missing and sudo unavailable. Install git and retry."
+        git_cmd=(sudo "${git_cmd[@]}")
+      fi
+      "${git_cmd[@]}"
       ;;
     freebsd)
       fail "Git missing. Ask the system administrator to install it with pkg install git, then retry."
@@ -434,33 +422,21 @@ parse_args() {
         JSON=1
         shift
         ;;
-      --prefix)
+      --prefix|--version|--compatible-with|--node-version|--install-method|--method|--git-dir|--dir)
         if [[ $# -lt 2 || "${2:-}" == --* ]]; then
           fail "Missing value for $1"
         fi
-        PREFIX="$2"
-        shift 2
-        ;;
-      --version)
-        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-          fail "Missing value for $1"
-        fi
-        OPENCLAW_VERSION="$2"
-        shift 2
-        ;;
-      --compatible-with)
-        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-          fail "Missing value for $1"
-        fi
-        REQUIRED_COMPATIBLE_VERSION="$2"
-        shift 2
-        ;;
-      --node-version)
-        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-          fail "Missing value for $1"
-        fi
-        NODE_VERSION="$2"
-        NODE_VERSION_REQUESTED=1
+        case "$1" in
+          --prefix) PREFIX="$2" ;;
+          --version) OPENCLAW_VERSION="$2" ;;
+          --compatible-with) REQUIRED_COMPATIBLE_VERSION="$2" ;;
+          --node-version)
+            NODE_VERSION="$2"
+            NODE_VERSION_REQUESTED=1
+            ;;
+          --install-method|--method) INSTALL_METHOD="$2" ;;
+          --git-dir|--dir) GIT_DIR="$2" ;;
+        esac
         shift 2
         ;;
       --runtime-only)
@@ -471,13 +447,6 @@ parse_args() {
         NODE_ONLY=1
         shift
         ;;
-      --install-method|--method)
-        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-          fail "Missing value for $1"
-        fi
-        INSTALL_METHOD="$2"
-        shift 2
-        ;;
       --npm)
         INSTALL_METHOD="npm"
         shift
@@ -485,13 +454,6 @@ parse_args() {
       --git|--github)
         INSTALL_METHOD="git"
         shift
-        ;;
-      --git-dir|--dir)
-        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-          fail "Missing value for $1"
-        fi
-        GIT_DIR="$2"
-        shift 2
         ;;
       --no-git-update)
         GIT_UPDATE=0
@@ -1003,10 +965,11 @@ require_openclaw_version_compatible() {
     return 0
   fi
 
-  if openclaw_version_is_compatible_with "$candidate" "$config_writer"; then
+  local status=0
+  openclaw_version_is_compatible_with "$candidate" "$config_writer" || status=$?
+  if [[ "$status" -eq 0 ]]; then
     return 0
   fi
-  local status="$?"
   if [[ "$status" -eq 2 ]]; then
     fail "Cannot compare resolved OpenClaw version '${candidate}' with config writer '${config_writer}'."
   fi
@@ -1034,30 +997,15 @@ resolve_git_openclaw_ref() {
   local resolved_version=""
 
   case "$requested" in
-    ""|latest)
+    ""|latest|next|beta)
       resolved_version="$("$(npm_bin)" view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
       if [[ -n "$resolved_version" ]]; then
         echo "v${resolved_version}"
-        return 0
+      elif [[ -z "$requested" || "$requested" == "latest" ]]; then
+        echo "main"
+      else
+        echo "$requested"
       fi
-      echo "main"
-      return 0
-      ;;
-    next|beta)
-      resolved_version="$("$(npm_bin)" view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
-      if [[ -n "$resolved_version" ]]; then
-        echo "v${resolved_version}"
-        return 0
-      fi
-      echo "$requested"
-      return 0
-      ;;
-    main)
-      echo "main"
-      return 0
-      ;;
-    v[0-9]*)
-      echo "$requested"
       return 0
       ;;
     [0-9]*.[0-9]*.[0-9]*)
@@ -1275,7 +1223,7 @@ install_node() {
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
     sqlite_version="$(linked_node_sqlite_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.19.0 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.21.0 (or newer)"
   fi
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
   ln -sfn "$dir" "${PREFIX}/tools/node"
@@ -1286,7 +1234,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.4.0"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.5.1"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1732,18 +1680,10 @@ install_openclaw_from_git() {
     fail "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
   fi
 
-  if [[ -d "$repo_dir/.git" ]]; then
-    :
-  elif [[ -d "$repo_dir" ]]; then
-    if [[ -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
-      emit_json step name git-clone status start
-      clone_git_checkout_transactionally "$repo_url" "$repo_dir"
-      emit_json step name git-clone status ok
-      fresh_checkout=1
-    else
+  if [[ ! -d "$repo_dir/.git" ]]; then
+    if [[ -d "$repo_dir" && -n "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
       fail "Git install dir exists but is not a git repo: ${repo_dir}"
     fi
-  else
     emit_json step name git-clone status start
     clone_git_checkout_transactionally "$repo_url" "$repo_dir"
     emit_json step name git-clone status ok

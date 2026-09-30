@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
-import * as replaceFile from "../infra/replace-file.js";
 import { assertSafeSessionSqliteMigrationMove } from "../infra/session-sqlite-migration-manifest.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -16,7 +16,20 @@ import {
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
+}));
+
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
+
+async function createImportedManifest() {
+  const store = createLegacyStore();
+  const report = await importLegacyStore(store);
+  const manifestPath = requireMigrationManifestPath(report.migrationRun?.manifestPath);
+  const manifest = readMigrationManifest(manifestPath);
+  const target = expectDefined(manifest.targets[0], "manifest target");
+  return { store, manifestPath, manifest, target };
+}
 
 describe("runDoctorSessionSqlite", () => {
   it.each([
@@ -24,7 +37,7 @@ describe("runDoctorSessionSqlite", () => {
     ["different session", "other", 2, false, "sqlite_entry_mismatch", 0, 0],
     ["short transcript", "session-1", 1, false, "sqlite_transcript_count_mismatch", 1, 0],
     ["matching transcript", "session-1", 2, false, undefined, 1, 2],
-    ["longer transcript", "session-1", 3, false, "sqlite_transcript_count_mismatch", 1, 0],
+    ["longer transcript", "session-1", 3, false, undefined, 1, 3],
     ["missing source", "session-1", 2, true, undefined, 1, 2],
   ] as const)(
     "validates a %s against SQLite",
@@ -38,7 +51,7 @@ describe("runDoctorSessionSqlite", () => {
       validatedTranscriptEvents,
     ) => {
       const events = [
-        { type: "session", id: "session-1", version: 3 },
+        { type: "session", id: "session-1", version: 3, timestamp: "", cwd: "" },
         {
           type: "message",
           id: "one",
@@ -98,32 +111,17 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it("writes a migration manifest with planned and completed archive moves", async () => {
+  it("checkpoints bulk archive moves without per-file manifest rewrites", async () => {
     const store = createLegacyStore();
     const expectedStorePath = fs.realpathSync.native(store.storePath);
-
-    const report = await importLegacyStore(store);
-    const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
-    const target = expectDefined(manifest.targets[0], "manifest.targets[0] test invariant");
-
-    expect(report.migrationRun?.runId).toBe(manifest.runId);
-    expect(manifest.manifestVersion).toBe(3);
-    expect(target).toMatchObject({
-      agentId: "main",
-      storePath: expectedStorePath,
-      validationBeforeArchive: "passed",
-    });
-    expect(target.completedMoves).toHaveLength(4);
-    expect(target.plannedMoves.map((move) => path.basename(move.sourcePath)).toSorted()).toEqual([
+    const expectedSources = [
       "orphan.jsonl",
       "session-1.jsonl",
       "session-1.trajectory.jsonl",
       "sessions.json",
-    ]);
-  });
-
-  it("checkpoints bulk archive moves without per-file manifest rewrites", async () => {
-    const store = createLegacyStore();
+      "orphan collision.jsonl",
+      "orphan_collision.jsonl",
+    ];
     const sessions = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
       string,
       Record<string, unknown>
@@ -131,6 +129,7 @@ describe("runDoctorSessionSqlite", () => {
     for (let index = 0; index < 64; index += 1) {
       const sessionId = `bulk-session-${index}`;
       const sessionFile = `${sessionId}.jsonl`;
+      expectedSources.push(sessionFile, `orphan-${index}.jsonl`);
       sessions[`agent:main:bulk:${index}`] = {
         channel: "cli",
         chatType: "direct",
@@ -159,24 +158,32 @@ describe("runDoctorSessionSqlite", () => {
     try {
       const report = await importLegacyStore(store);
       const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+      const target = expectDefined(manifest.targets[0], "manifest target");
       const manifestWrites = replaceFileAtomicSync.mock.calls.filter(([options]) =>
         options.filePath.includes("session-sqlite-migration-runs"),
       ).length;
-      const plannedUnreferencedMoves =
-        manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "unreferenced-jsonl") ??
-        [];
-      const plannedTranscriptMoves =
-        manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "transcript") ?? [];
+      const plannedUnreferencedMoves = target.plannedMoves.filter(
+        (move) => move.kind === "unreferenced-jsonl",
+      );
 
+      expect(report.migrationRun?.runId).toBe(manifest.runId);
+      expect(manifest.manifestVersion).toBe(3);
+      expect(target).toMatchObject({
+        agentId: "main",
+        storePath: expectedStorePath,
+        validationBeforeArchive: "passed",
+      });
+      expect(target.plannedMoves.map((move) => path.basename(move.sourcePath)).toSorted()).toEqual(
+        expectedSources.toSorted(),
+      );
+      expect(target.completedMoves).toHaveLength(134);
       expect(plannedUnreferencedMoves).toHaveLength(67);
       expect(new Set(plannedUnreferencedMoves.map((move) => move.archivePath)).size).toBe(67);
-      expect(plannedTranscriptMoves).toHaveLength(65);
+      expect(target.plannedMoves.filter((move) => move.kind === "transcript")).toHaveLength(65);
       expect(
-        manifest.targets[0]?.completedMoves.filter((move) => move.kind === "unreferenced-jsonl"),
+        target.completedMoves.filter((move) => move.kind === "unreferenced-jsonl"),
       ).toHaveLength(67);
-      expect(
-        manifest.targets[0]?.completedMoves.filter((move) => move.kind === "transcript"),
-      ).toHaveLength(65);
+      expect(target.completedMoves.filter((move) => move.kind === "transcript")).toHaveLength(65);
       expect(manifestWrites).toBeLessThan(20);
       expect(replaceFileAtomicSync).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -257,14 +264,7 @@ describe("runDoctorSessionSqlite", () => {
   });
 
   it("rejects restore moves outside the manifest target archive boundary", async () => {
-    const store = createLegacyStore();
-    const importReport = await importLegacyStore(store);
-    const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-    const manifest = readMigrationManifest(manifestPath);
-    const target = expectDefined(
-      manifest.targets[0],
-      "restore-boundary manifest target test invariant",
-    );
+    const { store, manifestPath, manifest, target } = await createImportedManifest();
     const outsideSourcePath = path.join(store.tempDir, "outside-source.jsonl");
     const outsideArchivePath = path.join(store.tempDir, "outside-archive.jsonl");
     fs.writeFileSync(outsideArchivePath, '{"type":"outside"}\n', { mode: 0o600 });
@@ -317,14 +317,7 @@ describe("runDoctorSessionSqlite", () => {
   });
 
   it("rejects a coherently rewritten target that is not trusted by the caller", async () => {
-    const store = createLegacyStore();
-    const importReport = await importLegacyStore(store);
-    const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-    const manifest = readMigrationManifest(manifestPath);
-    const target = expectDefined(
-      manifest.targets[0],
-      "untrusted-target manifest target test invariant",
-    );
+    const { store, manifestPath, manifest, target } = await createImportedManifest();
     const outsideSessionsDir = path.join(store.tempDir, "outside-agent", "sessions");
     const outsideStorePath = path.join(outsideSessionsDir, "sessions.json");
     const outsideSourcePath = path.join(outsideSessionsDir, "outside.jsonl");
@@ -362,14 +355,7 @@ describe("runDoctorSessionSqlite", () => {
   });
 
   it("rejects recovery manifests with a rewritten SQLite path", async () => {
-    const store = createLegacyStore();
-    const importReport = await importLegacyStore(store);
-    const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-    const manifest = readMigrationManifest(manifestPath);
-    const target = expectDefined(
-      manifest.targets[0],
-      "rewritten-sqlite manifest target test invariant",
-    );
+    const { store, manifestPath, manifest, target } = await createImportedManifest();
     const outsideSqlitePath = path.join(store.tempDir, "outside.sqlite");
     manifest.failedAt = "2030-01-01T00:00:00.000Z";
     target.issues = [{ code: "startup_failure", message: "failed after archive" }];

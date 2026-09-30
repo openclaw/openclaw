@@ -16,10 +16,13 @@ import {
   prepareChannelOperatorAdmin,
   resolveChannelOperatorAdminAuthority,
   resolveUpdateChannelOperatorAdminIdentityAuthority,
+  type ResolvedChannelOperatorIdentity,
 } from "../gateway/channel-operator-authority.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import type { CommandOwnerReference } from "../state/user-channel-identities.js";
+import { prepareConfiguredCommandOwnerAuthority } from "../state/user-channel-identity-operations.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
@@ -28,6 +31,7 @@ import {
 import {
   captureCommandOwnerAssertion,
   getCommandOwnerAuthority,
+  type CommandOwnerAssertion,
 } from "./command-owner-authority.js";
 import { getCommandSenderAuthority } from "./command-sender-authority.js";
 import {
@@ -155,10 +159,6 @@ function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig) {
 
 function isWildcardAllowFromEntry(entry: string): boolean {
   return entry.trim() === "*";
-}
-
-function hasWildcardAllowFrom(list: string[]): boolean {
-  return list.some((entry) => isWildcardAllowFromEntry(entry));
 }
 
 function stripWildcardAllowFrom(list: string[]): string[] {
@@ -308,7 +308,7 @@ function resolveOwnerAuthorizationState(
   });
   const allowAll =
     !params.hadResolutionError &&
-    (params.allowFromList.length === 0 || hasWildcardAllowFrom(params.allowFromList));
+    (params.allowFromList.length === 0 || params.allowFromList.some(isWildcardAllowFromEntry));
   const channelCommandOwners = resolveOwnerCandidatesForCommands({ ...params, allowAll });
   const explicitOwners = Array.from(new Set(stripWildcardAllowFrom(configOwnerAllowFromList)));
   const contextCommandOwners = stripWildcardAllowFrom(contextOwnerAllowFromList);
@@ -348,7 +348,7 @@ function resolveCommandSenderAuthorization(params: {
     const commandsAllowFromList = params.commandsAllowFromList;
     const commandsAllowAll =
       !params.providerResolutionError &&
-      Boolean(commandsAllowFromList && hasWildcardAllowFrom(commandsAllowFromList));
+      Boolean(commandsAllowFromList && commandsAllowFromList.some(isWildcardAllowFromEntry));
     const matchedCommandsAllowFrom = commandsAllowFromList?.length
       ? params.senderCandidates.find((candidate) => commandsAllowFromList.includes(candidate))
       : undefined;
@@ -616,43 +616,72 @@ function captureCommandOwnerIdentity(
 
 export type PreparedCommandOwnerAuthority = Readonly<{
   source: string | undefined;
+  operatorProfile?: NonNullable<
+    Awaited<ReturnType<typeof prepareChannelOperatorAdmin>>
+  >["operatorProfile"];
+  recoveryReference?: Exclude<CommandOwnerAssertion["recoveryReference"], null>;
   isCurrent: (currentCfg: OpenClawConfig) => boolean;
   /** The original additional person-policy grant, never a substitute for the current check. */
   signal?: AbortSignal;
 }>;
 
-/** Worker admission fixes the original person; synchronous final checks never touch SQLite. */
+/** Admission and recovery share the original authority owner; final checks never touch SQLite. */
 export async function prepareCommandOwnerAuthority(
   cfg: OpenClawConfig,
-  requester: { channel?: string; accountId?: string; senderId?: string },
+  requester:
+    | { channel?: string; accountId?: string; senderId?: string }
+    | CommandOwnerReference
+    | ResolvedChannelOperatorIdentity,
   stateOptions: OpenClawStateDatabaseOptions = {},
 ): Promise<PreparedCommandOwnerAuthority> {
-  const captured = { ...requester };
-  if (isConfiguredCommandOwner(cfg, captured)) {
+  const resolved = "identity" in requester ? requester : undefined;
+  const captured =
+    "identity" in requester
+      ? {
+          channel: requester.identity.channelId,
+          accountId: requester.identity.accountId,
+          senderId: requester.identity.senderId,
+        }
+      : "version" in requester
+        ? undefined
+        : { ...requester };
+  const reference = "version" in requester ? requester : undefined;
+  if (reference?.version === 2 || (captured && isConfiguredCommandOwner(cfg, captured))) {
+    const prepared = await prepareConfiguredCommandOwnerAuthority(
+      cfg.commands?.ownerAllowFrom,
+      stateOptions,
+    );
+    const accepted = !reference || prepared?.recoveryReference.id === reference.id;
     return Object.freeze({
-      source: "configured-owner",
-      isCurrent: (currentCfg: OpenClawConfig) => isConfiguredCommandOwner(currentCfg, captured),
+      source: accepted ? "configured-owner" : undefined,
+      recoveryReference: prepared?.recoveryReference,
+      // Live configured admission remains config-owned; an absent durable policy cannot recover.
+      isCurrent: (currentCfg: OpenClawConfig) =>
+        accepted &&
+        (prepared ? prepared.isCurrent() : !reference) &&
+        (!captured || isConfiguredCommandOwner(currentCfg, captured)),
     });
   }
-  const providerId = normalizeAnyChannelId(captured.channel) ?? captured.channel;
+  const providerId = normalizeAnyChannelId(captured?.channel) ?? captured?.channel;
+  const identity =
+    reference ??
+    (providerId && captured?.senderId
+      ? {
+          channelId: providerId,
+          accountId: normalizeAccountId(captured.accountId),
+          senderId: captured.senderId,
+        }
+      : undefined);
   const prepared =
-    providerId && captured.senderId
-      ? await prepareChannelOperatorAdmin(
-          cfg,
-          {
-            channelId: providerId,
-            accountId: normalizeAccountId(captured.accountId),
-            senderId: captured.senderId,
-          },
-          stateOptions,
-        )
-      : undefined;
+    identity && (await prepareChannelOperatorAdmin(cfg, resolved ?? identity, stateOptions));
   return Object.freeze({
     source: prepared ? `profile:${prepared.profileId}` : undefined,
+    operatorProfile: prepared?.operatorProfile,
+    recoveryReference: prepared?.recoveryReference,
     ...(prepared?.signal ? { signal: prepared.signal } : {}),
     isCurrent: (currentCfg: OpenClawConfig) =>
       prepared !== undefined &&
-      !isConfiguredCommandOwner(currentCfg, captured) &&
+      (!captured || !isConfiguredCommandOwner(currentCfg, captured)) &&
       prepared.isCurrent(currentCfg),
   });
 }

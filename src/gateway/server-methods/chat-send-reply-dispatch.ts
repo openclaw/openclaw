@@ -1,5 +1,6 @@
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
@@ -27,6 +28,7 @@ import { splitMediaFromOutput } from "../../media/parse.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   extractAssistantPhaseText,
   extractAssistantTextForPhase,
@@ -48,6 +50,7 @@ import {
   combineNonStreamingReplyParts,
   extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
+  hasManagedOutgoingAssistantContent,
   isMediaBearingPayload,
   prepareAssistantDisplayText,
   sanitizeAssistantDisplayText,
@@ -185,7 +188,6 @@ export function createChatSendReplyDispatch(params: {
   });
   const deliveredReplies: DeliveredChatSendReply[] = [];
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
-  let appendedWebchatAgentMedia = false;
   let preparingTranscript = false;
   const prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage = (
     message,
@@ -435,15 +437,13 @@ export function createChatSendReplyDispatch(params: {
       extractAssistantDisplayText(assistantContent) ??
       buildTranscriptReplyTextFromInputs(transcriptInputs);
     const payloadMetadata = getReplyPayloadMetadata(payload);
-    const sourceMediaUrls = Array.from(
-      new Set(
-        payloadMetadata?.assistantTranscriptMediaUrls?.length
-          ? payloadMetadata.assistantTranscriptMediaUrls
-          : [
-              ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-              ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
-            ],
-      ),
+    const sourceMediaUrls = uniqueStrings(
+      payloadMetadata?.assistantTranscriptMediaUrls?.length
+        ? payloadMetadata.assistantTranscriptMediaUrls
+        : [
+            ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+            ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
+          ],
     );
     const ownedTranscriptIdempotencyKey =
       transcript?.idempotencyKey ??
@@ -456,6 +456,8 @@ export function createChatSendReplyDispatch(params: {
       storePath: latestStorePath,
       agentId,
     });
+    const assistantMessageIndex = payloadMetadata?.assistantMessageIndex;
+    let rewritten: { messageId: string } | null = null;
     if (ownedTranscriptIdempotencyKey && transcriptScope) {
       // Receipt identity is not authority after asynchronous media preparation.
       if (
@@ -468,34 +470,19 @@ export function createChatSendReplyDispatch(params: {
       }
       // The harness row is the canonical final assistant. Replace that exact
       // identity so media materialization cannot append a parallel reply.
-      const rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
+      rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
         content: persistedContentForAppend,
         idempotencyKey: ownedTranscriptIdempotencyKey,
         managedMediaUrls: sourceMediaUrls,
         scope: transcriptScope,
       });
-      if (rewritten) {
-        appendedWebchatAgentMedia = true;
-        finalizedAgentMediaTranscriptKeys.add(finalizationKey);
-        await publishAssistantTranscriptRewrite({
-          scope: transcriptScope,
-          rewritten: [rewritten],
-        });
-        if (assistantContent?.length) {
-          attachManagedOutgoingMediaToMessage({
-            messageId: rewritten.messageId,
-            blocks: assistantContent,
-          });
-        }
+      if (!rewritten) {
+        logGateway.warn(
+          "webchat runtime-owned assistant media rewrite skipped: transcript identity not found",
+        );
         return;
       }
-      logGateway.warn(
-        "webchat runtime-owned assistant media rewrite skipped: transcript identity not found",
-      );
-      return;
-    }
-    const assistantMessageIndex = payloadMetadata?.assistantMessageIndex;
-    if (assistantMessageIndex !== undefined && transcriptScope) {
+    } else if (assistantMessageIndex !== undefined && transcriptScope) {
       // Embedded runtimes identify their owned turn by message index, not a persisted key.
       // Require that exact current-turn row and media set so a sibling reply cannot be rewritten.
       if (assistantTranscriptRewriteState.sessionId !== sessionId) {
@@ -505,7 +492,7 @@ export function createChatSendReplyDispatch(params: {
           afterSeq: 0,
         };
       }
-      const rewritten = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
+      const indexedRewrite = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
         afterSeq: assistantTranscriptRewriteState.afterSeq,
         assistantMessageIndex,
         content: persistedContentForAppend,
@@ -513,22 +500,24 @@ export function createChatSendReplyDispatch(params: {
         mediaUrls: sourceMediaUrls,
         scope: transcriptScope,
       });
-      if (rewritten) {
-        assistantTranscriptRewriteState.generation = rewritten.generation;
-        appendedWebchatAgentMedia = true;
-        finalizedAgentMediaTranscriptKeys.add(finalizationKey);
-        await publishAssistantTranscriptRewrite({
-          scope: transcriptScope,
-          rewritten: [rewritten],
-        });
-        if (assistantContent?.length) {
-          attachManagedOutgoingMediaToMessage({
-            messageId: rewritten.messageId,
-            blocks: assistantContent,
-          });
-        }
-        return;
+      if (indexedRewrite) {
+        assistantTranscriptRewriteState.generation = indexedRewrite.generation;
+        rewritten = indexedRewrite;
       }
+    }
+    if (rewritten && transcriptScope) {
+      finalizedAgentMediaTranscriptKeys.add(finalizationKey);
+      if (assistantContent?.length) {
+        await attachManagedOutgoingMediaToMessage({
+          messageId: rewritten.messageId,
+          blocks: assistantContent,
+        });
+      }
+      await publishAssistantTranscriptRewrite({
+        scope: transcriptScope,
+        rewritten: [rewritten],
+      });
+      return;
     }
     const hasOnlyFailureDisplay =
       persistedContentForAppend.some((block) => block.type === "attachment_error") &&
@@ -580,15 +569,16 @@ export function createChatSendReplyDispatch(params: {
           : `${clientRunId}:assistant-media`,
       ttsSupplement: ttsSupplementMarker,
       cfg,
+      onMessageCommitted: (receipt, acceptCompletion) => {
+        const blocks = readAssistantDisplayContent(receipt.message);
+        if (hasManagedOutgoingAssistantContent(blocks)) {
+          acceptCompletion(async () => {
+            await attachManagedOutgoingMediaToMessage({ messageId: receipt.messageId, blocks });
+          });
+        }
+      },
     });
     if (appended.ok) {
-      if (appended.messageId && assistantContent?.length) {
-        attachManagedOutgoingMediaToMessage({
-          messageId: appended.messageId,
-          blocks: assistantContent,
-        });
-      }
-      appendedWebchatAgentMedia = true;
       finalizedAgentMediaTranscriptKeys.add(finalizationKey);
       return;
     }
@@ -712,7 +702,7 @@ export function createChatSendReplyDispatch(params: {
     captureAgentTranscriptStart,
     deliveredReplies,
     dispatcherOptions,
-    hasAppendedWebchatAgentMedia: () => appendedWebchatAgentMedia,
+    hasAppendedWebchatAgentMedia: () => finalizedAgentMediaTranscriptKeys.size > 0,
     onModelSelected,
     prepareAssistantTranscriptMessage,
     resolveReplyDelivery,

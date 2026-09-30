@@ -21,158 +21,38 @@ function parseLegacyDeliveryHintsInput(payload: Record<string, unknown>) {
   };
 }
 
-/** Return true when a payload still carries legacy delivery hint fields. */
-function hasLegacyDeliveryHints(payload: Record<string, unknown>) {
-  const hints = parseLegacyDeliveryHintsInput(payload);
-  return (
-    hints.deliver !== undefined ||
-    hints.bestEffortDeliver !== undefined ||
-    hints.channel !== undefined ||
-    hints.provider !== undefined ||
-    hints.to !== undefined ||
-    hints.threadId !== undefined
-  );
-}
-
-/** Build a new delivery object from legacy top-level payload delivery fields. */
-function buildDeliveryFromLegacyPayload(payload: Record<string, unknown>): Record<string, unknown> {
-  const hints = parseLegacyDeliveryHintsInput(payload);
-  const mode = hints.deliver === false ? "none" : "announce";
-  const next: Record<string, unknown> = { mode };
-  if (hints.channel ?? hints.provider) {
-    next.channel = hints.channel ?? hints.provider;
-  }
-  if (hints.to) {
-    next.to = hints.to;
-  }
-  if (hints.threadId) {
-    next.threadId = hints.threadId;
-  }
-  if (hints.bestEffortDeliver !== undefined) {
-    next.bestEffort = hints.bestEffortDeliver;
-  }
-  return next;
-}
-
-/** Build a partial delivery patch from legacy payload fields, or null when none exist. */
-function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unknown>) {
-  const hints = parseLegacyDeliveryHintsInput(payload);
-  const next: Record<string, unknown> = {};
-  let hasPatch = false;
-
-  if (hints.deliver === false) {
-    next.mode = "none";
-    hasPatch = true;
-  } else if (
-    hints.deliver === true ||
-    hints.channel ||
-    hints.provider ||
-    hints.to ||
-    hints.threadId ||
-    hints.bestEffortDeliver !== undefined
-  ) {
-    next.mode = "announce";
-    hasPatch = true;
-  }
-  if (hints.channel ?? hints.provider) {
-    next.channel = hints.channel ?? hints.provider;
-    hasPatch = true;
-  }
-  if (hints.to) {
-    next.to = hints.to;
-    hasPatch = true;
-  }
-  if (hints.threadId) {
-    next.threadId = hints.threadId;
-    hasPatch = true;
-  }
-  if (hints.bestEffortDeliver !== undefined) {
-    next.bestEffort = hints.bestEffortDeliver;
-    hasPatch = true;
-  }
-
-  return hasPatch ? next : null;
-}
-
-/** Merge legacy payload delivery hints into an existing delivery object. */
-function mergeLegacyDeliveryInto(
-  delivery: Record<string, unknown>,
-  payload: Record<string, unknown>,
-) {
-  const patch = buildDeliveryPatchFromLegacyPayload(payload);
-  if (!patch) {
-    return { delivery, mutated: false };
-  }
-
-  const next = { ...delivery };
-  let mutated = false;
-
-  if ("mode" in patch && patch.mode !== next.mode) {
-    next.mode = patch.mode;
-    mutated = true;
-  }
-  if ("channel" in patch && patch.channel !== next.channel) {
-    next.channel = patch.channel;
-    mutated = true;
-  }
-  if ("to" in patch && patch.to !== next.to) {
-    next.to = patch.to;
-    mutated = true;
-  }
-  if ("threadId" in patch && patch.threadId !== next.threadId) {
-    next.threadId = patch.threadId;
-    mutated = true;
-  }
-  if ("bestEffort" in patch && patch.bestEffort !== next.bestEffort) {
-    next.bestEffort = patch.bestEffort;
-    mutated = true;
-  }
-
-  return { delivery: next, mutated };
-}
-
 /** Normalize delivery and strip consumed legacy delivery fields from the payload. */
 export function normalizeLegacyDeliveryInput(params: {
   delivery?: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
 }) {
-  if (!params.payload || !hasLegacyDeliveryHints(params.payload)) {
+  const { payload } = params;
+  const hints = payload ? parseLegacyDeliveryHintsInput(payload) : undefined;
+  if (!payload || !hints || !Object.values(hints).some((value) => value !== undefined)) {
     return {
       delivery: params.delivery ?? undefined,
       mutated: false,
     };
   }
 
-  const nextDelivery = params.delivery
-    ? mergeLegacyDeliveryInto(params.delivery, params.payload)
-    : {
-        delivery: buildDeliveryFromLegacyPayload(params.payload),
-        mutated: true,
-      };
-  stripLegacyDeliveryFields(params.payload);
-  return {
-    delivery: nextDelivery.delivery,
-    mutated: true,
+  const next: Record<string, unknown> = {
+    ...params.delivery,
+    mode: hints.deliver === false ? "none" : "announce",
   };
-}
-
-function stripLegacyDeliveryFields(payload: Record<string, unknown>) {
-  if ("deliver" in payload) {
-    delete payload.deliver;
+  if (hints.channel ?? hints.provider) {
+    next.channel = hints.channel ?? hints.provider;
   }
-  if ("channel" in payload) {
-    delete payload.channel;
+  if (hints.to) {
+    next.to = hints.to;
   }
-  if ("provider" in payload) {
-    delete payload.provider;
+  if (hints.threadId) {
+    next.threadId = hints.threadId;
   }
-  if ("to" in payload) {
-    delete payload.to;
+  if (hints.bestEffortDeliver !== undefined) {
+    next.bestEffort = hints.bestEffortDeliver;
   }
-  if ("threadId" in payload) {
-    delete payload.threadId;
+  for (const key of ["deliver", "channel", "provider", "to", "threadId", "bestEffortDeliver"]) {
+    delete payload[key];
   }
-  if ("bestEffortDeliver" in payload) {
-    delete payload.bestEffortDeliver;
-  }
+  return { delivery: next, mutated: true };
 }

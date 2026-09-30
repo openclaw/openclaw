@@ -1,8 +1,15 @@
-// Detects suspicious config clobbers and finds recovery snapshots.
 import path from "node:path";
 import { createDedupeCache } from "../infra/dedupe.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { sleep } from "../utils/sleep.js";
+import {
+  resolveConfigIoEffect,
+  runConfigIoAsync,
+  runConfigIoSync,
+  type ConfigIoOperation,
+} from "./io.effects.js";
+import { formatConfigArtifactTimestamp } from "./io.write-safety.js";
 
 /** Maximum retained clobbered-config snapshots per config file. */
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
@@ -47,17 +54,8 @@ type ConfigClobberSnapshotDeps = {
   logger: Pick<typeof console, "warn">;
 };
 
-function formatConfigArtifactTimestamp(ts: string): string {
-  return ts.replaceAll(":", "-").replaceAll(".", "-");
-}
-
 function isFsErrorCode(error: unknown, code: string): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    typeof (error as { code?: unknown }).code === "string" &&
-    (error as { code: string }).code === code
-  );
+  return error instanceof Error && hasErrnoCode(error, code);
 }
 
 function resolveClobberPaths(configPath: string): {
@@ -143,68 +141,32 @@ function compareClobberedSiblings(
   );
 }
 
-function createClobberedSiblingSnapshot(params: {
-  dir: string;
-  entry: string;
-  prefix: string;
-  mtimeMs: number;
-}): ClobberedSiblingSnapshot {
-  return {
-    name: params.entry,
-    path: path.join(params.dir, params.entry),
-    timestampKey: params.entry.slice(params.prefix.length).replace(/-\d{2}$/, ""),
-    mtimeMs: params.mtimeMs,
-  };
-}
-
-async function listClobberedSiblings(
+function* listClobberedSiblings(
   deps: ConfigClobberSnapshotDeps,
   dir: string,
   prefix: string,
-): Promise<ClobberedSiblingSnapshot[]> {
+): ConfigIoOperation<ClobberedSiblingSnapshot[]> {
   try {
-    const entries = await deps.fs.promises.readdir(dir);
+    const entries = yield* resolveConfigIoEffect({
+      sync: () => deps.fs.readdirSync(dir),
+      async: () => deps.fs.promises.readdir(dir),
+    });
     const snapshots: ClobberedSiblingSnapshot[] = [];
     for (const entry of entries) {
       if (!entry.startsWith(prefix)) {
         continue;
       }
-      const stat = await deps.fs.promises.stat(path.join(dir, entry)).catch(() => null);
-      snapshots.push(
-        createClobberedSiblingSnapshot({
-          dir,
-          entry,
-          prefix,
-          mtimeMs: stat?.mtimeMs ?? 0,
-        }),
-      );
-    }
-    return snapshots.toSorted(compareClobberedSiblings);
-  } catch {
-    return [];
-  }
-}
-
-function listClobberedSiblingsSync(
-  deps: ConfigClobberSnapshotDeps,
-  dir: string,
-  prefix: string,
-): ClobberedSiblingSnapshot[] {
-  try {
-    const snapshots: ClobberedSiblingSnapshot[] = [];
-    for (const entry of deps.fs.readdirSync(dir)) {
-      if (!entry.startsWith(prefix)) {
-        continue;
-      }
-      const stat = deps.fs.statSync(path.join(dir, entry), { throwIfNoEntry: false });
-      snapshots.push(
-        createClobberedSiblingSnapshot({
-          dir,
-          entry,
-          prefix,
-          mtimeMs: stat?.mtimeMs ?? 0,
-        }),
-      );
+      const pathname = path.join(dir, entry);
+      const stat = yield* resolveConfigIoEffect({
+        sync: () => deps.fs.statSync(pathname, { throwIfNoEntry: false }),
+        async: () => deps.fs.promises.stat(pathname).catch(() => null),
+      });
+      snapshots.push({
+        name: entry,
+        path: pathname,
+        timestampKey: entry.slice(prefix.length).replace(/-\d{2}$/, ""),
+        mtimeMs: stat?.mtimeMs ?? 0,
+      });
     }
     return snapshots.toSorted(compareClobberedSiblings);
   } catch {
@@ -225,122 +187,83 @@ function warnClobberCapReached(
   );
 }
 
-async function rotateOldestClobberedSiblings(
-  deps: ConfigClobberSnapshotDeps,
-  snapshots: ClobberedSiblingSnapshot[],
-): Promise<boolean> {
-  const deleteCount = Math.max(0, snapshots.length - CONFIG_CLOBBER_SNAPSHOT_LIMIT + 1);
-  for (const snapshot of snapshots.slice(0, deleteCount)) {
-    try {
-      await deps.fs.promises.unlink(snapshot.path);
-    } catch (error) {
-      if (!isFsErrorCode(error, "ENOENT")) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-function rotateOldestClobberedSiblingsSync(
-  deps: ConfigClobberSnapshotDeps,
-  snapshots: ClobberedSiblingSnapshot[],
-): boolean {
-  const deleteCount = Math.max(0, snapshots.length - CONFIG_CLOBBER_SNAPSHOT_LIMIT + 1);
-  for (const snapshot of snapshots.slice(0, deleteCount)) {
-    try {
-      deps.fs.unlinkSync(snapshot.path);
-    } catch (error) {
-      if (!isFsErrorCode(error, "ENOENT")) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 function buildClobberedTargetPath(configPath: string, observedAt: string, attempt: number): string {
   const basePath = `${configPath}.clobbered.${formatConfigArtifactTimestamp(observedAt)}`;
   return attempt === 0 ? basePath : `${basePath}-${String(attempt).padStart(2, "0")}`;
 }
 
-export async function persistBoundedClobberedConfigSnapshot(params: {
+type ClobberedConfigSnapshotParams = {
   deps: ConfigClobberSnapshotDeps;
   configPath: string;
   raw: string;
   observedAt: string;
-}): Promise<string | null> {
-  const paths = resolveClobberPaths(params.configPath);
-  return await clobberSnapshotQueue.enqueue(paths.lockPath, async () => {
-    const locked = await acquireClobberLock(params.deps, paths.lockPath);
-    if (!locked) {
-      return null;
-    }
-    try {
-      const existing = await listClobberedSiblings(params.deps, paths.dir, paths.prefix);
-      if (existing.length >= CONFIG_CLOBBER_SNAPSHOT_LIMIT) {
-        warnClobberCapReached(params.deps, params.configPath, existing.length);
-        const rotated = await rotateOldestClobberedSiblings(params.deps, existing);
-        if (!rotated) {
+};
+
+function* persistClobberedConfigSnapshot(
+  params: ClobberedConfigSnapshotParams,
+  paths: ReturnType<typeof resolveClobberPaths>,
+): ConfigIoOperation<string | null> {
+  const { deps } = params;
+  const existing = yield* listClobberedSiblings(deps, paths.dir, paths.prefix);
+  if (existing.length >= CONFIG_CLOBBER_SNAPSHOT_LIMIT) {
+    warnClobberCapReached(deps, params.configPath, existing.length);
+    const deleteCount = existing.length - CONFIG_CLOBBER_SNAPSHOT_LIMIT + 1;
+    for (const snapshot of existing.slice(0, deleteCount)) {
+      try {
+        yield* resolveConfigIoEffect({
+          sync: () => deps.fs.unlinkSync(snapshot.path),
+          async: () => deps.fs.promises.unlink(snapshot.path),
+        });
+      } catch (error) {
+        if (!isFsErrorCode(error, "ENOENT")) {
           return null;
         }
       }
-      for (let attempt = 0; attempt < CONFIG_CLOBBER_SNAPSHOT_LIMIT; attempt++) {
-        const targetPath = buildClobberedTargetPath(params.configPath, params.observedAt, attempt);
-        try {
-          await params.deps.fs.promises.writeFile(targetPath, params.raw, {
-            encoding: "utf-8",
-            mode: 0o600,
-            flag: "wx",
-          });
-          return targetPath;
-        } catch (error) {
-          if (!isFsErrorCode(error, "EEXIST")) {
-            return null;
-          }
-        }
+    }
+  }
+  for (let attempt = 0; attempt < CONFIG_CLOBBER_SNAPSHOT_LIMIT; attempt++) {
+    const targetPath = buildClobberedTargetPath(params.configPath, params.observedAt, attempt);
+    const options = { encoding: "utf-8" as const, mode: 0o600, flag: "wx" };
+    try {
+      yield* resolveConfigIoEffect({
+        sync: () => deps.fs.writeFileSync(targetPath, params.raw, options),
+        async: () => deps.fs.promises.writeFile(targetPath, params.raw, options),
+      });
+      return targetPath;
+    } catch (error) {
+      if (!isFsErrorCode(error, "EEXIST")) {
+        return null;
       }
+    }
+  }
+  return null;
+}
+
+export async function persistBoundedClobberedConfigSnapshot(
+  params: ClobberedConfigSnapshotParams,
+): Promise<string | null> {
+  const paths = resolveClobberPaths(params.configPath);
+  return await clobberSnapshotQueue.enqueue(paths.lockPath, async () => {
+    if (!(await acquireClobberLock(params.deps, paths.lockPath))) {
       return null;
+    }
+    try {
+      return await runConfigIoAsync(persistClobberedConfigSnapshot(params, paths));
     } finally {
       await params.deps.fs.promises.rmdir(paths.lockPath).catch(() => {});
     }
   });
 }
 
-export function persistBoundedClobberedConfigSnapshotSync(params: {
-  deps: ConfigClobberSnapshotDeps;
-  configPath: string;
-  raw: string;
-  observedAt: string;
-}): string | null {
+export function persistBoundedClobberedConfigSnapshotSync(
+  params: ClobberedConfigSnapshotParams,
+): string | null {
   const paths = resolveClobberPaths(params.configPath);
   if (!acquireClobberLockSync(params.deps, paths.lockPath)) {
     return null;
   }
   try {
-    const existing = listClobberedSiblingsSync(params.deps, paths.dir, paths.prefix);
-    if (existing.length >= CONFIG_CLOBBER_SNAPSHOT_LIMIT) {
-      warnClobberCapReached(params.deps, params.configPath, existing.length);
-      if (!rotateOldestClobberedSiblingsSync(params.deps, existing)) {
-        return null;
-      }
-    }
-    for (let attempt = 0; attempt < CONFIG_CLOBBER_SNAPSHOT_LIMIT; attempt++) {
-      const targetPath = buildClobberedTargetPath(params.configPath, params.observedAt, attempt);
-      try {
-        params.deps.fs.writeFileSync(targetPath, params.raw, {
-          encoding: "utf-8",
-          mode: 0o600,
-          flag: "wx",
-        });
-        return targetPath;
-      } catch (error) {
-        if (!isFsErrorCode(error, "EEXIST")) {
-          return null;
-        }
-      }
-    }
-    return null;
+    return runConfigIoSync(persistClobberedConfigSnapshot(params, paths));
   } finally {
     try {
       params.deps.fs.rmdirSync(paths.lockPath);

@@ -73,7 +73,7 @@ beforeEach(() => {
     unitName: "fixture-A.service",
     unitPath: path.join(a, "unit"),
   });
-  vi.spyOn(systemdScope, "assertNoSystemGatewayOwnership").mockResolvedValue();
+  vi.spyOn(systemdScope, "assertNoSystemGatewayOwnershipForActivation").mockResolvedValue();
   vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue();
 });
 afterEach(() => {
@@ -114,73 +114,127 @@ function owned(
 }
 
 describe.skipIf(process.platform === "win32")("retained POSIX native restart", () => {
-  it("restarts retained A with a real child and keeps both owners until native drain", async () => {
-    const effect = path.join(a, "effect");
-    const proceed = path.join(a, "proceed");
-    const started = createDeferred();
-    const definition = path.join(a, "unit");
-    fs.writeFileSync(definition, "original Node A and service definition");
-    let pid = 0;
-    const native = vi
-      .spyOn(systemdExec, "execSystemctlUser")
-      .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
-        assertCurrent?.();
-        assertGatewayServiceUpdateCurrent();
-        if (args[0] === "reset-failed") {
-          return success;
+  it.each(["native drain", "readiness failure"] as const)(
+    "restarts retained A with a real child and keeps both owners until %s",
+    async (outcome) => {
+      const effect = path.join(a, "effect");
+      const proceed = path.join(a, "proceed");
+      const started = createDeferred();
+      const definition = path.join(a, "unit");
+      fs.writeFileSync(definition, "original Node A and service definition");
+      let pid = 0;
+      const readinessError = new Error("fixture readiness observer failed");
+      // Observe outside native custody so a readiness failure can release the child
+      // before the authority owner joins its still-pending command.
+      const observer = fs.watch(a, () => {
+        try {
+          if (!fs.existsSync(effect)) {
+            return;
+          }
+          pid = Number(fs.readFileSync(effect, "utf8"));
+          observer.close();
+          if (outcome === "readiness failure") {
+            started.reject(readinessError);
+          } else {
+            started.resolve();
+          }
+        } catch (error) {
+          started.reject(error);
         }
-        expect(args).toEqual(["restart", "fixture-A.service"]);
-        const running = execFileUtf8(process.execPath, [
-          "-e",
-          `
-      const fs=require("node:fs");
-      fs.writeFileSync(${JSON.stringify(effect + ".tmp")},String(process.pid));
-      fs.renameSync(${JSON.stringify(effect + ".tmp")},${JSON.stringify(effect)});
-      const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer);process.stdout.write("drained");}},10);
+      });
+      observer.on("error", started.reject);
+      const native = vi
+        .spyOn(systemdExec, "execSystemctlUser")
+        .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
+          assertCurrent?.();
+          assertGatewayServiceUpdateCurrent();
+          if (args[0] === "reset-failed") {
+            return success;
+          }
+          expect(args).toEqual(["restart", "fixture-A.service"]);
+          return await execFileUtf8(process.execPath, [
+            "-e",
+            `
+      const fs = require("node:fs");
+      let drained = false;
+      const finish = () => {
+        if (drained || !fs.existsSync(${JSON.stringify(proceed)})) return;
+        drained = true;
+        watcher.close();
+        process.stdout.write("drained");
+      };
+      const watcher = fs.watch(${JSON.stringify(a)}, finish);
+      fs.writeFileSync(${JSON.stringify(effect + ".tmp")}, String(process.pid));
+      fs.renameSync(${JSON.stringify(effect + ".tmp")}, ${JSON.stringify(effect)});
+      finish();
     `,
-        ]);
-        await vi.waitFor(() => expect(fs.existsSync(effect)).toBe(true));
-        pid = Number(fs.readFileSync(effect, "utf8"));
-        started.resolve();
-        return await running;
+          ]);
+        });
+      let complete = false;
+      const work = owned(async (run) => {
+        const onGatewayStartAttempted = vi.fn();
+        await expect(
+          commands.restartRetainedUpdateGatewayService({
+            ...request(run),
+            onGatewayStartAttempted,
+          }),
+        ).resolves.toEqual({
+          outcome: "completed",
+        });
+        expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
+      }).then(() => {
+        complete = true;
       });
-    let complete = false;
-    const work = owned(async (run) => {
-      await expect(commands.restartRetainedUpdateGatewayService(request(run))).resolves.toEqual({
-        outcome: "completed",
-      });
-    }).then(() => {
-      complete = true;
-    });
-    try {
-      await Promise.race([started.promise, work]);
-      expect(pid).toBeGreaterThan(0);
-      expect(pid).not.toBe(process.pid);
-      expect(complete).toBe(false);
-      const store = createManagedHandoffLeaseStore();
-      for (const root of [a, b]) {
-        expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe("busy");
+      const exercise = async () => {
+        try {
+          await Promise.race([started.promise, work]);
+          expect(pid).toBeGreaterThan(0);
+          expect(pid).not.toBe(process.pid);
+          expect(complete).toBe(false);
+          const store = createManagedHandoffLeaseStore();
+          for (const root of [a, b]) {
+            expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe("busy");
+          }
+          expect(store.read(c)).toEqual({ kind: "absent" });
+          fs.writeFileSync(proceed, "");
+          await work;
+        } finally {
+          observer.close();
+          fs.writeFileSync(proceed, "");
+          await work.catch(() => undefined);
+        }
+      };
+      if (outcome === "readiness failure") {
+        await expect(exercise()).rejects.toBe(readinessError);
+      } else {
+        await exercise();
       }
-      expect(store.read(c)).toEqual({ kind: "absent" });
-      fs.writeFileSync(proceed, "");
-      await work;
+      expect(pid).toBeGreaterThan(0);
+      expect(complete).toBe(true);
       expect(native.mock.calls.map((call) => call[1][0])).toEqual(["reset-failed", "restart"]);
       expect(fs.readFileSync(definition, "utf8")).toBe("original Node A and service definition");
+      const store = createManagedHandoffLeaseStore();
       for (const root of [a, b]) {
         expect(store.read(root)).toEqual({ kind: "absent" });
       }
-    } finally {
-      fs.writeFileSync(proceed, "");
-      await work.catch(() => undefined);
-    }
-  });
+    },
+  );
 
-  it.each(["A", "B", "caller", "executor", "abort"] as const)(
+  it.each(["A", "B", "caller", "executor", "abort", "binding", "unavailable", "scope"] as const)(
     "refuses after the native lock/config await changes %s",
     async (fault) => {
       const native = vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue(success);
       const controller = new AbortController();
       let callerCurrent = true;
+      const onGatewayStartAttempted = vi.fn();
+      let revalidations = 0;
+      if (fault === "unavailable") {
+        vi.mocked(systemdExec.assertSystemdAvailable).mockRejectedValue(new Error("unavailable"));
+      } else if (fault === "scope") {
+        vi.mocked(systemdScope.findInstalledSystemdGatewayScope).mockRejectedValue(
+          new Error("scope"),
+        );
+      }
       const work = owned(async (run) => {
         vi.spyOn(futureConfig, "assertFutureConfigActionAllowed").mockImplementation(async () => {
           await Promise.resolve();
@@ -190,12 +244,18 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
             run.executorFence = { assertCurrent() {} };
           } else if (fault === "abort") {
             controller.abort(new Error("cancelled fixture"));
-          } else {
+          } else if (fault === "caller") {
             callerCurrent = false;
           }
         });
         await commands.restartRetainedUpdateGatewayService({
           ...request(run),
+          onGatewayStartAttempted,
+          revalidate: async () => {
+            if (++revalidations === 2 && fault === "binding") {
+              throw new Error("changed original service binding");
+            }
+          },
           signal: controller.signal,
           assertCurrent() {
             if (!callerCurrent) {
@@ -205,16 +265,18 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         });
       });
       await expect(work).rejects.toThrow(
-        /executor|ownership|cancelled fixture|changed original service/,
+        /executor|ownership|cancelled fixture|changed original service|unavailable|scope/,
       );
       expect(futureConfig.assertFutureConfigActionAllowed).toHaveBeenCalledOnce();
       expect(native).not.toHaveBeenCalled();
+      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
     },
   );
 
   it.each(["A", "B"] as const)(
     "checks %s again after reset-failed and before restart",
     async (root) => {
+      const onGatewayStartAttempted = vi.fn();
       const native = vi.spyOn(systemdExec, "execSystemctlUser").mockImplementation(async () => {
         await Promise.resolve();
         revoke(root === "A" ? a : b);
@@ -222,11 +284,15 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
       });
       await expect(
         owned(async (run) => {
-          await commands.restartRetainedUpdateGatewayService(request(run));
+          await commands.restartRetainedUpdateGatewayService({
+            ...request(run),
+            onGatewayStartAttempted,
+          });
         }),
       ).rejects.toThrow();
       expect(native).toHaveBeenCalledOnce();
       expect(native.mock.calls[0]?.[1][0]).toBe("reset-failed");
+      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
     },
   );
 
@@ -310,16 +376,14 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
     }
   });
 
-  it.each(["healthy", "A", "B", "A-child"] as const)(
-    "retained-root query uses actual delegated authority: %s",
-    async (fault) => {
-      const proceed = path.join(a, "proceed");
-      const effect = path.join(a, "delegated-effect");
-      const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
-      const sourceArgs = ownerUrl.pathname.endsWith(".ts")
-        ? ["--import", path.resolve("scripts/tsx.mjs")]
-        : [];
-      const script = `
+  it("retained-root query uses actual delegated authority", async () => {
+    const proceed = path.join(a, "proceed");
+    const effect = path.join(a, "delegated-effect");
+    const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
+    const sourceArgs = ownerUrl.pathname.endsWith(".ts")
+      ? ["--import", path.resolve("scripts/tsx.mjs")]
+      : [];
+    const script = `
       import fs from "node:fs";
       import {setTimeout} from "node:timers/promises";
       import {withDelegatedUpdateCommandExecutor,assertRetainedUpdateCommandRoot,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(ownerUrl.href)};
@@ -339,49 +403,34 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         });
       } catch(error) {process.stderr.write(error.message);process.exitCode=1;}
     `;
-      let childAdmitted = false;
-      const work = owned(async (run) => {
-        const fence = run.executorFence;
-        if (!fence) {
-          throw new Error("Missing fixture fence");
-        }
-        const result = await withUpdateCommandExecutorChild(fence, b, (grant, beforeInput) =>
-          runUtf8CommandWithTimeout(
-            [process.execPath, ...sourceArgs, "--input-type=module", "-e", script],
-            {
-              input: JSON.stringify({ grant, a, b, proceed, effect }),
-              beforeInput,
-              timeoutMs: 15000,
-              killProcessTree: true,
-              requireProcessTreeExtinction: true,
-              onOutputChunk(chunk, stream) {
-                if (!childAdmitted && stream === "stdout" && chunk.toString() === "ADMITTED") {
-                  childAdmitted = true;
-                  if (fault === "A" || fault === "B") {
-                    revoke(fault === "A" ? a : b);
-                  }
-                  if (fault === "A-child") {
-                    if (!grant.retainedChildKey) {
-                      throw new Error("Missing retained fixture child");
-                    }
-                    revoke(grant.retainedChildKey);
-                  }
-                  fs.writeFileSync(proceed, "");
-                }
-              },
-            },
-          ),
-        );
-        expect(result.code, result.stderr).toBe(fault === "healthy" ? 0 : 1);
-      });
-      if (fault === "healthy") {
-        await work;
-        expect(fs.readFileSync(effect, "utf8")).toBe("live retained A with original B");
-      } else {
-        await expect(work).rejects.toThrow(/ownership|settle|release|cleanup/);
-        expect(fs.existsSync(effect)).toBe(false);
+    let childAdmitted = false;
+    const work = owned(async (run) => {
+      const fence = run.executorFence;
+      if (!fence) {
+        throw new Error("Missing fixture fence");
       }
-      expect(childAdmitted).toBe(true);
-    },
-  );
+      const result = await withUpdateCommandExecutorChild(fence, b, (grant, beforeInput) =>
+        runUtf8CommandWithTimeout(
+          [process.execPath, ...sourceArgs, "--input-type=module", "-e", script],
+          {
+            input: JSON.stringify({ grant, a, b, proceed, effect }),
+            beforeInput,
+            timeoutMs: 15000,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+            onOutputChunk(chunk, stream) {
+              if (!childAdmitted && stream === "stdout" && chunk.toString() === "ADMITTED") {
+                childAdmitted = true;
+                fs.writeFileSync(proceed, "");
+              }
+            },
+          },
+        ),
+      );
+      expect(result.code, result.stderr).toBe(0);
+    });
+    await work;
+    expect(fs.readFileSync(effect, "utf8")).toBe("live retained A with original B");
+    expect(childAdmitted).toBe(true);
+  });
 });

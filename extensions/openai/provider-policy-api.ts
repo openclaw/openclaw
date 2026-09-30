@@ -33,6 +33,8 @@ import {
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
+export { resolveModelAuthPolicy } from "./model-auth-policy.js";
+
 export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
   if (!ctx.api || !ctx.baseUrl || ctx.runtimeId !== "openclaw") {
     return undefined;

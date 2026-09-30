@@ -1,11 +1,5 @@
-/** Exact-run final answer reads for subagent completion announcements. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import {
-  readSessionTranscriptRunId,
-  resolveTerminalAssistantTranscriptRunId,
-} from "../../../sessions/transcript-events.js";
+import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
@@ -14,6 +8,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "../registry/subagent-lifecycle-events.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 
@@ -55,24 +50,6 @@ function captureAnnounceResultAuthority(child: AnnounceChild): () => boolean {
   };
 }
 
-export function isVisibleSubagentResultEventForRun(event: unknown, runId: string): boolean {
-  if (
-    !isRecord(event) ||
-    !isRecord(event.message) ||
-    readSessionTranscriptRunId(event.message) !== runId ||
-    resolveTerminalAssistantTranscriptRunId(event.message, runId) === undefined
-  ) {
-    return false;
-  }
-  const mirror = event.message.openclawDeliveryMirror;
-  if (isRecord(mirror) && mirror.kind === "message-tool-source-reply" && mirror.final !== true) {
-    return false;
-  }
-  // A final source reply remains visible when the run ends with NO_REPLY.
-  const text = extractStoredAssistantText(event.message);
-  return Boolean(text?.trim()) && !isSilentReplyText(text, SILENT_REPLY_TOKEN);
-}
-
 /** Read the final assistant message from the transcript identity owned by this run. */
 export async function readSubagentRunAnnounceResultUsing(
   child: AnnounceChild,
@@ -80,8 +57,13 @@ export async function readSubagentRunAnnounceResultUsing(
 ): Promise<PreparedAnnounceResult> {
   const isCurrent = captureAnnounceResultAuthority(child);
   const terminalReply = child.completion?.terminalReply;
-  if (terminalReply?.disposition !== "visible" || child.execution.outcome?.status !== "ok") {
-    return { text: resolveSubagentCompletionResultText(child), isCurrent };
+  const capturedResult = resolveSubagentCompletionResultText(child);
+  if (
+    !capturedResult ||
+    terminalReply?.disposition !== "visible" ||
+    child.execution.outcome?.status !== "ok"
+  ) {
+    return { text: capturedResult, isCurrent };
   }
   const runId = child.runId;
   const childSessionKey = child.childSessionKey;
@@ -94,9 +76,8 @@ export async function readSubagentRunAnnounceResultUsing(
   const sessionId =
     target?.sessionId ?? deps.readSubagentSessionEntry(storePath, sessionKey)?.sessionId;
   const scope = { agentId, storePath, sessionKey };
-  const matchesRun = (event: unknown) => isVisibleSubagentResultEventForRun(event, runId);
   const found = sessionId
-    ? await deps.findTranscriptEvent({ ...scope, sessionId }, matchesRun)
+    ? await deps.findTranscriptEvent({ ...scope, sessionId }, { kind: "visible-final", runId })
     : undefined;
   let event: unknown = found?.event;
   if (!event) {
@@ -123,6 +104,9 @@ function describeSubagentOutcome(child: ChildCompletionRow): string {
     const error = outcome?.error?.trim();
     return error ? `cancelled: ${error}` : "cancelled";
   }
+  if (child.execution.interruptionReason === "gateway-restart") {
+    return "interrupted by gateway restart";
+  }
   if (!outcome) {
     return "unknown";
   }
@@ -145,17 +129,12 @@ function formatChildResultData(resultText?: string | null): string {
   );
 }
 
-function truncateChildCompletionField(value: string): string {
-  return value.length > MAX_CHILD_COMPLETION_FIELD_CHARS
-    ? `${truncateUtf16Safe(value, MAX_CHILD_COMPLETION_FIELD_CHARS - 1)}…`
-    : value;
-}
-
 type CompletionResultSource = Parameters<typeof resolveSubagentCompletionResultText>[0];
 type ChildCompletionExecution = CompletionResultSource["execution"] & {
   endedAt?: number;
   outcome?: NonNullable<CompletionResultSource["execution"]["outcome"]> & { error?: string };
   transcriptTarget?: AgentRunSessionTarget;
+  interruptionReason?: SubagentRunRecord["execution"]["interruptionReason"];
 };
 
 export type ChildCompletionRow = {
@@ -181,7 +160,7 @@ function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
 export function buildChildCompletionFindings(
   children: Array<ChildCompletionRow>,
 ): string | undefined {
-  const sorted = [...children].toSorted((a, b) => {
+  const sorted = children.toSorted((a, b) => {
     if (a.createdAt !== b.createdAt) {
       return a.createdAt - b.createdAt;
     }
@@ -227,7 +206,7 @@ export function buildChildCompletionFindings(
           maxEscapedChars: MAX_CHILD_COMPLETION_FIELD_CHARS,
           truncationMarker: "…",
         }),
-        `status: ${truncateChildCompletionField(outcome)}`,
+        `status: ${truncateUtf16WithEllipsis(outcome, MAX_CHILD_COMPLETION_FIELD_CHARS)}`,
         formatChildResultData(resultText),
       ].join("\n"),
     );

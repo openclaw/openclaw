@@ -14,10 +14,6 @@ import { normalizeAgentId } from "../../../routing/session-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import type { MutableRecord } from "./codex-route-types.js";
 
-export function normalizeRuntimeString(value: unknown): string | undefined {
-  return normalizeOptionalAgentRuntimeId(value);
-}
-
 export function asAgentRuntimePolicyConfig(value: unknown): AgentRuntimePolicyConfig | undefined {
   const record = asMutableRecord(value);
   return record ? { id: typeof record.id === "string" ? record.id : undefined } : undefined;
@@ -147,8 +143,8 @@ export function resolveRuntime(params: {
   defaultsRuntime?: AgentRuntimePolicyConfig;
 }): string | undefined {
   return (
-    normalizeRuntimeString(params.agentRuntime?.id) ??
-    normalizeRuntimeString(params.defaultsRuntime?.id)
+    normalizeOptionalAgentRuntimeId(params.agentRuntime?.id) ??
+    normalizeOptionalAgentRuntimeId(params.defaultsRuntime?.id)
   );
 }
 

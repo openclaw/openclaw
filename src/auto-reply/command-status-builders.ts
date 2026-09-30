@@ -8,6 +8,7 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import { isCommandFlagEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginCommands } from "../plugins/commands.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import {
   listChatCommands,
@@ -40,9 +41,6 @@ function groupCommandsByCategory(
   commands: ChatCommandDefinition[],
 ): Map<DisplayCategory, ChatCommandDefinition[]> {
   const grouped = new Map<DisplayCategory, ChatCommandDefinition[]>();
-  for (const category of CATEGORY_ORDER) {
-    grouped.set(category, []);
-  }
   for (const command of commands) {
     const category = command.category === "docks" ? "tools" : (command.category ?? "tools");
     const list = grouped.get(category) ?? [];
@@ -54,16 +52,10 @@ function groupCommandsByCategory(
 
 /** Builds the compact slash-command help text shown by `/help`. */
 export function buildHelpMessage(cfg?: OpenClawConfig): string {
-  const lines = ["ℹ️ Help", ""];
-
-  lines.push("Session");
-  lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
-  lines.push("");
-
   const optionParts = [
     "/think <level|default>",
     "/model <id>",
-    "/fast status|auto|on|off|default",
+    "/fast status|auto|on|off|ultrafast|default",
     "/verbose on|off|full",
     "/trace on|off|raw",
   ];
@@ -73,21 +65,23 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   if (isCommandFlagEnabled(cfg, "debug")) {
     optionParts.push("/debug");
   }
-  lines.push("Options");
-  lines.push(`  ${optionParts.join("  |  ")}`);
-  lines.push("");
-
-  lines.push("Status");
-  lines.push("  /status  |  /tasks  |  /whoami  |  /context");
-  lines.push("");
-
-  lines.push("Skills");
-  lines.push("  /skill <name> [input]");
-
-  lines.push("");
-  lines.push("More: /commands for full list, /tools for available capabilities");
-
-  return lines.join("\n");
+  return [
+    "ℹ️ Help",
+    "",
+    "Session",
+    "  /new  |  /reset  |  /compact [instructions]  |  /stop",
+    "",
+    "Options",
+    `  ${optionParts.join("  |  ")}`,
+    "",
+    "Status",
+    "  /status  |  /whoami  |  /context",
+    "",
+    "Skills",
+    "  /skill <name> [input]",
+    "",
+    "More: /commands for full list, /tools for available capabilities",
+  ].join("\n");
 }
 
 const COMMANDS_PER_PAGE = 8;
@@ -112,22 +106,16 @@ function formatCommandEntry(command: ChatCommandDefinition): string {
   const primary = command.nativeName
     ? `/${command.nativeName}`
     : normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
-  const seen = new Set<string>();
-  const aliases = command.textAliases
-    .map((alias) => alias.trim())
-    .filter(Boolean)
-    .filter(
-      (alias) =>
-        normalizeLowercaseStringOrEmpty(alias) !== normalizeLowercaseStringOrEmpty(primary),
-    )
-    .filter((alias) => {
-      const key = normalizeLowercaseStringOrEmpty(alias);
-      if (seen.has(key)) {
-        return false;
-      }
-      seen.add(key);
-      return true;
-    });
+  const aliases = dedupeByKey(
+    command.textAliases
+      .map((alias) => alias.trim())
+      .filter(Boolean)
+      .filter(
+        (alias) =>
+          normalizeLowercaseStringOrEmpty(alias) !== normalizeLowercaseStringOrEmpty(primary),
+      ),
+    normalizeLowercaseStringOrEmpty,
+  );
   const aliasLabel = aliases.length ? ` (${aliases.join(", ")})` : "";
   const scopeLabel = command.scope === "text" ? " [text]" : "";
   return `${primary}${aliasLabel}${scopeLabel} - ${command.description}`;
@@ -146,13 +134,8 @@ function buildCommandItems(
   const items: CommandsListItem[] = [];
 
   for (const category of CATEGORY_ORDER) {
-    const categoryCommands = grouped.get(category) ?? [];
-    if (categoryCommands.length === 0) {
-      continue;
-    }
-    const label = CATEGORY_LABELS[category];
-    for (const command of categoryCommands) {
-      items.push({ label, text: formatCommandEntry(command) });
+    for (const command of grouped.get(category) ?? []) {
+      items.push({ label: CATEGORY_LABELS[category], text: formatCommandEntry(command) });
     }
   }
 
@@ -191,8 +174,7 @@ export function buildCommandsMessage(
   skillCommands?: SkillCommandSpec[],
   options?: CommandsMessageOptions,
 ): string {
-  const result = buildCommandsMessagePaginated(cfg, skillCommands, options);
-  return result.text;
+  return buildCommandsMessagePaginated(cfg, skillCommands, options).text;
 }
 
 /** Builds `/commands` text and pagination metadata for surfaces with native list controls. */

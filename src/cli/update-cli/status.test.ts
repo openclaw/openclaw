@@ -25,10 +25,12 @@ import {
   getUpdateRun,
   listUpdateRuns,
   recordUpdateRunPhase,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -252,22 +254,24 @@ describe("update status Node runtime findings", () => {
     "preserves diagnostics with stored=$stored SQLite $sqliteVersion (JSON: $json)",
     async ({ json, stored, sqliteVersion, unavailable }) => {
       const recorded = stored ? createUpdateRun({ trigger: "cli" }) : undefined;
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       vi.resetModules();
       const sqlitePrototype: {
         prepare: (this: DatabaseSync, sql: string) => ReturnType<DatabaseSync["prepare"]>;
       } = DatabaseSync.prototype;
       const realPrepare = sqlitePrototype.prepare;
-      const prepare = vi
-        .spyOn(DatabaseSync.prototype, "prepare")
-        .mockImplementation(function (this: DatabaseSync, sql) {
-          return realPrepare.call(
-            this,
-            sql === "SELECT sqlite_version() AS version"
-              ? `SELECT '${sqliteVersion}' AS version`
-              : sql,
-          );
-        });
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        return realPrepare.call(
+          this,
+          sql === "SELECT sqlite_version() AS version"
+            ? `SELECT '${sqliteVersion}' AS version`
+            : sql,
+        );
+      });
       const freshGuard = await import("../../infra/runtime-guard.js");
       vi.spyOn(freshGuard, "detectRuntime").mockResolvedValue({
         kind: "node",
@@ -286,10 +290,21 @@ describe("update status Node runtime findings", () => {
       });
       const command = await import("./status.js");
       const ledger = await import("../../infra/update-run-ledger.js");
+      const readOwner = await import("../../state/openclaw-state-db-readonly.js");
+      const workerRead = vi.spyOn(readOwner, "executeExistingOpenClawStateRead");
       if (unavailable) {
-        expect(() => ledger.findActiveUpdateRun()).toThrow(
-          "SQLite support is unavailable or unsafe",
-        );
+        let nativeFailure: unknown;
+        expect(() => {
+          try {
+            ledger.findActiveUpdateRun();
+          } catch (error) {
+            nativeFailure = error;
+            throw error;
+          }
+        }).toThrow("SQLite support is unavailable or unsafe");
+        // The host SQLite spy cannot cross threads; deliver the same runtime refusal
+        // through the async read owner without replacing status or diagnostic logic.
+        workerRead.mockRejectedValue(nativeFailure);
       }
       await expect(command.updateStatusCommand({ json })).resolves.toBeUndefined();
       if (json) {
@@ -320,6 +335,7 @@ describe("update status Node runtime findings", () => {
       if (!stored) {
         expect(prepare).not.toHaveBeenCalled();
       }
+      workerRead.mockRestore();
       prepare.mockRestore();
       expect(recorded && ledger.getUpdateRun(recorded.runId)).toEqual(recorded);
     },
@@ -425,7 +441,8 @@ describe("update status Node runtime findings", () => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -444,7 +461,7 @@ describe("update status readiness outcome", () => {
         registry: { latestVersion: "9999.0.0" },
       });
       const run = createUpdateRun({ trigger: "cli" });
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         pending: [
           {
             pluginId: "sample",
@@ -473,11 +490,19 @@ describe("update status readiness outcome", () => {
     },
   );
 
-  it("keeps a real failure visible after a retained dry run", async () => {
+  it("keeps a managed-service refusal and its code visible after a retained dry run", async () => {
     const failed = createUpdateRun({ trigger: "cli" });
+    const failureFacts = [
+      { check: "managed-service-preflight", code: "inside-gateway-process-tree" },
+    ];
+    recordUpdateRunStep(failed.runId, {
+      step: "managed-service-preflight",
+      status: "failed",
+      failureFacts,
+    });
     const failure = finishUpdateRun(failed.runId, {
       status: "failed",
-      reason: "preflight-fetch",
+      reason: "managed-service-preflight",
     });
     const preview = createUpdateRun({ trigger: "cli", preview: true });
     finishUpdateRun(preview.runId, { status: "skipped", reason: "dry-run" });
@@ -485,6 +510,9 @@ describe("update status readiness outcome", () => {
     await updateStatusCommand({ json: true });
 
     expect(runtime.writeJson.mock.lastCall?.[0].lastRun).toEqual(failure);
+    expect(runtime.writeJson.mock.lastCall?.[0].lastRun.steps).toContainEqual(
+      expect.objectContaining({ failureFacts }),
+    );
     expect(listUpdateRuns().map((run) => run.runId)).toEqual([preview.runId, failed.runId]);
   });
 
@@ -548,6 +576,9 @@ describe("update status abandoned-run reporting", () => {
       expect(runtime.log).not.toHaveBeenCalledWith(advice);
       expect(output).toContain("Historical recovery advice:");
       expect(output).toContain(
+        `Last recorded update (${new Date(created.createdAtMs).toISOString()}):`,
+      );
+      expect(output).toContain(
         responding ? "supersedes saved claims" : "Current health unavailable",
       );
       expect(confirmGatewayReachable).toHaveBeenCalledWith(
@@ -563,7 +594,7 @@ describe("update status abandoned-run reporting", () => {
   it.each([true, false])(
     "reports unreadable pending migration status without losing availability (JSON: %s)",
     async (json) => {
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         pending: [
           {
             pluginId: "codex",
@@ -661,7 +692,7 @@ describe("update status abandoned-run reporting", () => {
         reason: "The configured plugin package is missing.",
         command: "openclaw plugins install @openclaw/codex",
       };
-      recordDeferredPluginMigrations({ pending: [pending] });
+      await recordDeferredPluginMigrations({ pending: [pending] });
       await updateStatusCommand({ json });
       if (json) {
         expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings).toEqual([
@@ -677,7 +708,7 @@ describe("update status abandoned-run reporting", () => {
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
 
-      recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
+      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
       runtime.log.mockClear();
       runtime.writeJson.mockClear();
       await updateStatusCommand({ json });
@@ -732,7 +763,7 @@ describe("update status abandoned-run reporting", () => {
       });
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
       if (surface === "status") {
-        const rows = buildStatusUpdateRows(null);
+        const rows = await buildStatusUpdateRows(null);
         expect(rows).toContainEqual(
           expect.objectContaining({
             Item: "Update run",
@@ -813,7 +844,7 @@ describe("update status abandoned-run reporting", () => {
       }
       let output: string;
       if (surface === "status") {
-        output = JSON.stringify(buildStatusUpdateRows(null));
+        output = JSON.stringify(await buildStatusUpdateRows(null));
       } else {
         await updateStatusCommand({ json: surface === "json" });
         output =
@@ -829,6 +860,9 @@ describe("update status abandoned-run reporting", () => {
       });
       expect(output).toContain("treated as abandoned after 24 h");
       expect(output.includes("Historical update:")).toBe(laterRun !== "none");
+      if (surface === "text") {
+        expect(output.includes("Last recorded update (")).toBe(laterRun !== "active");
+      }
       expect(output.includes("run `openclaw update` to retry.")).toBe(laterRun === "none");
       expect(findActiveUpdateRun()?.runId).toBe(laterRun === "active" ? currentRunId : undefined);
       // A later read must still surface the advisory after the terminal write.

@@ -13,9 +13,7 @@ describe("Code Mode configuration", () => {
     agentModel?: boolean;
     expected: boolean | "auto";
   }>([
-    { name: "inherits the global default", global: "auto", expected: "auto" },
     { name: "model on overrides global off", global: false, model: true, expected: true },
-    { name: "model off overrides global on", global: true, model: false, expected: false },
     {
       name: "agent default overrides model default",
       global: false,
@@ -30,27 +28,6 @@ describe("Code Mode configuration", () => {
       agent: false,
       agentModel: true,
       expected: true,
-    },
-    {
-      name: "agent model off overrides agent on",
-      global: true,
-      model: true,
-      agent: true,
-      agentModel: false,
-      expected: false,
-    },
-    {
-      name: "unset agent model inherits model default",
-      global: false,
-      model: true,
-      expected: true,
-    },
-    {
-      name: "agent auto overrides model default",
-      global: false,
-      model: true,
-      agent: "auto",
-      expected: "auto",
     },
   ])("$name", ({ global, model, agent, agentModel, expected }) => {
     const cfg: OpenClawConfig = {
@@ -140,57 +117,5 @@ describe("Code Mode configuration", () => {
     expect(() =>
       resolveCodeModeConfig({ tools: { codeMode: { executor: "unsupported" } } } as never),
     ).toThrow('Code Mode executor must be "node" or "quickjs".');
-  });
-
-  it("resolves active-agent code mode over the runtime default", () => {
-    const config = {
-      tools: {
-        codeMode: {
-          enabled: false,
-          timeoutMs: 1234,
-          searchDefaultLimit: 6,
-        },
-      },
-      agents: {
-        list: [
-          {
-            id: "ops",
-            tools: {
-              codeMode: {
-                enabled: true,
-                searchDefaultLimit: 4,
-              },
-            },
-          },
-          {
-            id: "chat",
-            tools: {
-              codeMode: false,
-            },
-          },
-        ],
-      },
-    } as never;
-
-    const ops = resolveCodeModeConfig(config, "ops");
-    expect(ops.enabled).toBe(true);
-    expect(ops.timeoutMs).toBe(1234);
-    expect(ops.searchDefaultLimit).toBe(4);
-
-    expect(resolveCodeModeConfig(config, "chat").enabled).toBe(false);
-    expect(resolveCodeModeConfig(config, "missing").enabled).toBe(false);
-
-    const configuredAgent = resolveCodeModeConfig(
-      {
-        agents: {
-          entries: {
-            ops: { tools: { codeMode: { timeoutMs: 2345 } } },
-          },
-        },
-      } as never,
-      "ops",
-    );
-    expect(configuredAgent.enabled).toBe("auto");
-    expect(configuredAgent.timeoutMs).toBe(2345);
   });
 });

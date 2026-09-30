@@ -6,6 +6,7 @@ import {
   confirmDevicePairSetupCompletionDelivery,
   consumeDeviceBootstrapTokenWithSetupCompletion,
 } from "../infra/device-bootstrap.js";
+import type { CloudWorkerSetupMutationAdmission } from "../infra/device-bootstrap.worker-types.js";
 import type {
   DeviceBootstrapTokenRecord,
   DevicePairSetupCompletionRecord,
@@ -24,6 +25,7 @@ export async function consumeSetupHandoff(params: {
   token: string;
   deviceId: string;
   pairedDeviceMatches?: (device: PairedDevice | null) => boolean;
+  admitsCloudWorkerSetup?: (setup: CloudWorkerSetupMutationAdmission) => boolean;
   baseDir?: string;
   ts?: number;
 }): Promise<SetupHandoff | null> {
@@ -32,6 +34,7 @@ export async function consumeSetupHandoff(params: {
     token: params.token,
     deviceId: params.deviceId,
     completedAtMs,
+    admitsCloudWorkerSetup: params.admitsCloudWorkerSetup,
     ...(params.pairedDeviceMatches ? { pairedDeviceMatches: params.pairedDeviceMatches } : {}),
     ...(params.baseDir ? { baseDir: params.baseDir } : {}),
   });

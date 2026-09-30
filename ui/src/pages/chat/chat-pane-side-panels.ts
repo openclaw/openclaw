@@ -1,4 +1,10 @@
+import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
+import { t } from "../../i18n/index.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { buildCompanionQuestionPrefill } from "../../lib/chat/companion-question.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { showToast } from "../../lib/toast.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
@@ -10,6 +16,7 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
+import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
 import {
   closeSlot,
@@ -35,13 +42,6 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     }
     this.requestUpdate();
   };
-
-  protected selectedSessionRailMode(sessionKey: string): "expanded" | "hidden" {
-    const state = this.state;
-    const visible =
-      state?.sessionKey === sessionKey && isSidebarSlotVisible(state.sidebarLayout, "companion");
-    return visible ? "expanded" : "hidden";
-  }
 
   protected restorePaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
     if (!this.compact) {
@@ -77,8 +77,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     if (!state) {
       return;
     }
-    const visible = this.selectedSessionRailMode(state.sessionKey) === "expanded";
-    if (intent === "toggle" && visible) {
+    if (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion")) {
       this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
       this.setSessionObserverVisibility(false);
       return;
@@ -168,19 +167,64 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
       this.sessionCompanionThreads.setDraft(sessionKey, text, agentId);
       return;
     }
-    const ask = (key: string, value: string) =>
-      requestSessionCompanionAnswer(client, key, value, agentId);
+    const attachments =
+      typeof question === "string"
+        ? this.sessionCompanionThreads.view(sessionKey, agentId).attachments
+        : question.attachments;
+    if (
+      attachments?.some((attachment) => !attachment.selectionAnnotation) &&
+      !uploadsEnabled(state.uploadConfig)
+    ) {
+      showToast({ message: uploadsDisabledMessage() });
+      return;
+    }
+    const ask = (key: string, value: string, requestedAttachments?: ChatAttachment[]) =>
+      requestSessionCompanionAnswer(
+        client,
+        key,
+        value,
+        agentId,
+        requestedAttachments,
+        state.uploadConfig,
+      );
     await this.sessionCompanionThreads.submit(sessionKey, question, ask, agentId);
   };
 
-  protected readonly prefillSessionCompanionQuestion = (question: string) => {
+  protected readonly stageSessionCompanionAttachment = (
+    attachment: ChatAttachment,
+    sourceSessionKey: string,
+  ): boolean => {
     const state = this.state;
-    const sessionKey = state?.sessionKey;
-    if (!sessionKey) {
-      return;
+    if (!state || state.sessionKey !== sourceSessionKey || !attachment.selectionAnnotation) {
+      return false;
     }
-    this.sessionCompanionThreads.setDraft(sessionKey, question, resolveChatAgentId(state));
+    const agentId = resolveChatAgentId(state);
+    const thread = this.sessionCompanionThreads.view(sourceSessionKey, agentId);
+    const nextAttachments = [...(thread.attachments ?? []), attachment];
+    // Only an oversized passage gets the old quote-only path; comments stay correctable.
+    if (
+      formatChatSelectionAnnotation({ ...attachment.selectionAnnotation, comment: "" }).length >
+      SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS
+    ) {
+      showToast({
+        message: t(
+          thread.draft.trim() ? "chat.rail.selectionTooLong" : "chat.rail.selectionQuoteOnly",
+        ),
+      });
+    } else if (
+      !this.sessionCompanionThreads.setAttachments(sourceSessionKey, nextAttachments, agentId)
+    ) {
+      return false;
+    }
+    if (!thread.draft.trim()) {
+      this.sessionCompanionThreads.setDraft(
+        sourceSessionKey,
+        buildCompanionQuestionPrefill(attachment.selectionAnnotation.text) ?? "",
+        agentId,
+      );
+    }
     this.requestSessionRail("open");
+    return true;
   };
 
   protected hydrateSessionCompanion(sessionKey: string): void {

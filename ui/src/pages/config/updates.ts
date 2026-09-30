@@ -57,6 +57,7 @@ type UpdatesViewProps = {
   canCheckStatus: boolean;
   canHoldUpdate: boolean;
   canReport: boolean;
+  canDiagnose: boolean;
   updateBusy: boolean;
   nowMs?: number;
   onChannelChange: (channel: UpdatesChannel) => void;
@@ -66,6 +67,7 @@ type UpdatesViewProps = {
   onHoldUpdate: () => Promise<boolean>;
   onCheckStatus: () => Promise<boolean>;
   onReportFailure: (attemptId: string) => Promise<void>;
+  onDiagnoseFailure: (attemptId: string) => void;
 };
 
 function renderDeviceUpdates(capability: NativeDeviceSettingsCapability | null | undefined) {
@@ -149,6 +151,19 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
                 ${t("updates.page.checkStatus")}
               </button>
               ${
+                props.update.diagnosableUpdateFailureId
+                  ? html`<button
+                      class="btn btn--sm"
+                      type="button"
+                      title=${props.canDiagnose ? "" : t("updates.adminRequired")}
+                      ?disabled=${!props.canDiagnose || props.updateBusy || props.update.updateStatusRefreshing || props.update.updateFailureReportBusy}
+                      @click=${() => props.onDiagnoseFailure(props.update.diagnosableUpdateFailureId!)}
+                    >
+                      ${t("updates.page.diagnoseFailure")}
+                    </button>`
+                  : nothing
+              }
+              ${
                 failed
                   ? html`<button
                       class="btn btn--sm primary"
@@ -180,7 +195,7 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
               }
             </div>`,
           }),
-          failed
+          failed && run?.target.installationMethod !== "ocm"
             ? renderSettingsRow({
                 title: t("updates.page.cliFallback"),
                 description: t("updates.triage.hostHint"),
@@ -261,10 +276,6 @@ function readUpdatesSettings(
   };
 }
 
-function parseTimestampMs(value: string | null): number | null {
-  return parseDateStringTimestampMs(value) ?? null;
-}
-
 function renderTimestamp(timestampMs: number, nowMs = Date.now()) {
   const relative = formatTimeAgo(Math.max(0, nowMs - timestampMs));
   return renderSettingsValue(
@@ -278,8 +289,8 @@ function renderTimestamp(timestampMs: number, nowMs = Date.now()) {
 function renderBuildFacts(props: UpdatesViewProps) {
   const installKind = props.update.updateSchedule?.install?.kind;
   const git = props.update.updateSchedule?.install?.git;
-  const builtAtMs = parseTimestampMs(props.controlUiBuiltAt);
-  const commitAtMs = git?.commitAtMs ?? parseTimestampMs(props.controlUiCommitAt);
+  const builtAtMs = parseDateStringTimestampMs(props.controlUiBuiltAt) ?? null;
+  const commitAtMs = git?.commitAtMs ?? parseDateStringTimestampMs(props.controlUiCommitAt) ?? null;
   return renderSettingsSection({ title: t("updates.page.buildTitle") }, [
     renderSettingsRow({
       title: t("updates.page.gatewayVersion"),
@@ -415,7 +426,7 @@ function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
   >`;
 }
 
-function readGitCommits(props: UpdatesViewProps) {
+function renderCommitList(props: UpdatesViewProps) {
   const update = props.update.updateAvailable;
   const comparison = getUpdateGitComparison(props.update.updateSchedule, update);
   const commitsMatch =
@@ -423,11 +434,7 @@ function readGitCommits(props: UpdatesViewProps) {
     comparison.commitsBehind === update?.commitsBehind &&
     comparison.currentSha === update?.currentSha &&
     comparison.upstreamSha === update?.upstreamSha;
-  return commitsMatch ? (update?.commits ?? []) : [];
-}
-
-function renderCommitList(props: UpdatesViewProps) {
-  const commits = readGitCommits(props);
+  const commits = commitsMatch ? (update?.commits ?? []) : [];
   if (commits.length === 0) {
     return nothing;
   }

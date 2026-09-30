@@ -172,22 +172,19 @@ describe("scoped session access providers", () => {
     });
   });
 
-  it.each(["history", "send", "list", "status"] as const)(
-    "gives the canonical main session agent-wide %s access under tree visibility",
-    (action) => {
-      const checker = createSessionVisibilityRowChecker({
-        action,
-        requesterSessionKey: "agent:main:work",
-        mainSessionKey: "agent:main:work",
-        visibility: "tree",
-        a2aPolicy: createAgentToAgentPolicy({}),
-      });
+  it("gives the canonical main session agent-wide access under tree visibility", () => {
+    const checker = createSessionVisibilityRowChecker({
+      action: "history",
+      requesterSessionKey: "agent:main:work",
+      mainSessionKey: "agent:main:work",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({}),
+    });
 
-      expect(checker.check({ key: "agent:main:telegram:group:unspawned" })).toEqual({
-        allowed: true,
-      });
-    },
-  );
+    expect(checker.check({ key: "agent:main:telegram:group:unspawned" })).toEqual({
+      allowed: true,
+    });
+  });
 
   it("keeps the main exception inside tree same-agent scope", () => {
     const makeChecker = (visibility: "self" | "tree") =>

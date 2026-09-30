@@ -1,7 +1,10 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
@@ -19,6 +22,7 @@ import {
   getOpenClawStateRuntimeSchema,
   STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
 } from "../state/openclaw-state-schema-compatibility.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
   acknowledgeSessionStateNotices,
@@ -32,8 +36,8 @@ import {
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
+  recordSessionStateEventAsync,
   recordSubagentSpawned,
-  recordSubagentTerminalState,
   registerMainSessionGroupWatch,
   registerSessionStateWatch,
   sweepSessionStateWatchNotices,
@@ -48,6 +52,7 @@ import {
   seedChild,
   watcher,
 } from "./session-state-events.test-support.js";
+import { recordSubagentTerminalState } from "./subagent-terminal-state.js";
 
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -72,6 +77,79 @@ afterEach(async () => {
 });
 
 describe("session state events", () => {
+  it.each(
+    [
+      { change: "ownership", key: child, field: "lifecycleRunId", records: false },
+      { change: "metadata", key: child, field: "label", records: true },
+      { change: "another session", key: watcher, field: "lifecycleRunId", records: true },
+    ].flatMap(({ change, key, field, records }) =>
+      [1, 2].map((verdict) => ({ change, key, field, records, verdict })),
+    ),
+  )(
+    "records=$records after $change changes during native verdict $verdict",
+    async ({ key, field, records, verdict }) => {
+      const database = createDatabaseOptions();
+      const target = { agentId: "main", sessionKey: child, env: database.env };
+      const entry = { sessionId: "session-child", updatedAt: 1, lifecycleRunId: "original-run" };
+      await upsertSessionEntryCore(target, entry);
+      await createWatcherSession(database);
+      openOpenClawStateDatabase(database);
+      const current = await withSessionEntryReadOnlyInWorker(
+        target,
+        () => {},
+        async (read, owner) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return captureSessionEntryCurrentRead(target, owner);
+        },
+      );
+      if (!current.source) {
+        throw new Error("Expected a file-backed source");
+      }
+      let changedAfterVerdict = false;
+      let verdicts = 0;
+      const peer = new DatabaseSync(current.source.path);
+      const check = {
+        source: current.source,
+        assertCurrent: (facts: { lifecycleRunId?: unknown } | undefined) => {
+          current.assertSourceCurrent();
+          expect(facts?.lifecycleRunId).toBe("original-run");
+          if (++verdicts === verdict) {
+            peer
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+              )
+              .run(`$.${field}`, "successor-run", key);
+            changedAfterVerdict = true;
+          }
+        },
+      };
+      try {
+        const input = eventInput({ watcherSessionKeys: [], dedupeKey: "currency-signal" });
+        const options = { ...database, now: 0, sessionEntryCurrent: check };
+        const recorded = await recordSessionStateEventAsync(input, options);
+        expect(changedAfterVerdict).toBe(true);
+        if (records) {
+          expect(recorded).toMatchObject({ sessionKey: child, sessionId: entry.sessionId });
+          expect(getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
+        } else {
+          expect(recorded).toBeUndefined();
+          expect(getSessionStateVersion(child, "main", database)).toBe(0);
+        }
+
+        await upsertSessionEntryCore(target, entry);
+        expect(await recordSessionStateEventAsync(input, options)).toMatchObject({
+          sessionKey: child,
+          sessionId: entry.sessionId,
+        });
+        expect(getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
+      } finally {
+        peer.close();
+      }
+    },
+  );
+
   it("does not advance a replacement watch from older producer facts", () => {
     const database = createDatabaseOptions();
     resetHeartbeatEventsForTest();
@@ -211,50 +289,45 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
-  it.each([false, true])(
-    "wakes main watchers but only queues notices for nested watchers (prior clock=%s)",
-    async (priorClock) => {
-      if (priorClock) {
-        vi.useFakeTimers();
-        vi.advanceTimersByTime(30_000);
-        requestHeartbeat({
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          coalesceMs: 0,
-        });
-        vi.useRealTimers();
-      }
-      vi.useFakeTimers();
-      const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
-      disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-      // Pending deadlines may belong to a previous fake-clock origin.
-      await vi.runAllTimersAsync();
-      wakes.mockClear();
-      const database = createDatabaseOptions();
-      seedChild(database, nestedWatcher);
+  it("wakes main watchers but only queues nested notices after a prior clock", async () => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(30_000);
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      coalesceMs: 0,
+    });
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    // Pending deadlines may belong to a previous fake-clock origin.
+    await vi.runAllTimersAsync();
+    wakes.mockClear();
+    const database = createDatabaseOptions();
+    seedChild(database, nestedWatcher);
 
-      recordSessionStateEvent(eventInput({ watcherSessionKeys: [nestedWatcher] }), database);
-      await vi.advanceTimersByTimeAsync(21_000);
-      expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
-      expect(wakes).not.toHaveBeenCalled();
+    recordSessionStateEvent(eventInput({ watcherSessionKeys: [nestedWatcher] }), database);
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
+    expect(wakes).not.toHaveBeenCalled();
 
-      seedChild(database, watcher);
-      recordSessionStateEvent(eventInput(), database);
-      await vi.advanceTimersByTimeAsync(21_000);
-      expect(wakes).toHaveBeenCalledWith(
-        // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
-        // dueness and would sit on the notice until the next scheduled tick. The
-        // wake itself coalesces for SESSION_STATE_WAKE_COALESCE_MS (20s), hence
-        // the 21s timer advances in these tests.
-        expect.objectContaining({
-          source: "session-state",
-          sessionKey: watcher,
-          intent: "immediate",
-        }),
-      );
-    },
-  );
+    seedChild(database, watcher);
+    recordSessionStateEvent(eventInput(), database);
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(wakes).toHaveBeenCalledWith(
+      // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
+      // dueness and would sit on the notice until the next scheduled tick. The
+      // wake itself coalesces for SESSION_STATE_WAKE_COALESCE_MS (20s), hence
+      // the 21s timer advances in these tests.
+      expect.objectContaining({
+        source: "session-state",
+        sessionKey: watcher,
+        intent: "immediate",
+      }),
+    );
+  });
 
   it("suppresses watcher-originated material events", () => {
     const database = createDatabaseOptions();
@@ -903,24 +976,35 @@ describe("session state events", () => {
       requesterSessionKey: watcher,
       agentId: "main",
     });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child",
-      requesterSessionKey: watcher,
-      outcomeStatus: "ok",
-    });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child",
-      requesterSessionKey: watcher,
-      outcomeStatus: "ok",
-    });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child-cancelled",
-      requesterSessionKey: watcher,
-      outcomeStatus: "cancelled",
-    });
+    const terminalContext = captureOpenClawStateWorkerContext(database);
+    const assertTerminalCurrent = () => terminalContext.admission.assertCurrent();
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child",
+        requesterSessionKey: watcher,
+        outcomeStatus: "ok",
+      },
+      assertTerminalCurrent,
+    );
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child",
+        requesterSessionKey: watcher,
+        outcomeStatus: "ok",
+      },
+      assertTerminalCurrent,
+    );
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child-cancelled",
+        requesterSessionKey: watcher,
+        outcomeStatus: "cancelled",
+      },
+      assertTerminalCurrent,
+    );
     await recordSessionGoalChanged({
       sessionKey: child,
       entry: {

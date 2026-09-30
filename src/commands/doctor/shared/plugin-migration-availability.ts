@@ -12,10 +12,7 @@ import { resolvePluginDoctorContractArtifact } from "../../../plugins/doctor-con
 import { createInstalledPluginIndexScopeLookup } from "../../../plugins/installed-plugin-index-scope-lookup.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../../../plugins/installed-plugin-index-store-path.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
-import {
-  isActivatedManifestOwner,
-  passesManifestOwnerBasePolicy,
-} from "../../../plugins/manifest-owner-policy.js";
+import { passesManifestOwnerBasePolicy } from "../../../plugins/manifest-owner-policy.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
 import {
@@ -121,7 +118,7 @@ export async function inspectPluginMigrationAvailability(params: {
           const inspectionRequiredIds = new Set(inspectionRequiredPluginIds);
           const statelessPluginIds: string[] = [];
           const normalizedConfig = normalizePluginsConfig(params.cfg.plugins);
-          const pending = [...selected].toSorted().flatMap((pluginId) => {
+          const pending = [...inspectedIds].toSorted().flatMap((pluginId) => {
             if (!passesManifestOwnerBasePolicy({ plugin: { id: pluginId }, normalizedConfig })) {
               return [];
             }
@@ -146,12 +143,16 @@ export async function inspectPluginMigrationAvailability(params: {
             if (
               (availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable)) &&
               plugin &&
-              statelessCandidates.has(pluginId) &&
-              isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.cfg })
+              statelessCandidates.has(pluginId)
             ) {
+              // Installation-only confirmation reads metadata; it need not activate a channel.
               statelessPluginIds.push(pluginId);
             }
-            if (availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable)) {
+            if (
+              !selected.has(pluginId) ||
+              availableWithoutPackageConvergence ||
+              (!params.deferInstallation && !unavailable)
+            ) {
               return [];
             }
             return [

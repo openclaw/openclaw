@@ -9,13 +9,16 @@ import {
 } from "./attachment-payload-store.ts";
 import type { ChatComposerRecoveryOwner } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   loadChatComposerDraftRevision,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
-import { panesOf, visiblePanesOf } from "./split-layout.ts";
+import { visiblePanesOf } from "./split-layout.ts";
 
 export type ChatAttachmentGatewayOwner = ApplicationContext["gateway"]["snapshot"]["client"];
 
@@ -26,6 +29,8 @@ type ComposerPresentation = {
   presented: () => boolean;
   pause: () => void;
   resume: (restore?: boolean) => void;
+  takeAttachmentReads: () => ChatAttachmentReadLifecycle;
+  adoptAttachmentReads: (reads: ChatAttachmentReadLifecycle) => void;
 };
 type ComposerOwnerScope = {
   owner: NonNullable<ChatAttachmentGatewayOwner>;
@@ -199,6 +204,8 @@ export class ChatPaneComposerHandoff {
     sourceState.chatQueuedEdit = null;
     sourceState.chatAttachments = [];
     sourceState.chatComposerFallbackByScope = {};
+    // Pending file reads move with the draft, including Send's preparation gate.
+    target.host.adoptAttachmentReads(this.host.takeAttachmentReads());
     this.ownsComposer = false;
     target.ownsComposer = true;
     target.custody = this.custody;
@@ -234,6 +241,7 @@ export function restorePaneStagedAttachments(
     state.chatMessage = restored.message ?? "";
     state.chatMentions = restored.mentions;
     state.chatGoalDraftMode = restored.goalMode ?? null;
+    state.chatReplyTarget = restored.replyTarget ?? null;
   }
   const currentIds = new Set(state.chatAttachments.map((attachment) => attachment.id));
   state.chatAttachments = [
@@ -271,13 +279,19 @@ export function preparePaneStagedAttachments(
 ): void {
   const attachments = [...state.chatAttachments];
   context.chatAttachmentHandoff.prepare({
+    reviewPrivateDraft: reviewPrivateComposerDraft,
     ...handoffKey(paneId, state, owner),
     attachments,
     fallbacks: state.chatComposerFallbackByScope,
     message: state.chatMessage,
     mentions: state.chatMentions,
     goalMode: state.chatGoalDraftMode,
+    replyTarget: state.chatReplyTarget,
     draftRevision,
+    incognito: isIncognitoComposerScope(
+      state,
+      resolveUiConversationIdentity(state, state.sessionKey),
+    ),
   });
 }
 
@@ -325,8 +339,6 @@ export function replacePaneStagedAttachmentGatewayOwner(
 
 type StagedAttachmentPane = Element & {
   paneId: string;
-  sessionKey: string;
-  discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
 };
 
@@ -341,23 +353,4 @@ export function resumeStagedPanes(
       pane.resumeStagedAttachments?.();
     }
   }
-}
-
-export function closeStagedPane(
-  context: ApplicationContext,
-  root: ParentNode,
-  layout: ChatSplitLayout,
-  paneId: string,
-) {
-  const survivingPane = panesOf(layout).find((candidate) => candidate.id !== paneId);
-  const mounted = [...root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")].filter(
-    (candidate) => candidate.paneId === paneId,
-  );
-  // Clear every retained presentation first so their disconnects cannot
-  // restage a package under a later reused logical pane id.
-  for (const pane of mounted) {
-    pane.discardStagedAttachments?.();
-  }
-  context.chatAttachmentHandoff.clearPane(paneId);
-  return survivingPane;
 }

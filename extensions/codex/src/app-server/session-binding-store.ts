@@ -1,18 +1,14 @@
 /** Synchronous binding reads with lazy mutation, lease, and auth machinery. */
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createCodexManagedThreadStore,
   type CodexManagedThreadStore,
-  type StoredCodexManagedThread,
 } from "./managed-thread-store.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./session-binding-meta.js";
 import {
+  readCurrentNativePendingAssignments,
   readCurrentCodexAppServerBinding,
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
@@ -20,7 +16,7 @@ import {
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
-  StoredCodexAppServerBinding,
+  CodexBindingStateStore,
 } from "./session-binding.js";
 
 export { CODEX_APP_SERVER_BINDING_MAX_ENTRIES, CODEX_APP_SERVER_BINDING_NAMESPACE };
@@ -28,14 +24,8 @@ export type { StoredCodexAppServerBinding } from "./session-binding.js";
 
 /** Keeps lifecycle/auth loading behind mutations while sharing the canonical read codec. */
 export function createLazyCodexAppServerBindingStore(
-  state: Pick<
-    PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-    "deleteIf" | "entries" | "lookup" | "lookupMany" | "registerIfAbsent" | "update"
-  >,
-  managedThreadState?: Pick<
-    PluginStateKeyedStore<StoredCodexManagedThread>,
-    "entries" | "lookup" | "registerIfAbsent"
-  >,
+  state: CodexBindingStateStore,
+  managedThreadState?: Parameters<typeof createCodexManagedThreadStore>[0],
 ): CodexAppServerBindingStore {
   let resolved: Promise<CodexAppServerBindingStore> | undefined;
   const store = () =>
@@ -55,6 +45,8 @@ export function createLazyCodexAppServerBindingStore(
             readCurrentCodexAppServerBindings(state, identities)
         : undefined;
     },
+    readNativeSubagentAssignments: (identity, owner) =>
+      readCurrentNativePendingAssignments(state, identity, owner),
     readNativeSubagentSubmissions: (identity, owner) =>
       readCurrentCodexNativeSubagentSubmissions(state, identity, owner),
     hasOtherThreadOwner: async (threadId, currentIdentity) =>

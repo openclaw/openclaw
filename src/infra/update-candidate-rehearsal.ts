@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
@@ -22,6 +24,7 @@ import {
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
 } from "./update-post-core-context.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
@@ -32,8 +35,10 @@ export type UpdateCandidateRehearsal = {
   env: NodeJS.ProcessEnv;
   port: number;
   snapshotCapacity: UpdateSnapshotCapacity;
+  snapshotDiagnostics?: string[];
   cleanupDirectories: string[];
-  cleanup: () => Promise<void>;
+  pluginCodeLinks?: UpdateCandidatePluginCodeLink[];
+  cleanup: (assertDirectoryCurrent?: (directory: string) => void) => Promise<void>;
 };
 
 function isolatedConfig(
@@ -130,6 +135,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
 }): Promise<UpdateCandidateRehearsal> {
   const sourceEnv = params.env ?? process.env;
   const workerEnv = (tempDir: string): NodeJS.ProcessEnv => {
@@ -188,7 +195,9 @@ export async function prepareUpdateCandidateRehearsal(params: {
   const {
     stateDir: tempDir,
     pluginPaths,
+    pluginCodeLinks,
     snapshotCapacity,
+    snapshotDiagnostics,
     cleanupDirectories,
   } = await prepareUpdateCandidateStateSnapshot({
     ...params,
@@ -198,13 +207,22 @@ export async function prepareUpdateCandidateRehearsal(params: {
   const env = workerEnv(tempDir);
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");
-  const cleanup = async () => {
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tempDir });
+  const cleanup = async (assertDirectoryCurrent?: (directory: string) => void) => {
+    const { closeOpenClawStateDatabaseByPathAsync } =
+      await import("../state/openclaw-state-db-cache.js");
+    assertDirectoryCurrent?.(tempDir);
+    // Read-only inventory can retain a worker actor after its native reader closes.
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
     for (const directory of cleanupDirectories) {
+      // Revalidate physical custody after worker drainage and before removal.
+      assertDirectoryCurrent?.(directory);
       await fs.rm(directory, { recursive: true, force: true });
     }
   };
   try {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
@@ -220,7 +238,11 @@ export async function prepareUpdateCandidateRehearsal(params: {
         pluginPaths,
       ),
     );
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     await fs.writeFile(configPath, serialized, { mode: 0o600 });
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
     return {
       stateDir: tempDir,
@@ -229,7 +251,9 @@ export async function prepareUpdateCandidateRehearsal(params: {
       env,
       port,
       snapshotCapacity,
+      snapshotDiagnostics,
       cleanupDirectories,
+      pluginCodeLinks,
       cleanup,
     };
   } catch (error) {

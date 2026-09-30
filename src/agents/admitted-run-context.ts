@@ -9,10 +9,12 @@ import {
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
   getAgentRunLifecycleGeneration,
+  readAgentRunDelegatedAuthorityFailure,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
@@ -46,6 +48,14 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   source?: object;
   /** Retains the original source independently of a foreground run or request. */
   retain?: () => () => void;
+  /** Live assignment from the original prepared profile lease. */
+  readCurrentRoleAssignment?: (this: void) => string | null;
+  /** Prepared role permissions; source-policy changes revoke the owning authority. */
+  rolePolicy?: Readonly<{
+    sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
+    sandboxRequired: boolean;
+    agents: "*" | readonly string[];
+  }>;
   modelPolicy?: PreparedOperatorModelPolicy;
   /** Committed policy changes invalidate only executions using a removed model. */
   onModelPolicyChanged?: (listener: () => void) => () => void;
@@ -60,6 +70,21 @@ export function createAdmittedRunOperatorAuthority(
   const check = source.assertCurrent;
   const signal = source.signal;
   let revoked = false;
+  let revocationReason: unknown;
+  const assertCurrent = () => {
+    if (revoked) {
+      throw revocationReason;
+    }
+    try {
+      signal?.throwIfAborted();
+      check();
+    } catch (error) {
+      revoked = true;
+      revocationReason = error;
+      throw error;
+    }
+  };
+  const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
   const authority = Object.freeze({
     profileId: source.profileId,
     scopes: Object.freeze([...source.scopes]),
@@ -73,18 +98,22 @@ export function createAdmittedRunOperatorAuthority(
     get modelPolicy() {
       return source.modelPolicy;
     },
-    assertCurrent: () => {
-      if (revoked) {
-        throw new Error("operator execution authority is no longer active");
-      }
-      try {
-        signal?.throwIfAborted();
-        check();
-      } catch (error) {
-        revoked = true;
-        throw error;
-      }
-    },
+    assertCurrent,
+    readCurrentRoleAssignment: readCurrentRoleAssignment
+      ? () => {
+          assertCurrent();
+          return readCurrentRoleAssignment();
+        }
+      : undefined,
+    rolePolicy: source.rolePolicy
+      ? Object.freeze({
+          ...source.rolePolicy,
+          agents:
+            source.rolePolicy.agents === "*"
+              ? "*"
+              : Object.freeze([...new Set(source.rolePolicy.agents)].toSorted()),
+        })
+      : undefined,
   });
   operatorAuthorityIssuers.add(authority);
   return authority;
@@ -120,25 +149,33 @@ export function assertOperatorModelAllowed(
 export function bindOperatorModelExecution(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: ModelRef | undefined,
+  mapAuthorizationError?: (error: unknown) => Error,
 ): Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined {
   if (!authority) {
     return undefined;
   }
   const selected = model ? { ...model } : undefined;
-  assertOperatorModelAllowed(authority, selected);
-  const releaseAuthority = authority.retain?.();
+  const mapError = (error: unknown) => mapAuthorizationError?.(error) ?? error;
+  let releaseAuthority: (() => void) | undefined;
+  try {
+    assertOperatorModelAllowed(authority, selected);
+    releaseAuthority = authority.retain?.();
+  } catch (error) {
+    throw mapError(error);
+  }
   const revoked = new AbortController();
   let released = false;
   const assertCurrent = () => {
     if (released) {
-      throw new Error("operator model execution authority is no longer active");
+      throw mapError(new Error("operator model execution authority is no longer active"));
     }
     revoked.signal.throwIfAborted();
     try {
       assertOperatorModelAllowed(authority, selected);
     } catch (error) {
-      revoked.abort(error);
-      throw error;
+      const failure = mapError(error);
+      revoked.abort(failure);
+      throw failure;
     }
   };
   const recheck = () => {
@@ -148,7 +185,7 @@ export function bindOperatorModelExecution(
       // The latched signal owns cancellation; notification must reach other executions.
     }
   };
-  const onSourceAbort = () => revoked.abort(authority.signal?.reason);
+  const onSourceAbort = () => revoked.abort(mapError(authority.signal?.reason));
   authority.signal?.addEventListener("abort", onSourceAbort, { once: true });
   const unsubscribe = authority.onModelPolicyChanged?.(recheck);
   recheck();
@@ -289,7 +326,10 @@ export function resolveAdmittedRunActiveAssertion(
       context.operationalRunInstance !== operationalRunInstance ||
       getAdmittedRunDelegatedAuthority(context) !== authority
     ) {
-      throw new Error("admitted run authority is no longer active");
+      throw new Error(
+        "admitted run authority is no longer active",
+        readAgentRunDelegatedAuthorityFailure(authority),
+      );
     }
   };
 }
@@ -441,18 +481,20 @@ export function prepareAgentRunAdmission(params: {
   }
   const assertOperatorCurrent = operatorAuthority?.assertCurrent;
   const releaseOperatorAuthority = operatorAuthority?.retain?.();
-  let sourceClosed = false;
+  let sourceFailure: Error | undefined;
   const assertSourceCurrent =
     (sourceAssertion || assertOperatorCurrent) &&
     (() => {
-      if (sourceClosed) {
-        throw new Error("source execution authority is no longer active");
+      if (sourceFailure) {
+        throw sourceFailure;
       }
       try {
         sourceAssertion?.();
         assertOperatorCurrent?.();
       } catch (error) {
-        sourceClosed = true;
+        sourceFailure = new Error("source execution authority is no longer active", {
+          cause: error,
+        });
         throw error;
       }
     });

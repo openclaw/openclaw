@@ -166,9 +166,11 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 
 Startup and hot replacement share one prepared registry publisher and the same inventory across all configured agent workspaces. Reload preserves workspace provenance so an unchanged linked plugin is not replaced when another plugin changes. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. Reordering object keys in equivalent metadata or settings does not replace a registration; changed values, ordered lists, and explicit reload requests still do. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
 
-Replacement is refused before model invalidation or service shutdown when the affected instance still has retained work, including an agent turn between plugin callbacks or unfinished cleanup. This also applies when an agent awaits its own context engine’s `plugins.reload`: the tool returns a prepare-phase error, and the current runtime stays available. Retry after the work finishes; reload does not queue a replacement. Idle prepared publications do not block replacement. Once replacement is admitted, new retained work cannot acquire that instance until the operation releases its reservation.
+Durable final channel replies can use the admitting Gateway's current registry after an unrelated reload only when their exact channel registration is retained. The handoff also requires unchanged channel settings, shared channel defaults, and owning-plugin settings, plus channel-owned validation that preserves the admitted sender. Telegram checks its resolved bot credential and pins it for the final send; changed token-file contents, environment tokens, and SecretRef values cannot select another bot. Channels without sender preparation, new or replaced channel registrations, changed settings, and closing Gateways remain blocked. This never falls back to another Gateway or retries a send that may already have reached the provider.
 
-Once admitted and before stopping services or channels, replacement pauses new calls and waits up to 60 seconds for the plugins' in-flight calls to finish. This wait excludes service and channel consumers, which stop later with their owners. Detailed readiness reports the reloading phase and deadline. If the work does not finish, the reload fails once, resumes admission, and clears the reload status; the previous plugin generation keeps serving. Retry `openclaw plugins reload <id>` after the work finishes.
+Replacement reserves the affected instance even when agent turns or unfinished cleanup retain it. The prepared-model replacement gate holds new runs while already admitted runs finish using their original callbacks. New top-level retained work cannot acquire the old instance; already admitted consumers can still derive work needed to finish their runs. Detailed readiness and logs report the retained-work count and drain deadline; the final RPC receipt reports application and any drain notices. Reload from the instance's own active callback still fails during preparation to avoid waiting on itself. Idle prepared publications do not block replacement.
+
+Retained work and in-flight calls share a 60-second pre-stop budget. Retained runs finish before their callbacks close; sidecars release their capability consumers before the remaining finite consumers drain. Replacement then pauses ordinary calls before stopping services and channels. Idle service and channel custody stops later with its owners. If work does not finish, the reload fails once, resumes admission, and clears the reload status; the previous plugin generation keeps serving. The deadline does not cancel agent runs or permit disposal of unfinished writes. Retry `openclaw plugins reload <id>` after that work finishes, or explicitly select `--wait` to wait until admitted work settles. The explicit wait belongs to its requesting connection: Ctrl+C or disconnect cancels the pre-publication wait and runs the same rollback. Cancellation never disposes admitted work, bypasses cleanup, or reverses a committed publication. Service shutdown and recovery retain their bounded deadlines. Successful publication logs the applied replacement and emits `plugins.changed`.
 
 A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then request `plugins.reload` through the admin Gateway API to load the repaired plugin.
 
@@ -176,7 +178,9 @@ Read-only model validation, effective tool inventory, and isolated model probes 
 
 Each plugin service startup attempt owns one cleanup operation, including failed starts. Hot replacement observes candidate startup and service cleanup with five-second deadlines. Candidate startup failure rejects the replacement. Replacing a loaded plugin requires successful cleanup before another registration can acquire its resources; pending cleanup or a cleanup error can therefore reject replacement and prevent automatic recovery. A pending startup retains its resources until it finishes and its one stop operation settles. Plugin removal can report deferred cleanup; Gateway shutdown joins that work before releasing the plugin's resources. Disposal stops new registered calls while physical cleanup finishes. Service cleanup is not invoked a second time merely because an observer timed out. If a command catalog refresh also stopped unchanged channels, failed replacement resumes those healthy registrations while the failed plugin remains fenced.
 
-A failed replacement automatically tries to restore the previous code and configuration. If its channels have already stopped, recovery waits up to 60 seconds for pending service cleanup and admitted work, retrying settlement observation with one-, two-, then four-second backoff. Each observation remains bounded by the five-second cleanup deadline and the remaining recovery window. Only service-stop observer timeouts qualify for this wait; channel-stop failures, rejected service cleanup, and failed candidate cleanup still prevent recovery. The wait joins the original service stop promises, including services whose shared stop deadline was already exhausted. After cleanup and work settle successfully, recovery disposes the old registration, registers its captured code with fresh resource ownership, and restarts its channels. Manually stopped accounts stay stopped. A timeout never grants another registration ownership of an unfinished write's resources, and retries do not repeat service stop or resource disposal. Uncommitted failures also attempt to republish the prepared model runtime against the previous config, even when plugin recovery fails or cannot safely run, unless the Gateway is shutting down.
+A replacement that fails before publication automatically tries to restore the previous code and configuration. If its channels have already stopped, recovery observes pending service cleanup and admitted work once, for up to 60 seconds. Its observation has an independent Gateway-owned cancellation signal, so a disconnected reload requester cannot interrupt recovery. Only service-stop observer timeouts qualify for this wait; channel-stop failures, rejected service cleanup, and failed candidate cleanup still prevent recovery. The wait joins the original service stop promises, including services whose shared stop deadline was already exhausted. After cleanup and work settle successfully, recovery disposes the old registration, registers its captured code with fresh resource ownership, and restarts its channels. Manually stopped accounts stay stopped. A timeout never grants another registration ownership of an unfinished write's resources, and retries do not repeat service stop or resource disposal. Uncommitted failures also attempt to republish the prepared model runtime against the previous config, even when plugin recovery fails or cannot safely run, unless the Gateway is shutting down.
+
+For plugin-only replacements that fail after publication, the Gateway attempts to republish model catalogs and reply dispatch against the committed configuration and plugin generation. The original plugin failure remains visible, including failed channel readiness. If model publication also fails, the operation reports both failures and asks the operator to retry the plugin reload or restart the Gateway. Shutdown or Gateway replacement cancels this recovery; mixed config changes with unfinished runtime work retain their existing restart recovery.
 
 When recovery cannot safely finish, the operation settles as failed and releases its channel reload pauses. Channel health reads retain captured account facts without invoking unavailable plugin code; healthy registrations can restart normally. Detailed readiness reports `failing: ["plugin-reload"]` with the affected plugin IDs and an actionable recovery reason, instead of leaving an indefinite "reloading" state. Retry `openclaw plugins reload <id>` after admitted work and pending cleanup settle, or restart the Gateway. Permanent cleanup failures still prevent another registration from acquiring those resources.
 
@@ -185,6 +189,10 @@ A later reload can retry after pending cleanup completes successfully, without c
 Missing captured source files produce a replacement warning instead of preventing a fresh plugin load. Recovery snapshots must contain every previously captured input, including companion files. If replacement then fails, recovery restores only plugins with available captured code; it does not substitute changed installed files for a missing snapshot. Existing call-drain and resource-cleanup requirements still apply.
 
 Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media cleanup after their initial grace periods. When clearing the active registry, plugin host cleanup can advance to later hooks after a timeout, but registry resets and shared database closure wait for its actual completion. These waits preserve resources for cleanup; they do not restore a retired plugin's runtime authority.
+
+Shutdown closes admission before waiting for config reloads to settle. Those reloads can still defer cleanup held by existing consumers. Final Gateway close releases those consumers, joins retained cleanup, and reports its failures before another Gateway can start.
+
+Gateway config reload and startup metadata persistence use process-bound plugin lifecycle leases. After a forced stop, the next process can reclaim a lease whose recorded same-host process identity is proven dead. Package installation leases retain their expiry protection because installer subprocesses can outlive their parent. A contended lease logs its holder and observed expiry while waiting; older leases without process identity must still expire before startup can safely refresh the plugin index. This uses the existing state schema and requires no update migration.
 
 Executable CLI cleanup reports each disposer that exceeds five seconds and proceeds with later cleanup without canceling the pending work. On macOS with Node's system CA support enabled, automatic exit after command completion waits for this pending cleanup to finish. Explicit command exit requests and the update exit watchdog retain their bounded behavior.
 
@@ -198,6 +206,11 @@ Install, update, registry refresh, and doctor flows may read fresh package metad
 
 ### Runtime instance and source lifetime
 
+Inference verification fingerprints the artifact selected by the runtime's
+source/build preference, including explicit bundled source overrides. Loading an
+unchanged plugin preserves that proof; changing its selected runtime files
+invalidates it.
+
 A managed runtime instance owns its module results, registered callables, and
 runtime-store slots. With Node's synchronous module hooks, it also owns a captured
 source artifact. Package plugins capture their package inputs when the instance
@@ -207,8 +220,8 @@ modules share the host's code identity; each inventory still owns its registered
 callbacks and cleanup. Replacing that compiled code requires a build and Gateway
 restart. Conditional package aliases retain their package metadata, and native
 Node conditions select the target from that captured metadata. Legacy packages
-without an exports map also prefetch their existing main or index entry as raw
-bytes; this can read a large native entry, but does not execute unselected code.
+without an exports map also admit their existing main or index entry without
+executing unselected code. Native entries reuse the recorded admission below.
 The selected package's remaining body is captured before execution.
 Dependency links retain existing nested installation locations. Dependencies installed
 beside a package remain siblings in the capture, including optional platform packages
@@ -216,6 +229,52 @@ whose native assets are read through relative filesystem paths. Other ancestor
 dependencies link at the captured package root. Capture does not add `node_modules` beside
 individual source files, so native-addon loaders can still locate their package
 root and its build assets.
+
+Native artifacts are admitted with their owning package directory, preserving
+the binary's package-relative path and declared companion library dependencies.
+Artifacts without an admitted package root retain their containing directory.
+Installer-owned directories use
+hardlinks or an existing retained-directory reference; files inspected by plugin
+safety checks keep independent copies. Mutable source trees retain one private
+directory snapshot per admitted identity, preserving old binary and companion
+bytes through in-place edits. Files in this namespace are prepared at admission;
+module execution remains on demand. Registrations share admission facts without
+sharing their runtime authority.
+Private Doctor inspections keep their native admission facts separate from the
+operator's state. Their temporary captures never become deferred writes to the
+installed index after inspection ends; ordinary deferred writes retain their
+original state directory.
+When native packages share a dependency, admission reconciles identities only for
+its own hardlinks, even when the filesystem's ctime has not advanced. Recorded
+digests are checked against installed bytes before promotion, including companions
+previously captured as independent copies. Unchanged companions remain valid during
+Doctor and reload; source content checks still reject edits.
+When file symlinks are unavailable, a generation can use hardlinks only if its
+directory preserves every captured companion and the selected host SDK. Otherwise
+that plugin reports a load error asking for file symlink support; the update
+continues with the existing plugin-failure warning behavior.
+The existing installed-index SQLite payload records directory membership, device,
+inode, mode, size, mtime, and ctime identities, SHA-256 digests, and the initial
+generation receipt. Unchanged warm startup reuses those facts. Added, removed, or
+changed companions require admission again. If a recorded capture directory is
+missing, fresh admission reads the installed package without promoting the missing
+capture's identities. This also applies to post-update Doctor with older updaters.
+Ctime-only uncertainty is resolved
+with a bounded rehash, including ordinary companion files whose inodes another
+capture retains or releases. Legacy reload receipts keep their framed raw-byte value,
+so a changed receipt still requires streaming its native payloads.
+Read-only inspection never publishes its native admissions during later settlement.
+Deferred publication retains the original database authority and state directory.
+Doctor's private checks keep captured code in profile-qualified temporary storage,
+so removing their database snapshots cannot remove an image still loaded in the process.
+An entirely missing retired capture can be rebuilt from its installed source;
+missing files in a retained or partially present namespace remain load errors.
+Identity reuse cannot detect an edit that preserves every recorded identity field.
+Source code outside an admitted native namespace is captured and verified separately.
+Published native captures survive ordinary scratch cleanup. Doctor maintenance
+removes unreferenced captures while preserving installed-index references, warm
+generations, and live owners. System-temp fallback captures are scoped to their
+state directory; captures with unknown ownership are preserved.
 
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link
@@ -259,34 +318,55 @@ inspection and failed capture still clean up before returning.
 
 Default source captures live under
 `<stateDir>/tmp/plugin-captures/<instanceId>/captures/`, with a random instance ID
-and an empty SQLite coordinator held for that instance's lifetime. Gateway
+and one `owner.sqlite` token holding its native lifetime lease. Gateway
 metadata and its source captures retain the same process-local instance; a
 concurrent CLI process owns a separate instance. Releasing one capture cannot
 retire another capture or a still-running metadata owner.
-The shared cleanup timer does not retain the first command's invocation context.
+Gateway metadata supplies its scheduler for hourly cleanup; executable CLI
+commands own maintenance through their invocation scope. Capturing source alone
+does not create a timer. Cleanup does not retain the first command's invocation context.
 The managed `tmp/plugin-captures` subtree is excluded from source snapshots when
 the state directory is inside a plugin's source directory. Recovery can still
 load a preserved source package from within that subtree.
 
-This follows the native lifetime-token pattern used for
-[interrupted SQLite snapshots](/reference/database-schemas/integrity-and-recovery).
 Executable CLI commands retire their plugin inventory through the existing invocation
 resource scope on success and failure. Inventory adopted by Gateway publication
 remains with Gateway metadata retirement. At process exit, the capture owner
-synchronously retires any remaining instance that holds this process's native
+synchronously retires any remaining instance that holds this process's
 custody, including explicit exits and CLI-handled signals. Forced termination
-still relies on startup reclamation. Snapshot
-cleanup owns SQLite staging files, while plugin cleanup owns this capture subtree.
-Reclamation removes captured
-payload before its coordinator so a partial deletion remains retryable.
+still relies on startup reclamation. Plugin cleanup owns this capture subtree;
+reclamation removes captured payload before retiring the token so a partial deletion
+remains retryable. The token closes before its directory is removed, including on Windows.
 
-Startup and hourly cleanup inspect only this owned subtree. An instance becomes
-eligible after one hour, but age alone never authorizes removal: cleanup must
-also acquire its native coordinator, proving that no producer retains custody.
-Process exit releases the native lock even after a forced termination. PID
-names, process probes, and PID-reuse guesses are not used; a numeric PID cannot
-identify a producer across containers sharing a temporary directory. Contention,
-unreadable entries, symlinks, and entries without a coordinator preserve files.
+A native library mapped in the current process retains its capture and token
+through process exit, even after its JavaScript module cache entry is removed.
+Cleanup records `retained-by-loaded-module` once for that capture lifetime instead
+of trying to unlink a loaded Windows image. Unchanged native package identities
+continue to share the retained payload across reloads. Native-load attempts also
+retain their capture when initialization throws: the native image can remain
+mapped after the initialization error.
+
+Before runtime plugin loading, startup attempts receipt-aware cleanup under
+exclusive maintenance ownership. It can reclaim a retired, unlocked instance
+immediately, including unpublished native payloads retained until the previous
+process exited. Published native payloads still referenced by the installed index
+remain available. If another process holds state ownership, this opportunistic
+cleanup silently skips without asking the operator to stop a healthy Gateway.
+Other maintenance or cleanup failures produce a warning and startup continues;
+observational reads leave captures untouched.
+
+Hourly cleanup also inspects this owned subtree. An instance becomes eligible
+after one hour. Age alone never authorizes removal: for token-bearing instances, cleanup must
+also acquire the existing token's exclusive native lease to prove released custody.
+This works after process termination or reboot without PID or boot-namespace records
+and preserves the same cleanup contract for shipped `owner.sqlite` markers.
+Cleanup rechecks directory and token identity before removal. Live leases,
+unreadable entries, symlinks, and invalid tokens preserve files. An aged instance
+left without a token by interrupted allocation or older partial cleanup is
+reclaimed after a successful rename probe. Allocation creates the token before
+creating payload, and disposal removes payload before its token.
+The token belongs to its capture instance; captures do not create a global
+coordination database.
 Removal remains asynchronous and advisory. This subtree is excluded from state
 backups because its captured package bytes are reconstructible.
 
@@ -296,9 +376,25 @@ system-temporary instance and reports a warning. Normal disposal still removes
 that instance; automatic cleanup does not scan unrelated system-temporary roots.
 There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
+If its payload directory is removed while the instance still holds custody, the
+next capture recreates that directory under the same lease. This does not restore
+previously deleted captured files or recreate a missing ownership directory.
+
+Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
+`openclaw-model-catalog-*` roots in the selected state's temporary directory and
+the current system temporary directory. Roots must be older than one hour and
+have no custody token. On macOS and Linux, cleanup rechecks that each legacy root belongs
+to the current UID immediately before its rename, preserving other users' captures even in
+privileged runs. Windows has no equivalent UID check, so privileged Windows cleanup keeps
+the age and rename-probe rules below.
+A complete process census that finds another OpenClaw
+producer preserves legacy roots. When the census is unavailable, including on
+Windows, cleanup uses age and a rename probe instead; sharing violations leave
+locked roots for a later cycle. This is best-effort cleanup of reconstructible
+legacy scratch, not proof that an older producer has stopped using it.
 
 Older `openclaw-plugin-build-*` directories in the system temporary directory
-have no coordinator proving whether their producer is still alive. Doctor reports
+have no owner record proving whether their producer is still alive. Doctor reports
 tokenless `openclaw-plugin-build-*` and `openclaw-model-catalog-*` roots under the
 state temporary directory, `~/.openclaw/tmp` even when another state directory is
 selected, the current system temporary directory, `/tmp` on
@@ -321,8 +417,9 @@ On hosts without a complete process census (including
 Windows and recognized container environments), Doctor reports legacy
 captures but skips their removal. For a container sharing the host's temporary
 directory, run maintenance on the host after stopping its OpenClaw containers.
-Modern captures retain their existing custody-token cleanup; no legacy files are
-moved or adopted by the new runtime.
+Doctor's maintenance repair remains separate from runtime reclamation: its
+broader inventory includes old service temporary locations the current runtime
+does not use. Modern captures retain their custody-token cleanup.
 
 Configured Gateway agents share one model-catalog worker per plugin-inventory
 lifetime. Agent and authentication facts belong to each task; plugin registrations
@@ -331,10 +428,26 @@ their own environment retain an isolated catalog worker for that environment.
 Provider-discovery entries use the exact selected runtime instance's captured
 source when it is already loaded, so discovery does not create a second copy of
 the same plugin package. Standalone discovery keeps its own setup lifetime.
-Each worker retains one prepared catalog generation. Replacement releases the
-previous generation's registrations after its work settles. Successfully disposed
-registrations leave their plugin caches; unchanged registrations remain reusable
-across agent requests within the same inventory.
+Each worker retains the current plugin registration context for each loader
+workspace, shared by agents with matching configuration, environment, and plugin
+inventory. Alternating unchanged workspaces reuse their captured source; replacing
+one workspace does not evict another. Node retains native ESM module graphs until
+worker retirement even after their capture files are removed, so actual source or
+configuration revisions can still retain module memory during that lifetime. Agent
+credentials and configured model facts travel with each request; catalog jobs do
+not rebuild the agent workspace. Discovery reuses the registrations already
+acquired by that context. The first catalog request prepares registrations for the
+agent's known configured and credential providers together; only the requested
+providers run catalog hooks. Newly observed owners extend that context without
+discarding earlier owners. Replacement releases them after admitted work settles.
+Successfully disposed registrations leave their plugin caches.
+
+Catalog observation is passive. Inventory requests can ask the catalog owner to
+renew expired providers while returning its accepted rows. Chat metadata and
+session projections only observe publication, so a refresh cannot schedule itself
+through its own notifications. Selected native-model discovery has an independent
+acquisition owner and does not wait for provider inventory renewal. Both owners
+merge their results with the latest accepted counterpart before publication.
 Catalog workers use a 512 MiB V8 old-generation limit rather than inheriting the
 Gateway's default heap budget. Explicit process-wide heap flags override this
 limit; native and external allocations are outside it.
@@ -355,7 +468,9 @@ The parent removes any remaining captures after that worker exits,
 including cancellation and crashes. Files remain available while the worker is
 running, and retiring one worker does not remove another generation's captures.
 If the whole Gateway is killed, the existing hourly cleanup reclaims the abandoned
-instance only after acquiring its released SQLite coordinator.
+instance only when it can acquire the existing token's exclusive native lease.
+The same rule covers shipped SQLite markers and works after a reboot.
+Age alone never releases captures.
 Cancellation releases compute capacity after the worker exits; terminal shutdown
 also waits for file cleanup. Failed file removal is reported as a cleanup warning.
 
@@ -512,7 +627,7 @@ That means:
 
 <AccordionGroup>
   <Accordion title="Vendor multi-capability">
-    `google` owns text inference, CLI backend, embeddings, speech, realtime voice, media understanding, image/music/video generation, and web search. `openai` owns text inference, embeddings, speech, realtime transcription, realtime voice, media understanding, image/video generation. `minimax` owns text inference plus media understanding, speech, image/music/video generation, and web search.
+    `google` owns text inference, CLI backend, embeddings, speech, realtime voice, media understanding, image/music/video generation, and web search. `openai` owns text inference, embeddings, speech, realtime transcription, realtime voice, media understanding, image generation. `minimax` owns text inference plus media understanding, speech, image/music/video generation, and web search.
   </Accordion>
   <Accordion title="Vendor single-capability">
     `arcee` and `chutes` own text inference only; `microsoft` owns speech only. A vendor plugin can stay this narrow until it needs to cover more of that vendor's surface.

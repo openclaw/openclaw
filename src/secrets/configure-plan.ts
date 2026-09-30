@@ -42,7 +42,7 @@ type ConfigureProviderChanges = {
   deletes: string[];
 };
 
-function getSecretProviders(config: OpenClawConfig): Record<string, SecretProviderConfig> {
+export function getSecretProviders(config: OpenClawConfig): Record<string, SecretProviderConfig> {
   if (!isRecord(config.secrets?.providers)) {
     return {};
   }
@@ -84,9 +84,6 @@ export function buildConfigureCandidatesForScope(params: {
 }): ConfigureCandidate[] {
   const authoredConfig = params.authoredOpenClawConfig ?? params.config;
 
-  const hasPathInAuthoredConfig = (pathSegments: string[]): boolean =>
-    hasPath(authoredConfig, pathSegments);
-
   const openclawCandidates = discoverConfigSecretTargets(params.config)
     .filter((entry) => entry.entry.includeInConfigure)
     .map((entry) => {
@@ -95,9 +92,9 @@ export function buildConfigureCandidatesForScope(params: {
         refValue: entry.refValue,
         defaults: params.config.secrets?.defaults,
       });
-      const pathExists = hasPathInAuthoredConfig(entry.pathSegments);
+      const pathExists = hasPath(authoredConfig, entry.pathSegments);
       const refPathExists = entry.refPathSegments
-        ? hasPathInAuthoredConfig(entry.refPathSegments)
+        ? hasPath(authoredConfig, entry.refPathSegments)
         : false;
       // Generated/defaulted target paths are still configurable, but mark them derived so
       // prompts can distinguish authored config from normalized aliases.
@@ -117,16 +114,13 @@ export function buildConfigureCandidatesForScope(params: {
       );
     });
 
+  const authProfiles = params.authProfiles;
   const authCandidates =
-    params.authProfiles === undefined
+    authProfiles === undefined
       ? []
-      : discoverAuthProfileSecretTargets(params.authProfiles.store)
+      : discoverAuthProfileSecretTargets(authProfiles.store)
           .filter((entry) => entry.entry.includeInConfigure)
           .map((entry) => {
-            const authProfiles = params.authProfiles;
-            if (!authProfiles) {
-              throw new Error("Missing auth profile scope for configure candidate discovery.");
-            }
             const authProfileProvider = resolveAuthProfileProvider(
               authProfiles.store,
               entry.pathSegments,

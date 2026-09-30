@@ -1,6 +1,6 @@
 import { err, ok } from "@openclaw/normalization-core/result";
+import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
   OpenClawStateDatabase,
@@ -40,6 +40,10 @@ import {
   pluginStateWorkerOperations,
 } from "./plugin-state-worker-contract.js";
 import { capturePluginStateWorkerFailure } from "./plugin-state-worker-errors.js";
+import {
+  clearRuntimeHealthEntries,
+  hasRuntimeHealthEntriesToClear,
+} from "./runtime-health-store.kernel.js";
 
 export function executePluginStateCommand(
   command: SqliteWorkerCommand<PluginStateWorkerOperations>,
@@ -48,6 +52,23 @@ export function executePluginStateCommand(
   hasRetainedDatabase: boolean,
 ): PluginStateWorkerOperations[keyof PluginStateWorkerOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
+  const admit = (stage: "transaction" | "commit") =>
+    requestSessionEntryCurrentAdmission(command.input?.sessionEntryCurrentSource, {
+      stage,
+      facts: undefined,
+    });
+  const failure = (error: unknown) =>
+    err(
+      capturePluginStateWorkerFailure(
+        wrapPluginStateError(
+          error,
+          description.operation,
+          description.code,
+          description.message,
+          options.path,
+        ),
+      ),
+    );
   if (
     command.type === "pluginState.lookup" ||
     command.type === "pluginState.lookupMany" ||
@@ -106,17 +127,23 @@ export function executePluginStateCommand(
           );
       }
     } catch (error) {
-      return err(
-        capturePluginStateWorkerFailure(
-          wrapPluginStateError(
-            error,
-            description.operation,
-            description.code,
-            description.message,
-            options.path,
-          ),
-        ),
+      return failure(error);
+    }
+  }
+  if (command.type === "pluginState.clearRuntimeHealth") {
+    try {
+      // An absent health mirror must not open or upgrade a native-only state database.
+      // A positive observation still rereads current rows inside the write transaction.
+      const present = withPluginStateDatabaseReadOnly(
+        "entries",
+        (store) => hasRuntimeHealthEntriesToClear(store, command.input),
+        options,
       );
+      if (!present) {
+        return ok(undefined);
+      }
+    } catch (error) {
+      return failure(error);
     }
   }
   let database: OpenClawStateDatabase;
@@ -139,7 +166,7 @@ export function executePluginStateCommand(
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          admit("transaction");
           const result = (() => {
             switch (command.type) {
               case "pluginState.appendJournal":
@@ -171,29 +198,21 @@ export function executePluginStateCommand(
                 return deletePluginStateEntry(store.db, command.input) > 0;
               case "pluginState.clear":
                 return clearPluginStateNamespace(store.db, command.input);
+              case "pluginState.clearRuntimeHealth":
+                return clearRuntimeHealthEntries(store, command.input);
               case "pluginState.sweep":
                 return deleteExpiredPluginStateEntries(store.db, Date.now());
               default:
                 throw new Error("Plugin-state read command entered its write path");
             }
           })();
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          admit("commit");
           return result;
         },
         { ...options, database },
       ),
     );
   } catch (error) {
-    return err(
-      capturePluginStateWorkerFailure(
-        wrapPluginStateError(
-          error,
-          description.operation,
-          description.code,
-          description.message,
-          options.path,
-        ),
-      ),
-    );
+    return failure(error);
   }
 }

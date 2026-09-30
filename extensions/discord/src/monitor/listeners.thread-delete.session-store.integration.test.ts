@@ -3,13 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ChannelType, type GatewayThreadDeleteDispatchData } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   getSessionEntry,
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { withEnvAsync, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DiscordThreadDeleteListener } from "./listeners.js";
 
 const THREAD_ID = "112233445566778899";
@@ -53,7 +54,11 @@ describe("DiscordThreadDeleteListener session-store integration", () => {
           entry: { sessionId: "main-survivor-session", updatedAt: 3_000 },
         });
 
-        const listener = new DiscordThreadDeleteListener(cfg, "session-store-integration");
+        const errors = vi.fn();
+        const listener = new DiscordThreadDeleteListener(cfg, "session-store-integration", {
+          ...createSubsystemLogger("discord/thread-delete-test"),
+          error: errors,
+        });
         const deletedThread: GatewayThreadDeleteDispatchData = {
           id: THREAD_ID,
           guild_id: "887766554433221100",
@@ -62,6 +67,8 @@ describe("DiscordThreadDeleteListener session-store integration", () => {
         };
 
         await listener.handle(deletedThread);
+
+        expect(errors.mock.calls).toEqual([]);
 
         expect(
           getSessionEntry({

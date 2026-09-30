@@ -1,7 +1,7 @@
+import type { ExecApprovalDecision } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   sanitizeCodexApprovalVisibleText,
   type AppServerApprovalOutcome,
-  type ExecApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 

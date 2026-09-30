@@ -7,7 +7,6 @@ import { createInterface } from "node:readline";
 import { describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import * as gatewayBenchChild from "../../scripts/lib/gateway-bench-child.js";
-import { getFreePort } from "../../scripts/lib/gateway-bench-probes.js";
 import { createGatewayWsClient } from "../../scripts/lib/gateway-ws-client.js";
 import {
   BUILD_STAMP_FILE,
@@ -335,12 +334,6 @@ describe("Gateway concurrent HTTP streams", () => {
           signal.throwIfAborted();
           expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
           signal.throwIfAborted();
-          const mockPort = await getFreePort();
-          signal.throwIfAborted();
-          const provider = buildMockOpenAiResponsesProvider(
-            `http://127.0.0.1:${mockPort}/v1`,
-            "gpt-5.6-luna",
-          );
           await writeControl(true);
           signal.throwIfAborted();
           mock = ownMockProcess(
@@ -349,20 +342,42 @@ describe("Gateway concurrent HTTP streams", () => {
               detached: process.platform !== "win32",
               env: {
                 PATH: process.env.PATH,
-                MOCK_PORT: String(mockPort),
+                MOCK_PORT: "0",
                 MOCK_RESPONSE_CONTROL: controlPath,
                 MOCK_REQUEST_LOG: requestLogPath,
               },
             }),
           );
-          mock.child.stdout.resume();
           mock.child.stderr.resume();
-          await vi.waitFor(async () => {
+          await once(mock.child, "spawn", { signal });
+          const output = createInterface({ input: mock.child.stdout, signal });
+          let mockPort: number | undefined;
+          try {
+            for await (const line of output) {
+              const match = /^mock-openai listening on ([1-9]\d{0,4})$/u.exec(line);
+              if (match) {
+                mockPort = Number(match[1]);
+                expect(mockPort).toBeLessThanOrEqual(65_535);
+                break;
+              }
+            }
             signal.throwIfAborted();
-            expect(
-              (await fetch(`http://127.0.0.1:${mockPort}/health`, { signal: abort.signal })).status,
-            ).toBe(200);
-          });
+            if (mockPort === undefined) {
+              throw new Error(
+                `mock OpenAI exited before listening (code=${mock.child.exitCode} signal=${mock.child.signalCode})`,
+              );
+            }
+          } finally {
+            output.close();
+            mock.child.stdout.resume();
+          }
+          expect(
+            (await fetch(`http://127.0.0.1:${mockPort}/health`, { signal: abort.signal })).status,
+          ).toBe(200);
+          const provider = buildMockOpenAiResponsesProvider(
+            `http://127.0.0.1:${mockPort}/v1`,
+            "gpt-5.6-luna",
+          );
           const cfg = {
             gateway: {
               port,
@@ -528,10 +543,18 @@ describe("Gateway concurrent HTTP streams", () => {
               expect(lifecycle.filter((event) => event.data.phase === "start")).toHaveLength(1);
               expect(lifecycle.filter((event) => event.data.phase === "end")).toHaveLength(1);
               const assistant = own.filter((event) => event.stream === "assistant");
-              expect(assistant.at(-1)?.data.text).toBe(item.marker);
+              expect(assistant[0]?.data.text).toBeTypeOf("string");
+              let assistantText = "";
               for (const event of assistant) {
-                expect(item.marker.startsWith(String(event.data.text))).toBe(true);
+                if (typeof event.data.text === "string") {
+                  assistantText = event.data.text;
+                } else {
+                  expect(event.data.delta).toBeTypeOf("string");
+                  assistantText += String(event.data.delta);
+                }
+                expect(item.marker.startsWith(assistantText)).toBe(true);
               }
+              expect(assistantText).toBe(item.marker);
             });
           }
         } catch (error) {

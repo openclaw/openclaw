@@ -169,9 +169,7 @@ export function observeChatSendCommentaryMedia(params: {
                   sessionKey: scope.sessionKey,
                   agentId: scope.agentId,
                   items: prepareOutgoingMediaFromReplyPayload(payload),
-                  localRoots: getWebchatReplyMediaLocalRoots({
-                    ...mediaScope,
-                  }),
+                  localRoots: getWebchatReplyMediaLocalRoots(mediaScope),
                   continueOnPrepareError: true,
                   assertCurrent: mediaScope.assertCurrent,
                   abortSignal: params.abortSignal,
@@ -241,7 +239,7 @@ export function observeChatSendCommentaryMedia(params: {
                 );
               if (
                 mediaBlocks.length > 0 &&
-                !attachManagedOutgoingMediaToMessage({ messageId, blocks: mediaBlocks })
+                !(await attachManagedOutgoingMediaToMessage({ messageId, blocks: mediaBlocks }))
               ) {
                 throw new Error("Webchat commentary media ownership could not be persisted");
               }

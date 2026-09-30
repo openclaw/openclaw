@@ -83,6 +83,26 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     expect(completionRequests()[0]?.options).not.toHaveProperty("reasoning");
   });
 
+  it("passes only selected auth facts to transport preparation", async () => {
+    await completeWithPreparedSimpleCompletionModel({
+      model: baseModel,
+      auth: {
+        apiKey: "test-access-token",
+        source: "profile:test",
+        profileId: "test:profile",
+        mode: "oauth",
+        authFlow: "test-subscription",
+      },
+      context,
+    });
+
+    expect(mocks.prepareModel.mock.calls[0]?.[0]).toMatchObject({
+      auth: { mode: "oauth", authFlow: "test-subscription" },
+    });
+    expect(mocks.prepareModel.mock.calls[0]?.[0]).not.toHaveProperty("auth.apiKey");
+    expect(completionRequests()[0]?.options.apiKey).toBe("test-access-token");
+  });
+
   it("stops before transport preparation when its owner retires during host initialization", async () => {
     const retired = new Error("Completion owner retired.");
     let current = true;
@@ -224,6 +244,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       apiRegistry: expect.anything(),
       model,
       cfg,
+      auth: { mode: "api-key", authFlow: undefined },
     });
     expect(completionRequests()).toEqual([
       { model: preparedModel, context, options: { apiKey: "ollama-local" } },

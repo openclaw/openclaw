@@ -40,6 +40,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.provider`, `openclaw.model`, `openclaw.channel`, optional `openclaw.agent`
   - On completion: `openclaw.harness.result_classification`, `openclaw.harness.yield_detected`, `openclaw.harness.items.started`, `openclaw.harness.items.completed`, `openclaw.harness.items.active`
   - On error: `openclaw.harness.phase`, `openclaw.errorCategory`, optional `openclaw.harness.cleanup_failed`
+  - Span event `openclaw.agent.commentary` for completed preambles from supported harnesses, including the built-in runtime, Codex, and Claude CLI. Attributes include `openclaw.commentary.sequence`, `openclaw.commentary.text_length`, and `openclaw.commentary.content_truncated`. The existing `diagnostics.otel.captureContent` setting controls bounded, redacted output-message content.
 - `openclaw.tool.execution`
   - `gen_ai.tool.name`, `gen_ai.operation.name` (`execute_tool`), `openclaw.toolName`, `openclaw.tool.source`, optional `gen_ai.tool.call.id`, `openclaw.tool.owner`, `openclaw.tool.params.*`, optional `openclaw.agent`
   - Optional `openclaw.errorCategory`/`openclaw.errorCode` on errors, `openclaw.deniedReason` and `openclaw.outcome=blocked` when denied by policy or sandbox
@@ -51,6 +52,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - `openclaw.channel`, `openclaw.webhook`, `openclaw.error`
 - `openclaw.message.processed`
   - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, optional `openclaw.agent` (the agent that initially ingested the prompt)
+  - Isolated cron agent turns use this span as the parent of their harness spans, keeping model calls, tools, and usage on the same trace through completion or failure.
 - `openclaw.message.delivery`
   - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
@@ -78,6 +80,13 @@ the diagnostics-otel plugin does not export them as standalone OTLP signals.
 Event kinds and `run.execution_phase.phase` values are additive. TypeScript
 consumers should keep default branches instead of assuming either union is
 permanently exhaustive.
+
+`agent.commentary` records completed preambles, not text deltas. It carries the
+original agent-event sequence and timestamp and attaches to the active harness
+span. Recent duplicate completions are suppressed per attempt. Like other
+queued diagnostics, commentary may be dropped under queue pressure; the session
+transcript remains the durable conversation record. At debug level, the
+`diagnostic` logger also records completion metadata without commentary text.
 
 **Model usage**
 

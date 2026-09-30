@@ -15,7 +15,6 @@ import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   createDelegatedSetupWizardProxy,
   setSetupChannelEnabled,
-  type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
 import {
   hasAnyWhatsAppAuth,
@@ -25,7 +24,6 @@ import {
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { readWhatsAppAccountLinkState } from "./channel-runtime-loader.js";
-import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
 import { resolveWhatsAppConfigPath } from "./group-config-path.js";
@@ -34,6 +32,7 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
+import { normalizeWhatsAppAllowFromEntries } from "./normalize-target.js";
 import {
   collectUnsupportedSecretRefConfigCandidates,
   unsupportedSecretRefSurfacePatterns,
@@ -48,14 +47,6 @@ import { whatsappSetupContract } from "./setup-core.js";
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
 
-async function loadWhatsAppSetupSurface() {
-  return await import("./setup-surface.js");
-}
-
-const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(
-  async () => (await loadWhatsAppSetupSurface()).whatsappSetupWizard,
-);
-
 const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppAccount>({
   sectionKey: WHATSAPP_CHANNEL,
   listAccountIds: listWhatsAppAccountIds,
@@ -64,7 +55,7 @@ const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppA
   clearBaseFields: [],
   allowTopLevel: false,
   resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatWhatsAppConfigAllowFromEntries(allowFrom),
+  formatAllowFrom: normalizeWhatsAppAllowFromEntries,
   resolveDefaultTo: (account) => account.defaultTo,
 });
 
@@ -77,29 +68,25 @@ const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppA
   inheritSharedDefaultsFromDefaultAccount: true,
 });
 
-function createWhatsAppSetupWizardProxy(
-  loadWizard: () => Promise<ChannelSetupWizard>,
-): ChannelSetupWizard {
-  return createDelegatedSetupWizardProxy({
-    channel: WHATSAPP_CHANNEL,
-    loadWizard,
-    status: {
-      configuredLabel: "linked",
-      unconfiguredLabel: "not linked",
-      configuredHint: "linked",
-      unconfiguredHint: "not linked",
-      configuredScore: 5,
-      unconfiguredScore: 4,
-    },
-    resolveShouldPromptAccountIds: (params) => params.shouldPromptAccountIds,
-    credentials: [],
-    delegateFinalize: true,
-    disable: (cfg) => setSetupChannelEnabled(cfg, WHATSAPP_CHANNEL, false),
-    onAccountRecorded: (accountId, options) => {
-      options?.onAccountId?.(WHATSAPP_CHANNEL, accountId);
-    },
-  });
-}
+const whatsappSetupWizardProxy = createDelegatedSetupWizardProxy({
+  channel: WHATSAPP_CHANNEL,
+  loadWizard: async () => (await import("./setup-surface.js")).whatsappSetupWizard,
+  status: {
+    configuredLabel: "linked",
+    unconfiguredLabel: "not linked",
+    configuredHint: "linked",
+    unconfiguredHint: "not linked",
+    configuredScore: 5,
+    unconfiguredScore: 4,
+  },
+  resolveShouldPromptAccountIds: (params) => params.shouldPromptAccountIds,
+  credentials: [],
+  delegateFinalize: true,
+  disable: (cfg) => setSetupChannelEnabled(cfg, WHATSAPP_CHANNEL, false),
+  onAccountRecorded: (accountId, options) => {
+    options?.onAccountId?.(WHATSAPP_CHANNEL, accountId);
+  },
+});
 
 export function createWhatsAppPluginBase() {
   const collectWhatsAppSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{

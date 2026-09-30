@@ -1,8 +1,8 @@
 /** Offline Doctor target discovery and legacy-source admission. */
 import fs from "node:fs";
 import path from "node:path";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
@@ -13,26 +13,56 @@ import {
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { canonicalMigrationFilePath } from "../infra/session-sqlite-migration-manifest.js";
+import {
+  canonicalMigrationFilePath,
+  type SessionSqliteMigrationTargetInput,
+} from "../infra/session-sqlite-migration-manifest.js";
 import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  hasOrphanedSqliteSidecars,
+  resolveSqliteDatabaseFilePaths,
+} from "../infra/sqlite-files.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import type { HistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
-import type { DoctorSessionSqliteMode } from "./doctor-session-sqlite-types.js";
+import type {
+  DoctorSessionSqliteMode,
+  DoctorSessionSqliteOptions,
+} from "./doctor-session-sqlite-types.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
+
+export function createMigrationTargetInput(
+  target: SessionStoreTarget,
+): SessionSqliteMigrationTargetInput {
+  return {
+    agentId: target.agentId,
+    sqlitePath: canonicalMigrationFilePath(resolveTargetSqlitePath(target)),
+    storePath: canonicalMigrationFilePath(target.storePath),
+  };
+}
+
+// Direct store migrations are scoped by path; broader agent discovery needs runtime config.
+export function resolveDoctorSessionSqliteConfig(
+  options: DoctorSessionSqliteOptions,
+): OpenClawConfig {
+  if (options.cfg) {
+    return options.cfg;
+  }
+  const requestedAgentId = normalizeAgentId(options.agent ?? LEGACY_IMPLICIT_AGENT_ID);
+  return options.store
+    ? { agents: { entries: { [requestedAgentId]: { default: true } } } }
+    : getRuntimeConfig();
+}
 
 export function resolveDoctorSessionSqliteMaintenancePaths(
   targets: readonly SessionStoreTarget[],
 ): string[] {
-  const protectedPaths = new Set<string>();
-  for (const target of targets) {
-    for (const databasePath of resolveSqliteDatabaseFilePaths(resolveTargetSqlitePath(target))) {
-      protectedPaths.add(databasePath);
-    }
-  }
-  return [...protectedPaths];
+  return [
+    ...new Set(
+      targets.flatMap((target) => resolveSqliteDatabaseFilePaths(resolveTargetSqlitePath(target))),
+    ),
+  ];
 }
 
 export function resolveDoctorSessionSqliteMaintenanceRoots(
@@ -80,7 +110,11 @@ export function resolveDoctorSessionSqliteTargets(params: {
 }): { targets: SessionStoreTarget[]; knownTargets?: SessionStoreTarget[] } {
   if (params.store) {
     return {
-      targets: resolveSessionStoreTargets(params.cfg, { store: params.store }, { env: params.env }),
+      targets: resolveSessionStoreTargets(
+        params.cfg,
+        { store: params.store, agent: params.agent, allAgents: params.allAgents },
+        { env: params.env },
+      ),
     };
   }
   const discoversHistory =
@@ -137,11 +171,14 @@ export function resolveDoctorSessionSqliteTargets(params: {
     );
     return {
       targets: targets
-        .filter(
-          ({ target, sqlitePath }) =>
-            !isRetained(target.storePath, target.agentId) &&
-            !isRetained(sqlitePath, target.agentId),
-        )
+        .filter(({ target, sqlitePath }) => {
+          const orphanedSidecars = hasOrphanedSqliteSidecars(sqlitePath);
+          return [target.storePath, sqlitePath].every((pathname) => {
+            const disposition = isRetained(pathname, target.agentId);
+            // Unknown history is not a deletion; an incomplete SQLite family still needs recovery.
+            return !disposition || (disposition === "unavailable" && !orphanedSidecars);
+          });
+        })
         .map(({ target }) => target),
       knownTargets: targets.map(({ target }) => target),
     };
@@ -166,6 +203,6 @@ export function filterLegacySessionStoreTargets(
         (historicalArchives.get(canonicalMigrationFilePath(target.storePath))?.transcripts.length ??
           0) > 0 ||
         (fs.existsSync(path.dirname(target.storePath)) &&
-          fs.readdirSync(path.dirname(target.storePath)).some(isPrimarySessionTranscriptFileName))),
+          fs.readdirSync(path.dirname(target.storePath)).some((file) => file.endsWith(".jsonl")))),
   );
 }

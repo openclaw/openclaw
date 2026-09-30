@@ -26,10 +26,17 @@ Inspect or continue an existing parent:
 
 ```bash
 pnpm frv status --run <parent-run-id> --json
+pnpm frv watch --run <parent-run-id> [--once] [--json]
 pnpm frv rerun --run <parent-run-id> --job "normalCi:checks-node-agentic-control-plane-agent-chat"
+pnpm frv rerun --run <parent-run-id> --child <child-key|run-id> [--max-attempts 2]
 pnpm frv continue --failed --run <parent-run-id>
 pnpm frv verify --run <successful-parent-run-id>
+pnpm frv prioritize --restore <record> [--dry-run]
 ```
+
+`prioritize --restore` recovers runs deferred by the former release-priority gate
+(see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)). Active validation
+no longer pauses CI or supporting workflows.
 
 `rerun --job` selects an exact executed, terminal job name inside a child key shown by
 `status --json` (for example, `normalCi`, `pluginPrerelease`, or
@@ -37,6 +44,19 @@ pnpm frv verify --run <successful-parent-run-id>
 then uses GitHub's job-rerun API on the job's accepted attempt. GitHub also
 reruns dependent jobs. Other failures stay visible and require their own retry;
 a targeted retry never declares the parent recovered while blockers remain.
+
+`watch` resolves child runs from the parent's `Dispatched <workflow>: <url>
+(attempt N)` dispatch-job log lines and reports each attempt transition and
+failed job once, with runner labels. Transient GitHub failures retry on the next
+poll. A local state file under `$TMPDIR/openclaw-frv/` lets a restarted watch
+resume without repeating events.
+
+`rerun --child` waits for one failed child, sends exactly one
+rerun-failed-jobs request, confirms the new attempt has no duplicate jobs, and
+records an audit line. It refuses children past `--max-attempts` (default 2,
+which allows one rerun). When a failed consumer is bound to a green producer's
+run attempt, it reruns that producer and its dependents instead. It returns
+after the new attempt starts; `continue --failed` still owns the final reseal.
 
 `continue --failed` reruns each failed child's jobs as soon as that child is
 terminal, while sibling children and the original parent may still run. It
@@ -91,8 +111,10 @@ Parents whose immutable plan predates attempt-aware evidence cannot be
 continued. Start a fresh all-group Full Release Validation instead; the
 controller never reconstructs old state or dispatches a replacement parent.
 
-The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
-passes the Validation SHA as both the candidate ref and `expected_sha`, and
+For new dispatches, including dry runs, the helper first proves GitHub serves the
+exact Validation SHA by bare-SHA fetch in a fresh temporary repository. It pushes
+one immutable `release-ci/*` workflow ref pinned to the Tooling SHA,
+passes the exact Validation SHA as both `ref` and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
 verification. The helper reads Release Decision artifacts while the parent is
 active so blockers can surface while Diagnostic Drain collects failures. It
@@ -107,7 +129,8 @@ check and at most three retries, waiting 30, 60, then 120 seconds between checks
 All reads use the normal cache-aware GitHub route; cache and request latency can
 add to these intervals. The helper retains its 12-hour wait deadline. Successful
 temporary-ref cleanup still requires parent completion and strict evidence
-verification. Failed validations retain both refs for reruns and diagnosis. The
+verification. Failed validations retain the workflow ref for reruns and diagnosis;
+`--keep-branch` also retains it after success. The
 Validation SHA is the exact commit being qualified: the Code SHA, which can
 also be the Release SHA, or a later changelog-only Release SHA. It is not a
 third release identity. The workflow
@@ -119,6 +142,57 @@ from current `origin/main`. The helper rejects a pinned Tooling SHA that does
 not declare the current release-isolation contract or the `expected_sha`
 dispatch input; it never silently substitutes newer tooling. The workflow never
 creates or updates repository refs itself.
+
+### Record a flake
+
+Decide explicitly whether each failed test blocks release or is a flake. Rerun
+a flake on the same Release SHA at most twice with `frv rerun --job`, and file an
+issue or PR tracking its fix on `main`. Do not re-cut the release, change tooling,
+or start a new Full Release Validation for it. A flake never blocks publication
+once its eligible failure is recorded.
+
+For a still-failing `normalCi` job, dispatch the classification workflow from
+trusted `main`, using the exact job URL from its accepted attempt:
+
+```bash
+gh workflow run full-release-flake-classification.yml --repo openclaw/openclaw --ref main \
+  -f job_url='https://github.com/openclaw/openclaw/actions/runs/<child-run-id>/job/<job-id>' \
+  -f tracking_url='https://github.com/openclaw/openclaw/issues/<issue-number>' \
+  -f reason='Describe the observed flake and why the release can proceed.'
+```
+
+Wait for that classification run to succeed. Its receipt binds the FRV parent,
+CI child, Release SHA, accepted job ID/attempt, actor, reason, and tracking issue
+or PR. Then run `pnpm frv continue --failed --run <parent-run-id>`: when all
+remaining failures are advisory, it reruns only the parent collector and verifies
+the sealed manifest. It does not rerun the classified child. Inspect `frv status`
+first if other blockers remain, because `continue --failed` retries them.
+
+The `recorded-flake` class is limited to `normalCi` in v1. CI coverage gates,
+seal/evidence jobs, Build Artifacts, install smoke, survivor, first-hop, pack/npm
+qualification, Package Acceptance, and package integrity cannot be classified.
+Other children remain strict; extending the scope is follow-up work. A failed
+`openclaw/ci-gate` is accepted only when every other failed job is advisory,
+at least one has a recorded classification, and its log proves every non-passing
+entry is `selected=true` with result `failure`. Matrix job display names may
+differ from gate keys. Skipped, cancelled, missing, or unrecognized entries block.
+A later rerun creates a different job ID and invalidates the old classification
+for that job.
+
+### Automatic retries for declared flakes
+
+Automatic test retries are disabled. Unclassified failed or timed out jobs
+outside `windows-node-ci` remain blockers; `known_flaky_jobs_json` is rejected
+on new dispatches. Inspect the original failure before requesting another execution. The
+explicit `frv rerun` and `frv continue --failed` commands remain operator recovery
+operations and never run as an automatic response to a test outcome.
+
+Published artifacts may contain empty `knownFlakyJobs` and `automaticRetries`
+fields. Readers retain their original plan digest and reject nonempty allowances
+or retry records. Current qualification requires successful selected results
+or validated `windows-node-ci`/`recorded-flake` evidence. Retired waivers and
+pre-declared advisory failure allowances remain rejected and must
+be replaced with a fresh qualifying run; it cannot authorize publication.
 
 ### Read publication observations
 
@@ -139,8 +213,7 @@ FRV and publication workflow identities independently, then joins supported
 manifest recorded by that publisher. An original plan from attempt 1 can bind a
 final validation manifest from attempt 2. The two attempts are reported
 separately; neither is silently replaced with the latest attempt.
-Linked children retain their own observed tooling SHA/ref. The recorded normal
-ClawHub ref can differ from an alpha publisher's ref.
+Linked children retain their own observed tooling SHA/ref.
 
 This view reports observations, **not release authorization or current registry
 visibility**. Writer selection, verification selection, job conclusions,

@@ -15,6 +15,7 @@ import {
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionProviderHost } from "./provider-host.js";
 import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
 import { DecisionContractError, validateDecisionBatch } from "./validation.js";
@@ -36,13 +37,14 @@ export async function evaluateDecision(
 
 export async function evaluateDecisionInRegistry(
   batch: DecisionBatch,
-  options: Options,
+  inputOptions: Options,
   registry: PluginRegistry | null,
   config: OpenClawConfig,
   consumerId?: string,
 ): Promise<DecisionOutcome> {
+  const options = { ...inputOptions };
   if (
-    !options ||
+    !inputOptions ||
     (options.agentId !== undefined &&
       (typeof options.agentId !== "string" || !options.agentId.trim())) ||
     typeof options.purpose !== "string" ||
@@ -58,39 +60,63 @@ export async function evaluateDecisionInRegistry(
     throw new DecisionContractError();
   }
   options.signal.throwIfAborted();
+  const started = performance.now();
+  const skipped = (outcome: DecisionOutcome): DecisionOutcome => {
+    logDecisionEvaluation({ options, facts: { dispatched: false }, started, outcome });
+    return outcome;
+  };
   if (!validateDecisionBatch(batch)) {
-    return { status: "unavailable", reason: "unsupported-input" };
+    return skipped({ status: "unavailable", reason: "unsupported-input" });
   }
   const selected = resolveDecisionModelSetting(config, options.agentId);
   if (!selected) {
-    return { status: "unavailable", reason: "disabled" };
+    return skipped({ status: "unavailable", reason: "disabled" });
   }
   if (config.plugins?.enabled === false) {
-    return { status: "unavailable", reason: "disabled" };
+    return skipped({ status: "unavailable", reason: "disabled" });
   }
   const entry = registry?.decisionProviders.find(
     (candidate) => candidate.host.provider.id === selected.provider,
   );
   if (!entry || !registry) {
-    return { status: "unavailable", reason: "not-configured" };
+    return skipped({ status: "unavailable", reason: "not-configured" });
   }
   if (config.plugins?.entries?.[entry.pluginId]?.enabled === false) {
-    return entry.host.unavailable("disabled");
+    return skipped(entry.host.unavailable("disabled"));
   }
-  let capturedOperator: ReturnType<typeof captureAmbientGatewayOperatorAuthority> | undefined;
+  let submitted: DecisionBatch;
+  try {
+    submitted = structuredClone(batch);
+  } catch {
+    throw new DecisionContractError();
+  }
+  const model = normalizeModelRef(selected.provider, selected.model, {
+    allowPluginNormalization: false,
+    manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
+  });
+  // Bind the registry lifetime before operator preparation yields.
+  const rootCaller =
+    getPluginRegistryResourceOwner(registry) === getPluginRegistryState()?.activeRegistry;
+  const authority = rootCaller
+    ? undefined
+    : capturePluginLifecycleAuthority(registry, undefined, { scopedRuntime: true });
+  const lifetime = rootCaller
+    ? undefined
+    : capturePluginRegistryLifecycleSignal(
+        registry,
+        capturePluginRegistryLifecycleEpoch(registry),
+        { scopedRuntime: true },
+      );
+  let capturedOperator:
+    | Awaited<ReturnType<typeof captureAmbientGatewayOperatorAuthority>>
+    | undefined;
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   try {
-    capturedOperator = captureAmbientGatewayOperatorAuthority({
+    capturedOperator = await captureAmbientGatewayOperatorAuthority({
       missingBindingError: () =>
         new Error("Decision evaluation requires its current Gateway binding."),
     });
-    modelExecution = bindOperatorModelExecution(
-      capturedOperator.authority,
-      normalizeModelRef(selected.provider, selected.model, {
-        allowPluginNormalization: false,
-        manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
-      }),
-    );
+    modelExecution = bindOperatorModelExecution(capturedOperator.authority, model);
     const modelSignal = modelExecution
       ? AbortSignal.any([options.signal, modelExecution.signal])
       : options.signal;
@@ -102,9 +128,9 @@ export async function evaluateDecisionInRegistry(
     assertCurrent();
     // Root callers carry their own work signal: provider replacement may still allow fallback.
     // Prepared views additionally lose consumer authority when their finite view is released.
-    if (getPluginRegistryResourceOwner(registry) === getPluginRegistryState()?.activeRegistry) {
+    if (rootCaller) {
       const result = await entry.host.evaluate(
-        batch,
+        submitted,
         { ...options, signal: modelSignal },
         selected.model,
         config,
@@ -114,18 +140,12 @@ export async function evaluateDecisionInRegistry(
       assertCurrent();
       return result;
     }
-    const authority = capturePluginLifecycleAuthority(registry, undefined, { scopedRuntime: true });
-    const lifetime = capturePluginRegistryLifecycleSignal(
-      registry,
-      capturePluginRegistryLifecycleEpoch(registry),
-      { scopedRuntime: true },
-    );
     if (!authority?.() || !lifetime) {
       throw new Error("Decision consumer authority closed.");
     }
     const signal = AbortSignal.any([modelSignal, lifetime]);
     const result = await entry.host.evaluate(
-      batch,
+      submitted,
       { ...options, signal },
       selected.model,
       config,

@@ -162,13 +162,13 @@ export const marginCases = [
     id: ["forwarded", "other-agent", "subagent", "legacy"][index]!,
     messages: forwarded(key, longText),
     side: "left",
-    selector: ".chat-bubble",
+    selector: ".chat-session-activity",
   })),
   {
     id: "forwarded-short",
     messages: forwarded("agent:main:cron:release-review", "Review complete."),
     side: "left",
-    selector: ".chat-bubble",
+    selector: ".chat-session-activity",
   },
   {
     id: "forwarded-media",
@@ -178,7 +178,7 @@ export const marginCases = [
       { type: "text", text: "The sample checklist is ready." },
     ]),
     side: "left",
-    selector: ".chat-bubble",
+    selector: ".chat-session-activity",
   },
   {
     id: "clawhub",

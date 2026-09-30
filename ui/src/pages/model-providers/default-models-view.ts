@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { BASE_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
+import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
 import {
@@ -23,8 +24,9 @@ import {
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
+import { renderMutationMessage } from "./view-status.ts";
 
-type DefaultModelsViewProps = {
+export type DefaultModelsViewProps = {
   models: ModelPickerEntry[];
   decisionModels: DecisionModelEntry[];
   selection: DefaultModelSelection;
@@ -64,23 +66,6 @@ const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
 // available on session-level pickers.
 const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
 const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
-
-function modelOptions(
-  models: ModelPickerEntry[],
-  authProviders: ReadonlyMap<string, ModelAuthStatusProvider>,
-): ModelPickerOption[] {
-  const seen = new Set<string>();
-  const options: ModelPickerOption[] = [];
-  for (const model of models) {
-    const ref = modelCatalogRef(model);
-    if (seen.has(ref)) {
-      continue;
-    }
-    seen.add(ref);
-    options.push(modelOption(model, authProviders));
-  }
-  return options.toSorted((a, b) => a.label.localeCompare(b.label));
-}
 
 function modelOption(
   model: ModelPickerEntry,
@@ -134,8 +119,8 @@ function renderHelpTitle(params: {
   `;
 }
 
-function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
-  return value === "auto" ? "auto" : value === "on";
+function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): FastMode {
+  return value === "auto" || value === "ultrafast" ? value : value === "on";
 }
 
 // Discovery progress does not change the saved selection or disable known models.
@@ -183,7 +168,9 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
       provider,
     ]),
   );
-  const options = modelOptions(props.models, authProviders);
+  const options = dedupeByKey(props.models, modelCatalogRef).map((model) =>
+    modelOption(model, authProviders),
+  );
   const automaticRef = props.automaticUtilityModel;
   const automaticBaseRef = automaticRef ? splitTrailingAuthProfile(automaticRef).model : "";
   const automaticEntry = props.models.find((model) => modelCatalogRef(model) === automaticBaseRef);
@@ -217,11 +204,13 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             {
               value: "",
               label: t("modelProviders.defaults.selectModel"),
-              disabled: Boolean(props.selection.primary),
+              disabled: !props.canMutate || Boolean(props.selection.primary),
             },
-            ...options,
+            ...(props.canMutate
+              ? options
+              : options.map((option) => ({ ...option, disabled: true }))),
           ],
-          disabled: modelControlsDisabled || saving,
+          disabled: props.models.length === 0 || saving,
           title,
           showSelectedDetail: true,
           onChange: props.onPrimaryChange,
@@ -338,7 +327,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           `,
         }),
         control: html`
-          ${renderSettingsSegmented<"" | "auto" | "on" | "off">({
+          ${renderSettingsSegmented<"" | ReturnType<typeof formatFastModeValue>>({
             value: fastMode,
             ariaLabel: t("quickSettings.model.fastMode"),
             options: [
@@ -367,21 +356,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
         `,
       })}
       ${renderCatalogProgress(props)}
-      ${
-        props.canMutate && props.message
-          ? html`<div
-              class="callout ${props.message.kind}"
-              role=${props.message.kind === "error" ? "alert" : "status"}
-            >
-              ${props.message.text}
-            </div>`
-          : nothing
-      }
-      ${
-        props.canMutate && props.message?.warning
-          ? html`<div class="callout warning" role="status">${props.message.warning}</div>`
-          : nothing
-      }
+      ${props.canMutate ? renderMutationMessage(props.message) : nothing}
     </div>
   `;
   return renderSettingsSection(

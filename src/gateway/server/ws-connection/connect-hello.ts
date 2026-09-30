@@ -13,6 +13,8 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { formatErrorMessage as formatError } from "../../../infra/errors.js";
+import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
@@ -33,6 +35,7 @@ import {
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
+import { operatorSessionCap } from "../../operator-role-policy.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
   MAX_BUFFERED_BYTES,
@@ -40,12 +43,11 @@ import {
   TICK_INTERVAL_MS,
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
-import { formatError } from "../../server-utils.js";
+import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { shouldScheduleBackgroundHealthRefresh } from "../health-refresh-admission.js";
 import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
-import { broadcastPresenceSnapshot } from "../presence-events.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -116,11 +118,19 @@ export async function sendGatewayHello(
       ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
+  const sessionRowProjection = getSessionRowProjection(buildRequestContext());
+  while (sessionRowProjection?.needsMembershipPreparation()) {
+    await sessionRowProjection.prepareMembership();
+    if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
+      throw new Error("Gateway connection closed before hello");
+    }
+  }
   const snapshot = buildGatewaySnapshot({
     client: context.handler.getClient(),
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
     revisionProjector: buildRequestContext().configRevisionProjector,
+    sessionRowProjection,
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {
@@ -142,6 +152,10 @@ export async function sendGatewayHello(
     ? ("configured" as const)
     : ("bundled" as const);
   const serverBuildId = resolveRuntimeServiceBuildId();
+  const sessionCap =
+    role === "operator"
+      ? operatorSessionCap(context.handler.getClient(), context.configSnapshot)
+      : undefined;
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -161,13 +175,23 @@ export async function sendGatewayHello(
       capabilities: [
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+        // Configured UI roots may serve an older route contract than this Gateway.
+        ...(controlUiBuildSource === "bundled" &&
+        context.configSnapshot.gateway?.controlUi?.enabled !== false
+          ? [GATEWAY_SERVER_CAPS.CONTROL_UI_BROWSER_FOCUS]
+          : []),
         GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_HOST_DIAGNOSTICS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
         GATEWAY_SERVER_CAPS.PROFILE_BINDING,
         GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
         GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
@@ -194,6 +218,7 @@ export async function sendGatewayHello(
       method: authMethod,
       role,
       scopes,
+      ...(sessionCap !== undefined ? { sessionCap } : {}),
       ...(recoveryScope ? { recoveryScope } : {}),
       ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
       ...(deviceToken
@@ -230,6 +255,7 @@ export async function sendGatewayHello(
           const consumed = await consumeSetupHandoff({
             token: bootstrapTokenCandidate,
             deviceId: device.id,
+            admitsCloudWorkerSetup: context.handler.admitsNodeSetupCompletion,
             pairedDeviceMatches: (paired) => paired?.publicKey === devicePublicKey,
           });
           if (!consumed) {
@@ -272,6 +298,15 @@ export async function sendGatewayHello(
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
+    const client = context.handler.getClient();
+    if (
+      client?.presenceKey &&
+      !client.invalidated &&
+      client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
+      !context.handler.isClosed()
+    ) {
+      commitPresence(client.presenceKey, connId);
+    }
     onHelloDelivered();
   } catch (err) {
     if (bootstrapHandoff) {
@@ -436,6 +471,6 @@ export async function sendGatewayHello(
   ) {
     // The row is already in hello's snapshot. Notify established readers now,
     // without queueing this connection's redundant snapshot ahead of hello.
-    broadcastPresenceSnapshot(buildRequestContext());
+    buildRequestContext().publishPresence();
   }
 }

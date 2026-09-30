@@ -18,23 +18,14 @@ public enum OpenClawBonjour {
     }
 
     private static func resolveWideAreaDomain(_ raw: String?) -> String? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return nil }
-        let normalized = self.normalizeServiceDomain(trimmed)
+        let normalized = self.normalizeServiceDomain(raw)
         return normalized == self.gatewayServiceDomain ? nil : normalized
     }
 
     public static func normalizeServiceDomain(_ raw: String?) -> String {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return self.gatewayServiceDomain
-        }
+        guard let trimmed = raw?.trimmedNonEmpty else { return self.gatewayServiceDomain }
 
         let lower = trimmed.lowercased()
-        if lower == "local" || lower == "local." {
-            return self.gatewayServiceDomain
-        }
-
         return lower.hasSuffix(".") ? lower : (lower + ".")
     }
 }

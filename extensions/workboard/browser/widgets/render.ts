@@ -193,7 +193,7 @@ export function renderWorkboardBoardWidget(model: WorkboardWidgetModel): Templat
     agentsList: null,
     sessions: [],
     onOpenSession: model.host.sessions.open,
-    onRequestUpdate: () => model.syncFromHost(),
+    onRequestUpdate: () => model.runtime.notify(),
   };
   const workboardPath = model.host.navigation.pageHref(workboardPageTarget(boardId));
 

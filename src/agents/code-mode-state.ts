@@ -26,6 +26,7 @@ import type {
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-runtime.js";
+import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -256,10 +257,6 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
     void close(signal.reason);
   }
   return owner;
-}
-
-export function createCodeModeBridgeDispatchState(): CodeModeBridgeDispatchState {
-  return { started: false };
 }
 
 // One unreferenced timer owns parked continuations even when no later exec or wait
@@ -589,22 +586,9 @@ export function createPendingBridgeStates(
   });
 }
 
-export function storeSuspendedRun(params: {
-  owner: CodeModeRunOwner;
-  replayId: string;
-  pending: PendingBridgeState[];
-  replaySafe: boolean;
-  settlementMode: CodeModeSettlementMode;
-  continuation: CodeModeExecutorContinuation;
-  parentToolCallId: string;
-  ctx: ToolSearchToolContext;
-  config: CodeModeConfig;
-  runtime: ToolSearchRuntime;
-  catalogProjection: CodeModeCatalogProjection;
-  namespaceRuntime: CodeModeNamespaceRuntime;
-  output: CodeModeOutputState;
-  bridgeDispatch: CodeModeBridgeDispatchState;
-}) {
+export function storeSuspendedRun(
+  params: Omit<CodeModeRunState, "runId" | "expiresAt" | "agentWaitRetainUntil">,
+) {
   const runId = params.owner.runId;
   if (params.owner.signal.aborted) {
     cancelPendingBridgeStates(params.pending);
@@ -624,25 +608,7 @@ export function storeSuspendedRun(params: {
         params.config.snapshotTtlSeconds * MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS,
       )
     : undefined;
-  const state: CodeModeRunState = {
-    runId,
-    replayId: params.replayId,
-    parentToolCallId: params.parentToolCallId,
-    ctx: params.ctx,
-    config: params.config,
-    continuation: params.continuation,
-    pending: params.pending,
-    settlementMode: params.settlementMode,
-    replaySafe: params.replaySafe,
-    output: params.output,
-    expiresAt,
-    agentWaitRetainUntil,
-    runtime: params.runtime,
-    catalogProjection: params.catalogProjection,
-    namespaceRuntime: params.namespaceRuntime,
-    bridgeDispatch: params.bridgeDispatch,
-    owner: params.owner,
-  };
+  const state: CodeModeRunState = { ...params, runId, expiresAt, agentWaitRetainUntil };
   const result = params.output.takeResult(
     {
       status: "waiting" as const,
@@ -658,7 +624,7 @@ export function storeSuspendedRun(params: {
   // A result that cannot expose its continuation must not leave an unreachable parked cell.
   activeRuns.set(runId, state);
   scheduleActiveRunExpiry();
-  return result;
+  return recordCodeModeToolOutcome(result, result, params.pending);
 }
 
 export function codeModeAbortedResult(params: {

@@ -28,9 +28,7 @@ actor CameraCaptureService {
                 "Microphone unavailable"
             case let .permissionDenied(kind):
                 "\(kind) permission denied"
-            case let .captureFailed(msg):
-                msg
-            case let .exportFailed(msg):
+            case let .captureFailed(msg), let .exportFailed(msg):
                 msg
             }
         }
@@ -43,7 +41,7 @@ actor CameraCaptureService {
             CameraDeviceInfo(
                 id: device.uniqueID,
                 name: device.localizedName,
-                position: Self.positionLabel(device.position),
+                position: CameraCapturePipelineSupport.positionLabel(device.position),
                 deviceType: device.deviceType.rawValue)
         }
     }
@@ -255,15 +253,10 @@ actor CameraCaptureService {
         let ns = UInt64(min(delayMs, 10000)) * 1_000_000
         try? await Task.sleep(nanoseconds: ns)
     }
-
-    private nonisolated static func positionLabel(_ position: AVCaptureDevice.Position) -> String {
-        CameraCapturePipelineSupport.positionLabel(position)
-    }
 }
 
 private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     private var cont: CheckedContinuation<Data, Error>?
-    private var didResume = false
 
     init(_ cont: CheckedContinuation<Data, Error>) {
         self.cont = cont
@@ -274,8 +267,7 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
         didFinishProcessingPhoto photo: AVCapturePhoto,
         error: Error?)
     {
-        guard !self.didResume, let cont else { return }
-        self.didResume = true
+        guard let cont else { return }
         self.cont = nil
         if let error {
             cont.resume(throwing: error)
@@ -298,8 +290,7 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
         error: Error?)
     {
         guard let error else { return }
-        guard !self.didResume, let cont else { return }
-        self.didResume = true
+        guard let cont else { return }
         self.cont = nil
         cont.resume(throwing: error)
     }

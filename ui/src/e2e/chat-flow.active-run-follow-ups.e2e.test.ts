@@ -141,7 +141,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await page.locator(".chat-tool-msg-summary", { hasText: "Exec" }).waitFor();
+      await page
+        .locator(".chat-tool-msg-summary")
+        .getByRole("img", { name: "exec", exact: true })
+        .waitFor();
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
       let agentSequence = 0;
       const commentaryText = "The active commentary stays visible.";
@@ -501,6 +504,7 @@ suite.define(() => {
     const initialText = "Explain the long running operation.";
     const beforeText = "A B";
     const commentaryText = "Checking the intermediate result.";
+    const latestCommentaryText = "Checking the remaining work.";
     const steerText = "Now focus on the remaining work.";
     const afterText = "The remaining work continues after steering.";
     const userMessage = {
@@ -597,7 +601,25 @@ suite.define(() => {
           },
           steerMessage,
         ],
-        inFlightRun: { runId, startedAt, text: beforeText },
+        inFlightRun: {
+          runId,
+          startedAt,
+          text: beforeText,
+          events: [
+            {
+              runId,
+              seq: 1,
+              stream: "item",
+              ts: startedAt + 4_000,
+              sessionKey: "agent:main:main",
+              data: {
+                kind: "preamble",
+                itemId: "split-latest-commentary",
+                progressText: latestCommentaryText,
+              },
+            },
+          ],
+        },
         sessionInfo,
       });
       const startupsBefore = (await gateway.getRequests("chat.startup")).length;
@@ -614,7 +636,15 @@ suite.define(() => {
       try {
         await expect
           .poll(bubbleTexts)
-          .toEqual([initialText, "A", commentaryText, "B", steerText, afterText]);
+          .toEqual([
+            initialText,
+            "A",
+            commentaryText,
+            "B",
+            steerText,
+            latestCommentaryText,
+            afterText,
+          ]);
       } finally {
         await capture("recovered-continuation");
       }
@@ -758,8 +788,10 @@ suite.define(() => {
           timestamp: Date.now(),
         },
       ]);
-      const sessionListsBeforeTerminal = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const rosterMatch = { includeGlobal: true };
+      const sessionListsBeforeTerminal = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", {
         activeRunIds: [activeRunId],
         hasActiveRun: true,
@@ -770,7 +802,7 @@ suite.define(() => {
         updatedAt: Date.now(),
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeTerminal);
       const terminalSessions = chatSessionListResponse([
         {

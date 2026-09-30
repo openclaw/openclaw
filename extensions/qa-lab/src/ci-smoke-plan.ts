@@ -1,4 +1,3 @@
-// Qa Lab plugin module plans the bounded CI smoke pack parts.
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./model-selection.js";
 import { resolveQaProfileScenarios } from "./profile-planning.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
@@ -88,10 +87,6 @@ export function createQaSmokeCiPart(
       cause: error,
     });
   }
-  if (scenarios.length === 0) {
-    throw new Error(`${QA_SMOKE_PROFILE} taxonomy profile did not resolve any CI scenarios.`);
-  }
-
   const supportedChannels = new Set<string>(QA_SMOKE_CI_CHANNELS);
   const unsupportedChannels = new Set(
     scenarios.flatMap((scenario) => {

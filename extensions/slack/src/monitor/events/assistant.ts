@@ -1,6 +1,8 @@
+import type { AssistantThreadStartedEvent } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { buildSlackAssistantThreadMetadata, DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../context.js";
+import { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../../channel-meta.js";
+import { buildSlackAssistantThreadMetadata } from "../context.js";
 import type { SlackMonitorContext, SlackAssistantThreadContext } from "../context.js";
 
 type SlackAssistantThreadPayload = {
@@ -10,41 +12,18 @@ type SlackAssistantThreadPayload = {
   thread_ts?: string;
 };
 
-type SlackAssistantThreadContextPayload = {
-  channel_id?: string;
-  team_id?: string;
-  enterprise_id?: string | null;
-};
+type SlackAssistantThreadContextPayload =
+  AssistantThreadStartedEvent["assistant_thread"]["context"];
 
-type SlackAssistantThreadStartedEvent = {
-  type: "assistant_thread_started";
+type SlackAssistantThreadEvent = {
+  type: "assistant_thread_started" | "assistant_thread_context_changed";
   assistant_thread?: SlackAssistantThreadPayload;
   context?: SlackAssistantThreadContextPayload;
   event_ts?: string;
-};
-
-type SlackAssistantThreadContextChangedEvent = {
-  type: "assistant_thread_context_changed";
-  assistant_thread?: SlackAssistantThreadPayload;
-  context?: SlackAssistantThreadContextPayload;
-  event_ts?: string;
-};
-
-type SlackAssistantEventHandler<TEvent> = (args: { event: TEvent; body: unknown }) => Promise<void>;
-
-type SlackAssistantEventRegistrar = {
-  (
-    name: "assistant_thread_started",
-    handler: SlackAssistantEventHandler<SlackAssistantThreadStartedEvent>,
-  ): void;
-  (
-    name: "assistant_thread_context_changed",
-    handler: SlackAssistantEventHandler<SlackAssistantThreadContextChangedEvent>,
-  ): void;
 };
 
 function normalizeAssistantThread(
-  event: SlackAssistantThreadStartedEvent | SlackAssistantThreadContextChangedEvent,
+  event: SlackAssistantThreadEvent,
   getPrevious?: (channelId: string, threadTs: string) => SlackAssistantThreadContext | undefined,
 ) {
   const thread = event.assistant_thread;
@@ -63,26 +42,18 @@ function normalizeAssistantThread(
     key: keyof Pick<SlackAssistantThreadContextPayload, "channel_id" | "team_id">,
     previousValue: string | undefined,
   ) => threadContext?.[key]?.trim() || eventContext?.[key]?.trim() || previousValue;
-  const enterpriseId = (() => {
-    if (threadContext && "enterprise_id" in threadContext) {
-      return threadContext.enterprise_id === null
-        ? null
-        : threadContext.enterprise_id?.trim() || previous?.enterpriseId;
-    }
-    if (eventContext && "enterprise_id" in eventContext) {
-      return eventContext.enterprise_id === null
-        ? null
-        : eventContext.enterprise_id?.trim() || previous?.enterpriseId;
-    }
-    return previous?.enterpriseId;
-  })();
+  const enterpriseContext =
+    threadContext && "enterprise_id" in threadContext ? threadContext : eventContext;
   return {
     assistantChannelId: channelId,
     threadTs,
     userId: thread.user_id?.trim() || previous?.userId,
     channelId: resolveContextString("channel_id", previous?.channelId),
     teamId: resolveContextString("team_id", previous?.teamId),
-    enterpriseId,
+    enterpriseId:
+      enterpriseContext?.enterprise_id === null
+        ? null
+        : enterpriseContext?.enterprise_id?.trim() || previous?.enterpriseId,
   };
 }
 
@@ -128,40 +99,32 @@ export function registerSlackAssistantEvents(params: {
   trackEvent?: () => void;
 }) {
   const { ctx, trackEvent } = params;
-  const slackApp = ctx.app as unknown as { event: SlackAssistantEventRegistrar };
 
-  slackApp.event("assistant_thread_started", async ({ event, body }) => {
-    if (ctx.shouldDropMismatchedSlackEvent(body)) {
-      return;
-    }
-    trackEvent?.();
-    const assistantThread = normalizeAssistantThread(event, ctx.getSlackAssistantThreadContext);
-    if (!assistantThread) {
-      logVerbose("slack assistant_thread_started dropped: missing assistant thread channel/thread");
-      return;
-    }
-    ctx.saveSlackAssistantThreadContext(assistantThread);
-    await ctx.setSlackSuggestedPrompts({
-      channelId: assistantThread.assistantChannelId,
-      threadTs: assistantThread.threadTs,
-      title: "Try asking",
-      prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
+  for (const eventName of [
+    "assistant_thread_started",
+    "assistant_thread_context_changed",
+  ] as const) {
+    ctx.app.event(eventName, async ({ event, body }) => {
+      if (ctx.shouldDropMismatchedSlackEvent(body)) {
+        return;
+      }
+      trackEvent?.();
+      const assistantThread = normalizeAssistantThread(event, ctx.getSlackAssistantThreadContext);
+      if (!assistantThread) {
+        logVerbose(`slack ${eventName} dropped: missing assistant thread channel/thread`);
+        return;
+      }
+      ctx.saveSlackAssistantThreadContext(assistantThread);
+      if (eventName === "assistant_thread_started") {
+        await ctx.setSlackSuggestedPrompts({
+          channelId: assistantThread.assistantChannelId,
+          threadTs: assistantThread.threadTs,
+          title: "Try asking",
+          prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
+        });
+      } else {
+        await persistAssistantThreadMetadata({ ctx, assistantThread });
+      }
     });
-  });
-
-  slackApp.event("assistant_thread_context_changed", async ({ event, body }) => {
-    if (ctx.shouldDropMismatchedSlackEvent(body)) {
-      return;
-    }
-    trackEvent?.();
-    const assistantThread = normalizeAssistantThread(event, ctx.getSlackAssistantThreadContext);
-    if (!assistantThread) {
-      logVerbose(
-        "slack assistant_thread_context_changed dropped: missing assistant thread channel/thread",
-      );
-      return;
-    }
-    ctx.saveSlackAssistantThreadContext(assistantThread);
-    await persistAssistantThreadMetadata({ ctx, assistantThread });
-  });
+  }
 }

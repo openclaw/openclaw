@@ -1,88 +1,276 @@
-import type { Worker } from "node:worker_threads";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
+import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
+import { markWorkerRetirement, type WorkerRetirementReason } from "./worker-cpu.js";
+import type { WorkerLifecycle } from "./worker-native-lifecycle.types.js";
 import {
+  areWorkerNativeSectionsSettled,
   cancelWorkerNativeSections,
   waitForWorkerNativeSections,
 } from "./worker-task-native-sections.js";
 import type { Slot, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
+const WORKER_WARM_WINDOW_MS = 5 * 60_000;
+
 export type WorkerTaskPoolRetirement<Input, Output> = {
-  retire(slot: Slot<Input, Output>): Promise<void>;
-  retireIdle(resourceClosures: WeakMap<Worker, { pending: number }>): void;
+  retire(slot: Slot<Input, Output>, reason?: WorkerRetirementReason): Promise<void>;
+  startRetire(slot: Slot<Input, Output>, reason?: WorkerRetirementReason): RetainedOperation<void>;
+  service(): void;
+  startRotate(): RetainedOperation<void>;
+  readonly dispatchAllowed: boolean;
+  idle(slot: Slot<Input, Output>): void;
+  clearIdle(slot: Slot<Input, Output>): void;
+  retireIdle(resourceClosures: WeakMap<WorkerLifecycle, { pending: number }>): void;
   retryFailedRetirements(): Promise<void>;
-  joinArtifacts(): Promise<void[]>;
+  joinArtifacts(): Promise<void>;
+  startJoinArtifacts(): RetainedOperation<void>;
 };
 
 export function createWorkerTaskPoolRetirement<Input, Output>({
   slots,
   options,
-  clearIdleTimer,
   runInContext,
   dispatch,
+  serviceDeadlines,
 }: {
   slots: Set<Slot<Input, Output>>;
   options: WorkerTaskPoolOptions<Output>;
-  clearIdleTimer: (timer: Slot<Input, Output>["idleTimer"]) => void;
   runInContext: <T>(operation: () => T) => T;
   dispatch: () => void;
+  serviceDeadlines: () => void;
 }): WorkerTaskPoolRetirement<Input, Output> {
   const artifactCleanups = new Set<Promise<void>>();
+  const artifactSettlements = new WeakMap<Promise<void>, RetainedOperation<void>>();
+  let lastIdleRetirementAt = -Infinity;
+  let warmSlot: Slot<Input, Output> | undefined;
+  let rotation: RetainedOperation<void> | undefined;
+  let rotationFailed = false;
+  // Worker replies can arrive under an unrelated fake clock; use the owner's clock.
+  const setTimeoutFn = setTimeout;
+  const clearTimeoutFn = clearTimeout;
+  const now = performance.now.bind(performance);
+  const clearIdle = (slot: Slot<Input, Output>) => clearTimeoutFn(slot.idleTimer);
 
-  function retire(slot: Slot<Input, Output>): Promise<void> {
-    clearIdleTimer(slot.idleTimer);
-    cancelWorkerNativeSections(slot.nativeSections);
-    // Retain error listeners until exit: termination can race a worker startup error.
-    // Constructor observers can retire this slot before its Worker is assigned.
-    return (slot.retiring ??= Promise.resolve()
-      .then(async () => {
-        if (slot.worker) {
-          // Node can abort if termination interrupts zlib between allocation and initialization.
-          // Keep custody until the current bounded native operation settles, including on timeout.
-          const settlement = waitForWorkerNativeSections(slot.nativeSections);
-          if (settlement) {
-            await settlement;
-          }
-          await slot.worker.terminate();
+  function startRotate(): RetainedOperation<void> {
+    if (rotation) {
+      return rotation;
+    }
+    const runRotation = AsyncLocalStorage.snapshot();
+    let retirements: RetainedOperation<void>[] | undefined;
+    let artifacts: RetainedOperation<void> | undefined;
+    let advancing = false;
+    const completion = createRetainedOperation<void>(() => {
+      for (const slot of rotationSlots) {
+        slot.native?.service();
+      }
+      serviceDeadlines();
+      for (const retiring of retirements ?? []) {
+        retiring.service();
+      }
+      artifacts?.service();
+      advance();
+    });
+    rotation = completion.operation;
+    rotationFailed = false;
+    const rotationSlots = [...slots];
+    const tasks = rotationSlots.flatMap((slot) => (slot.task ? [slot.task] : []));
+    const advance = () =>
+      runRotation(() => {
+        if (advancing || completion.operation.read().status !== "pending") {
+          return;
         }
-        slot.retired = true;
-      })
-      .catch((error: unknown) => {
+        advancing = true;
         try {
-          void Promise.resolve(options.onRetirementFailure?.(error)).catch(() => undefined);
-        } catch {
-          // Observer failures cannot replace the termination failure or its retained custody.
+          if (tasks.some((task) => task.read().status === "pending")) {
+            return;
+          }
+          if (!retirements) {
+            retirements = rotationSlots.map((slot) => startRetire(slot, "rotation"));
+            for (const retiring of retirements) {
+              void retiring.result.then(advance, advance);
+            }
+          }
+          for (const retiring of retirements) {
+            const stopped = retiring.read();
+            if (stopped.status === "rejected") {
+              throw stopped.error;
+            }
+            if (stopped.status === "pending") {
+              return;
+            }
+          }
+          if (!artifacts) {
+            artifacts = startJoinArtifacts();
+            void artifacts.result.then(advance, advance);
+          }
+          const cleaned = artifacts.read();
+          if (cleaned.status === "pending") {
+            return;
+          }
+          if (cleaned.status === "rejected") {
+            throw cleaned.error;
+          }
+          rotation = undefined;
+          completion.resolve();
+          dispatch();
+        } catch (error) {
+          rotation = undefined;
+          rotationFailed = true;
+          completion.reject(error);
+        } finally {
+          advancing = false;
         }
-        throw error;
-      })
-      .then(() => {
-        const releaseResources = slot.releaseResources;
-        if (releaseResources) {
-          runInContext(() => {
-            const cleanup = runBestEffortCleanup({
-              cleanup: releaseResources,
-              onError: (error) =>
-                process.emitWarning(`Worker task resource release failed: ${String(error)}`),
+      });
+    for (const task of tasks) {
+      void task.promise.then(advance, advance);
+    }
+    advance();
+    return completion.operation;
+  }
+
+  function startRetire(
+    slot: Slot<Input, Output>,
+    reason: WorkerRetirementReason = "closed",
+  ): RetainedOperation<void> {
+    if (reason === "idle_timeout") {
+      lastIdleRetirementAt = now();
+    } else if (reason === "rotation") {
+      lastIdleRetirementAt = -Infinity;
+    }
+    if (warmSlot === slot) {
+      warmSlot = undefined;
+    }
+    if (slot.worker) {
+      markWorkerRetirement(slot.worker, reason);
+    }
+    clearIdle(slot);
+    cancelWorkerNativeSections(slot.nativeSections);
+    if (slot.retiring) {
+      return slot.retiring;
+    }
+    const runRetirement = AsyncLocalStorage.snapshot();
+    let nativeStop: RetainedOperation<void> | undefined;
+    let observingSection = false;
+    let advancing = false;
+    const completion = createRetainedOperation<void>(() => {
+      nativeStop?.service();
+      advance();
+    });
+    const advance = () =>
+      runRetirement(() => {
+        if (advancing || completion.operation.read().status !== "pending") {
+          return;
+        }
+        advancing = true;
+        try {
+          if (slot.creating) {
+            return;
+          }
+          if (!areWorkerNativeSectionsSettled(slot.nativeSections)) {
+            if (!observingSection) {
+              observingSection = true;
+              void Promise.resolve(waitForWorkerNativeSections(slot.nativeSections)).then(
+                advance,
+                completion.reject,
+              );
+            }
+            return;
+          }
+          if (slot.worker && !nativeStop) {
+            markWorkerRetirement(slot.worker, reason);
+            if (slot.native) {
+              nativeStop = slot.native.stop();
+            } else {
+              const stopped = createRetainedOperation<void>(() => {});
+              nativeStop = stopped.operation;
+              // Direct SDK Workers retain their existing awaited native barrier.
+              void Promise.resolve()
+                .then(() => slot.worker!.terminate())
+                .then(() => stopped.resolve(), stopped.reject);
+            }
+            void nativeStop.result.then(advance, advance);
+          }
+          const stopped = nativeStop?.read();
+          if (stopped?.status === "pending") {
+            return;
+          }
+          if (stopped?.status === "rejected") {
+            throw stopped.error;
+          }
+          slot.retired = true;
+          const releaseResources = slot.releaseResources;
+          if (releaseResources) {
+            runInContext(() => {
+              const cleanup = runBestEffortCleanup({
+                cleanup: releaseResources,
+                onError: (error) =>
+                  process.emitWarning(`Worker task resource release failed: ${String(error)}`),
+              });
+              // Release execution capacity at exit; terminal close still joins disposable files.
+              artifactCleanups.add(cleanup);
+              const settled = createRetainedOperation<void>(() => {});
+              artifactSettlements.set(cleanup, settled.operation);
+              void cleanup.then(() => {
+                artifactCleanups.delete(cleanup);
+                settled.resolve();
+              }, settled.reject);
             });
-            // Release execution capacity at exit; terminal close still joins disposable files.
-            artifactCleanups.add(cleanup);
-            void cleanup.then(() => artifactCleanups.delete(cleanup));
-          });
+          }
+          slot.worker?.removeAllListeners();
+          slots.delete(slot);
+          for (const complete of slot.completions ?? []) {
+            complete();
+          }
+          slot.completions = undefined;
+          dispatch();
+          completion.resolve();
+        } catch (error) {
+          try {
+            void Promise.resolve(options.onRetirementFailure?.(error)).catch(() => undefined);
+          } catch {
+            // Observer failures cannot replace native custody or its original failure.
+          }
+          // Keep native custody and queued input charges until a later close/rotation joins exit.
+          slot.retirementFailed = true;
+          slot.retiring = undefined;
+          completion.reject(error);
+        } finally {
+          advancing = false;
         }
-        slot.worker?.removeAllListeners();
-        slots.delete(slot);
-        for (const complete of slot.completions ?? []) {
-          complete();
-        }
-        slot.completions = undefined;
-        dispatch();
-      })
-      .catch((error: unknown) => {
-        // Keep native custody and queued input charges until a later close/rotation joins exit.
-        slot.retirementFailed = true;
-        slot.retiring = undefined;
-        throw error;
-      }));
+      });
+    slot.retiring = completion.operation;
+    // Constructor observers may retire before the returned Worker is installed.
+    void Promise.resolve().then(advance);
+    return completion.operation;
+  }
+
+  function retire(slot: Slot<Input, Output>, reason?: WorkerRetirementReason): Promise<void> {
+    return startRetire(slot, reason).result;
+  }
+
+  function startJoinArtifacts(): RetainedOperation<void> {
+    const pending = [...artifactCleanups].map((cleanup) => artifactSettlements.get(cleanup)!);
+    const joined = createRetainedOperation<void>(() => {
+      for (const operation of pending) {
+        operation.service();
+      }
+      advance();
+    });
+    const advance = () => {
+      const outcomes = pending.map((operation) => operation.read());
+      const failure = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failure?.status === "rejected") {
+        joined.reject(failure.error);
+      } else if (outcomes.every((outcome) => outcome.status === "fulfilled")) {
+        joined.resolve();
+      }
+    };
+    for (const operation of pending) {
+      void operation.result.then(advance, advance);
+    }
+    advance();
+    return joined.operation;
   }
 
   /** Join failed native retirements without interrupting healthy tasks. */
@@ -105,7 +293,37 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   }
 
   return {
+    get dispatchAllowed() {
+      return rotation === undefined && !rotationFailed;
+    },
+    startRotate,
     retire,
+    startRetire,
+    service() {
+      const current = [...slots];
+      for (const slot of current) {
+        slot.retiring?.service();
+      }
+      rotation?.service();
+    },
+    clearIdle,
+    idle(slot) {
+      const idleMs = options.idleTimeoutMs ?? 60_000;
+      if (idleMs <= 0) {
+        return;
+      }
+      // A promptly reused pool retains one isolate; excess slots keep their normal timeout.
+      if (!warmSlot && now() - lastIdleRetirementAt < WORKER_WARM_WINDOW_MS) {
+        warmSlot = slot;
+      }
+      slot.idleTimer = runInContext(() =>
+        setTimeoutFn(
+          () => void retire(slot, "idle_timeout").catch(() => undefined),
+          warmSlot === slot ? Math.max(idleMs, WORKER_WARM_WINDOW_MS) : idleMs,
+        ),
+      );
+      slot.idleTimer.unref();
+    },
     retireIdle(resourceClosures) {
       for (const slot of slots) {
         if (
@@ -115,11 +333,12 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
           slot.worker &&
           !resourceClosures.get(slot.worker)?.pending
         ) {
-          void retire(slot).catch(() => undefined);
+          void retire(slot, "memory_pressure").catch(() => undefined);
         }
       }
     },
     retryFailedRetirements,
-    joinArtifacts: () => Promise.all(artifactCleanups),
+    startJoinArtifacts,
+    joinArtifacts: () => startJoinArtifacts().result,
   };
 }

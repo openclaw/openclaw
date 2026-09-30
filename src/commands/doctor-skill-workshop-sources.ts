@@ -5,7 +5,10 @@ import { pathExists, root, type Root } from "../infra/fs-safe.js";
 import { validateSkillProposalRecord } from "../skills/workshop/store-record.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { listLegacyCollectionBackupWorkspaceDirs } from "./doctor-skill-workshop-collection-backups.js";
-import { classifyWorkshopRelocation } from "./doctor-skill-workshop-relocation.js";
+import {
+  classifyWorkshopRelocation,
+  type LegacyWorkshopProposal,
+} from "./doctor-skill-workshop-relocation.js";
 
 export const LEGACY_WORKSHOP_PROPOSALS_DIR = "skill-workshop/proposals";
 export const LEGACY_WORKSHOP_MAX_RECORD_BYTES = 1024 * 1024;
@@ -22,6 +25,34 @@ export async function readLegacyWorkshopJson(
     symlinks: "reject",
   });
   return JSON.parse(read.buffer.toString("utf8"));
+}
+
+export async function readLegacyWorkshopProposals(
+  stateRoot: Root,
+): Promise<LegacyWorkshopProposal[]> {
+  const records: LegacyWorkshopProposal[] = [];
+  for (const entry of await stateRoot.list(LEGACY_WORKSHOP_PROPOSALS_DIR, {
+    withFileTypes: true,
+  })) {
+    if (!entry.isDirectory || !LEGACY_WORKSHOP_PROPOSAL_ID_PATTERN.test(entry.name)) {
+      continue;
+    }
+    try {
+      const parsed = validateSkillProposalRecord(
+        await readLegacyWorkshopJson(
+          stateRoot,
+          `${LEGACY_WORKSHOP_PROPOSALS_DIR}/${entry.name}/proposal.json`,
+          LEGACY_WORKSHOP_MAX_RECORD_BYTES,
+        ),
+      );
+      if (parsed.ok && parsed.value.id === entry.name) {
+        records.push({ record: parsed.value, ownerAgentId: null });
+      }
+    } catch {
+      // Invalid sidecars cannot establish migration targets; import owns their diagnostics.
+    }
+  }
+  return records;
 }
 
 export async function readWorkshopMigrationRecords(env: NodeJS.ProcessEnv, includeEvents = false) {
@@ -51,27 +82,8 @@ export async function listLegacySkillWorkshopWorkspaceDirs(
   const { records } = await readWorkshopMigrationRecords(env);
   const stateDir = resolveStateDir(env);
   if (await pathExists(path.join(stateDir, LEGACY_WORKSHOP_PROPOSALS_DIR))) {
-    const stateRoot = await root(stateDir);
-    for (const entry of await stateRoot.list(LEGACY_WORKSHOP_PROPOSALS_DIR, {
-      withFileTypes: true,
-    })) {
-      if (!entry.isDirectory || !LEGACY_WORKSHOP_PROPOSAL_ID_PATTERN.test(entry.name)) {
-        continue;
-      }
-      try {
-        const parsed = validateSkillProposalRecord(
-          await readLegacyWorkshopJson(
-            stateRoot,
-            `${LEGACY_WORKSHOP_PROPOSALS_DIR}/${entry.name}/proposal.json`,
-            LEGACY_WORKSHOP_MAX_RECORD_BYTES,
-          ),
-        );
-        if (parsed.ok && parsed.value.id === entry.name) {
-          records.push({ record: parsed.value, ownerAgentId: null });
-        }
-      } catch {
-        // Missing or invalid sidecars cannot establish a workspace; import owns their diagnostics.
-      }
+    for (const proposal of await readLegacyWorkshopProposals(await root(stateDir))) {
+      records.push(proposal);
     }
   }
   const { external } = classifyWorkshopRelocation(records, config, env);

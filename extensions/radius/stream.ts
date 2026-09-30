@@ -11,6 +11,7 @@ import {
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
+  buildAssistantMessage,
   createEmptyTransportUsage,
   failTransportStream,
   notifyProviderHttpResponse,
@@ -257,16 +258,12 @@ async function* readEvents(body: ReadableStream<Uint8Array>, signal?: AbortSigna
 export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptions> {
   return (model, context, options) => {
     const stream = createAssistantMessageEventStream();
-    const partial: AssistantMessage = {
-      role: "assistant",
+    const partial = buildAssistantMessage({
+      model,
       content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
       usage: createEmptyTransportUsage(),
       stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    });
     const convert = createEventConverter(partial);
     void (async () => {
       let response: Response | undefined;

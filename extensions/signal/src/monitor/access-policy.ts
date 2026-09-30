@@ -1,10 +1,9 @@
-// Signal plugin module implements access policy behavior.
 import {
   type ChannelIngressContextBinding,
   defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   formatSignalSenderId,
@@ -13,9 +12,6 @@ import {
   type SignalSender,
 } from "../identity.js";
 import { getSignalRuntime } from "../runtime.js";
-
-type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
-type SignalGroupPolicy = "open" | "allowlist" | "disabled";
 
 const SIGNAL_UUID_KIND = "plugin:signal-uuid" as const;
 const SIGNAL_GROUP_KIND = "plugin:signal-group" as const;
@@ -112,8 +108,8 @@ function signalSubjectInput(params: { sender: SignalSender; groupId?: string }) 
 
 export async function resolveSignalAccessState(params: {
   accountId: string;
-  dmPolicy: SignalDmPolicy;
-  groupPolicy: SignalGroupPolicy;
+  dmPolicy: DmPolicy;
+  groupPolicy: GroupPolicy;
   allowFrom: string[];
   groupAllowFrom: string[];
   sender: SignalSender;
@@ -161,7 +157,7 @@ export async function resolveSignalAccessState(params: {
 }
 
 export async function handleSignalDirectMessageAccess(params: {
-  dmPolicy: SignalDmPolicy;
+  dmPolicy: DmPolicy;
   dmAccessDecision: "allow" | "block" | "pairing";
   senderId: string;
   senderIdLine: string;

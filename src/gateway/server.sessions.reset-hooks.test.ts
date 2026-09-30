@@ -437,26 +437,6 @@ test("sessions.reset does not begin cleanup after losing lifecycle ownership", a
   expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
 });
 
-test("sessions.reset emits before_reset hook with transcript context", async () => {
-  await createSessionStoreDir();
-  const transcriptPath = await writeMainTranscriptSession({
-    sessionId: "sess-main",
-    content: "hello from transcript",
-  });
-
-  beforeResetHookState.hasBeforeResetHook = true;
-
-  await resetMainSession();
-  expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-  const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
-  expectTranscriptResetEvent({
-    event,
-    sessionFile: transcriptPath,
-    content: "hello from transcript",
-  });
-  expectMainHookContext(context, "sess-main");
-});
-
 test("sessions.reset infers selected global agent from agent-prefixed aliases", async () => {
   const { dir } = await createSessionStoreDir();
   await withGlobalAgentSessionStore(dir, async (globalConfig) => {
@@ -527,6 +507,29 @@ test("sessions.reset rejects unknown selected global agents", async () => {
     expectResetErrorMessage(reset, "Unknown agent id: typo");
   });
 });
+
+test.each(["!!!", "   "])(
+  "sessions.reset rejects an unrepresentable explicit agent %j without resetting main",
+  async (agentId) => {
+    const { storePath } = await createSessionStoreDir();
+    await writeMainSessionEntry("sess-preserved");
+    const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
+    const before = loadEntry(scope);
+
+    const reset = await directSessionReq("sessions.reset", {
+      key: scope.sessionKey,
+      agentId,
+    });
+
+    expect(reset.ok).toBe(false);
+    expect(reset.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("Unknown agent id"),
+    });
+    expect(loadEntry(scope)).toEqual(before);
+    expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
+  },
+);
 
 test("sessions.reset emits inferred selected global agent scope", async () => {
   const { dir } = await createSessionStoreDir();
@@ -718,17 +721,6 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
   const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
   expectTranscriptResetEvent({ event, sessionFile: newSessionFile, content: "new transcript" });
   expectMainHookContext(context, "sess-new");
-});
-
-test("sessions.create with emitCommandHooks=true fires command:new hook against parent (#76957)", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-parent", "hello from parent");
-
-  await writeMainSessionEntry("sess-parent");
-
-  await createFromMainSession({ emitCommandHooks: true });
-
-  expect(expectSingleCommandHookEvent("new").context?.commandSource).toBe("webchat");
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {

@@ -42,7 +42,7 @@ export function createAbortAwareDispatcher(params: {
     (payload: ReplyPayload): boolean =>
       params.isAborted() ? false : send(payload);
   const { getCancelledCounts, prepareReplyPayload, sendPreparedReply } = params.dispatcher;
-  const dispatcher: ReplyDispatcher = {
+  return {
     ...(prepareReplyPayload
       ? { prepareReplyPayload: prepareReplyPayload.bind(params.dispatcher) }
       : {}),
@@ -66,5 +66,4 @@ export function createAbortAwareDispatcher(params: {
       }
     },
   };
-  return dispatcher;
 }

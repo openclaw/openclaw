@@ -2,8 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { isBunRuntime, resolveRuntimeScriptPosition } from "./runtime-binary.js";
 import {
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceProcessEnv,
@@ -43,6 +47,7 @@ export async function resolveGatewayServiceInstallationRefreshRoot(params: {
   if (
     !root ||
     !command ||
+    isBunRuntime(command.programArguments[0] ?? "") ||
     state.loadState.status === "unknown" ||
     (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
     (process.platform === "linux" &&
@@ -100,17 +105,6 @@ export async function inspectGatewayServiceInstallationDrift(
   return { serviceRoot, activeRoot: activeRootReal, serviceVersion, activeVersion };
 }
 
-function shellQuoteArg(value: string): string {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(value)) {
-    return value;
-  }
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function formatExecStart(programArguments: readonly string[]): string {
-  return programArguments.map(shellQuoteArg).join(" ");
-}
-
 function resolveSystemdScopeFromServicePath(
   sourcePath: string | undefined,
 ): "user" | "system" | undefined {
@@ -131,15 +125,37 @@ function resolveSystemdScopeFromServicePath(
 export function resolveServiceEntrypointIndex(
   programArguments: readonly string[],
 ): number | undefined {
-  // Managed commands put the entrypoint immediately before the subcommand.
-  // A subcommand name following a native option is its value, not this boundary.
-  const commandIndex = programArguments.findIndex(
-    (arg, index, args) =>
-      index > 0 &&
-      !args[index - 1]?.startsWith("-") &&
-      (arg === "gateway" || (arg === "node" && args[index + 1] === "run")),
-  );
-  return commandIndex > 0 ? commandIndex - 1 : undefined;
+  const args = [...programArguments];
+  const { position: script } = resolveRuntimeScriptPosition(args);
+  if (typeof script !== "number" && script.kind === "other") {
+    return undefined;
+  }
+  // Runtime flags belong before the script; CLI root options belong after it.
+  // File launchers and custom runtimes retain their original argv indices.
+  const first = typeof script === "number" ? script : 0;
+  const last = typeof script === "number" ? script : args.length - 1;
+  for (let entrypoint = first; entrypoint <= last; entrypoint++) {
+    const argument = args[entrypoint];
+    if (!argument || argument.startsWith("-")) {
+      continue;
+    }
+    let command = entrypoint + 1;
+    while (command < args.length) {
+      if (args[command] === FLAG_TERMINATOR) {
+        command++;
+        break;
+      }
+      const consumed = consumeRootCommandOptionToken(args, command);
+      if (!consumed) {
+        break;
+      }
+      command += consumed;
+    }
+    if (args[command] === "gateway" || (args[command] === "node" && args[command + 1] === "run")) {
+      return entrypoint;
+    }
+  }
+  return undefined;
 }
 
 export function resolveServiceEntrypoint(
@@ -244,7 +260,7 @@ export async function summarizeGatewayServiceLayout(
     : undefined;
 
   return {
-    execStart: formatExecStart(command.programArguments),
+    execStart: command.programArguments.map(quoteCliArg).join(" "),
     ...(sourcePath ? { sourcePath } : {}),
     ...(sourcePathReal ? { sourcePathReal } : {}),
     ...(sourcePath ? { sourceScope: resolveSystemdScopeFromServicePath(sourcePath) } : {}),
@@ -255,6 +271,30 @@ export async function summarizeGatewayServiceLayout(
     ...(packageVersion ? { packageVersion } : {}),
     ...(entrypointSourceCheckout !== undefined ? { entrypointSourceCheckout } : {}),
   };
+}
+
+/** Physical installation overlap only; deployment current/releases names are not evidence. */
+export async function gatewayServiceCommandOverlapsPhysicalInstallation(
+  root: string,
+  command: GatewayServiceCommandConfig | null,
+): Promise<boolean | null> {
+  const layout = await summarizeGatewayServiceLayout(command);
+  if (!layout?.packageRootReal || !layout.entrypointReal) {
+    return null;
+  }
+  const [destination, serving] = await Promise.all(
+    [root, layout.packageRootReal].map((directory) => fs.realpath(directory).catch(() => null)),
+  );
+  if (!destination || !serving) {
+    return null;
+  }
+  if (isPathInside(destination, serving) || isPathInside(serving, destination)) {
+    return true;
+  }
+  const [left, right] = await Promise.all(
+    [destination, serving].map((directory) => fs.stat(directory).catch(() => null)),
+  );
+  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
 }
 
 /** Compare an already inspected launcher with one installation; no service discovery or effects. */

@@ -18,8 +18,8 @@ import {
   type NodeInvokePlacementGrantAuthorization,
 } from "./node-invoke-placement-grant.js";
 import type { NodeSession } from "./node-registry.js";
+import { handlePendingApprovalRequestWithDelivery } from "./server-methods/approval-request-delivery.js";
 import { bindApprovalRequesterMetadata } from "./server-methods/approval-shared.js";
-import { handlePendingPluginApprovalRequest } from "./server-methods/plugin-approval-request-delivery.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
 function sanitizeOptionalMeta(value?: string | null): string | null {
@@ -32,27 +32,6 @@ function normalizeRouteThreadId(value: unknown): string | number | null {
     return value;
   }
   return normalizeOptionalString(value) ?? null;
-}
-
-function resolveNodeInvokeTurnSourceFields(
-  turnSource:
-    | {
-        channel?: unknown;
-        to?: unknown;
-        accountId?: unknown;
-        threadId?: unknown;
-      }
-    | undefined,
-): Pick<
-  PluginApprovalRequestPayload,
-  "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
-> {
-  return {
-    turnSourceChannel: normalizeOptionalString(turnSource?.channel) ?? null,
-    turnSourceTo: normalizeOptionalString(turnSource?.to) ?? null,
-    turnSourceAccountId: normalizeOptionalString(turnSource?.accountId) ?? null,
-    turnSourceThreadId: normalizeRouteThreadId(turnSource?.threadId),
-  };
 }
 
 export function createPluginNodeInvokeApprovalRuntime(params: {
@@ -97,7 +76,12 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
   return {
     async request(input) {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
-      const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
+      const turnSource = {
+        turnSourceChannel: normalizeOptionalString(params.turnSource?.channel) ?? null,
+        turnSourceTo: normalizeOptionalString(params.turnSource?.to) ?? null,
+        turnSourceAccountId: normalizeOptionalString(params.turnSource?.accountId) ?? null,
+        turnSourceThreadId: normalizeRouteThreadId(params.turnSource?.threadId),
+      };
       const callerIdentity = params.callerIdentity;
       const invocationSessionKey =
         params.client?.internal?.pluginRuntimeOwnerId === params.pluginId
@@ -176,10 +160,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
           null,
         runId: callerIdentity?.operationalRunInstance.runId ?? scopedAuthority?.runId ?? null,
         placementGrant,
-        turnSourceChannel: turnSource.turnSourceChannel,
-        turnSourceTo: turnSource.turnSourceTo,
-        turnSourceAccountId: turnSource.turnSourceAccountId,
-        turnSourceThreadId: turnSource.turnSourceThreadId,
+        ...turnSource,
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       if (callerIdentity) {
@@ -197,7 +178,8 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
       const { decision: decisionPromise } = await manager.register(record, timeoutMs);
-      await handlePendingPluginApprovalRequest({
+      await handlePendingApprovalRequestWithDelivery({
+        approvalKind: "plugin",
         manager,
         record,
         respond,

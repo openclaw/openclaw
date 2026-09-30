@@ -38,21 +38,6 @@ export function shouldFetchChatAudioWaveform(params: {
   );
 }
 
-export function canDecodeChatAudioWaveform(params: {
-  sizeBytes: number;
-  durationSeconds?: number;
-}): boolean {
-  return (
-    Number.isFinite(params.sizeBytes) &&
-    params.sizeBytes >= 0 &&
-    params.sizeBytes <= CHAT_AUDIO_WAVEFORM_MAX_BYTES &&
-    params.durationSeconds !== undefined &&
-    Number.isFinite(params.durationSeconds) &&
-    params.durationSeconds >= 0 &&
-    params.durationSeconds <= CHAT_AUDIO_WAVEFORM_MAX_DURATION_SECONDS
-  );
-}
-
 export function computeChatAudioWaveformPeaks(
   buffer: ChatAudioBufferLike,
   bucketCount = CHAT_AUDIO_WAVEFORM_BUCKET_COUNT,

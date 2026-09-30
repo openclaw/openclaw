@@ -12,12 +12,7 @@ import {
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import {
-  readCachedTelegramBotInfo,
-  TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
-  TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
-  writeCachedTelegramBotInfo,
-} from "./bot-info-cache.js";
+import { readCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { telegramPlugin } from "./channel.js";
 import type { TelegramMonitorFn } from "./monitor.types.js";
@@ -29,6 +24,7 @@ import {
 } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
+import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
 const probeTelegram = vi.fn();
 const monitorTelegramProvider = vi.fn();
@@ -368,8 +364,8 @@ describe("telegramPlugin gateway startup", () => {
           fetchedAt: string;
           botInfo: TelegramBotInfo;
         }>({
-          namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
-          maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
+          namespace: "telegram.bot-info-cache",
+          maxEntries: 128,
           defaultTtlMs: 24 * 60 * 60 * 1000,
         });
         const cached = await store.lookup("ops");
@@ -397,18 +393,23 @@ describe("telegramPlugin gateway startup", () => {
     },
   );
 
-  it("deletes cached startup botInfo when the account token changes", async () => {
+  it("invalidates botInfo but retains the previous identity until token-change startup", async () => {
     installTelegramRuntime();
     await writeCachedTelegramBotInfo({
       accountId: "ops",
       botToken: "123456:bad-token",
       botInfo: startupBotInfo,
     });
+    await writeTelegramUpdateOffset({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      updateId: 42,
+    });
 
     await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
-      nextCfg: createTelegramConfig("ops", { botToken: "123456:new-token" }),
+      nextCfg: createTelegramConfig("ops", { botToken: "654321:new-token" }),
       runtime: createRuntimeSpies(),
     });
 
@@ -418,6 +419,9 @@ describe("telegramPlugin gateway startup", () => {
         botToken: "123456:bad-token",
       }),
     ).resolves.toBeNull();
+    await expect(
+      readTelegramUpdateOffset({ accountId: "ops", botToken: "123456:bad-token" }),
+    ).resolves.toBe(42);
   });
 
   it("keeps cached startup botInfo when unrelated Telegram config changes", async () => {

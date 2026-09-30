@@ -1,18 +1,17 @@
-// Policy plugin module implements policy conformance behavior.
 import { promises as fs } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { policyRuleValueIsValid } from "./doctor/ordered-shape.js";
 import {
-  isPolicyValueAtLeastAsStrict,
-  policyContainerShapeFindings,
-  POLICY_RULE_METADATA as RAW_POLICY_RULE_METADATA,
+  POLICY_RULE_METADATA,
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
-} from "./doctor/register.js";
+} from "./doctor/metadata.js";
+import { policyRuleValueIsValid } from "./doctor/ordered-shape.js";
+import { policyContainerShapeFindings } from "./doctor/policy-shape.js";
+import { isPolicyValueAtLeastAsStrict } from "./doctor/strictness.js";
 import { ocPathSegment } from "./doctor/utils.js";
 import { getPolicyPath, scopedPolicyValue } from "./policy-value.js";
 
@@ -67,8 +66,6 @@ type PolicyRuleClaim = {
   };
 };
 
-const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = RAW_POLICY_RULE_METADATA;
-
 export async function buildPolicyConformanceReport(params: {
   readonly baselinePath: string;
   readonly policyPath: string;
@@ -112,12 +109,6 @@ export async function buildPolicyConformanceReport(params: {
       .filter((claim) => !policyRuleValueIsValid(claim.metadata, claim.value))
       .map((claim) => invalidConformanceFinding(claim, policy.displayName)),
   ]);
-  const validBaselineClaims = baselineClaims.filter((claim) =>
-    policyRuleValueIsValid(claim.metadata, claim.value),
-  );
-  const validCandidateClaims = candidateClaims.filter((claim) =>
-    policyRuleValueIsValid(claim.metadata, claim.value),
-  );
   if (invalidFindings.length > 0) {
     return {
       ok: false,
@@ -127,15 +118,15 @@ export async function buildPolicyConformanceReport(params: {
       findings: invalidFindings,
     };
   }
-  const findings = validBaselineClaims
-    .map((claim) => conformanceFinding(claim, validCandidateClaims, policy.displayName))
+  const findings = baselineClaims
+    .map((claim) => conformanceFinding(claim, candidateClaims, policy.displayName))
     .filter((finding): finding is PolicyConformanceFinding => finding !== undefined);
   return {
-    ok: invalidFindings.length === 0 && findings.length === 0,
+    ok: findings.length === 0,
     baselinePath: baseline.displayName,
     policyPath: policy.displayName,
-    rulesChecked: validBaselineClaims.length,
-    findings: [...invalidFindings, ...findings],
+    rulesChecked: baselineClaims.length,
+    findings,
   };
 }
 

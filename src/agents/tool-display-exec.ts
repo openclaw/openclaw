@@ -63,15 +63,6 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
         sub = firstPositional(words, i + 1);
         break;
       }
-      if (token.startsWith("--")) {
-        if (token.includes("=")) {
-          continue;
-        }
-        if (globalWithValue.has(token)) {
-          i += 1;
-        }
-        continue;
-      }
       if (token.startsWith("-")) {
         if (globalWithValue.has(token)) {
           i += 1;
@@ -504,31 +495,19 @@ type ExecSummary = {
   allGeneric?: boolean;
 };
 
-function normalizePathForDisplay(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/g, "");
-}
-
 function classifyWorkspacePath(
   path: string,
 ): "agent" | "repo" | "sandbox" | "workspace" | undefined {
-  const normalized = normalizePathForDisplay(path);
-  const segments = normalized.split("/").filter(Boolean);
-  if (segments.length === 0) {
-    return undefined;
-  }
+  const segments = path.split(/[\\/]/).filter(Boolean);
 
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = segments[index];
-    if (!segment) {
-      continue;
-    }
+  for (const [index, segment] of segments.entries()) {
     if (segment === ".openclaw" && segments[index + 1] === "workspace") {
       return "agent";
     }
     if (segment === ".openclaw" && segments[index + 1] === "sandboxes") {
       return "sandbox";
     }
-    if (/[-_]workspace$/i.test(segment) && segment.toLowerCase() !== "workspace") {
+    if (/[-_]workspace$/i.test(segment)) {
       return "agent";
     }
     if (/^workspace[-_]/i.test(segment)) {
@@ -583,41 +562,10 @@ function summarizeExecCommand(command: string): ExecSummary | undefined {
 }
 
 const KNOWN_SUMMARY_PREFIXES = [
-  "check git",
-  "view git",
-  "show git",
-  "list git",
-  "switch git",
-  "create git",
-  "pull git",
-  "push git",
-  "fetch git",
-  "merge git",
-  "rebase git",
-  "stage git",
-  "restore git",
-  "reset git",
-  "stash git",
-  "search ",
-  "find files",
-  "list files",
-  "show first",
-  "show last",
-  "print line",
-  "print text",
-  "copy ",
-  "move ",
-  "remove ",
-  "create folder",
-  "create file",
-  "fetch http",
-  "install dependencies",
   "run tests",
   "run build",
-  "start app",
   "run lint",
   "run openclaw",
-  "run node script",
   "run node ",
   "run python",
   "run ruby",
@@ -628,7 +576,6 @@ const KNOWN_SUMMARY_PREFIXES = [
   "run pnpm ",
   "run yarn ",
   "run bun ",
-  "check js syntax",
 ];
 
 function isGenericSummary(summary: string): boolean {

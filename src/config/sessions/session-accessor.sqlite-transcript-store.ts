@@ -12,6 +12,7 @@ import { redactSecrets } from "../../logging/redact.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import {
   deferOpenClawAgentPostCommitPublication,
+  openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
@@ -21,24 +22,32 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   createTranscriptIdentityReader,
-  findTranscriptEventInDatabase,
+  findAssistantTranscriptEventInDatabase,
   readEventTimestamp,
   readTranscriptEventId,
   readTranscriptEventMessage,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
-import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionKysely,
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope.js";
 import {
   advanceTranscriptMutationAtInTransaction,
   deleteTranscriptEventsInTransaction,
   ensureTranscriptGenerationInTransaction,
   ensureTranscriptSessionRoot,
+  pruneTranscriptReactionsInTransaction,
   readTranscriptGenerationInTransaction,
   readTranscriptMutationStateInTransaction,
   readNextTranscriptSeq,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
+import type { SessionTranscriptRuntimeScope } from "./session-accessor.types.js";
+import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import {
   createTranscriptIndexAppenderInTransaction,
   deleteSessionTranscriptIndexInTransaction,
@@ -68,6 +77,7 @@ type TranscriptAppendOptions = {
   eventJson?: string;
   preparedPayload?: PreparedTranscriptPayload;
   allowStoredAlias?: boolean;
+  onPlaceholderInserted?: (placeholder: { sessionKey: string; sessionId: string }) => void;
   idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner";
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
@@ -183,6 +193,7 @@ function appendTranscriptEvent(
   } else {
     ensureTranscriptSessionRoot(database, scope, createdAt, {
       allowStoredAlias: options.allowStoredAlias === true,
+      onPlaceholderInserted: options.onPlaceholderInserted,
     });
     ensureTranscriptGenerationInTransaction(database, scope.sessionId);
     cursor.initialized = true;
@@ -260,10 +271,9 @@ export function scheduleTranscriptProjectionReconcile(
     return;
   }
   // Dirty state is durable: a missed post-commit kick is recovered by startup/search reconciliation.
-  deferOpenClawAgentPostCommitPublication(database, () =>
+  deferOpenClawAgentPostCommitPublication(database, (databaseOptions) =>
     startSessionTranscriptIndexReconcile({
-      agentId: database.agentId,
-      path: database.path,
+      ...databaseOptions,
       preferredSessionId: sessionId,
     }),
   );
@@ -382,6 +392,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
   const previousGeneration = readTranscriptGenerationInTransaction(database, resolved.sessionId);
   const deleted = deleteTranscriptEventsInTransaction(database, resolved.sessionId);
   if (events.length === 0) {
+    pruneTranscriptReactionsInTransaction(database, resolved);
     deleteSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
     if (deleted || previousGeneration) {
       rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
@@ -428,6 +439,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
       seq += 1;
     }
   }
+  pruneTranscriptReactionsInTransaction(database, resolved);
   if (deleted || seq > 0) {
     recordTranscriptReplacementMutation(database, resolved.sessionId, preservedTranscriptUpdatedAt);
     if (rebuildSynchronously) {
@@ -613,15 +625,6 @@ function readIdempotencyKeyOwner(
   return row ? { eventId: row.event_id, seq: row.seq } : undefined;
 }
 
-function readTranscriptMessageByIdempotencyKey(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  scope: ResolvedTranscriptScope,
-  idempotencyKey: string,
-): { messageId: string; message: unknown } | undefined {
-  const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
-  return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
-}
-
 export function readTranscriptMessageByScopedIdempotencyKey(
   database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
@@ -629,12 +632,10 @@ export function readTranscriptMessageByScopedIdempotencyKey(
   lookup: TranscriptMessageAppendOptions<unknown>["idempotencyLookup"],
 ): { messageId: string; message: unknown } | undefined {
   if (lookup !== "scan-assistant") {
-    return readTranscriptMessageByIdempotencyKey(database, scope, idempotencyKey);
+    const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
+    return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
   }
-  const found = findTranscriptEventInDatabase(database, scope.sessionId, (event) => {
-    const message = readTranscriptEventMessage(event);
-    return message?.role === "assistant" && message.idempotencyKey === idempotencyKey;
-  });
+  const found = findAssistantTranscriptEventInDatabase(database, scope.sessionId, idempotencyKey);
   if (!found) {
     return undefined;
   }
@@ -642,6 +643,17 @@ export function readTranscriptMessageByScopedIdempotencyKey(
   return message
     ? { messageId: readTranscriptEventId(found.event) ?? idempotencyKey, message }
     : undefined;
+}
+
+export function readSessionTranscriptMessageByEventId(
+  scope: SessionTranscriptRuntimeScope,
+  eventId: string,
+): { messageId: string; message: unknown } | undefined {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return readHotSessionTranscriptSnapshot(database, resolved.sessionId, "identity", () =>
+    readTranscriptMessageByEventId(database, resolved, eventId),
+  );
 }
 
 export function readTranscriptMessageByEventId(

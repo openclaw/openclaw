@@ -2,21 +2,21 @@ import { describe, expect, it } from "vitest";
 import { loadOfficialExternalChannelSecretContractApi } from "./official-external-channel-secret-contract.js";
 import { createResolverContext } from "./runtime-shared.js";
 
+function secretRef(id: string) {
+  return { source: "env" as const, provider: "default", id };
+}
+
 describe("official external channel secret contracts", () => {
   it("binds active QQBot SecretRefs to their exact account owners", () => {
     const config = {
       channels: {
         qqbot: {
           appId: "root-app",
-          clientSecret: { source: "env" as const, provider: "default", id: "QQBOT_ROOT_SECRET" },
+          clientSecret: secretRef("QQBOT_ROOT_SECRET"),
           accounts: {
             "Named.Team": {
               appId: "named-app",
-              clientSecret: {
-                source: "env" as const,
-                provider: "default",
-                id: "QQBOT_NAMED_SECRET",
-              },
+              clientSecret: secretRef("QQBOT_NAMED_SECRET"),
             },
           },
         },
@@ -55,23 +55,15 @@ describe("official external channel secret contracts", () => {
     const config = {
       channels: {
         qqbot: {
-          clientSecret: { source: "env" as const, provider: "default", id: "QQBOT_ROOT_SECRET" },
+          clientSecret: secretRef("QQBOT_ROOT_SECRET"),
           accounts: {
             disabled: {
               enabled: false,
               appId: "disabled-app",
-              clientSecret: {
-                source: "env" as const,
-                provider: "default",
-                id: "QQBOT_DISABLED_SECRET",
-              },
+              clientSecret: secretRef("QQBOT_DISABLED_SECRET"),
             },
             missingAppId: {
-              clientSecret: {
-                source: "env" as const,
-                provider: "default",
-                id: "QQBOT_MISSING_APP_SECRET",
-              },
+              clientSecret: secretRef("QQBOT_MISSING_APP_SECRET"),
             },
           },
         },

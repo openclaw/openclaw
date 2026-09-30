@@ -29,7 +29,7 @@ describe.each(["local", "repository"] as const)("%s workspace media policy", (ki
         ? { kind, path: localWorkspace }
         : {
             kind,
-            repository: getSessionRepositoryWorkspaceStore().create({
+            repository: await getSessionRepositoryWorkspaceStore().create({
               agentId: sessionTarget.agentId,
               sessionKey: sessionTarget.sessionKey,
               url: "https://github.com/example/repository.git",

@@ -1,11 +1,15 @@
-// Verifies plugin registry behavior with runtime config inputs.
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveUserPath } from "../utils.js";
 import {
   createLazyPluginRuntime,
@@ -13,19 +17,105 @@ import {
 } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRegistry } from "./registry.js";
 import { disposePluginRegistryInstances, withPluginRegistrationContext } from "./runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import * as sdkAlias from "./sdk-alias.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+function createHarness(id: string) {
+  return {
+    id,
+    label: id,
+    supports: () => ({ supported: true as const }),
+    runAttempt: async () => {
+      throw new Error("unused");
+    },
+  };
+}
+
+function createRecord(
+  id: string,
+  overrides: Partial<Parameters<typeof createPluginRecord>[0]> = {},
+) {
+  return createPluginRecord({
+    id,
+    source: `/plugins/${id}/index.js`,
+    origin: "global",
+    enabled: true,
+    configSchema: false,
+    ...overrides,
+  });
+}
+
+type CreateSession = PluginRuntime["agent"]["session"]["createSessionEntry"];
+type CreateParams = Parameters<CreateSession>[0];
+
+function registered(
+  id: string,
+  overrides: Parameters<typeof createRecord>[1] = {},
+  runtime = createPluginRuntime(),
+) {
+  const builder = createRuntimeTestRegistry(runtime);
+  const record = createRecord(id, overrides);
+  return { builder, record, api: builder.createApi(record, { config: {} }) };
+}
+
+function sessionFixture(id: string) {
+  const runtime = createPluginRuntime();
+  const createSessionEntry = vi.fn<CreateSession>(async (params) => ({
+    key: params.key,
+    agentId: "main",
+    sessionId: "session-1",
+    entry: { sessionId: "session-1", updatedAt: 1 },
+  }));
+  runtime.agent.session.createSessionEntry = createSessionEntry;
+  return { ...registered(id, { origin: "bundled" }, runtime), createSessionEntry };
+}
+
+function expectRejectedHarness(
+  { builder, record }: ReturnType<typeof registered>,
+  message: string,
+) {
+  expect(builder.registry.agentHarnesses).toEqual([]);
+  expect(record.agentHarnessIds).toEqual([]);
+  expect(builder.registry.diagnostics).toContainEqual(
+    expect.objectContaining({ level: "error", pluginId: record.id, message }),
+  );
+}
+
+async function expectSessionNamespace(
+  { api, createSessionEntry, record }: ReturnType<typeof sessionFixture>,
+  key: string,
+  initialEntry: CreateParams["initialEntry"],
+  conflict: CreateParams,
+) {
+  const create = api.runtime.agent.session.createSessionEntry;
+  await expect(create({ cfg: {}, key, initialEntry })).resolves.toEqual(
+    expect.objectContaining({ sessionId: "session-1" }),
+  );
+  expect(createSessionEntry).toHaveBeenCalledWith(
+    expect.objectContaining({
+      initialEntry: expect.objectContaining({ pluginOwnerId: record.id }),
+    }),
+  );
+  await expect(create({ cfg: {}, key: "agent:main:ordinary", initialEntry })).rejects.toThrow(
+    `must start with "plugin:${record.id}:"`,
+  );
+  await expect(create(conflict)).rejects.toThrow("requires exactly one runtime owner");
+}
+
 describe("plugin registration runtime admission", () => {
-  function fixture() {
+  function fixture(origin: "config" | "bundled" = "config") {
     const list = vi.fn(async () => ({ nodes: [] }));
     const runtime = createPluginRuntime();
     runtime.nodes.list = list;
@@ -34,17 +124,122 @@ describe("plugin registration runtime admission", () => {
       activateGlobalSideEffects: false,
       logger: { info() {}, warn() {}, error() {} },
     });
-    const record = createPluginRecord({
-      id: "register-runtime",
-      source: "/plugins/register-runtime/index.js",
-      origin: "config",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("register-runtime", { origin });
     const api = builder.createApi(record, { config: {} });
     const owner = expectDefined(getPluginInstance(record), "registration instance");
     return { builder, record, api, owner, list };
   }
+
+  it("rejects a retained ingress purge after runtime retirement without changing rows", async () => {
+    await withStateDirEnv("plugin-ingress-retirement-", async ({ stateDir }) => {
+      const { builder, record, api, owner } = fixture("bundled");
+      builder.registry.plugins.push(record);
+      const queue = api.runtime.state.openChannelIngressQueue<{ text: string }>({
+        accountId: "default",
+        stateDir,
+      });
+      try {
+        await queue.enqueue("active", { text: "active owner" });
+        expect(await queue.purge?.()).toBe(1);
+        await queue.enqueue("pending", { text: "replacement work" });
+        await queue.enqueue("claimed", { text: "in flight" });
+        await queue.claim("claimed");
+        const pending = await queue.listPending();
+        const claims = await queue.listClaims();
+        const purge = expectDefined(queue.purge?.bind(queue), "core purge");
+
+        revokePluginRecord(builder.registry, record);
+
+        await expect(purge()).rejects.toThrow("runtime is no longer active");
+        const inspector = createChannelIngressQueue({
+          channelId: record.id,
+          accountId: "default",
+          stateDir,
+          access: "read-only",
+        });
+        expect(await inspector.listPending()).toEqual(pending);
+        expect(await inspector.listClaims()).toEqual(claims);
+      } finally {
+        await owner.dispose();
+        await closeOpenClawStateDatabaseAsync();
+      }
+    });
+  });
+
+  it("retains an inspected harness until terminal CLI cleanup without reopening ordinary calls", async () => {
+    const { builder, record, api, owner } = fixture();
+    const dispose = vi.fn(async () => {});
+    const physicalCleanup = vi.fn();
+    owner.lifecycle.onDispose(physicalCleanup);
+    api.registerAgentHarness({
+      ...createHarness("owned"),
+      label: "Owned",
+      dispose,
+    });
+    builder.registry.plugins.push(record);
+    const inspection = new PluginRegistryInspectionResources(async () => {
+      await owner.dispose();
+    });
+    inspection.attach(builder.registry);
+    await withCliProcessScope(() =>
+      withCliCommandCleanup(false, async (cleanup) => {
+        const command = expectDefined(cleanup, "CLI cleanup owner");
+        try {
+          const [registration] = withPluginRuntimeRegistryScope(
+            builder.registry,
+            listRegisteredAgentHarnesses,
+          );
+          await inspection.release();
+          expect(physicalCleanup).not.toHaveBeenCalled();
+          expect(() => registration!.harness.dispose?.()).toThrow(/reloaded|disabled/);
+          for (const finish of command.harnesses.values()) {
+            await finish();
+          }
+          expect(dispose).toHaveBeenCalledOnce();
+        } finally {
+          await inspection.release();
+          await command.pluginResources?.release();
+        }
+      }),
+    );
+    expect(physicalCleanup).toHaveBeenCalledOnce();
+  });
+
+  it("does not close a shared harness client when an in-process peer retires", async () => {
+    const first = fixture();
+    const second = fixture();
+    let closed = false;
+    const harness = {
+      ...createHarness("shared"),
+      label: "Shared",
+      loadModelCatalog: async () => {
+        if (closed) {
+          throw new Error("shared client is closed");
+        }
+        return { entries: [] };
+      },
+      dispose: async () => {
+        closed = true;
+      },
+    };
+    first.api.registerAgentHarness(harness);
+    second.api.registerAgentHarness(harness);
+    try {
+      await first.owner.dispose();
+      const peer = expectDefined(second.builder.registry.agentHarnesses[0], "live peer");
+      await expect(
+        peer.harness.loadModelCatalog?.({
+          config: {},
+          agentId: "main",
+          agentDir: "/fixture/agent",
+          workspaceDir: "/fixture/workspace",
+        }),
+      ).resolves.toEqual({ entries: [] });
+      expect(closed).toBe(false);
+    } finally {
+      await second.owner.dispose();
+    }
+  });
 
   it("allows the canonical synchronous registration call before publication", async () => {
     const { builder, record, api, owner, list } = fixture();
@@ -119,33 +314,14 @@ describe("plugin registration runtime admission", () => {
 
 describe("plugin registry runtime config scope", () => {
   it("rejects a plugin harness that claims the built-in runtime id", () => {
-    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
-    const record = createPluginRecord({
-      id: "untrusted-plugin",
-      source: "/plugins/untrusted-plugin/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    const fixture = registered("untrusted-plugin");
+    const { api } = fixture;
 
-    api.registerAgentHarness({
-      id: "openclaw",
-      label: "Forged built-in",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("must not run");
-      },
-    });
+    api.registerAgentHarness(createHarness("openclaw"));
 
-    expect(pluginRegistry.registry.agentHarnesses).toEqual([]);
-    expect(record.agentHarnessIds).toEqual([]);
-    expect(pluginRegistry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "untrusted-plugin",
-        message: 'agent harness id "openclaw" is reserved for the built-in runtime',
-      }),
+    expectRejectedHarness(
+      fixture,
+      'agent harness id "openclaw" is reserved for the built-in runtime',
     );
   });
 
@@ -163,36 +339,14 @@ describe("plugin registry runtime config scope", () => {
       packageName: "@openclaw/codex",
     },
   ] as const)("binds native compaction to the $label Codex harness", async (fixture) => {
-    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
-    const record = createPluginRecord({
-      id: "codex",
-      source: fixture.source,
-      origin: fixture.origin,
-      packageName: fixture.packageName,
-      enabled: true,
-      configSchema: false,
-    });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    const { builder, record, api } = registered("codex", fixture);
     const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
     const options = { nativeCompaction };
 
-    api.registerAgentHarness(
-      {
-        id: "codex",
-        label: "Codex",
-        supports: () => ({ supported: true }),
-        runAttempt: async () => {
-          throw new Error("must not run");
-        },
-      },
-      options,
-    );
+    api.registerAgentHarness(createHarness("codex"), options);
 
-    expect(pluginRegistry.registry.agentHarnesses).toHaveLength(1);
-    const registration = expectDefined(
-      pluginRegistry.registry.agentHarnesses[0],
-      "registered harness",
-    );
+    expect(builder.registry.agentHarnesses).toHaveLength(1);
+    const registration = expectDefined(builder.registry.agentHarnesses[0], "registered harness");
     const compact = expectDefined(registration.nativeCompaction, "native compaction callback");
     const request = {
       sessionId: "native-compaction-session",
@@ -212,73 +366,19 @@ describe("plugin registry runtime config scope", () => {
   it.each(["config", "global"] as const)(
     "rejects native compaction from a %s Codex impostor",
     (origin) => {
-      const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
-      const record = createPluginRecord({
-        id: "codex",
-        source: "/plugins/impostor/index.js",
-        origin,
-        enabled: true,
-        configSchema: false,
+      const fixture = registered("codex", { source: "/plugins/impostor/index.js", origin });
+      const { api } = fixture;
+
+      api.registerAgentHarness(createHarness("codex"), {
+        nativeCompaction: vi.fn(async () => ({ ok: true, compacted: true })),
       });
-      const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
-      api.registerAgentHarness(
-        {
-          id: "codex",
-          label: "Forged Codex",
-          supports: () => ({ supported: true }),
-          runAttempt: async () => {
-            throw new Error("must not run");
-          },
-        },
-        { nativeCompaction: vi.fn(async () => ({ ok: true, compacted: true })) },
-      );
-
-      expect(pluginRegistry.registry.agentHarnesses).toEqual([]);
-      expect(record.agentHarnessIds).toEqual([]);
-      expect(pluginRegistry.registry.diagnostics).toContainEqual(
-        expect.objectContaining({
-          level: "error",
-          pluginId: "codex",
-          message: 'native compaction requires the registry-owned "codex" harness',
-        }),
+      expectRejectedHarness(
+        fixture,
+        'native compaction requires the registry-owned "codex" harness',
       );
     },
   );
-
-  it("rejects native compaction from a foreign harness owner", () => {
-    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
-    const record = createPluginRecord({
-      id: "copilot",
-      source: "/plugins/copilot/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
-
-    api.registerAgentHarness(
-      {
-        id: "copilot",
-        label: "Copilot",
-        supports: () => ({ supported: true }),
-        runAttempt: async () => {
-          throw new Error("must not run");
-        },
-      },
-      { nativeCompaction: vi.fn(async () => ({ ok: true, compacted: true })) },
-    );
-
-    expect(pluginRegistry.registry.agentHarnesses).toEqual([]);
-    expect(record.agentHarnessIds).toEqual([]);
-    expect(pluginRegistry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "copilot",
-        message: 'native compaction requires the registry-owned "codex" harness',
-      }),
-    );
-  });
 
   it("resolves plugin API paths against the plugin root", () => {
     const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
@@ -307,16 +407,7 @@ describe("plugin registry runtime config scope", () => {
         throw new Error("Unable to resolve plugin runtime module; loader=/tmp/openclaw-loader.js");
       },
     });
-    const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "diagnostic-plugin",
-      name: "Diagnostic Plugin",
-      source: "/plugins/diagnostic-plugin/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    const { api } = registered("diagnostic-plugin", { name: "Diagnostic Plugin" }, runtime);
 
     let thrown: unknown;
     try {
@@ -326,11 +417,17 @@ describe("plugin registry runtime config scope", () => {
     }
 
     expect(thrown).toBeInstanceOf(Error);
-    const message = (thrown as Error).message;
-    expect(message).toContain("Unable to resolve plugin runtime module");
-    expect(message).toContain("pluginRuntimeContext=pluginId:diagnostic-plugin");
-    expect(message).toContain("property:version");
-    expect(message).toContain("source:/plugins/diagnostic-plugin/index.js");
+    if (!(thrown instanceof Error)) {
+      throw new Error("expected runtime resolution failure");
+    }
+    for (const text of [
+      "Unable to resolve plugin runtime module",
+      "pluginRuntimeContext=pluginId:diagnostic-plugin",
+      "property:version",
+      "source:/plugins/diagnostic-plugin/index.js",
+    ]) {
+      expect(thrown.message).toContain(text);
+    }
   });
 
   it("runs config helpers with the owning plugin scope", async () => {
@@ -370,14 +467,7 @@ describe("plugin registry runtime config scope", () => {
     const runtime = createPluginRuntime();
     runtime.config = configRuntime;
     const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "legacy-plugin",
-      name: "Legacy Plugin",
-      source: "/plugins/legacy-plugin/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("legacy-plugin", { name: "Legacy Plugin" });
     const api = pluginRegistry.createApi(record, { config });
 
     expect(api.runtime.config.current()).toBe(config);
@@ -412,14 +502,7 @@ describe("plugin registry runtime config scope", () => {
       return undefined;
     });
     const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "memory-provider",
-      name: "Memory Provider",
-      source: "/plugins/memory-provider/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("memory-provider", { name: "Memory Provider", origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     await api.runtime.llm.acquireLocalService({
@@ -430,95 +513,69 @@ describe("plugin registry runtime config scope", () => {
     expect(acquireScope).toMatchObject({ pluginId: "memory-provider" });
   });
 
-  it.each(["materialized", "lazy"] as const)(
-    "runs node helpers with the owning plugin scope (%s)",
-    async (mode) => {
-      let listScope = getPluginRuntimeGatewayRequestScope();
-      let invokeScope = getPluginRuntimeGatewayRequestScope();
-      let duplexScope = getPluginRuntimeGatewayRequestScope();
-      const nodes: PluginRuntime["nodes"] = {
-        list: vi.fn(async () => {
-          listScope = getPluginRuntimeGatewayRequestScope();
-          return { nodes: [] };
-        }),
-        invoke: vi.fn(async () => {
-          invokeScope = getPluginRuntimeGatewayRequestScope();
-          return { ok: true };
-        }),
-        openDuplex: vi.fn(async () => {
-          duplexScope = getPluginRuntimeGatewayRequestScope();
-          return {
-            send: vi.fn(async () => {}),
-            onMessage: vi.fn(() => () => {}),
-            closed: Promise.resolve({ ok: true }),
-            close: vi.fn(),
-          };
-        }),
-      };
-      const resolveRuntimeModule = vi
-        .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
-        .mockImplementation(() => {
-          throw new Error("broad runtime should stay lazy during scoped node access");
-        });
-      const runtime =
-        mode === "lazy"
-          ? createLazyPluginRuntime({ runtimeOptions: { nodes } })
-          : createPluginRuntime({ nodes });
-      const pluginRegistry = createRuntimeTestRegistry(runtime);
-      const record = createPluginRecord({
-        id: "google-meet",
-        name: "Google Meet",
-        source: "/plugins/google-meet/index.js",
-        origin: "bundled",
-        enabled: true,
-        configSchema: false,
+  it("runs lazy node helpers with the owning plugin scope", async () => {
+    let listScope = getPluginRuntimeGatewayRequestScope();
+    let invokeScope = getPluginRuntimeGatewayRequestScope();
+    let duplexScope = getPluginRuntimeGatewayRequestScope();
+    const nodes: PluginRuntime["nodes"] = {
+      list: vi.fn(async () => {
+        listScope = getPluginRuntimeGatewayRequestScope();
+        return { nodes: [] };
+      }),
+      invoke: vi.fn(async () => {
+        invokeScope = getPluginRuntimeGatewayRequestScope();
+        return { ok: true };
+      }),
+      openDuplex: vi.fn(async () => {
+        duplexScope = getPluginRuntimeGatewayRequestScope();
+        return {
+          send: vi.fn(async () => {}),
+          onMessage: vi.fn(() => () => {}),
+          closed: Promise.resolve({ ok: true }),
+          close: vi.fn(),
+        };
+      }),
+    };
+    const resolveRuntimeModule = vi
+      .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
+      .mockImplementation(() => {
+        throw new Error("broad runtime should stay lazy during scoped node access");
       });
-      const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    const runtime = createLazyPluginRuntime({ runtimeOptions: { nodes } });
+    const { builder, api } = registered(
+      "google-meet",
+      { name: "Google Meet", origin: "bundled" },
+      runtime,
+    );
 
-      await api.runtime.nodes.list({ connected: true });
-      await api.runtime.nodes.invoke({
-        nodeId: "node-1",
-        command: "browser.proxy",
-        scopes: ["operator.admin"],
-      });
-      await api.runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" });
+    await api.runtime.nodes.list({ connected: true });
+    await api.runtime.nodes.invoke({
+      nodeId: "node-1",
+      command: "browser.proxy",
+      scopes: ["operator.admin"],
+    });
+    await api.runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" });
 
-      expect(listScope).toMatchObject({
+    for (const scope of [listScope, invokeScope, duplexScope]) {
+      expect(scope).toMatchObject({
         pluginId: "google-meet",
         pluginSource: "/plugins/google-meet/index.js",
       });
-      expect(invokeScope).toMatchObject({
-        pluginId: "google-meet",
-        pluginSource: "/plugins/google-meet/index.js",
-      });
-      expect(duplexScope).toMatchObject({
-        pluginId: "google-meet",
-        pluginSource: "/plugins/google-meet/index.js",
-      });
-      expect(duplexScope?.pluginRegistry).toBe(pluginRegistry.registry);
-      expect(resolveRuntimeModule).not.toHaveBeenCalled();
-    },
-  );
+    }
+    expect(duplexScope?.pluginRegistry).toBe(builder.registry);
+    expect(resolveRuntimeModule).not.toHaveBeenCalled();
+  });
 
   it("runs gateway requests with the owning plugin scope", async () => {
     let requestScope = getPluginRuntimeGatewayRequestScope();
     const runtime = createPluginRuntime();
-    runtime.gateway = {
-      isAvailable: async () => true,
-      request: async <T>() => {
-        requestScope = getPluginRuntimeGatewayRequestScope();
-        return { ok: true } as T;
-      },
-    };
-    const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "google-meet",
-      name: "Google Meet",
-      source: "/plugins/google-meet/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
+    runtime.gateway.isAvailable = async () => true;
+    vi.spyOn(runtime.gateway, "request").mockImplementation(async () => {
+      requestScope = getPluginRuntimeGatewayRequestScope();
+      return { ok: true };
     });
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
+    const record = createRecord("google-meet", { name: "Google Meet", origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     await api.runtime.gateway.request("voicecall.start", { to: "+15550001234" });
@@ -531,50 +588,20 @@ describe("plugin registry runtime config scope", () => {
   });
 
   it("limits harness session creation to the registering plugin", async () => {
-    const runtime = createPluginRuntime();
+    const { builder, api: ownerApi, createSessionEntry } = sessionFixture("codex-owner");
     let createScope = getPluginRuntimeGatewayRequestScope();
-    const createSessionEntry: PluginRuntime["agent"]["session"]["createSessionEntry"] = vi.fn(
-      async (params) => {
-        createScope = getPluginRuntimeGatewayRequestScope();
-        const entry = {
-          sessionId: "session-1",
-          updatedAt: 1,
-          agentHarnessId: params.initialEntry.agentHarnessId,
-        };
-        return {
-          key: params.key,
-          agentId: "main",
-          sessionId: entry.sessionId,
-          entry,
-        };
-      },
-    );
-    runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const ownerRecord = createPluginRecord({
-      id: "codex-owner",
-      source: "/plugins/codex-owner/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
+    createSessionEntry.mockImplementation(async (params) => {
+      createScope = getPluginRuntimeGatewayRequestScope();
+      const entry = {
+        sessionId: "session-1",
+        updatedAt: 1,
+        agentHarnessId: "codex",
+      };
+      return { key: params.key, agentId: "main", sessionId: entry.sessionId, entry };
     });
-    const otherRecord = createPluginRecord({
-      id: "other-plugin",
-      source: "/plugins/other-plugin/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
-    const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
-    ownerApi.registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("unused");
-      },
-    });
+    const otherRecord = createRecord("other-plugin", { origin: "bundled" });
+    const otherApi = builder.createApi(otherRecord, { config: {} });
+    ownerApi.registerAgentHarness(createHarness("codex"));
     const createParams = {
       cfg: {},
       key: "agent:main:harness:codex:thread-1",
@@ -588,55 +615,26 @@ describe("plugin registry runtime config scope", () => {
       pluginId: "codex-owner",
       pluginSource: "/plugins/codex-owner/index.js",
     });
-    await expect(otherApi.runtime.agent.session.createSessionEntry(createParams)).rejects.toThrow(
-      'Agent harness "codex" is owned by plugin "codex-owner", not "other-plugin".',
-    );
+    const ordinaryParams = {
+      cfg: {},
+      key: "agent:main:ordinary",
+      initialEntry: { agentHarnessId: "codex", modelSelectionLocked: true },
+    } satisfies CreateParams;
+    for (const params of [createParams, ordinaryParams]) {
+      await expect(otherApi.runtime.agent.session.createSessionEntry(params)).rejects.toThrow(
+        'Agent harness "codex" is owned by plugin "codex-owner", not "other-plugin".',
+      );
+    }
     await expect(
-      otherApi.runtime.agent.session.createSessionEntry({
-        cfg: {},
-        key: "agent:main:ordinary",
-        initialEntry: { agentHarnessId: "codex", modelSelectionLocked: true },
-      }),
-    ).rejects.toThrow(
-      'Agent harness "codex" is owned by plugin "codex-owner", not "other-plugin".',
-    );
-    await expect(
-      ownerApi.runtime.agent.session.createSessionEntry({
-        cfg: {},
-        key: "agent:main:ordinary",
-        initialEntry: { agentHarnessId: "codex", modelSelectionLocked: true },
-      }),
+      ownerApi.runtime.agent.session.createSessionEntry(ordinaryParams),
     ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
     expect(createSessionEntry).toHaveBeenCalledTimes(2);
   });
 
   it("limits CLI session creation to the owning plugin namespace", async () => {
-    const runtime = createPluginRuntime();
-    const createSessionEntry = vi.fn(async (params) => ({
-      key: params.key,
-      agentId: "main",
-      sessionId: "session-1",
-      entry: { sessionId: "session-1", updatedAt: 1 },
-    }));
-    runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "anthropic",
-      source: "/plugins/anthropic/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
-    api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
-    api.registerAgentHarness({
-      id: "anthropic-harness",
-      label: "Anthropic",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("unused");
-      },
-    });
+    const fixture = sessionFixture("anthropic");
+    fixture.api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
+    fixture.api.registerAgentHarness(createHarness("anthropic-harness"));
     const initialEntry = {
       cliBackendId: "claude-cli",
       model: "claude-opus-4-8",
@@ -644,55 +642,20 @@ describe("plugin registry runtime config scope", () => {
       cliSessionBinding: { sessionId: "source", forkNextResume: true as const },
     };
 
-    await expect(
-      api.runtime.agent.session.createSessionEntry({
+    await expectSessionNamespace(
+      fixture,
+      "plugin:anthropic:catalog-adopt:claude:source",
+      initialEntry,
+      {
         cfg: {},
-        key: "plugin:anthropic:catalog-adopt:claude:source",
-        initialEntry,
-      }),
-    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
-    expect(createSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialEntry: expect.objectContaining({ pluginOwnerId: "anthropic" }),
-      }),
+        key: "agent:main:ordinary",
+        initialEntry: { ...initialEntry, agentHarnessId: "anthropic-harness" } as never,
+      },
     );
-    await expect(
-      api.runtime.agent.session.createSessionEntry({
-        cfg: {},
-        key: "agent:main:ordinary",
-        initialEntry,
-      }),
-    ).rejects.toThrow('must start with "plugin:anthropic:"');
-    await expect(
-      api.runtime.agent.session.createSessionEntry({
-        cfg: {},
-        key: "agent:main:ordinary",
-        initialEntry: {
-          ...initialEntry,
-          agentHarnessId: "anthropic-harness",
-        } as never,
-      }),
-    ).rejects.toThrow("requires exactly one runtime owner");
   });
 
   it("limits ACP session creation to the calling plugin namespace", async () => {
-    const runtime = createPluginRuntime();
-    const createSessionEntry = vi.fn(async (params) => ({
-      key: params.key,
-      agentId: "main",
-      sessionId: "session-1",
-      entry: { sessionId: "session-1", updatedAt: 1 },
-    }));
-    runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "opencode",
-      source: "/plugins/opencode/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    const fixture = sessionFixture("opencode");
     const initialEntry = {
       acpBackendId: "acpx",
       acpSessionBinding: {
@@ -701,32 +664,11 @@ describe("plugin registry runtime config scope", () => {
       },
     };
 
-    await expect(
-      api.runtime.agent.session.createSessionEntry({
-        cfg: {},
-        key: "plugin:opencode:catalog-adopt:source",
-        initialEntry,
-      }),
-    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
-    expect(createSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialEntry: expect.objectContaining({ pluginOwnerId: "opencode" }),
-      }),
-    );
-    await expect(
-      api.runtime.agent.session.createSessionEntry({
-        cfg: {},
-        key: "agent:main:ordinary",
-        initialEntry,
-      }),
-    ).rejects.toThrow('must start with "plugin:opencode:"');
-    await expect(
-      api.runtime.agent.session.createSessionEntry({
-        cfg: {},
-        key: "plugin:opencode:catalog-adopt:source",
-        initialEntry: { ...initialEntry, cliBackendId: "opencode" } as never,
-      }),
-    ).rejects.toThrow("requires exactly one runtime owner");
+    await expectSessionNamespace(fixture, "plugin:opencode:catalog-adopt:source", initialEntry, {
+      cfg: {},
+      key: "plugin:opencode:catalog-adopt:source",
+      initialEntry: { ...initialEntry, cliBackendId: "opencode" } as never,
+    });
   });
 
   it.each(["patchSessionEntry", "updateSessionStoreEntry"] as const)(
@@ -745,16 +687,7 @@ describe("plugin registry runtime config scope", () => {
         commitPatch(await params.update({ ...entry }, { existingEntry: { ...entry } }));
       runtime.agent.session.updateSessionStoreEntry = async (params) =>
         commitPatch(await params.update({ ...entry }));
-      const pluginRegistry = createRuntimeTestRegistry(runtime);
-      const recordParams = {
-        id: "session-editor",
-        source: "/plugins/session-editor/index.js",
-        origin: "global" as const,
-        enabled: true,
-        configSchema: false,
-      };
-      const record = createPluginRecord(recordParams);
-      const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+      const { builder, record, api } = registered("session-editor", {}, runtime);
       const entered = createDeferredCore();
       const resume = createDeferredCore<Partial<SessionEntry>>();
       const scope = { sessionKey: "agent:main:ordinary", storePath: "/tmp/sessions.json" };
@@ -767,10 +700,10 @@ describe("plugin registry runtime config scope", () => {
           },
         });
         await entered.promise;
-        pluginRegistry.rollbackPluginGlobalSideEffects(record.id, record);
-        pluginRegistry.registry.plugins.splice(0, 1);
-        const replacementApi = pluginRegistry.createApi(createPluginRecord(recordParams), {
-          config: {} as OpenClawConfig,
+        builder.rollbackPluginGlobalSideEffects(record.id, record);
+        builder.registry.plugins.splice(0, 1);
+        const replacementApi = builder.createApi(createRecord(record.id), {
+          config: {},
         });
         const rejected = expect(pending).rejects.toThrow("runtime is no longer active");
         resume.resolve({ label: "stale" });
@@ -787,7 +720,7 @@ describe("plugin registry runtime config scope", () => {
       } finally {
         resume.resolve({});
         await getPluginInstance(record)?.dispose();
-        await disposePluginRegistryInstances(pluginRegistry.registry);
+        await disposePluginRegistryInstances(builder.registry);
       }
     },
   );

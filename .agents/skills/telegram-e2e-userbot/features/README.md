@@ -25,6 +25,7 @@ sees through the dedicated QA user account.
 
 - [Basic turns](./basic-turns.md): real-user group, DM, and native-command entry points.
 - [Delivery lifecycle](./delivery-lifecycle.md): messages, edits, typing, and finalization.
+- [Restart attribution](./restart-attribution.md): visible baseline, process replacement, and a distinct fresh reply.
 - [Reaction lifecycle](./reaction-lifecycle.md): acknowledgement and status reactions on the user's message.
 - Photo and album turns: pass `--photo PATH` to the canonical runner; repeat it for one Telegram media album and inspect `messagePhoto` events plus provider evidence.
 
@@ -100,6 +101,25 @@ list means the fault did not fire and cannot support a failure claim.
     { "type": "telegramApiReject", "method": "sendMessage", "bodyIncludes": "FINAL_MARKER" },
     { "type": "send", "atMs": 1000, "text": "Reply exactly FINAL_MARKER" }
   ]
+}
+```
+
+For flood control, add `retryAfter` (seconds): the proxy answers with Bot API
+429 `Too Many Requests` and `parameters.retry_after`. `times` (default 1)
+rejects that many consecutive matching requests before the control disarms.
+`retryAfter: 0` returns a bare 429 without `parameters.retry_after`. The summary's
+`scenario.telegramApiRequestLog` lists every proxied Bot API call except
+`getUpdates` as `{ method, at, status, chat }`, where `chat` is only
+`private` or `group` (never an id), so a run can show that no call reached Telegram
+inside a flood window.
+
+```json
+{
+  "type": "telegramApiReject",
+  "method": "sendMessage",
+  "bodyIncludes": "FINAL_MARKER",
+  "times": 3,
+  "retryAfter": 5
 }
 ```
 

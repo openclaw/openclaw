@@ -1,12 +1,17 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
+import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import {
   captureRuntimeWorkerSource,
   withRuntimeWorkerGeneration,
 } from "./runtime-worker-generation.js";
+import {
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+  readWorkerRows as read,
+} from "./sqlite-worker-fixture.test-support.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 import { getTrackedWorkerCpuSources } from "./worker-cpu.js";
@@ -16,43 +21,14 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 32,
 }));
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
-    }
-  }),
+const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
+  "openclaw-sqlite-worker-generation-",
 );
 
-function databasePath(): string {
-  return path.join(tempDirs.make("openclaw-sqlite-worker-generation-"), "store.sqlite");
-}
+const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
+const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 
-async function open(file: string) {
-  const store = await openSqliteWorkerStore<FixtureOperations>({
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: file,
-    input: undefined,
-  });
-  stores.add(store);
-  return store;
-}
-
-function append(store: SqliteWorkerStore<FixtureOperations>, value: string) {
-  return store.execute({ type: "append", input: { value } });
-}
-
-function read(store: SqliteWorkerStore<FixtureOperations>) {
-  return store.execute({ type: "read", input: undefined });
-}
-
-const nodeIt = process.versions.bun ? it.skip : it;
-
-nodeIt("borrows only one carrier at capacity and never crosses retained generations", async () => {
+poolIt("borrows only one carrier at capacity and never crosses retained generations", async () => {
   const ordinary = await Promise.all(Array.from({ length: 4 }, () => open(databasePath())));
   const ordinaryThreads = new Set(
     await Promise.all(ordinary.map(async (store) => (await append(store, "ordinary")).threadId)),

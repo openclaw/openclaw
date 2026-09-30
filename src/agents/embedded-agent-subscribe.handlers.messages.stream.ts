@@ -1,6 +1,7 @@
 /**
  * Projects provider assistant messages into ordered visible stream state.
  */
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -10,14 +11,16 @@ import {
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { parseAssistantTextSignature } from "../shared/chat-message-content.js";
-import { findCodeOwnership } from "../shared/text/code-regions.js";
 import { trimTextPreservingCode } from "../shared/text/text-projection.js";
+import {
+  findDirectiveCodePrefix,
+  type StreamDirectiveCodePrefix,
+} from "../utils/directive-tags.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { hasReplyDirectiveMetadata } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
-  StreamDirectiveCodePrefix,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   extractAssistantCommentaryText,
@@ -36,28 +39,18 @@ export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
-const RESPONSES_API_IDS = new Set([
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "azure-openai-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-  "openclaw-azure-openai-responses-transport",
-]);
-
 export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
-  return RESPONSES_API_IDS.has(api);
+  return OPENAI_RESPONSES_APIS.has(normalizeOptionalString(message.api) ?? "");
 }
 
 export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  const api = normalizeOptionalString(message.api) ?? "";
   return api === "anthropic-messages";
 }
 
@@ -65,7 +58,7 @@ export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | unde
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  const api = normalizeOptionalString(message.api) ?? "";
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
 }
 
@@ -111,12 +104,7 @@ export function resolveAssistantStreamItemId(params: {
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const contentIndex =
-    typeof params.contentIndex === "number" &&
-    Number.isInteger(params.contentIndex) &&
-    params.contentIndex >= 0
-      ? params.contentIndex
-      : undefined;
+  const contentIndex = resolveAssistantStreamContentIndex(params.contentIndex);
   const indexedBlock = contentIndex !== undefined ? content[contentIndex] : undefined;
   const indexedRecord =
     indexedBlock && typeof indexedBlock === "object"
@@ -262,7 +250,9 @@ export function shouldSuppressDeterministicApprovalOutput(
   return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
 }
 
-export function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): boolean {
+export function hasMessageToolOnlySourceDelivery(
+  ctx: Pick<EmbeddedAgentSubscribeContext, "params" | "state">,
+): boolean {
   return (
     ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
     (ctx.state.messageToolOnlySourceReplyDelivered ||
@@ -296,67 +286,6 @@ export function resolveAssistantTextChunk(params: {
     return content;
   }
   return "";
-}
-
-function hasDirectiveCodePrefixOpportunity(source: string, delta: string): boolean {
-  if (!delta) {
-    return false;
-  }
-  const deltaStart = source.length - delta.length;
-  const start = Math.max(0, deltaStart - 4);
-  let separator = -1;
-  // A following line can close block code without a blank separator; ownership proves stability.
-  for (const match of source.slice(start).matchAll(/(?:\r\n|\n|\r)[^\S\r\n]*\S/g)) {
-    if (start + match.index + match[0].length > deltaStart) {
-      separator = start + match.index;
-    }
-  }
-  if (separator === -1) {
-    return false;
-  }
-  const lastMarker = source.lastIndexOf("[[");
-  return lastMarker !== -1 && separator > lastMarker;
-}
-
-function findDirectiveCodePrefix(source: string): StreamDirectiveCodePrefix | undefined {
-  const { regions, retainStart, completedParagraphs } = findCodeOwnership(source);
-  let regionIndex = 0;
-  let paragraphIndex = 0;
-  let end = 0;
-  for (
-    let marker = source.indexOf("[[");
-    marker !== -1;
-    marker = source.indexOf("[[", marker + 1)
-  ) {
-    let region = regions[regionIndex];
-    while (region && region.end <= marker) {
-      region = regions[++regionIndex];
-    }
-    let paragraph = completedParagraphs[paragraphIndex];
-    while (paragraph && paragraph.end <= marker) {
-      paragraph = completedParagraphs[++paragraphIndex];
-    }
-    if (!region || region.start > marker || region.end < marker + 2) {
-      return undefined;
-    }
-    if (region.block) {
-      if (region.end > retainStart) {
-        return undefined;
-      }
-      end = region.end;
-      continue;
-    }
-    if (
-      !paragraph ||
-      paragraph.hasReferenceCandidate ||
-      paragraph.start > region.start ||
-      paragraph.end < region.end
-    ) {
-      return undefined;
-    }
-    end = paragraph.end;
-  }
-  return end ? { end, checkedRawLength: source.length } : undefined;
 }
 
 export function resolveStreamingReply(params: {
@@ -455,10 +384,9 @@ export function resolveStreamingReply(params: {
       text === params.next &&
       !parsed.isSilent &&
       !hasReplyDirectiveMetadata(parsed) &&
-      !parsed.mediaUrls?.length &&
-      hasDirectiveCodePrefixOpportunity(source, params.visibleDelta)
+      !parsed.mediaUrls?.length
     ) {
-      const prefix = findDirectiveCodePrefix(source);
+      const prefix = findDirectiveCodePrefix(source, params.visibleDelta);
       if (prefix && params.next.startsWith(source.slice(0, prefix.end))) {
         // Both raw and projected appends retain this canonical code prefix.
         directiveCodePrefix = prefix;

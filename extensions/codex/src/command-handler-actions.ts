@@ -345,7 +345,6 @@ export async function steerConversationTurn(
 export async function setConversationModel(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
   args: string[],
 ): Promise<string> {
   if (args.length > 1) {
@@ -387,7 +386,6 @@ export async function setConversationModel(
   return await deps.setCodexConversationModel({
     identity: target.identity,
     bindingStore: deps.bindingStore,
-    pluginConfig,
     model: normalized,
     agentDir: target.agentDir,
     config: ctx.config,

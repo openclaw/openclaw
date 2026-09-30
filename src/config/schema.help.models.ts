@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 export const MODEL_FIELD_HELP: Record<string, string> = {
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
@@ -138,17 +137,6 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.models[].mediaInput.image.tokenMode":
     'Provider image token accounting style: "tile", "detail", or "provider".',
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
-  "channels.googlechat.botLoopProtection":
-    "Sliding-window guard for accepted Google Chat bot-to-bot loops. Defaults to the shared bot loop protection budget when allowBots lets bot-authored messages reach dispatch.",
-  "channels.mattermost.botToken":
-    "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
-  "channels.mattermost.baseUrl":
-    "Base URL for your Mattermost server (e.g., https://chat.example.com).",
-  "channels.mattermost.chatmode":
-    'Reply to channel messages on mention ("oncall"), on trigger chars (">" or "!") ("onchar"), or on every message ("onmessage").',
-  "channels.mattermost.oncharPrefixes": 'Trigger prefixes for onchar mode (default: [">", "!"]).',
-  "channels.mattermost.requireMention":
-    "Require @mention in channels before responding (default: true).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "agents.defaults.workspace":

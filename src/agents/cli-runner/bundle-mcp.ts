@@ -1,11 +1,9 @@
-/**
- * Prepares bundled MCP configuration for CLI runner backends.
- */
-import crypto from "node:crypto";
 import path from "node:path";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import {
@@ -75,10 +73,6 @@ export function resolveCliNativeWebSearchEnabled(
   return search?.enabled !== false && !search?.provider?.trim();
 }
 
-async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
-  return { mcpServers: extractMcpServerMap(await tryReadJson<unknown>(configPath)) };
-}
-
 function sortJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((entry) => sortJsonValue(entry));
@@ -127,17 +121,17 @@ function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMc
     Object.entries(config.mcpServers).map(([name, server]) => {
       const canonicalServer = canonicalizeSystemAgentTurnStateForResume(server);
       if (name !== "openclaw" || typeof canonicalServer.url !== "string") {
-        return [name, sortJsonValue(canonicalServer)];
+        return [name, canonicalServer];
       }
       return [
         name,
-        sortJsonValue({
+        {
           ...canonicalServer,
           url: normalizeOpenClawLoopbackUrl(canonicalServer.url),
-        }),
+        },
       ];
     }),
-  ) as BundleMcpConfig["mcpServers"];
+  );
   return {
     mcpServers: sortJsonValue(canonicalServers) as BundleMcpConfig["mcpServers"],
   };
@@ -170,9 +164,7 @@ function applyCodexMcpToolDenials(
           return [serverName, server];
         }
         const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
-        const existing = Array.isArray(toolFilter.exclude)
-          ? toolFilter.exclude.filter((name): name is string => typeof name === "string")
-          : [];
+        const existing = filterStringEntries(toolFilter.exclude);
         return [
           serverName,
           {
@@ -248,24 +240,18 @@ async function prepareModeSpecificBundleMcpConfig(params: {
 }): Promise<PreparedCliBundleMcpConfig> {
   const mcpToolsDeny = normalizeMcpToolDenials(params.mcpToolsDeny);
   const webSearchDisabled = params.webSearchEnabled === false;
-  const configHashInput =
-    mcpToolsDeny || webSearchDisabled
-      ? { config: params.mergedConfig, mcpToolsDeny, webSearchDisabled }
-      : params.mergedConfig;
-  const serializedConfig = `${JSON.stringify(configHashInput, null, 2)}\n`;
-  const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
-  const serializedResumeConfig = `${JSON.stringify(
-    mcpToolsDeny || webSearchDisabled
-      ? {
-          config: canonicalizeBundleMcpConfigForResume(params.mergedConfig),
-          mcpToolsDeny,
-          webSearchDisabled,
-        }
-      : canonicalizeBundleMcpConfigForResume(params.mergedConfig),
-    null,
-    2,
-  )}\n`;
-  const mcpResumeHash = crypto.createHash("sha256").update(serializedResumeConfig).digest("hex");
+  const hashConfig = (config: BundleMcpConfig) =>
+    sha256Hex(
+      `${JSON.stringify(
+        mcpToolsDeny || webSearchDisabled ? { config, mcpToolsDeny, webSearchDisabled } : config,
+        null,
+        2,
+      )}\n`,
+    );
+  const fingerprints = {
+    mcpConfigHash: hashConfig(params.mergedConfig),
+    mcpResumeHash: hashConfig(canonicalizeBundleMcpConfigForResume(params.mergedConfig)),
+  };
 
   if (params.mode === "codex-config-overrides") {
     const codexConfig = applyCodexMcpToolDenials(params.mergedConfig, mcpToolsDeny);
@@ -275,8 +261,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
           ? [...injectCodexMcpConfigArgs(args, codexConfig), "-c", 'web_search="disabled"']
           : injectCodexMcpConfigArgs(args, codexConfig),
       ),
-      mcpConfigHash,
-      mcpResumeHash,
+      ...fingerprints,
       env: params.env,
     };
   }
@@ -290,8 +275,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     );
     return {
       backend: params.backend,
-      mcpConfigHash,
-      mcpResumeHash,
+      ...fingerprints,
       env: settings.env,
       cleanup: settings.cleanup,
     };
@@ -319,8 +303,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     backend: injectBundleMcpBackendArgs(params.backend, (args) =>
       injectClaudeMcpConfigArgs(args, temporary.filePath, mcpToolsDeny, params.webSearchEnabled),
     ),
-    mcpConfigHash,
-    mcpResumeHash,
+    ...fingerprints,
     env: params.env,
     cleanup: temporary.cleanup,
   };
@@ -331,7 +314,7 @@ async function prepareCliWebSearchDisabled(params: {
   backend: CliBackendConfig;
   env?: Record<string, string>;
 }): Promise<PreparedCliBundleMcpConfig> {
-  const fingerprint = crypto.createHash("sha256").update("web-search-disabled-v1").digest("hex");
+  const fingerprint = sha256Hex("web-search-disabled-v1");
   if (params.mode === "gemini-system-settings") {
     const settings = await writeGeminiWebSearchDisabledSettings(params.env);
     return {
@@ -419,10 +402,9 @@ export async function prepareCliBundleMcpConfig(params: {
     const resolvedExistingPath = path.isAbsolute(existingMcpConfigPath)
       ? existingMcpConfigPath
       : path.resolve(params.workspaceDir, existingMcpConfigPath);
-    mergedConfig = applyMergePatch(
-      mergedConfig,
-      await readExternalMcpConfig(resolvedExistingPath),
-    ) as BundleMcpConfig;
+    mergedConfig = applyMergePatch(mergedConfig, {
+      mcpServers: extractMcpServerMap(await tryReadJson<unknown>(resolvedExistingPath)),
+    }) as BundleMcpConfig;
   }
 
   const bundleConfig = loadMergedBundleMcpConfig({

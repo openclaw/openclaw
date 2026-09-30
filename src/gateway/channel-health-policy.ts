@@ -1,31 +1,13 @@
 // Gateway channel health policy.
 // Evaluates channel lifecycle snapshots for restart/readiness decisions.
-import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  isFutureDateTimestampMs,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 
-type ChannelHealthSnapshot = {
-  running?: boolean;
-  connected?: boolean;
-  enabled?: boolean;
-  configured?: boolean;
-  linked?: boolean;
-  restartPending?: boolean;
-  busy?: boolean;
-  activeRuns?: number;
-  lastRunActivityAt?: number | null;
-  activeRunStartedAt?: number | null;
-  lastEventAt?: number | null;
-  lastConnectedAt?: number | null;
-  lastDisconnect?: ChannelAccountSnapshot["lastDisconnect"];
-  lastTransportActivityAt?: number | null;
-  lastStartAt?: number | null;
-  reconnectAttempts?: number;
-  mode?: string;
-  ingressUnavailable?: true;
-  lifecycle?: "starting" | "ready" | "recovering" | "blocked" | "stopped";
-  healthState?: string;
-  terminalDisconnect?: boolean;
-};
+type ChannelHealthSnapshot = Omit<ChannelAccountSnapshot, "accountId">;
 
 type ChannelHealthEvaluationReason =
   | "healthy"
@@ -113,10 +95,7 @@ export function evaluateChannelHealth(
   if (snapshot.lifecycle === "blocked") {
     return { healthy: false, reason: "blocked" };
   }
-  const lastStartAt =
-    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
-      ? snapshot.lastStartAt
-      : null;
+  const lastStartAt = asFiniteNumber(snapshot.lastStartAt) ?? null;
   const currentLifecycleStarted =
     lastStartAt !== null && !isFutureDateTimestampMs(lastStartAt, { nowMs: policy.now });
   // Trust recorded starting/recovering only inside connect grace. Without a timestamp or after
@@ -128,16 +107,10 @@ export function evaluateChannelHealth(
   ) {
     return { healthy: true, reason: "startup-connect-grace" };
   }
-  if (snapshot.lifecycle === "stopped") {
+  if (snapshot.lifecycle === "stopped" || !snapshot.running) {
     return { healthy: false, reason: "not-running" };
   }
-  if (!snapshot.running) {
-    return { healthy: false, reason: "not-running" };
-  }
-  const activeRuns =
-    typeof snapshot.activeRuns === "number" && Number.isFinite(snapshot.activeRuns)
-      ? Math.max(0, Math.trunc(snapshot.activeRuns))
-      : 0;
+  const activeRuns = resolveNonNegativeIntegerOption(snapshot.activeRuns, 0);
   const isBusy = snapshot.busy === true || activeRuns > 0;
   const lastRunActivityAt = resolveObservedChannelTimestamp(snapshot.lastRunActivityAt, policy.now);
   const activeRunStartedAt = resolveObservedChannelTimestamp(
@@ -154,24 +127,20 @@ export function evaluateChannelHealth(
   // Runtime snapshots are patch-merged, so a restarted lifecycle can temporarily
   // inherit stale busy fields from the previous instance. Ignore busy short-circuit
   // until run activity is known to belong to the current lifecycle.
-  if (isBusy) {
-    if (!busyStateInitializedForLifecycle) {
-      // Fall through to normal startup/disconnect checks below.
-    } else {
-      const runActivityAge =
-        lastRunActivityAt == null
-          ? Number.POSITIVE_INFINITY
-          : Math.max(0, policy.now - lastRunActivityAt);
-      const disconnectedRunStartAge =
-        snapshot.connected === false && activeRunStartedAt != null
-          ? Math.max(0, policy.now - activeRunStartedAt)
-          : 0;
-      const busyAge = Math.max(runActivityAge, disconnectedRunStartAge);
-      if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
-        return { healthy: true, reason: "busy" };
-      }
-      return { healthy: false, reason: "stuck" };
+  if (isBusy && busyStateInitializedForLifecycle) {
+    const runActivityAge =
+      lastRunActivityAt == null
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, policy.now - lastRunActivityAt);
+    const disconnectedRunStartAge =
+      snapshot.connected === false && activeRunStartedAt != null
+        ? Math.max(0, policy.now - activeRunStartedAt)
+        : 0;
+    const busyAge = Math.max(runActivityAge, disconnectedRunStartAge);
+    if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
+      return { healthy: true, reason: "busy" };
     }
+    return { healthy: false, reason: "stuck" };
   }
   if (snapshot.lifecycle === undefined && currentLifecycleStarted) {
     const upDuration = policy.now - lastStartAt;

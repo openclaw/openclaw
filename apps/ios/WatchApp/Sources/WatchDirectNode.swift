@@ -189,11 +189,7 @@ final class WatchDirectNode {
         if enabled {
             self.connect()
         } else {
-            self.disconnectActiveSession()
-            self.connectionGeneration &+= 1
-            self.connectTask?.cancel()
-            self.connectTask = nil
-            self.isConnected = false
+            self.stopConnection()
             self.statusText = self.isConfigured
                 ? String(localized: "Direct connection is off")
                 : String(localized: "Use iPhone Settings to enable direct connection.")
@@ -202,9 +198,7 @@ final class WatchDirectNode {
 
     func connect() {
         guard self.isForeground, self.isEnabled, let configuration else { return }
-        self.disconnectActiveSession()
-        self.connectTask?.cancel()
-        self.connectionGeneration &+= 1
+        self.stopConnection()
         let generation = self.connectionGeneration
         self.connectTask = Task { [weak self] in
             await self?.run(configuration, generation: generation)
@@ -218,21 +212,14 @@ final class WatchDirectNode {
 
     func disconnectForBackground() {
         self.isForeground = false
-        self.disconnectActiveSession()
-        self.connectionGeneration &+= 1
-        self.connectTask?.cancel()
-        self.connectTask = nil
-        self.isConnected = false
+        self.stopConnection()
         if self.isEnabled, self.isConfigured {
             self.statusText = String(localized: "Reconnects when OpenClaw is active")
         }
     }
 
     func forget() {
-        self.disconnectActiveSession()
-        self.connectionGeneration &+= 1
-        self.connectTask?.cancel()
-        self.connectTask = nil
+        self.stopConnection()
         if let configuration {
             if let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .primary) {
                 self.clearCredentials(deviceId: identity.deviceId, gatewayID: configuration.gatewayID)
@@ -243,7 +230,6 @@ final class WatchDirectNode {
             account: Self.keychainAccount)
         configuration = nil
         self.endpointText = nil
-        self.isConnected = false
         self.setEnabled(false)
     }
 
@@ -405,7 +391,7 @@ final class WatchDirectNode {
                 path: "result",
                 method: "POST",
                 token: response.sessionToken,
-                body: result)
+                encodedBody: JSONEncoder().encode(result))
             try self.requireCurrentConnection(generation, configuration: configuration)
         }
     }
@@ -459,7 +445,7 @@ final class WatchDirectNode {
             path: "connect",
             method: "POST",
             token: nil,
-            body: params)
+            encodedBody: JSONEncoder().encode(params))
         return try JSONDecoder().decode(WatchNodeConnectResponse.self, from: connectData)
     }
 
@@ -529,38 +515,8 @@ final class WatchDirectNode {
         baseURL: URL,
         path: String,
         method: String,
-        token: String?) async throws -> Data
-    {
-        try await self.performRequest(
-            baseURL: baseURL,
-            path: path,
-            method: method,
-            token: token,
-            body: nil)
-    }
-
-    private func request(
-        baseURL: URL,
-        path: String,
-        method: String,
         token: String?,
-        body: some Encodable) async throws -> Data
-    {
-        let encodedBody = try JSONEncoder().encode(body)
-        return try await self.performRequest(
-            baseURL: baseURL,
-            path: path,
-            method: method,
-            token: token,
-            body: encodedBody)
-    }
-
-    private func performRequest(
-        baseURL: URL,
-        path: String,
-        method: String,
-        token: String?,
-        body: Data?) async throws -> Data
+        encodedBody: Data? = nil) async throws -> Data
     {
         let url = baseURL
             .appendingPathComponent("api")
@@ -574,8 +530,8 @@ final class WatchDirectNode {
         if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        if let body {
-            request.httpBody = body
+        if let encodedBody {
+            request.httpBody = encodedBody
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let (data, response) = try await urlSession.data(for: request)
@@ -624,7 +580,8 @@ final class WatchDirectNode {
     }
 
     private func handleNotification(_ request: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = try Self.decode(OpenClawSystemNotifyParams.self, from: request.paramsJSON)
+        let params = try JSONDecoder().decode(
+            OpenClawSystemNotifyParams.self, from: Data((request.paramsJSON ?? "{}").utf8))
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty || !body.isEmpty else {
@@ -732,10 +689,6 @@ final class WatchDirectNode {
         return BridgeInvokeResponse(id: id, ok: true, payloadJSON: json)
     }
 
-    private static func decode<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
-        try JSONDecoder().decode(type, from: Data((json ?? "{}").utf8))
-    }
-
     private static func errorResponse(
         id: String,
         code: OpenClawNodeErrorCode,
@@ -802,6 +755,13 @@ final class WatchDirectNode {
         self.sendDisconnect(session)
     }
 
+    private func stopConnection() {
+        self.disconnectActiveSession()
+        self.connectionGeneration &+= 1
+        self.connectTask?.cancel()
+        self.connectTask = nil
+    }
+
     private func releaseActiveSession(_ session: ActiveSession) {
         guard self.activeSession == session else { return }
         self.activeSession = nil
@@ -838,9 +798,7 @@ final class WatchURLSessionMetrics: NSObject, URLSessionTaskDelegate, @unchecked
     private var latest: WatchNetworkMetricsSnapshot?
 
     fileprivate func snapshot() -> WatchNetworkMetricsSnapshot? {
-        self.lock.lock()
-        defer { lock.unlock() }
-        return self.latest
+        self.lock.withLock { self.latest }
     }
 
     func urlSession(
@@ -853,9 +811,7 @@ final class WatchURLSessionMetrics: NSObject, URLSessionTaskDelegate, @unchecked
             isCellular: transaction.isCellular,
             isExpensive: transaction.isExpensive,
             isConstrained: transaction.isConstrained)
-        self.lock.lock()
-        self.latest = snapshot
-        self.lock.unlock()
+        self.lock.withLock { self.latest = snapshot }
     }
 
     func urlSession(

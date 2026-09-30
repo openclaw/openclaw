@@ -8,8 +8,6 @@ import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts"
 
 registerModelControlsEnglish();
 
-export type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
-
 export function renderChatModelCatalogRefresh(state: ChatModelCatalogState | undefined) {
   if (
     !state ||
@@ -62,7 +60,11 @@ export function renderChatModelCatalogState(
           ? t("chat.modelControls.modelsRefreshFailed")
           : errorLabel
         : status === "ready" && !checking
-          ? t("chat.modelControls.noModelsAvailable")
+          ? t(
+              state.modelSelectionPolicy?.restricted
+                ? "chat.modelControls.noPermittedModels"
+                : "chat.modelControls.noModelsAvailable",
+            )
           : t("chat.modelControls.loadingModels");
   return html`
     <div

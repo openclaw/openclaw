@@ -1,5 +1,6 @@
 // Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
@@ -20,8 +21,6 @@ import {
   getRuntimeConfigSnapshot,
   preflightManagedRuntimeConfigWrite,
   loadPinnedRuntimeConfig,
-  notifyRuntimeConfigWriteListeners,
-  registerRuntimeConfigWriteListener,
   registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,
@@ -45,6 +44,60 @@ describe("runtime snapshot state", () => {
     resetRuntimeConfigState();
   });
 
+  it.each<[string, OpenClawConfig, string]>([
+    [
+      "sidebar preferences",
+      { ui: { prefs: { sidebarEntries: ["sessions"] } } },
+      "config-presentation",
+    ],
+    ["logging", { logging: { level: "debug" } }, "config-presentation"],
+    [
+      "identity scopes",
+      { gateway: { auth: { identityScopes: { "reader@example.test": ["operator.read"] } } } },
+      "config-presentation",
+    ],
+    [
+      "Talk realtime model",
+      { talk: { realtime: { model: "unit-test/talk-a" } } },
+      "config-presentation",
+    ],
+    ["Talk provider", { talk: { provider: "unit-test" } }, "config"],
+    ["Talk realtime provider", { talk: { realtime: { provider: "unit-test" } } }, "config"],
+    [
+      "Talk realtime instructions",
+      { talk: { realtime: { instructions: "Synthetic voice instructions" } } },
+      "config",
+    ],
+    [
+      "agent identity",
+      { agents: { entries: { main: { identity: { name: "Renamed" } } } } },
+      "config-profiles",
+    ],
+    ["agent addition", { agents: { entries: { main: {}, other: {} } } }, "config"],
+    ["agent removal", { agents: { entries: {} } }, "config"],
+    [
+      "model defaults",
+      { agents: { entries: { main: {} }, defaults: { model: "unit-test/changed" } } },
+      "config",
+    ],
+    ["catalog", { models: { mode: "replace", providers: {} } }, "config"],
+    ["session policy", { session: { scope: "global" } }, "config"],
+    ["store topology", { session: { store: "/tmp/synthetic-session-store.sqlite" } }, "config"],
+    ["visibility", { tools: { sessions: { visibility: "all" } } }, "config"],
+    ["avatar route", { gateway: { controlUi: { basePath: "/changed" } } }, "config"],
+  ])("publishes the projection impact of %s", (_label, change, scope) => {
+    const initial: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(initial);
+    const published = vi.fn();
+    const stop = sessionChanges.subscribe(published);
+    try {
+      setRuntimeConfigSnapshot({ ...initial, ...change });
+      expect(published).toHaveBeenCalledExactlyOnceWith({ all: true, scope });
+    } finally {
+      stop();
+    }
+  });
+
   it("pins the first successful load in memory until the snapshot is cleared", () => {
     let freshPort = 18789;
     let loadCount = 0;
@@ -63,14 +116,6 @@ describe("runtime snapshot state", () => {
     resetRuntimeConfigState();
     expect(loadPinnedRuntimeConfig(loadFresh).gateway?.port).toBe(19001);
     expect(loadCount).toBe(2);
-  });
-
-  it("returns the source snapshot when runtime snapshot is active", () => {
-    const sourceConfig = createProviderConfigFixture();
-    const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
-
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
   });
 
   it("publishes and replaces same-byte resolution facts with the source snapshot", () => {
@@ -452,38 +497,6 @@ describe("runtime snapshot state", () => {
       }
     },
   );
-
-  it("notifies registered write listeners with committed runtime snapshots", () => {
-    const seen: Array<{ configPath: string; runtimeConfig: OpenClawConfig }> = [];
-    const unsubscribe = registerRuntimeConfigWriteListener((event) => {
-      seen.push({
-        configPath: event.configPath,
-        runtimeConfig: event.runtimeConfig,
-      });
-    });
-
-    try {
-      notifyRuntimeConfigWriteListeners({
-        configPath: "/tmp/openclaw.json",
-        sourceConfig: { gateway: { port: 18789 } },
-        runtimeConfig: { gateway: { port: 19003 } },
-        persistedHash: "abc123",
-        revision: 1,
-        fingerprint: "runtime-fingerprint",
-        sourceFingerprint: "source-fingerprint",
-        writtenAtMs: 1,
-      });
-    } finally {
-      unsubscribe();
-    }
-
-    expect(seen).toEqual([
-      {
-        configPath: "/tmp/openclaw.json",
-        runtimeConfig: { gateway: { port: 19003 } },
-      },
-    ]);
-  });
 
   it("scopes managed write ownership by path and reference count", () => {
     const releaseA = registerManagedRuntimeConfigWriteOwner("/tmp/a.json");

@@ -167,7 +167,7 @@ describe("update triage presentation", () => {
     expect(composer.value).toBe(draft);
   });
 
-  it("refreshes queued run facts before sending and never rearms a consumed diagnosis", async () => {
+  it("retires changed run facts and waits for a new explicit diagnosis before sending", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     let run = createUpdateRunFixture();
@@ -230,9 +230,11 @@ describe("update triage presentation", () => {
         updatedAtMs: 2_000,
       };
       setGatewaySnapshot({ phase: "connected" });
-      await vi.waitFor(() =>
-        expect(custodianAlertStore.alert?.question).toContain("restart-revision-mismatch"),
-      );
+      await overlays.refreshUpdateStatus();
+      expect(onUpdateFailure).not.toHaveBeenCalled();
+      expect(diagnosticMessages()).toEqual([]);
+      overlays.diagnoseUpdateFailure(run.runId);
+      expect(custodianAlertStore.alert?.question).toContain("restart-revision-mismatch");
       const staleAdmission = onUpdateFailure.mock.calls[0]?.[1];
       await overlays.refreshUpdateStatus();
       expect(onUpdateFailure).toHaveBeenCalledOnce();
@@ -245,15 +247,21 @@ describe("update triage presentation", () => {
         steps: [{ step: "build", status: "failed", detail: "Disk is full" }],
       };
       emitGatewayEvent({ event: "update.run.changed", payload: run });
+      expect(onUpdateFailure).toHaveBeenCalledOnce();
+      expect(staleAdmission?.isCurrent()).toBe(false);
+      expect(custodianAlertStore.alert).toBeNull();
+      surface.querySelector<HTMLButtonElement>('[data-option-value="Ask first"]')?.click();
+      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
+      expect(diagnosticMessages()).toEqual(["Ask first"]);
+      await vi.waitFor(() => expect(overlays.snapshot.updateRun).toEqual(run));
+      expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(run.runId);
+
+      overlays.diagnoseUpdateFailure(run.runId);
       await vi.waitFor(() => expect(custodianAlertStore.alert?.question).toContain("Disk is full"));
       expect(custodianAlertStore.alert?.question).not.toContain("restart-revision-mismatch");
-      expect(staleAdmission?.isCurrent()).toBe(false);
       expect(onUpdateFailure).toHaveBeenCalledTimes(2);
       await overlays.refreshUpdateStatus();
       expect(onUpdateFailure).toHaveBeenCalledTimes(2);
-      expect(diagnosticMessages()).toEqual([]);
-
-      surface.querySelector<HTMLButtonElement>('[data-option-value="Ask first"]')?.click();
       await vi.waitFor(() => expect(diagnosticMessages()).toHaveLength(2));
       expect(diagnosticMessages()).toEqual(["Ask first", expect.stringContaining("Disk is full")]);
       expect(diagnosticMessages()[1]).toContain(run.runId);
@@ -272,7 +280,7 @@ describe("update triage presentation", () => {
     }
   });
 
-  it("waits for the run to finish and diagnoses once even when campaign metadata is stale", async () => {
+  it("requires an explicit action after the run finishes even with stale campaign metadata", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     const schedule = {
@@ -338,6 +346,12 @@ describe("update triage presentation", () => {
         updatedAtMs: 3_000,
       };
       emitGatewayEvent({ event: "update.run.changed", payload: run });
+      expect(diagnosticMessages()).toEqual([]);
+      expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
+      await vi.waitFor(() => expect(overlays.snapshot.updateRun).toEqual(run));
+      expect(diagnosticMessages()).toEqual([]);
+      expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(run.runId);
+      overlays.diagnoseUpdateFailure(run.runId);
       await vi.waitFor(() =>
         expect(diagnosticMessages()).toEqual([expect.stringContaining("Do not retry the update")]),
       );
@@ -349,6 +363,10 @@ describe("update triage presentation", () => {
       setGatewaySnapshot({ phase: "connected" });
       await overlays.refreshUpdateStatus();
       expect(diagnosticMessages()).toHaveLength(1);
+      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
+      overlays.diagnoseUpdateFailure(run.runId);
+      await vi.waitFor(() => expect(diagnosticMessages()).toHaveLength(2));
+      expect(diagnosticMessages()[1]).toContain("restart-unhealthy");
     } finally {
       overlays.dispose();
     }
@@ -476,6 +494,9 @@ describe("update triage presentation", () => {
       });
       try {
         await overlays.runUpdate();
+        expect(retire).toBe(true);
+        expect(custodianAlertStore.alert).toBeNull();
+        overlays.diagnoseUpdateFailure("retired-attempt");
         await vi.waitFor(() => expect(retire).toBe(false));
         await surface.updateComplete;
 
@@ -499,7 +520,7 @@ describe("update triage presentation", () => {
   );
 
   it.each(["consumed admission", "throw before send", "reject before send"])(
-    "does not retain an unsent automatic question after %s",
+    "does not retain an unsent diagnostic question after %s",
     async (failure) => {
       let rejectDiagnostic = failure !== "consumed admission";
       const request = vi.fn((_method: string, params: { sessionId: string; message?: string }) => {

@@ -1,4 +1,3 @@
-/** Classifies terminal assistant visibility and provider retry eligibility. */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
@@ -192,59 +191,26 @@ export function joinAssistantTexts(assistantTexts?: readonly string[]): string {
   return (assistantTexts ?? []).join("\n\n").trim();
 }
 
-export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
-}
-
-// Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
-// returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
-// so the content.length > 0 guard is required to distinguish the two cases.
-export function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
-  if (message == null || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return false;
-  }
-  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
-}
-
 export function shouldApplyNonVisibleTurnRetryGuard(params: {
   provider?: string;
   modelId?: string;
   modelApi?: string;
   executionContract?: string;
 }): boolean {
-  if (
+  // These guards use provider output structure, never user or assistant prose.
+  return (
     params.executionContract === "strict-agentic" ||
-    isIncompleteTurnRecoverySupportedProviderModel({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
-  ) {
-    return true;
-  }
-  if (RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? ""))) {
-    return true;
-  }
-  // This path uses provider output structure only: no user or assistant prose classification.
-  return isOllamaIncompleteTurnProvider(params.provider);
+    isIncompleteTurnRecoverySupportedProviderModel(params) ||
+    RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
+    isOllamaIncompleteTurnProvider(params.provider)
+  );
 }
 
 function isIncompleteTurnRecoverySupportedProviderModel(params: {
   provider?: string;
   modelId?: string;
 }): boolean {
-  if (
-    isStrictAgenticSupportedProviderModel({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
-  ) {
+  if (isStrictAgenticSupportedProviderModel(params)) {
     return true;
   }
   const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
@@ -269,7 +235,9 @@ export function classifyAssistantTurn(params: {
       : joinAssistantTexts(params.attempt.assistantTexts),
   );
   const visibleText = output.text.trim();
-  const reasoningOnly = isReasoningOnlyAssistantTurn(assistant);
+  const reasoningOnly = Boolean(
+    assistant && assessLastAssistantMessage(assistant) === "incomplete-text",
+  );
   const nonVisibleEligibleForSilentReply =
     params.payloadCount === 0 &&
     visibleText.length === 0 &&

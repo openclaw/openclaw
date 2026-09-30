@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 /** Resolve effective inbound debounce milliseconds from explicit, channel, and global config. */
 export function resolveInboundDebounceMs(params: {
@@ -32,7 +33,6 @@ type DebounceBuffer<T> = {
   debounceMs: number;
   flushDeadlineMs: number;
   releaseReady: () => void;
-  readyReleased: boolean;
   task: Promise<void>;
 };
 
@@ -73,11 +73,8 @@ function createInboundDebounceFlush(params: {
   lifecycle?: InboundDebounceAdmissionLifecycleInput;
   dispatch: (lifecycle: InboundDebounceAdmissionLifecycle) => Promise<void>;
 }): InboundDebounceFlush {
-  let resolveAdmission!: () => void;
   let admitted = false;
-  const admission = new Promise<void>((resolve) => {
-    resolveAdmission = resolve;
-  });
+  const { promise: admission, resolve: resolveAdmission } = createDeferredCore();
   const markAdmitted = () => {
     if (admitted) {
       return;
@@ -238,37 +235,31 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await runFlush(items);
   };
 
+  const untrackKeyTask = (key: string, settled: Promise<void>) => {
+    if (keyChains.get(key) === settled) {
+      keyChains.delete(key);
+      if (!buffers.has(key)) {
+        keyGenerations.delete(key);
+      }
+    }
+  };
+
   const enqueueKeyTask = (key: string, task: () => Promise<void>) => {
     const previous = keyChains.get(key) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(task);
     const settled = next.catch(() => undefined);
     keyChains.set(key, settled);
-    const cleanup = () => {
-      if (keyChains.get(key) === settled) {
-        keyChains.delete(key);
-        if (!buffers.has(key)) {
-          keyGenerations.delete(key);
-        }
-      }
-    };
+    const cleanup = () => untrackKeyTask(key, settled);
     settled.then(cleanup, cleanup);
     return next;
   };
 
   const runKeyTaskNow = (key: string, task: () => Promise<void>) => {
-    let resolveSettled!: () => void;
-    const settled = new Promise<void>((resolve) => {
-      resolveSettled = resolve;
-    });
+    const { promise: settled, resolve: resolveSettled } = createDeferredCore();
     keyChains.set(key, settled);
     const cleanup = () => {
       resolveSettled();
-      if (keyChains.get(key) === settled) {
-        keyChains.delete(key);
-        if (!buffers.has(key)) {
-          keyGenerations.delete(key);
-        }
-      }
+      untrackKeyTask(key, settled);
     };
     let next: Promise<void>;
     try {
@@ -282,32 +273,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
 
   const enqueueReservedKeyTask = (key: string, task: () => Promise<void>) => {
-    let readyReleased = false;
-    let releaseReady!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      releaseReady = resolve;
-    });
+    const { promise: ready, resolve: releaseReady } = createDeferredCore();
     return {
       task: enqueueKeyTask(key, async () => {
         await ready;
         await task();
       }),
-      release: () => {
-        if (readyReleased) {
-          return;
-        }
-        readyReleased = true;
-        releaseReady();
-      },
+      release: releaseReady,
     };
-  };
-
-  const releaseBuffer = (buffer: DebounceBuffer<T>) => {
-    if (buffer.readyReleased) {
-      return;
-    }
-    buffer.readyReleased = true;
-    buffer.releaseReady();
   };
 
   const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
@@ -320,7 +293,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     }
     // Reserve each key's execution slot as soon as the first buffered item
     // arrives, so later same-key work cannot overtake a timer-backed flush.
-    releaseBuffer(buffer);
+    buffer.releaseReady();
     await buffer.task;
   };
 
@@ -351,7 +324,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       const canceledItems = buffer.items;
       buffer.items = [];
       cancelItems(canceledItems);
-      releaseBuffer(buffer);
+      buffer.releaseReady();
     }
     pendingBuffers.delete(key);
     return true;
@@ -409,10 +382,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           });
           return;
         }
-        await runFlush([item]);
-      } else {
-        await runFlush([item]);
       }
+      await runFlush([item]);
       return;
     }
 
@@ -422,7 +393,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       scheduleFlush(key, existing);
       return;
     }
-    if (key && buffers.has(key)) {
+    if (buffers.has(key)) {
       // Seal a full batch without waiting for its turn; the new batch reserves
       // the following FIFO slot while later ingress remains free to append.
       void flushKey(key);
@@ -464,7 +435,6 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           ),
         ),
       releaseReady: reservedTask.release,
-      readyReleased: false,
       task: reservedTask.task,
     };
     buffers.set(key, buffer);

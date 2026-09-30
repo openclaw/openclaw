@@ -3,7 +3,6 @@ import {
   formatCompactTokenCount as formatTokenUnits,
   type RelativeTimeUnit,
 } from "@openclaw/normalization-core";
-// Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { DurationPart } from "../../../src/infra/format-time/format-duration-internal.ts";
@@ -25,7 +24,6 @@ type FormatTimeAgoOptions = {
 
 type FormatRelativeTimestampOptions = {
   dateFallback?: boolean;
-  timezone?: string;
   fallback?: string;
   suffix?: boolean;
 };
@@ -106,10 +104,9 @@ export function formatRelativeTimestamp(
       return new Intl.DateTimeFormat(i18n.getLocale(), {
         month: "short",
         day: "numeric",
-        ...(options.timezone ? { timeZone: options.timezone } : {}),
       }).format(new Date(timestampMs));
     } catch {
-      // Invalid time zones should still leave a useful localized relative value.
+      // Finite timestamps can still be outside JavaScript's date range.
     }
   }
 
@@ -254,26 +251,20 @@ export function formatCost(cost: number | null | undefined, fallback = "$0.00"):
   if (cost === 0) {
     return "$0.00";
   }
-  if (cost < 0.01) {
-    return `$${cost.toFixed(4)}`;
-  }
-  if (cost < 1) {
-    return `$${cost.toFixed(3)}`;
-  }
-  return `$${cost.toFixed(2)}`;
+  return `$${cost.toFixed(cost < 0.01 ? 4 : cost < 1 ? 3 : 2)}`;
 }
 
 // Keep token presentation consistent across UI session and usage surfaces.
 export function formatCompactTokenCount(
   tokens: number | null | undefined,
-  options: { thousandsSuffix?: string; millionsSuffix?: string; trimTrailingZero?: boolean } = {},
+  options: { thousandsSuffix?: string; trimTrailingZero?: boolean } = {},
 ): string {
   if (tokens == null || !Number.isFinite(tokens)) {
     return "0";
   }
   return formatTokenUnits(tokens, {
     thousandsSuffix: options.thousandsSuffix,
-    millionsSuffix: options.millionsSuffix ?? "M",
+    millionsSuffix: "M",
     trimTrailingZero: options.trimTrailingZero ?? true,
     maxUnit: "billion",
   });

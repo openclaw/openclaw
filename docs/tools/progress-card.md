@@ -57,6 +57,26 @@ Every call is a replacement, not a patch. Omitting `markdown` removes the previo
 
 The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done)` or `Progress card updated (rev 4)` when there is no plan. Its structured result contains the revision and completed/total step counts, or `null` without a plan. Successful writes also update channel previews from the complete plan state. Failed or blocked writes leave the previous plan in place. Active channel previews retain a safe failure notice.
 
+## Before an active run ends
+
+When a run still owes a visible reply, the built-in agent runtime performs at most
+one completion self-check if that run successfully saves an unfinished checklist
+and then produces a normal final answer. The agent rechecks the latest user instructions: continue feasible,
+already-authorized work, reconcile completed steps, or explain the concrete reason
+it cannot continue. This may add one model response; it does not guarantee that the
+model finishes every task.
+
+The check continues the same active run with its existing transcript, permissions,
+time limit, and completed tool results. It does not replay earlier actions or
+restart the original request. A checkpoint already shown in chat stays in the
+conversation while work continues. A genuine blocker can leave steps pending after
+the check.
+
+Old cards do not restart idle work. Completed, cleared, and note-only replacements
+do not request a check. Cancellation, approval waits, accepted child/media completion handoffs,
+status-only refreshes, and explicit plugin finalization retain their
+existing behavior. Other agent harnesses retain their own finalization policies.
+
 ## Format the note
 
 For eligible multi-step work with a known total, prefer a leading progress bar using observed completed/total counts: PRs reviewed, tests finished, files processed, or other meaningful work units. Prefer those counts over coarse phase counts such as "1 of 3 steps." Label exactly what the count measures: reviewed PRs are not merged PRs, and finished tests are not necessarily passing tests. Never invent percentages or infer completion from elapsed time. When the total is unknown, use a compact status note or table instead.
@@ -94,6 +114,8 @@ Call `progress_card` with both parts absent or empty to remove the current card:
 ```
 
 An empty plan plus empty or whitespace-only Markdown also clears it. A successful clear returns `Progress card cleared`. Channel previews remove the checklist and its status, keep other activity, and delete an otherwise empty draft. A later card update can create a new draft.
+
+In the Control UI, users with write access can clear the current card with **Dismiss progress card** (×), whether it is expanded or collapsed. The button is available for unfinished, paused, completed, and note-only cards. Dismissal clears the saved card, not the conversation or active agent run; a later progress update can create a new card. Dismissal clears only the revision the user saw; if the agent has written a newer revision, the newer card is kept and shown instead.
 
 A full in-place conversation reset (`/reset` without `soft`, or `sessions.reset`) also clears the previous task’s card. The clear commits with the reset boundary and refreshes subscribed clients; a fresh page load also sees no old card. Writes admitted before that reset cannot restore it. Reset preserves transcript history and dashboard layout. Automatic continuity resets that preserve prior context do not clear the card.
 

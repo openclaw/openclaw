@@ -1,13 +1,16 @@
-// Clears follow-up queues and their session command lanes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
-import { clearCommandLane } from "../../../process/command-queue.js";
-import { normalizeAgentId } from "../../../routing/session-key.js";
+import { clearCommandLane, countQueuedCommandsInLane } from "../../../process/command-queue.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../../routing/session-key.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { removeQueuedItemsByRef } from "../../../utils/queue-helpers.js";
 import { clearFollowupDrainCallback } from "./drain.js";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
-import { clearFollowupQueue, FOLLOWUP_QUEUES } from "./state.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES, followupQueueSources } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import type { FollowupRun } from "./types.js";
 
@@ -17,18 +20,82 @@ export type ClearSessionQueueResult = {
   keys: string[];
 };
 
+export type SessionLifecycleQueueTarget = {
+  keys: Array<string | undefined>;
+  agentId: string;
+  sessionKey: string;
+  sessionId?: string;
+};
+
+function matchesSessionQueueTarget(
+  source: { agentId?: string; sessionKey?: string; sessionId?: string },
+  params: {
+    agentId: string;
+    sessionKey: string;
+    sessionKeyAliases?: readonly string[];
+    sessionId?: string;
+  },
+): boolean {
+  const agentId = normalizeAgentId(params.agentId);
+  const keyAgentId = parseAgentSessionKey(source.sessionKey)?.agentId;
+  return (
+    normalizeOptionalString(source.agentId) !== undefined &&
+    normalizeAgentId(source.agentId) === agentId &&
+    (!keyAgentId || normalizeAgentId(keyAgentId) === agentId) &&
+    (source.sessionKey === params.sessionKey ||
+      params.sessionKeyAliases?.some((key) =>
+        agentSessionKeysMatchByRequestKey(source.sessionKey, key),
+      ) === true) &&
+    source.sessionId === params.sessionId
+  );
+}
+
+function matchesSessionFollowupRun(
+  source: FollowupRun,
+  params: Parameters<typeof matchesSessionQueueTarget>[1],
+): boolean {
+  return (
+    matchesSessionQueueTarget(source.run, params) &&
+    (source.admissionSessionId === undefined || source.admissionSessionId === params.sessionId)
+  );
+}
+
+function resolveSessionLifecycleQueueKeys(params: SessionLifecycleQueueTarget) {
+  const agentId = normalizeAgentId(params.agentId);
+  const keys = [
+    ...new Set(
+      [...params.keys, params.sessionKey, params.sessionId]
+        .map(normalizeOptionalString)
+        .filter((key) => key !== undefined)
+        .filter((key) => {
+          const keyAgentId = parseAgentSessionKey(key)?.agentId;
+          return !keyAgentId || normalizeAgentId(keyAgentId) === agentId;
+        }),
+    ),
+  ];
+  return {
+    keys,
+    sessionKeyAliases: keys.filter((key) => key !== params.sessionId),
+    matchesLaneEntry:
+      (key: string) => (target: Parameters<typeof matchesSessionQueueTarget>[0] | undefined) =>
+        target
+          ? matchesSessionQueueTarget(target, { ...params, sessionKeyAliases: keys })
+          : key === params.sessionId || parseAgentSessionKey(key) !== null,
+  };
+}
+
 /** Capture pending sources before Stop callbacks can replace their queue or session. */
 export function prepareSessionFollowupCleanup(params: {
   keys: Array<string | undefined>;
   agentId: string;
   sessionKey: string;
+  sessionKeyAliases?: readonly string[];
   sessionId: string;
   assertCurrent: () => void;
 }): () => number {
   const keys = new Set(
     params.keys.map((key) => normalizeOptionalString(key)).filter((key) => key !== undefined),
   );
-  const targetAgentId = normalizeAgentId(params.agentId);
   const captures = [...keys].flatMap((key) => {
     const queue = FOLLOWUP_QUEUES.get(key);
     if (!queue) {
@@ -40,23 +107,8 @@ export function prepareSessionFollowupCleanup(params: {
       !queue.activeSummarySources.has(source);
     // Admission can retarget the next claim before run.sessionId is refreshed.
     // Neither identity may transfer this Stop to another incarnation.
-    const sources = [
-      ...new Set([
-        ...queue.items,
-        ...queue.summarySources,
-        ...queue.summaryElisions.flatMap((entry) => entry.sources),
-      ]),
-    ]
-      .filter(
-        (source) =>
-          isPending(source) &&
-          normalizeOptionalString(source.run.agentId) !== undefined &&
-          normalizeAgentId(source.run.agentId) === targetAgentId &&
-          source.run.sessionKey === params.sessionKey &&
-          source.run.sessionId === params.sessionId &&
-          (source.admissionSessionId === undefined ||
-            source.admissionSessionId === params.sessionId),
-      )
+    const sources = [...new Set(followupQueueSources(queue))]
+      .filter((source) => isPending(source) && matchesSessionFollowupRun(source, params))
       .map((source) => ({
         source,
         run: source.run,
@@ -140,11 +192,49 @@ export function prepareSessionFollowupCleanup(params: {
   };
 }
 
+export function clearSessionLifecycleQueues(
+  params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
+): ClearSessionQueueResult {
+  params.assertCurrent();
+  const { keys, sessionKeyAliases, matchesLaneEntry } = resolveSessionLifecycleQueueKeys(params);
+  const followupCleared = params.sessionId
+    ? prepareSessionFollowupCleanup({
+        ...params,
+        keys,
+        sessionKeyAliases,
+        sessionId: params.sessionId,
+      })()
+    : 0;
+  let laneCleared = 0;
+  for (const key of keys) {
+    params.assertCurrent();
+    laneCleared += clearCommandLane(resolveEmbeddedSessionLane(key), matchesLaneEntry(key));
+  }
+  return { followupCleared, laneCleared, keys };
+}
+
+export function hasSessionLifecycleQueueWork(params: SessionLifecycleQueueTarget): boolean {
+  const { keys, sessionKeyAliases, matchesLaneEntry } = resolveSessionLifecycleQueueKeys(params);
+  for (const key of keys) {
+    const queue = FOLLOWUP_QUEUES.get(key);
+    if (
+      queue &&
+      [...followupQueueSources(queue), ...queue.inFlight].some((source) =>
+        matchesSessionFollowupRun(source, { ...params, sessionKeyAliases }),
+      )
+    ) {
+      return true;
+    }
+  }
+  return keys.some(
+    (key) => countQueuedCommandsInLane(resolveEmbeddedSessionLane(key), matchesLaneEntry(key)) > 0,
+  );
+}
+
 export function clearSessionQueues(keys: Array<string | undefined>): ClearSessionQueueResult {
   const seen = new Set<string>();
   let followupCleared = 0;
   let laneCleared = 0;
-  const clearedKeys: string[] = [];
 
   for (const key of keys) {
     const cleaned = normalizeOptionalString(key);
@@ -152,11 +242,10 @@ export function clearSessionQueues(keys: Array<string | undefined>): ClearSessio
       continue;
     }
     seen.add(cleaned);
-    clearedKeys.push(cleaned);
     followupCleared += clearFollowupQueue(cleaned);
     clearFollowupDrainCallback(cleaned);
     laneCleared += clearCommandLane(resolveEmbeddedSessionLane(cleaned));
   }
 
-  return { followupCleared, laneCleared, keys: clearedKeys };
+  return { followupCleared, laneCleared, keys: [...seen] };
 }

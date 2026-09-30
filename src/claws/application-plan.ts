@@ -1,7 +1,6 @@
-import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
 import { inspectModelReference } from "../commands/models/model-reference-validation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { digestClawValue } from "./digest.js";
 import type {
   ClawAddCapabilityChange,
   ClawAddPlanAction,
@@ -22,7 +21,7 @@ export function clawAddCapabilityChange(
     ...change,
     classification: "escalation",
     requiresDistinctConsent: true,
-    digest: `sha256:${createHash("sha256").update(stableStringify(change.effect)).digest("hex")}`,
+    digest: digestClawValue(change.effect),
   };
 }
 
@@ -94,17 +93,6 @@ export function clawAgentConfigurationNotices(
     }
   }
   return notices;
-}
-
-export function clawProfileExtensionPackages(
-  profile: ClawOpenClawProfile | undefined,
-): ClawPackage[] {
-  return (profile?.extensions ?? []).map((extension) => ({
-    kind: "plugin",
-    source: extension.source,
-    ref: extension.ref,
-    version: extension.version,
-  }));
 }
 
 function blocker(code: string, path: string, message: string): ClawDiagnostic {

@@ -1,6 +1,6 @@
 /** Computes which manifest-owned plugins need activation for commands, routes, providers, or capabilities. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty as normalizeCommandId } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
@@ -330,8 +330,4 @@ function listHasNormalizedValue(
 
 function hasValues(values: readonly unknown[] | undefined): boolean {
   return (values?.length ?? 0) > 0;
-}
-
-function normalizeCommandId(value: string | undefined): string {
-  return normalizeOptionalLowercaseString(value) ?? "";
 }

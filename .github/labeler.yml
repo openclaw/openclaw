@@ -114,6 +114,12 @@
           - "extensions/teams-meetings/**"
           - "docs/plugins/teams-meetings.md"
           - "docs/plugins/reference/teams-meetings.md"
+"plugin: slack-huddles":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/slack-huddles/**"
+          - "docs/plugins/slack-huddles.md"
+          - "docs/plugins/reference/slack-huddles.md"
 "plugin: zoom":
   - changed-files:
       - any-glob-to-any-file:
@@ -488,10 +494,6 @@
           - "extensions/onepassword/**"
           - "docs/plugins/onepassword.md"
           - "docs/plugins/reference/onepassword.md"
-"extensions: webhooks":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/webhooks/**"
 "extensions: web-readability":
   - changed-files:
       - any-glob-to-any-file:
@@ -643,6 +645,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+          - "docs/providers/openai/authentication.md"
 "extensions: codex":
   - changed-files:
       - any-glob-to-any-file:
@@ -660,6 +663,12 @@
           - "extensions/copilot/**"
           - "docs/plugins/copilot.md"
           - "docs/plugins/reference/copilot.md"
+"extensions: kie":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kie/**"
+          - "docs/providers/kie.md"
+          - "docs/plugins/reference/kie.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:

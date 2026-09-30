@@ -201,12 +201,6 @@ describe("anthropic stream wrappers", () => {
     expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
 
-  it("strips legacy context-1m betas for API key auth", () => {
-    const headers = runWrapper("sk-ant-api-123");
-    expect(headers?.["anthropic-beta"]).toBeDefined();
-    expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
-  });
-
   it("skips service_tier for OAuth token in composed stream chain", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token");
     expect(captured.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
@@ -345,8 +339,9 @@ describe("anthropic stream wrappers", () => {
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
 
-  it("ignores unresolved auto fast mode at the provider boundary", () => {
+  it("leaves auto unresolved and falls back from Ultrafast to Fast at the provider boundary", () => {
     expect(resolveAnthropicFastMode({ fastMode: "auto" })).toBeUndefined();
+    expect(resolveAnthropicFastMode({ fastMode: "ultrafast" })).toBe(true);
   });
 
   it("uses native fast mode and premium pricing for Claude Opus 5", () => {

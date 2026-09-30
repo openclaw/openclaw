@@ -6,7 +6,7 @@ import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-version
 import type { createUpdateProgress } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
-import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 
 export type MutableUpdateExecutionParams = {
@@ -36,11 +36,13 @@ export type MutableUpdateExecutionParams = {
   managedServiceRoot?: string;
   invocationCwd?: string;
   legacyConfigPlan?: LegacyConfigUpdatePlan;
+  callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
   recoveryState: UpdateCommandRecoveryState;
   prepareMutableUpdate: (
     env: NodeJS.ProcessEnv | undefined,
     activationTimeoutMs: number | undefined,
     admitExecutor: (fence: UpdateRecoveryFence) => void,
+    installTarget?: ResolvedGlobalInstallTarget,
   ) => Promise<void>;
   onActivation?: () => void;
 };

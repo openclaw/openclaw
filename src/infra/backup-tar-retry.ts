@@ -6,10 +6,6 @@ const BACKUP_TAR_BACKOFF_MS = [10_000, 20_000];
 
 type BackupTarRetryLogger = (message: string) => void;
 
-function resolveBackupTarAttemptTempPath(tempArchivePath: string, attempt: number): string {
-  return attempt === 1 ? tempArchivePath : `${tempArchivePath}.retry-${attempt}`;
-}
-
 export async function writeTarArchiveWithRetry<T>(params: {
   tempArchivePath: string;
   runTar: (tempArchivePath: string) => Promise<T>;
@@ -21,7 +17,8 @@ export async function writeTarArchiveWithRetry<T>(params: {
   let attempts = 0;
   for (let attempt = 1; attempt <= BACKUP_TAR_MAX_ATTEMPTS; attempt += 1) {
     attempts = attempt;
-    const attemptTempArchivePath = resolveBackupTarAttemptTempPath(params.tempArchivePath, attempt);
+    const attemptTempArchivePath =
+      attempt === 1 ? params.tempArchivePath : `${params.tempArchivePath}.retry-${attempt}`;
     try {
       return await params.runTar(attemptTempArchivePath);
     } catch (err) {

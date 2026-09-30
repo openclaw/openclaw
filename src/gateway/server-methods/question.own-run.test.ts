@@ -52,7 +52,13 @@ function questionPeer(
     bufferedAmount: 0,
     readyState: 1,
     close: vi.fn(),
-    send: vi.fn((_wire: string, callback?: (error?: Error) => void) => callback?.()),
+    send: vi.fn(
+      (
+        _wire: string | Buffer,
+        options?: { binary: false } | ((error?: Error) => void),
+        callback?: (error?: Error) => void,
+      ) => (typeof options === "function" ? options : callback)?.(),
+    ),
   };
   const client: GatewayWsClient = {
     socket: socket as unknown as GatewayWsClient["socket"],
@@ -97,7 +103,7 @@ async function createOwnRunFixture() {
   await upsertSessionEntryCore(sessionScope, entry);
   const browser = questionPeer(profile, "original-browser");
   const sourceController = new AbortController();
-  const source = captureGatewayOperatorRunAuthority({
+  const source = await captureGatewayOperatorRunAuthority({
     client: browser.client,
     context: { getRuntimeConfig: () => cfg },
     sourceAuthority: {
@@ -292,7 +298,7 @@ describe("own-run question admission", () => {
     await withOwnRunQuestion(async (f) => {
       const id = await f.request();
       expect(f.browser.socket.send).toHaveBeenCalledOnce();
-      expect(JSON.parse(f.browser.socket.send.mock.calls[0]![0])).toMatchObject({
+      expect(JSON.parse(String(f.browser.socket.send.mock.calls[0]![0]))).toMatchObject({
         event: "question.requested",
         payload: { id },
       });
@@ -326,7 +332,7 @@ describe("own-run question admission", () => {
       });
       await manager.drain();
       expect(reconnected.socket.send).toHaveBeenCalledOnce();
-      expect(JSON.parse(reconnected.socket.send.mock.calls[0]![0])).toMatchObject({
+      expect(JSON.parse(String(reconnected.socket.send.mock.calls[0]![0]))).toMatchObject({
         event: "question.resolved",
         payload: { id, ...accepted },
       });

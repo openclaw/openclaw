@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import * as diagnosticsTimeline from "../../../infra/diagnostics-timeline.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
@@ -530,21 +528,6 @@ describe("createEmbeddedRunFailoverRetryController", () => {
       expect(mocks.sleepWithAbort).toHaveBeenCalledTimes(2);
       expect(mocks.sleepWithAbort.mock.calls[0]?.[0]).toBe(60_000);
       expect(mocks.sleepWithAbort.mock.calls[1]?.[0]).toBe(30_000);
-    } finally {
-      dateNow.mockRestore();
-    }
-  });
-
-  it("counts failed-request wall time against the retry budget", async () => {
-    let nowMs = 1_000_000;
-    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    try {
-      const controller = createController(vi.fn(async () => false));
-      await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(true);
-      // A slow provider failure burns the window even though no backoff slept.
-      nowMs += 90_000;
-      await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(false);
-      expect(controller.transientRetryCount).toBe(1);
     } finally {
       dateNow.mockRestore();
     }

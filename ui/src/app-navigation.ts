@@ -1,6 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
-// Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -24,7 +23,6 @@ export const SIDEBAR_NAV_ROUTES = [
   "dashboards",
   "usage",
   "cron",
-  "tasks",
   "sessions",
   "systems",
   "activity",
@@ -36,22 +34,14 @@ export const SIDEBAR_NAV_ROUTES = [
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
-const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
-  "plugins",
-  "skills",
-  "skill-workshop",
-]);
-
 export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
-  return PLUGINS_HUB_ROUTES.has(routeId);
+  return routeId === "plugins" || routeId === "skills" || routeId === "skill-workshop";
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
 // Sessions entry for both routes, mirroring the Plugins hub behavior.
-const SESSIONS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set(["sessions", "worktrees"]);
-
 export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
-  return SESSIONS_HUB_ROUTES.has(routeId);
+  return routeId === "sessions" || routeId === "worktrees";
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
@@ -353,7 +343,6 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   systems: navigationPresentation("monitor", "systems"),
   usage: navigationPresentation("coins", "usage"),
   cron: navigationPresentation("calendarClock", "cron"),
-  tasks: navigationPresentation("listChecks", "tasks"),
   skills: navigationPresentation("bookOpenText", "skills"),
   "skill-settings": navigationPresentation("bookOpenText", "skills"),
   plugins: navigationPresentation("plug", "plugins"),

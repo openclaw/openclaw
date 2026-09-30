@@ -14,9 +14,6 @@ import {
   trimToUndefined,
   type ExplicitGatewayAuth,
   type GatewayCredentialMode,
-  type GatewayCredentialPrecedence,
-  type GatewayRemoteCredentialFallback,
-  type GatewayRemoteCredentialPrecedence,
 } from "./credentials.js";
 import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
@@ -27,18 +24,11 @@ import {
   type SupportedGatewaySecretInputPath,
 } from "./secret-input-paths.js";
 
-type GatewayCredentialSecretInputOptions = {
+type GatewayCredentialSecretInputOptions = Omit<
+  Parameters<typeof resolveGatewayCredentialsFromConfig>[0],
+  "cfg"
+> & {
   config: OpenClawConfig;
-  explicitAuth?: ExplicitGatewayAuth;
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-  env?: NodeJS.ProcessEnv;
-  modeOverride?: GatewayCredentialMode;
-  localPrecedence?: GatewayCredentialPrecedence;
-  remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
-  remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
-  remoteTokenFallback?: GatewayRemoteCredentialFallback;
-  remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
 /** Internal options after explicit auth has been trimmed to real credential values. */
@@ -49,21 +39,21 @@ type NormalizedGatewayCredentialSecretInputOptions = Omit<
   explicitAuth: ExplicitGatewayAuth;
 };
 
-async function resolveGatewaySecretInputString(params: {
+async function resolveConfiguredGatewaySecretInput(params: {
   config: OpenClawConfig;
-  value: unknown;
-  path: string;
+  path: SupportedGatewaySecretInputPath;
   env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
+  const configuredValue = readGatewaySecretInputValue(params.config, params.path);
   const ref = resolveConfigSecretRef({
     config: params.config,
     path: params.path,
-    value: params.value,
+    value: configuredValue,
     defaults: params.config.secrets?.defaults,
   });
   const value = await materializeSecretInput({
     config: params.config,
-    value: ref ?? params.value,
+    value: ref ?? configuredValue,
     env: params.env,
     normalize: trimToUndefined,
     onResolveRefError: (error) => {
@@ -208,19 +198,6 @@ export function gatewaySecretInputPathCanWin(
     env,
     config: params.config,
     path,
-  });
-}
-
-async function resolveConfiguredGatewaySecretInput(params: {
-  config: OpenClawConfig;
-  path: SupportedGatewaySecretInputPath;
-  env: NodeJS.ProcessEnv;
-}): Promise<string | undefined> {
-  return resolveGatewaySecretInputString({
-    config: params.config,
-    value: readGatewaySecretInputValue(params.config, params.path),
-    path: params.path,
-    env: params.env,
   });
 }
 

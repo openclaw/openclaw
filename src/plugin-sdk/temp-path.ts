@@ -16,4 +16,4 @@ export {
   type TempWorkspaceSync,
   withTempWorkspace,
   withTempWorkspaceSync,
-} from "../infra/private-temp-workspace.js";
+} from "@openclaw/fs-safe/temp";

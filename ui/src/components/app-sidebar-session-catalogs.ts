@@ -108,18 +108,6 @@ export function adoptedCatalogSessionKeys(catalogs: readonly SessionCatalog[]): 
   return keys;
 }
 
-/** Catalogs the sidebar actually renders. Adopted-key exclusion must read this
-    same projection: excluding a key whose catalog is hidden (or whose section
-    the archived filter suppresses) deletes the session from the entire sidebar
-    with no row anywhere. */
-export function visibleSessionCatalogProjection(
-  catalogs: readonly SessionCatalog[],
-  hiddenCatalogIds: ReadonlySet<string>,
-  archivedFilter: boolean,
-): SessionCatalog[] {
-  return archivedFilter ? [] : catalogs.filter((catalog) => !hiddenCatalogIds.has(catalog.id));
-}
-
 export function catalogErrorMessages(catalog: SessionCatalog): string[] {
   const messages = new Set<string>();
   const add = (error: SessionCatalog["error"]) => {
@@ -145,11 +133,17 @@ export function projectSidebarSessionCatalogs(
   catalogs: readonly SessionCatalog[],
   ownerId: string | null,
   liveRows: readonly GatewaySessionRow[],
+  isSessionHidden?: (row: GatewaySessionRow) => boolean,
 ): SidebarSessionCatalog[] {
   // The current list wins over cached agent lists, including an unset live owner.
-  const liveOwners = new Map(liveRows.toReversed().map(({ key, owner }) => [key, owner?.actor.id]));
+  const liveRowsByKey = new Map(liveRows.toReversed().map((row) => [row.key, row]));
   return catalogs.flatMap((catalog) => {
-    const visibleHosts = visibleCatalogHosts(catalog.hosts, ownerId, liveOwners);
+    const visibleHosts = visibleCatalogHosts(
+      catalog.hosts,
+      ownerId,
+      liveRowsByKey,
+      isSessionHidden,
+    );
     return visibleHosts.length > 0 ? [{ ...catalog, visibleHosts }] : [];
   });
 }
@@ -157,18 +151,20 @@ export function projectSidebarSessionCatalogs(
 function visibleCatalogHosts(
   hosts: readonly SessionCatalogHost[],
   ownerId?: string | null,
-  liveOwnerIdBySessionKey: ReadonlyMap<string, string | undefined> = new Map(),
+  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow> = new Map(),
+  isSessionHidden?: (row: GatewaySessionRow) => boolean,
 ): SessionCatalogHost[] {
   const visible: SessionCatalogHost[] = [];
   for (const host of hosts) {
     const sessions = host.sessions.filter((session) => {
+      const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+      if (adoptedRow && isSessionHidden?.(adoptedRow)) {
+        return false;
+      }
       if (!ownerId) {
         return true;
       }
-      const sessionKey = session.sessionKey;
-      const adopted = Boolean(sessionKey && liveOwnerIdBySessionKey.has(sessionKey));
-      const effectiveOwnerId =
-        adopted && sessionKey ? liveOwnerIdBySessionKey.get(sessionKey) : session.createdActor?.id;
+      const effectiveOwnerId = adoptedRow ? adoptedRow.owner?.actor.id : session.createdActor?.id;
       return effectiveOwnerId === ownerId;
     });
     if (sessions.length > 0) {
@@ -182,7 +178,6 @@ export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
   catalogMenu: CatalogSessionMenuRequest;
   rowRef?: (element: Element | undefined) => void;
-  subtitle?: string;
   pullRequest?: SessionCatalogSession["pullRequest"];
 };
 

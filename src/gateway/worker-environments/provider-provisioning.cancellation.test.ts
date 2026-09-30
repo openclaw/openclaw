@@ -1,15 +1,13 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { racePromiseWithAbortSignal, waitForAbortSignal } from "../../infra/abort-signal.js";
-import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import { WorkerProviderError } from "../../plugins/capability-provider.types.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
+import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import * as support from "./service.test-support.js";
-import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 function observeDestroyIntent(environmentId: string) {
@@ -426,16 +424,13 @@ describe("worker provisioning cancellation ownership", () => {
           if (!setupId) {
             throw new Error("Expected persisted enrollment setup identity");
           }
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              const { environmentId, ...patch } = bindCloudWorkerSetupCompletion({
-                db,
-                completion: { setupId, deviceId, completedAtMs: 1_000 },
-              });
-              publishWorkerEnvironmentNativeMutation(db, environmentId, patch);
-            },
-            { database: support.testState.stateDb },
-          );
+          await completeWorkerNodeSetupForTest({
+            baseDir: support.testState.root,
+            store: support.testState.store,
+            setupId,
+            deviceId,
+            completedAtMs: 1_000,
+          });
           enrolled.resolve(await options!.beginNodeEnrollment!());
           await finishProvider.promise;
           return { leaseId: "newer-enrollment-lease", node: { deviceId }, sharedHost: false };

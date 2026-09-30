@@ -25,6 +25,8 @@ import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 const SESSION_PREFETCH_COUNT = 2;
 const SESSION_PREFETCH_INITIAL_DELAY_MS = 250;
+// Coalesce row sweeps for 75 ms while leaving time to warm history before a click.
+const SESSION_PREFETCH_INTENT_DELAY_MS = 75;
 const SESSION_PREFETCH_COOLDOWN_MS = 30_000;
 const SESSION_PREFETCH_LOCK_NAME = "openclaw-chat-prefetch";
 
@@ -85,14 +87,6 @@ function sessionActivityAt(row: GatewaySessionRow): number {
   return row.lastActivityAt ?? row.updatedAt ?? 0;
 }
 
-function debugSessionPrefetch(message: string, error?: unknown): void {
-  if (error === undefined) {
-    console.debug(`[chat-session-prefetch] ${message}`);
-  } else {
-    console.debug(`[chat-session-prefetch] ${message}`, error);
-  }
-}
-
 function sameKeys(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((key, index) => key === right[index]);
 }
@@ -102,10 +96,13 @@ class SessionPrefetcher {
   private snapshot: SessionPrefetchSnapshot | null = null;
   private readonly lastAttemptAt = new Map<string, number>();
   private delayTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private delayDeadline: number | null = null;
+  private pendingIntent = false;
   private idleTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private idleCallback: number | null = null;
   private running = false;
   private rescheduleDelayMs: number | null = null;
+  private rescheduleIntent = false;
 
   constructor(
     private readonly cache: ChatMessageCache,
@@ -124,6 +121,7 @@ class SessionPrefetcher {
   disconnect(): void {
     this.connected = false;
     this.rescheduleDelayMs = null;
+    this.rescheduleIntent = false;
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.cancelScheduledWork();
   }
@@ -140,7 +138,13 @@ class SessionPrefetcher {
       previous.presentedTranscriptsReady !== snapshot.presentedTranscriptsReady ||
       !sameKeys(previous.openSessionKeys, snapshot.openSessionKeys)
     ) {
-      this.schedule();
+      const intentChanged =
+        snapshot.intentSessionKey !== null &&
+        previous?.intentSessionKey !== snapshot.intentSessionKey;
+      this.schedule(
+        intentChanged ? SESSION_PREFETCH_INTENT_DELAY_MS : SESSION_PREFETCH_INITIAL_DELAY_MS,
+        intentChanged,
+      );
     }
   }
 
@@ -150,21 +154,38 @@ class SessionPrefetcher {
     }
   };
 
-  private schedule(delayMs = SESSION_PREFETCH_INITIAL_DELAY_MS): void {
+  private schedule(delayMs = SESSION_PREFETCH_INITIAL_DELAY_MS, intent = false): void {
     if (!this.connected) {
       return;
     }
     if (this.running) {
       this.rescheduleDelayMs =
         this.rescheduleDelayMs === null ? delayMs : Math.min(this.rescheduleDelayMs, delayMs);
+      this.rescheduleIntent ||= intent;
       return;
     }
-    if (this.delayTimer !== null || this.idleTimer !== null || this.idleCallback !== null) {
+    this.pendingIntent ||= intent;
+    const deadline = Date.now() + delayMs;
+    if (this.delayDeadline !== null && this.delayDeadline <= deadline) {
       return;
     }
+    if (!intent && (this.idleTimer !== null || this.idleCallback !== null)) {
+      return;
+    }
+    const pendingIntent = this.pendingIntent;
+    this.cancelScheduledWork();
+    this.pendingIntent = pendingIntent;
+    this.delayDeadline = deadline;
     this.delayTimer = globalThis.setTimeout(() => {
       this.delayTimer = null;
-      this.scheduleIdleCycle();
+      this.delayDeadline = null;
+      const runWithoutIdle = this.pendingIntent;
+      this.pendingIntent = false;
+      if (runWithoutIdle) {
+        void this.runCycle();
+      } else {
+        this.scheduleIdleCycle();
+      }
     }, delayMs);
   }
 
@@ -203,13 +224,15 @@ class SessionPrefetcher {
         await this.prefetchEligibleSessions();
       }
     } catch (error) {
-      debugSessionPrefetch("cycle failed", error);
+      console.debug("[chat-session-prefetch] cycle failed", error);
     } finally {
       this.running = false;
       if (this.rescheduleDelayMs !== null) {
         const delayMs = this.rescheduleDelayMs;
+        const intent = this.rescheduleIntent;
         this.rescheduleDelayMs = null;
-        this.schedule(delayMs);
+        this.rescheduleIntent = false;
+        this.schedule(delayMs, intent);
       }
     }
   }
@@ -371,7 +394,10 @@ class SessionPrefetcher {
         cached,
       );
     } catch (error) {
-      debugSessionPrefetch(`history fetch failed for ${candidate.snapshotKey}`, error);
+      console.debug(
+        `[chat-session-prefetch] history fetch failed for ${candidate.snapshotKey}`,
+        error,
+      );
     }
   }
 
@@ -492,6 +518,8 @@ class SessionPrefetcher {
   }
 
   private cancelScheduledWork(): void {
+    this.delayDeadline = null;
+    this.pendingIntent = false;
     if (this.delayTimer !== null) {
       globalThis.clearTimeout(this.delayTimer);
       this.delayTimer = null;
@@ -509,7 +537,7 @@ class SessionPrefetcher {
 
 type SessionPrefetchHost = ReactiveControllerHost & HTMLElement;
 
-class SessionPrefetchController implements ReactiveController {
+export class SessionPrefetchController implements ReactiveController {
   private readonly prefetcher: SessionPrefetcher;
   private context: SessionPrefetchContext | undefined;
   private subscriptions: Array<() => void> = [];
@@ -524,7 +552,6 @@ class SessionPrefetchController implements ReactiveController {
   ) {
     this.paneRoot = host;
     this.prefetcher = new SessionPrefetcher(cache, snapshotStore);
-    host.addController(this);
   }
 
   hostConnected(): void {
@@ -622,13 +649,4 @@ class SessionPrefetchController implements ReactiveController {
     this.subscriptions = [];
     this.context = undefined;
   }
-}
-
-export function installSessionPrefetch(
-  host: SessionPrefetchHost,
-  cache: ChatMessageCache,
-  snapshotStore: SessionSnapshotStore,
-  readContext: () => SessionPrefetchContext | undefined,
-): ReactiveController {
-  return new SessionPrefetchController(host, cache, snapshotStore, readContext);
 }

@@ -20,6 +20,7 @@ import {
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { sha256FileSync } from "./crypto-digest.js";
 import {
   LEGACY_DELIVERY_QUEUE_DIRS,
   listLegacyDeliveryQueueFiles,
@@ -31,7 +32,6 @@ import {
   inferDeliveryQueueFailureRetention,
   projectDeliveryQueueTerminalEntry,
 } from "./delivery-queue-sqlite.types.js";
-import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { migrationFileExists } from "./state-migrations.fs.js";
 import {
@@ -49,27 +49,13 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 
 type SqliteBindRow = Record<string, SQLInputValue>;
 
-function normalizeLegacySqliteInteger(value: number | bigint | null): number | null {
-  return typeof value === "bigint" ? Number(value) : value;
-}
-
 // Only the file-to-SQLite cutover expires old intent; live queues have no age TTL.
 const LEGACY_DELIVERY_QUEUE_MAX_AGE_MS = 72 * 60 * 60_000;
 
 type LegacyArchiveResolution = {
-  sourcePath: string;
   targetPath: string;
   action: "archived" | "removed";
 };
-
-function hashLegacyArchiveSource(sourcePath: string): string {
-  const fd = fs.openSync(sourcePath, "r");
-  try {
-    return hashFileDescriptorSync(fd).sha256;
-  } finally {
-    fs.closeSync(fd);
-  }
-}
 
 function archiveLegacyFileSource(params: {
   sourcePath: string;
@@ -84,13 +70,13 @@ function archiveLegacyFileSource(params: {
         index === 1 ? `${params.sourcePath}.migrated` : `${params.sourcePath}.migrated.${index}`;
       if (!fs.existsSync(targetPath)) {
         fs.renameSync(params.sourcePath, targetPath);
-        return { sourcePath: params.sourcePath, targetPath, action: "archived" };
+        return { targetPath, action: "archived" };
       }
       // Legacy sources can exceed whole-file allocation limits; hash only collisions.
-      sourceSha256 ??= hashLegacyArchiveSource(params.sourcePath);
-      if (sourceSha256 === hashLegacyArchiveSource(targetPath)) {
+      sourceSha256 ??= sha256FileSync(params.sourcePath);
+      if (sourceSha256 === sha256FileSync(targetPath)) {
         fs.rmSync(params.sourcePath, { force: true });
-        return { sourcePath: params.sourcePath, targetPath, action: "removed" };
+        return { targetPath, action: "removed" };
       }
     }
   } catch (err) {
@@ -133,10 +119,10 @@ export function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPlu
 function readLegacyTopLevelInstallRecords(
   parsed: unknown,
 ): Record<string, PluginInstallRecord> | null | undefined {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const legacy = asNullableRecord(parsed);
+  if (!legacy) {
     return null;
   }
-  const legacy = parsed as Record<string, unknown>;
   const key = Object.hasOwn(legacy, "installRecords")
     ? "installRecords"
     : Object.hasOwn(legacy, "records")
@@ -148,24 +134,21 @@ function readLegacyTopLevelInstallRecords(
 function readLegacyEmbeddedInstallRecords(
   parsed: unknown,
 ): Record<string, PluginInstallRecord> | null {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const plugins = (parsed as { plugins?: unknown }).plugins;
+  const plugins = asNullableRecord(parsed)?.plugins;
   if (!Array.isArray(plugins)) {
     return null;
   }
   const records = createPluginInstallRecordMap<unknown>();
   let found = false;
-  for (const plugin of plugins) {
-    if (!plugin || typeof plugin !== "object" || Array.isArray(plugin)) {
+  for (const item of plugins) {
+    const plugin = asNullableRecord(item);
+    if (!plugin) {
       return null;
     }
     if (!Object.hasOwn(plugin, "installRecord")) {
       continue;
     }
-    const pluginId = (plugin as { pluginId?: unknown }).pluginId;
-    const installRecord = (plugin as { installRecord?: unknown }).installRecord;
+    const { pluginId, installRecord } = plugin;
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       return null;
     }
@@ -194,37 +177,26 @@ function readInstallRecordField(
   return (record as Partial<Record<string, unknown>>)[key];
 }
 
-function readInstallRecordStringField(
-  record: InstalledPluginIndex["installRecords"][string],
-  key: string,
-): string | undefined {
-  const value = readInstallRecordField(record, key);
-  return typeof value === "string" ? value : undefined;
-}
-
 function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   currentRecord: InstalledPluginIndex["installRecords"][string];
   legacyRecord: InstalledPluginIndex["installRecords"][string];
 }): boolean {
   const { currentRecord, legacyRecord } = params;
-  const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
-  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
-  if (legacySpec) {
-    return currentResolvedSpec === legacySpec;
+  if (legacyRecord.spec) {
+    return currentRecord.resolvedSpec === legacyRecord.spec;
   }
-  const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
-  return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
+  return Boolean(
+    legacyRecord.resolvedSpec && currentRecord.resolvedSpec === legacyRecord.resolvedSpec,
+  );
 }
 
 function readAuthoritativeCurrentNpmIdentity(
   record: InstalledPluginIndex["installRecords"][string],
 ): { name: string; version: string } | null {
-  const resolvedName = readInstallRecordStringField(record, "resolvedName");
-  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion");
+  const { resolvedName, resolvedVersion, resolvedSpec } = record;
   if (resolvedName && resolvedVersion) {
     return { name: resolvedName, version: resolvedVersion };
   }
-  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
   const parsed = resolvedSpec ? parseRegistryNpmSpec(resolvedSpec) : null;
   if (parsed?.selectorKind === "exact-version" && parsed.selector) {
     return { name: parsed.name, version: parsed.selector };
@@ -240,8 +212,7 @@ function legacyNpmInstallRecordSupersededByCurrent(params: {
   if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
     return false;
   }
-  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
-  const legacyParsedSpec = legacySpec ? parseRegistryNpmSpec(legacySpec) : null;
+  const legacyParsedSpec = legacyRecord.spec ? parseRegistryNpmSpec(legacyRecord.spec) : null;
   if (legacyParsedSpec?.selectorKind !== "exact-version") {
     return false;
   }
@@ -479,13 +450,10 @@ function legacyDeliveryQueueRowsMatch(
   ].every((column) => {
     const left = existing[column];
     const right = incoming[column];
-    if (typeof left === "bigint" || typeof right === "bigint") {
-      return (
-        normalizeLegacySqliteInteger(left as number | bigint | null) ===
-        normalizeLegacySqliteInteger(right as number | bigint | null)
-      );
-    }
-    return left === right;
+    return (
+      (typeof left === "bigint" ? Number(left) : left) ===
+      (typeof right === "bigint" ? Number(right) : right)
+    );
   });
 }
 

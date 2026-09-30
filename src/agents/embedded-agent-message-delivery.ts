@@ -1,7 +1,10 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { resolveMessageReceiptPrimaryId } from "../channels/message/receipt.js";
+import {
+  listMessageReceiptSourceTargets,
+  resolveMessageReceiptPrimaryId,
+} from "../channels/message/receipt.js";
 import type { MessageReceipt } from "../channels/message/types.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { MessagePollResult, MessageSendResult } from "../infra/outbound/message.js";
@@ -11,6 +14,7 @@ type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
   sourceReplyDelivered?: true;
   primaryPlatformMessageId?: string;
+  deliveredTargets?: string[];
   partialDelivery: boolean;
   createdThreadIds: string[];
 };
@@ -187,15 +191,26 @@ export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SI
   return visitPluginEnvelope(value, PLUGIN_SIGNALS[signal]);
 }
 
-function readPluginDeliveryId(value: unknown): string | undefined {
-  let found: string | undefined;
+function readPluginDeliveryIdentity(value: unknown) {
+  let primaryPlatformMessageId: string | undefined;
+  const deliveredTargets = new Set<string>();
   visitPluginEnvelope(value, (record) => {
-    found = [record.messageId, record.pollId, asOptionalRecord(record.message)?.id]
+    primaryPlatformMessageId ??= [
+      record.messageId,
+      record.pollId,
+      asOptionalRecord(record.message)?.id,
+    ]
       .map(deliveryId)
       .find(Boolean);
-    return found !== undefined;
+    for (const target of listMessageReceiptSourceTargets(record)) {
+      deliveredTargets.add(target);
+    }
+    return false;
   });
-  return found;
+  return {
+    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
+    ...(deliveredTargets.size ? { deliveredTargets: [...deliveredTargets] } : {}),
+  };
 }
 
 export function projectPluginMessageDeliveryFact(
@@ -216,10 +231,9 @@ export function projectPluginMessageDeliveryFact(
   if (!pluginEnvelopeHas(value, "delivery") && !pluginEnvelopeHas(value, "ok")) {
     return undefined;
   }
-  const primaryPlatformMessageId = readPluginDeliveryId(value);
   return {
     status: "settled",
-    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
+    ...readPluginDeliveryIdentity(value),
     ...EMPTY_DELIVERY_FACT,
   };
 }

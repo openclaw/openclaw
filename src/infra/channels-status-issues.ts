@@ -1,4 +1,3 @@
-// Collects channel account status issues for diagnostics.
 import { Value } from "typebox/value";
 import { ChannelsStatusResultSchema } from "../../packages/gateway-protocol/src/schema/channels.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";

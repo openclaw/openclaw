@@ -1,14 +1,38 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
+import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import * as preferences from "../../state/user-preferences.js";
 import { ensureProfileForEmail, linkEmail, setAvatar } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { GatewayClient } from "./types.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
+import {
+  createCoreGatewayMethodDescriptors,
+  createGatewayMethodRegistry,
+} from "../methods/registry.js";
+import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { handleGatewayRequest } from "../server-methods.js";
+import {
+  dispatchGatewayMethodInProcess,
+  withOperatorToolGatewayAuthority,
+} from "../server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../server-plugin-in-process-dispatch.test-support.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
+import { createGatewayWsTestSocket } from "../server/ws-connection.test-helpers.js";
+import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
+import type { GatewayClient, GatewayRequestHandler } from "./types.js";
 import { usersHandlers } from "./users.js";
 
 async function invokePreferenceMethod(
@@ -36,6 +60,324 @@ async function invokePreferenceMethod(
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+});
+
+async function withPreferenceToolTurn(
+  run: (params: {
+    ownerId: string;
+    steer: () => Promise<void>;
+    revoke: () => void;
+    request: (
+      method: "users.prefs.get" | "users.prefs.set",
+      params?: Record<string, unknown>,
+    ) => Promise<unknown>;
+  }) => Promise<void>,
+) {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "prefs-tool-turn-" });
+  try {
+    const owner = ensureProfileForEmail("prefs-owner@example.test");
+    const guest = ensureProfileForEmail("prefs-guest@example.test");
+    const scopes = ["operator.read", "operator.write"];
+    const client = createOperatorClient({ profileId: owner.id, scopes });
+    const context = createContext();
+    const expectSyntheticOwnerCall = (
+      method: "users.prefs.get" | "users.prefs.set",
+    ): GatewayRequestHandler => {
+      const handler = usersHandlers[method];
+      if (!handler) {
+        throw new Error(`missing ${method} handler`);
+      }
+      return (options) => {
+        expect(options.client?.internal?.syntheticClient).toBe(true);
+        expect(options.client?.authenticatedUserProfile?.profileId).toBe(owner.id);
+        return handler(options);
+      };
+    };
+    const descriptors = createCoreGatewayMethodDescriptors({
+      "users.prefs.get": expectSyntheticOwnerCall("users.prefs.get"),
+      "users.prefs.set": expectSyntheticOwnerCall("users.prefs.set"),
+    });
+    context.getGatewayMethodRegistry = () => createGatewayMethodRegistry(descriptors);
+    await withOperatorToolGatewayAuthority(
+      { authenticatedUserProfile: client.authenticatedUserProfile!, scopes },
+      () =>
+        withPersonalToolTurn(
+          { owner: { profileId: owner.id, senderId: "owner", name: "Owner" } },
+          (turn) =>
+            run({
+              ownerId: owner.id,
+              steer: async () => {
+                expect(
+                  await turn.steer({ profileId: guest.id, senderId: "guest", name: "Guest" }),
+                ).toMatchObject({ status: "accepted" });
+              },
+              revoke: () => turn.revoke(owner.id),
+              request: (method, params = {}) =>
+                dispatchGatewayMethodInProcess(method, params, {
+                  forceSyntheticClient: true,
+                  resolveGatewayContext: () => context,
+                }),
+            }),
+        ),
+    );
+  } finally {
+    await state.cleanup();
+  }
+}
+
+test("users.prefs rejects mixed-person synthetic turn calls before reading or writing preferences", async () => {
+  await withPreferenceToolTurn(async ({ ownerId, steer, request }) => {
+    await expect(request("users.prefs.set", { entries: { "ui.theme": "claw" } })).resolves.toEqual({
+      status: "ok",
+    });
+    await expect(request("users.prefs.get")).resolves.toEqual({
+      status: "ok",
+      entries: { "ui.theme": "claw" },
+    });
+    await steer();
+    using read = vi.spyOn(preferences, "getCanonicalUserPreferences");
+    using write = vi.spyOn(preferences, "setCanonicalUserPreferences");
+    await withGatewayPersonalToolUser(ownerId, async () => {
+      await expect(request("users.prefs.get")).rejects.toThrow(/own Control UI turn/i);
+      await expect(request("users.prefs.set", { entries: { "ui.theme": "dark" } })).rejects.toThrow(
+        /own Control UI turn/i,
+      );
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+});
+
+test.each(["read", "write"] as const)(
+  "users.prefs rejects a steer accepted while the personal %s is pending",
+  async (operation) => {
+    await withPreferenceToolTurn(async ({ ownerId, steer, request }) => {
+      await request("users.prefs.set", { entries: { "ui.theme": "claw" } });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const readPreferences = preferences.getCanonicalUserPreferences;
+      const writePreferences = preferences.setCanonicalUserPreferences;
+      using read = vi.spyOn(preferences, "getCanonicalUserPreferences");
+      using write = vi.spyOn(preferences, "setCanonicalUserPreferences");
+      if (operation === "read") {
+        read.mockImplementationOnce(async (...args) => {
+          const result = await readPreferences(...args);
+          entered.resolve();
+          await release.promise;
+          return result;
+        });
+      } else {
+        write.mockImplementationOnce(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return writePreferences(...args);
+        });
+      }
+      const pending = request(
+        operation === "read" ? "users.prefs.get" : "users.prefs.set",
+        operation === "read" ? {} : { entries: { "ui.theme": "dark" } },
+      );
+      const outcome = Promise.allSettled([pending]);
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(operation === "read" ? read : write).toHaveBeenCalledOnce();
+        await steer();
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+      expect(await outcome).toMatchObject([
+        { status: "rejected", reason: { message: expect.stringMatching(/own Control UI turn/i) } },
+      ]);
+      expect(await readPreferences(ownerId)).toMatchObject({ entries: { "ui.theme": "claw" } });
+    });
+  },
+);
+
+test("users.prefs refuses a pending write when the participant is revoked before worker commit", async () => {
+  await withPreferenceToolTurn(async ({ ownerId, revoke, request }) => {
+    await request("users.prefs.set", { entries: { "ui.theme": "claw" } });
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    let reachedCommit = false;
+    using admission = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
+    admission.mockImplementation((admit, attachment) =>
+      createAdmission((workerRequest, grant) => {
+        if (workerRequest.stage === "commit") {
+          reachedCommit = true;
+          revoke();
+        }
+        admit(workerRequest, grant);
+      }, attachment),
+    );
+    await expect(request("users.prefs.set", { entries: { "ui.theme": "dark" } })).rejects.toThrow();
+    expect(reachedCommit).toBe(true);
+    expect(await preferences.getCanonicalUserPreferences(ownerId)).toMatchObject({
+      entries: { "ui.theme": "claw" },
+    });
+  });
+});
+
+test.each(["current", "scope", "source", "identity", "error-response", "staff"] as const)(
+  "users.self keeps its original %s authority through the handler's identity sync",
+  async (change) => {
+    const state = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "users-self-read-",
+    });
+    try {
+      const owner = ensureProfileForEmail("self-reader@example.test");
+      const replacement = ensureProfileForEmail("other-reader@example.test");
+      const client = createOperatorWsClient({
+        connId: "self-reader",
+        scopes: [change === "staff" ? "operator.read" : "operator.sessions.read"],
+      });
+      client.authenticatedUserId = "self-reader@github";
+      const attach = (profile: typeof owner) => {
+        client.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: null,
+          avatarRevision: "",
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        };
+        prepareGatewayRecipientProfile(client);
+      };
+      if (change === "staff") {
+        attach(owner);
+      }
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let syncCount = 0;
+      const sync = vi.fn(async () => {
+        syncCount += 1;
+        if (change !== "staff" && syncCount === 1) {
+          attach(owner);
+        } else {
+          entered.resolve();
+          await release.promise;
+        }
+        return { profileId: owner.id, updatedAt: owner.updatedAt };
+      });
+      client.authenticatedGitHubIdentitySync = sync;
+      let current = true;
+      const respond = vi.fn();
+      const request = handleGatewayRequest({
+        req: { type: "req", id: change, method: "users.self", params: {} },
+        client,
+        context: createDirectChatContext(),
+        respond,
+        hasCurrentClientAuthority: () => current,
+        isWebchatConnect: () => false,
+        extraHandlers: usersHandlers,
+      });
+      const outcome = Promise.allSettled([request]);
+      try {
+        await Promise.race([entered.promise, request]);
+        expect(sync).toHaveBeenCalledTimes(change === "staff" ? 1 : 2);
+        expect(respond).not.toHaveBeenCalled();
+        if (change === "scope") {
+          client.connect.scopes = [];
+        } else if (change === "source") {
+          current = false;
+        } else if (change === "identity") {
+          attach(replacement);
+        } else if (change === "error-response") {
+          client.authenticatedUserProfile = undefined;
+        }
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+      if (change === "source") {
+        expect(await outcome).toMatchObject([
+          { status: "rejected", reason: { message: "Gateway requester authority changed" } },
+        ]);
+        expect(respond).not.toHaveBeenCalled();
+      } else {
+        expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
+        if (change === "current" || change === "staff") {
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+            profile: expect.objectContaining({ id: owner.id }),
+          });
+        } else {
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "FORBIDDEN",
+              message: "Gateway requester authority changed",
+            }),
+          );
+        }
+      }
+    } finally {
+      await state.cleanup();
+    }
+  },
+);
+
+test("users.prefs.get retains its original scope across the preference read", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "users-prefs-read-",
+  });
+  try {
+    const owner = ensureProfileForEmail("retained-preferences@example.test");
+    await invokePreferenceMethod("users.prefs.set", { entries: { "ui.theme": "dark" } }, owner.id);
+    const client = createOperatorWsClient({
+      connId: "preference-reader",
+      scopes: ["operator.sessions.read"],
+    });
+    client.authenticatedUserProfile = {
+      profileId: owner.id,
+      displayName: null,
+      avatarRevision: "",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    prepareGatewayRecipientProfile(client);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const original = preferences.getCanonicalUserPreferences;
+    using read = vi
+      .spyOn(preferences, "getCanonicalUserPreferences")
+      .mockImplementation(async (...args) => {
+        const result = await original(...args);
+        entered.resolve();
+        await release.promise;
+        return result;
+      });
+    const respond = vi.fn();
+    const request = handleGatewayRequest({
+      req: { type: "req", id: "retained-preferences", method: "users.prefs.get", params: {} },
+      client,
+      context: createDirectChatContext(),
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers: usersHandlers,
+    });
+    const outcome = Promise.allSettled([request]);
+    try {
+      await Promise.race([entered.promise, request]);
+      expect(read).toHaveBeenCalledOnce();
+      client.connect.scopes = [];
+    } finally {
+      release.resolve();
+      await outcome;
+    }
+    expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "FORBIDDEN",
+        message: "Gateway requester authority changed",
+      }),
+    );
+    expect(await original(owner.id)).toMatchObject({ entries: { "ui.theme": "dark" } });
+  } finally {
+    await state.cleanup();
+  }
 });
 
 test("users.prefs remains self-scoped across durable identities", async () => {
@@ -113,21 +455,36 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
     }
     linkEmail("retired@example.test", owner.id);
 
-    const connectedClients = [
-      { connId: "owner", authenticatedUserProfile: { profileId: owner.id } },
-      { connId: "merged", authenticatedUserProfile: { profileId: retired.id } },
-      { connId: "other", authenticatedUserProfile: { profileId: other.id } },
-      { connId: "unbound" },
-    ];
-    const broadcastToConnIds = vi.fn();
+    const peers = [
+      ["owner", owner.id, ["operator.sessions.read"]],
+      ["merged", retired.id, ["operator.sessions.write"]],
+      ["staff", owner.id, ["operator.write"]],
+      ["other", other.id, ["operator.sessions.read"]],
+      ["unbound", undefined, ["operator.sessions.read"]],
+    ] as const;
+    const connected = peers.map(([connId, profileId, scopes]) => {
+      const frames: string[] = [];
+      const socket = createGatewayWsTestSocket({ onSend: (data) => frames.push(data) });
+      const client = createOperatorWsClient({ connId, socket, scopes: [...scopes] });
+      if (profileId) {
+        client.authenticatedUserProfile = {
+          profileId,
+          displayName: null,
+          avatarRevision: "",
+          hasAvatar: true,
+          updatedAt: 1,
+        };
+      }
+      prepareGatewayRecipientProfile(client);
+      return { client, frames };
+    });
+    const clients = new GatewayClientRegistry(connected.map(({ client }) => client));
+    const broadcaster = createGatewayBroadcaster({ clients });
+    const broadcastToConnIds = vi.fn(broadcaster.broadcastToConnIds);
     const context = {
       broadcastToConnIds,
       getClientConnIds: (filter: (client: GatewayClient) => boolean) =>
-        new Set(
-          connectedClients
-            .filter((client) => filter(client as GatewayClient))
-            .map((client) => client.connId),
-        ),
+        new Set([...clients].filter(filter).map((client) => client.connId)),
     };
 
     // Measure recipient selection on this handle; the preference worker has its own connection.
@@ -149,8 +506,20 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
       expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
         "users.prefs.changed",
         { profileId: owner.id, keys: ["ui.accent", "ui.theme"] },
-        new Set(["owner", "merged"]),
+        new Set(["owner", "merged", "staff"]),
       );
+      for (const peer of connected) {
+        if (["owner", "merged", "staff"].includes(peer.client.connId)) {
+          expect(peer.frames).toHaveLength(1);
+          expect(JSON.parse(peer.frames[0]!)).toMatchObject({
+            type: "event",
+            event: "users.prefs.changed",
+            payload: { profileId: owner.id, keys: ["ui.accent", "ui.theme"] },
+          });
+        } else {
+          expect(peer.frames).toEqual([]);
+        }
+      }
       expect(reads.rowCounts.profiles).toBeGreaterThan(0);
       expect.soft(reads.blobBytes.profiles).toBe(0);
     } finally {

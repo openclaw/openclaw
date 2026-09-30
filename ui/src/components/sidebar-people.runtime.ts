@@ -3,7 +3,6 @@ import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { presenceUserLabel, projectOnlinePresenceViewers } from "../lib/presence-users.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
@@ -195,16 +194,9 @@ export class SidebarPeopleRuntime {
       return;
     }
     const data = this.host.sessionData;
-    const self = resolveCurrentSelfUser({
-      snapshotUser: context.gateway.snapshot.selfUser,
-      presenceEntries: readPresenceEntries(data.presencePayload),
-      presenceInstanceId: data.presenceInstanceId,
-    });
-    let user = projectOnlinePresenceViewers(
-      data.presencePayload,
-      self,
-      data.presenceInstanceId,
-    ).find((person) => presenceUserKey(person) === active.id);
+    let user = projectOnlinePresenceViewers(data.presencePayload).find(
+      (person) => presenceUserKey(person) === active.id,
+    );
     if (!user && active.id.startsWith("profile:")) {
       const profileId = active.id.slice("profile:".length);
       const actor = [data.sessionsResult, ...Object.values(data.sessionResultsByAgent)]
@@ -269,6 +261,7 @@ export class SidebarPeopleRuntime {
             });
             this.close();
             runSessionNavigationIntent(this.host, {
+              agentId,
               face,
               sessionKey: row.key,
               commit: () => {
@@ -305,17 +298,7 @@ export class SidebarPeopleRuntime {
       this.portal.pointerOverCard = false;
       this.portal.scheduleClose();
     });
-    card.addEventListener("keydown", (event) => {
-      const links = this.portal.focusables();
-      if (
-        event.key === "Tab" &&
-        document.activeElement === (event.shiftKey ? links[0] : links.at(-1))
-      ) {
-        event.preventDefault();
-        this.returnFocus();
-        this.close();
-      }
-    });
+    card.addEventListener("keydown", this.portal.handleCardKeyDown);
     this.portal.mount(active.row, card, "horizontal", true, () => render(nothing, card));
   }
 

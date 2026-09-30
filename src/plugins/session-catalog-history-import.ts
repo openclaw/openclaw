@@ -3,6 +3,7 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentMessage } from "../plugin-sdk/agent-core.js";
 import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript-runtime.js";
@@ -42,41 +43,28 @@ function importedSessionCatalogMessage(params: {
           : params.item.type === "other"
             ? "Other\n\n"
             : "";
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: `${prefix}${text}` }],
+  return sessionCatalogAssistantMessage(
+    `${prefix}${text}`,
     timestamp,
-    api: "openai-responses",
-    provider: params.catalogId,
-    model: params.item.model ?? "native-history",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-  };
+    params.catalogId,
+    params.item.model ?? "native-history",
+  );
 }
 
-function sessionCatalogContinuationNotice(text: string, timestamp: number): AgentMessage {
+function sessionCatalogAssistantMessage(
+  text: string,
+  timestamp: number,
+  provider: string,
+  model: string,
+): AgentMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
     timestamp,
     api: "openai-responses",
-    provider: "openclaw",
-    model: "session-catalog",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    provider,
+    model,
+    usage: makeZeroUsageSnapshot(),
     stopReason: "stop",
   };
 }
@@ -111,13 +99,6 @@ function fitSessionCatalogItemToBytes(
   return Buffer.byteLength(JSON.stringify(bounded), "utf8") <= maxBytes ? bounded : undefined;
 }
 
-function importableSessionCatalogItem(
-  item: SessionCatalogTranscriptItem,
-): SessionCatalogTranscriptItem {
-  const { raw: _raw, ...importable } = item;
-  return importable;
-}
-
 async function readBoundedSessionCatalogHistory(params: {
   read: (params: { cursor?: string; limit: number }) => Promise<SessionsCatalogReadResult>;
 }): Promise<SessionCatalogTranscriptItem[]> {
@@ -135,7 +116,7 @@ async function readBoundedSessionCatalogHistory(params: {
     // Catalog reads are newest-first. Bound that recent suffix before restoring
     // source order for persistence; timestamps do not define transcript order.
     for (const item of page.items) {
-      const importableItem = importableSessionCatalogItem(item);
+      const { raw: _raw, ...importableItem } = item;
       const itemBytes = Buffer.byteLength(JSON.stringify(importableItem), "utf8");
       const remainingBytes = SESSION_CATALOG_HISTORY_IMPORT_MAX_BYTES - bytes;
       if (items.length > 0 && itemBytes > remainingBytes) {
@@ -205,7 +186,12 @@ export async function importSessionCatalogHistory(params: {
     if (notice) {
       await transcript.appendMessage({
         message: {
-          ...sessionCatalogContinuationNotice(notice, fallbackTimestamp + items.length),
+          ...sessionCatalogAssistantMessage(
+            notice,
+            fallbackTimestamp + items.length,
+            "openclaw",
+            "session-catalog",
+          ),
           idempotencyKey: `${params.catalogId}-catalog:${params.threadId}:continuation-notice`,
         },
         idempotencyLookup: "scan",

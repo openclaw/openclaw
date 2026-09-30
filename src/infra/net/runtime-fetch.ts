@@ -1,7 +1,7 @@
 // Runtime fetch adapter preserves undici dispatcher support and normalizes
 // headers/FormData before calling the runtime fetch implementation.
 import type { Dispatcher } from "undici";
-import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
+import { normalizeRequestInitHeadersForFetch } from "../fetch-headers.js";
 import { isFormDataLike } from "./form-data.js";
 import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
 
@@ -26,8 +26,6 @@ function normalizeRuntimeFormData(
     return body;
   }
 
-  // Node's global FormData and undici's runtime FormData can be different
-  // constructors. Rebuild entries so runtime fetch can stream multipart bodies.
   const next = new RuntimeFormData();
   for (const [key, value] of body.entries()) {
     const namedValue = value as FormDataEntryValueWithOptionalName;
@@ -52,9 +50,7 @@ function normalizeRuntimeRequestInit(
   if (!init) {
     return init;
   }
-  const normalizedHeaders = normalizeHeadersInitForFetch(init.headers);
-  const initWithNormalizedHeaders =
-    normalizedHeaders === init.headers ? init : { ...init, headers: normalizedHeaders };
+  const initWithNormalizedHeaders = normalizeRequestInitHeadersForFetch(init);
   if (!init.body) {
     return initWithNormalizedHeaders;
   }
@@ -66,7 +62,7 @@ function normalizeRuntimeRequestInit(
 
   // The rebuilt FormData will choose its own boundary and length; stale caller
   // values make undici send an invalid multipart request.
-  const headers = new Headers(normalizedHeaders);
+  const headers = new Headers(initWithNormalizedHeaders?.headers);
   headers.delete("content-length");
   headers.delete("content-type");
   return {

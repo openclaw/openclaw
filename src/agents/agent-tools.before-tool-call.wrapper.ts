@@ -69,6 +69,7 @@ import {
   bindBeforeToolCallMetadata,
   clearBeforeToolCallWrappedMarker,
   getBeforeToolCallDiagnosticOptions,
+  getBeforeToolCallExecutionWrappers,
   getBeforeToolCallHookContext,
   getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
@@ -147,23 +148,6 @@ export function finalizeBeforeToolCallExecutionParams(params: {
   return finalize.call(params.tool, reconciledParams, params.preparedParams) ?? reconciledParams;
 }
 
-class BeforeToolCallBlockedError extends Error {
-  constructor(readonly reason: string) {
-    super(reason);
-    this.name = "BeforeToolCallBlockedError";
-  }
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.beforeToolCallBlockedErrorTestApi")
-  ] = {
-    create(message: string): Error {
-      return new BeforeToolCallBlockedError(message);
-    },
-  };
-}
-
 class BeforeToolCallFailureError extends Error {
   constructor(
     message: string,
@@ -216,22 +200,14 @@ export function recordAdjustedParamsForToolCall(
   if (!toolCallId) {
     return;
   }
-  const cloneResult = cloneParamsForAdjustedReplay(params);
-  if (!cloneResult.ok) {
+  let snapshot: unknown;
+  try {
+    snapshot = structuredClone(params);
+  } catch {
     return;
   }
-  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), cloneResult.value);
+  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), snapshot);
   pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
-}
-
-function cloneParamsForAdjustedReplay(
-  params: unknown,
-): { ok: true; value: unknown } | { ok: false } {
-  try {
-    return { ok: true, value: structuredClone(params) };
-  } catch {
-    return { ok: false };
-  }
 }
 
 /** Record that one concrete core-owned tool call may use structured replay classification. */
@@ -251,13 +227,6 @@ export function recordStructuredReplayTrustForToolCall(
     }
     structuredReplaySafeToolCallIds.delete(oldest);
   }
-}
-
-/**
- * Returns true when an error represents an intentional before_tool_call veto.
- */
-export function isBeforeToolCallBlockedError(err: unknown): err is BeforeToolCallBlockedError {
-  return err instanceof BeforeToolCallBlockedError;
 }
 
 const preExecutionBlockedToolResults = new WeakSet<object>();
@@ -304,6 +273,7 @@ export function wrapToolWithBeforeToolCallHook(
     return tool;
   }
   const toolName = tool.name || "tool";
+  const toolOwnerPluginId = getPluginToolMeta(tool)?.pluginId;
   const admitExecution = captureAgentToolExecutionBudget();
   const diagnosticIdentity = resolveToolDiagnosticIdentity(tool);
   const hookOptions: BeforeToolCallDiagnosticOptions = {
@@ -447,7 +417,11 @@ export function wrapToolWithBeforeToolCallHook(
           params: hookParams,
           ...hookMetadata,
           toolCallId,
-          ctx,
+          ctx: ctx
+            ? { ...ctx, toolOwnerPluginId }
+            : toolOwnerPluginId
+              ? { toolOwnerPluginId }
+              : undefined,
           signal,
           approvalMode: hookOptions.approvalMode,
         });
@@ -510,6 +484,7 @@ export function wrapToolWithBeforeToolCallHook(
       const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
         toolCallId,
         toolName,
+        toolKind: hookMetadata?.toolKind,
         params: executeParams,
         ctx,
       });
@@ -711,8 +686,18 @@ export function rewrapToolWithBeforeToolCallHook(
   };
   clearBeforeToolCallWrappedMarker(rewrapSource);
   copyBeforeToolCallWrapperMetadata(tool, rewrapSource);
+  copyAgentToolSourceExecutionGuard(sourceTool, rewrapSource);
   copyAgentToolSourceExecutionGuard(tool, rewrapSource);
-  return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, wrapperOptions);
+  let rebuilt = wrapToolWithBeforeToolCallHook(
+    rewrapSource,
+    ctx ?? preservedContext,
+    wrapperOptions,
+  );
+  // Replace only the hook layer; caller authority and lifetime guards still enclose it.
+  for (const wrapExecution of getBeforeToolCallExecutionWrappers(tool)) {
+    rebuilt = wrapExecution(rebuilt);
+  }
+  return rebuilt;
 }
 
 function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {

@@ -55,7 +55,7 @@ export default definePluginEntry({
       maxEntries: MAX_AUDIT_ROWS,
       overflowPolicy: "evict-oldest",
     });
-    const pending = api.runtime.state.openSyncKeyedStore<PendingAuthorization>({
+    const pending = api.runtime.state.openKeyedStore<PendingAuthorization>({
       namespace: "pending",
       maxEntries: 512,
       overflowPolicy: "evict-oldest",

@@ -16,7 +16,7 @@ Codex dynamic tools default to `searchable` loading. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `get_goal`, `create_goal`, `update_goal`, `tool_call`, `tool_describe`,
-`tool_search`, and `tool_search_code`. Goal operations stay native to Codex,
+and `tool_search`. Goal operations stay native to Codex,
 so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, `progress_card`, and `heartbeat_respond` are available through
@@ -149,6 +149,12 @@ attempt: progress does not reset it, and `0` means unlimited execution.
 OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
+
+Failed app-server startup waits for child shutdown before returning its error.
+If startup times out or is canceled during process registration, cleanup joins
+that registration and closes any late child. Cleanup can extend beyond the
+startup deadline. A canceled caller leaves startup running when another caller
+still owns it.
 
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.

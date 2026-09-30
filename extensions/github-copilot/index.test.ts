@@ -13,7 +13,6 @@ import type {
   OpenClawConfig,
   OpenClawPluginApi,
   ProviderAuthResult,
-  ProviderCatalogResult,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -33,10 +32,6 @@ const mocks = vi.hoisted(() => ({
   resolveCopilotStarterModel: vi.fn(async () => "github-copilot/claude-sonnet-5"),
 }));
 
-function requireAuthMethod<T>(methods: readonly T[], index: number): T {
-  return expectDefined(methods[index], `GitHub Copilot auth method ${index}`);
-}
-
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
     "openclaw/plugin-sdk/ssrf-runtime",
@@ -55,25 +50,13 @@ vi.mock("./register.runtime.js", () => ({
 }));
 
 import plugin from "./index.js";
+import {
+  interactiveContext,
+  registerProviderWithPluginConfig,
+  requireAuthMethod,
+} from "./provider.test-support.js";
 
 const tempDirs: string[] = [];
-type RegisteredProvider = Parameters<OpenClawPluginApi["registerProvider"]>[0];
-type GithubCopilotTestProvider = RegisteredProvider & {
-  auth: Array<{
-    id: string;
-    run: (ctx: unknown) => Promise<ProviderAuthResult | null>;
-    runNonInteractive: (ctx: unknown) => Promise<OpenClawConfig | null>;
-  }>;
-  catalog: {
-    run: (ctx: unknown) => Promise<ProviderCatalogResult>;
-  };
-  prepareDynamicModel: NonNullable<RegisteredProvider["prepareDynamicModel"]>;
-  resolveDynamicModel: NonNullable<RegisteredProvider["resolveDynamicModel"]>;
-  preferRuntimeResolvedModel: NonNullable<RegisteredProvider["preferRuntimeResolvedModel"]>;
-  prepareRuntimeAuth: NonNullable<RegisteredProvider["prepareRuntimeAuth"]>;
-  resolveThinkingProfile: NonNullable<RegisteredProvider["resolveThinkingProfile"]>;
-};
-
 afterEach(async () => {
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -130,54 +113,38 @@ function createModelRegistry() {
   };
 }
 
-function writeExistingCopilotTokenProfile(agentDir: string) {
-  saveAuthProfileStore(
-    {
-      version: 1,
-      profiles: {
-        "github-copilot:github": {
-          type: "token",
-          provider: "github-copilot",
-          token: "existing-token",
-        },
-      },
-    },
-    agentDir,
-    { filterExternalAuthProfiles: false, syncExternalCli: false },
-  );
+function writeProfiles(
+  agentDir: string,
+  profiles: Parameters<typeof saveAuthProfileStore>[0]["profiles"],
+) {
+  saveAuthProfileStore({ version: 1, profiles }, agentDir, {
+    filterExternalAuthProfiles: false,
+    syncExternalCli: false,
+  });
 }
 
-function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
-  const registerProviderMock = vi.fn<OpenClawPluginApi["registerProvider"]>();
-  plugin.register(
-    createTestPluginApi({
-      id: "github-copilot",
-      pluginConfig,
-      registerProvider: registerProviderMock,
-    }),
-  );
-  expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  return expectDefined(
-    registerProviderMock.mock.calls[0]?.[0],
-    "provider registration",
-  ) as GithubCopilotTestProvider;
+function writeExistingCopilotTokenProfile(agentDir: string) {
+  writeProfiles(agentDir, {
+    "github-copilot:github": {
+      type: "token",
+      provider: "github-copilot",
+      token: "existing-token",
+    },
+  });
+}
+
+function nonInteractiveContext(agentDir: string) {
+  return {
+    authChoice: "github-copilot",
+    config: {},
+    baseConfig: {},
+    opts: {},
+    agentDir,
+    toApiKeyCredential: vi.fn(),
+  };
 }
 
 describe("github-copilot plugin", () => {
-  it("formats legacy OAuth profiles with the durable GitHub credential", () => {
-    const provider = registerProviderWithPluginConfig({});
-
-    expect(
-      provider.formatApiKey?.({
-        type: "oauth",
-        provider: "github-copilot",
-        access: "short-lived-copilot-token",
-        refresh: " durable-github-token ",
-        expires: Date.now() + 60_000,
-      }),
-    ).toBe("durable-github-token");
-  });
-
   it("normalizes legacy OAuth profiles without losing tenant metadata", async () => {
     const provider = registerProviderWithPluginConfig({});
     const credential = {
@@ -477,61 +444,6 @@ describe("github-copilot plugin", () => {
     expect(observedHeaders.every((headers) => !headers.has("x-private-header"))).toBe(true);
   });
 
-  it("owns session-bound replay thinking cleanup", () => {
-    const provider = registerProviderWithPluginConfig({});
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private", thinkingSignature: "sig" },
-          { type: "redacted_thinking", data: "opaque" },
-          { type: "text", text: "visible" },
-        ],
-      },
-    ];
-
-    expect(
-      provider.buildReplayPolicy?.({
-        modelId: "claude-haiku-4.5",
-        modelApi: "anthropic-messages",
-      } as never),
-    ).toMatchObject({
-      dropThinkingBlocks: true,
-      validateAnthropicTurns: true,
-    });
-    expect(
-      provider.sanitizeReplayHistory?.({
-        modelId: "claude-haiku-4.5",
-        modelApi: "anthropic-messages",
-        messages,
-      } as never),
-    ).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "visible" }],
-      },
-    ]);
-    expect(
-      provider.sanitizeReplayHistory?.({
-        modelApi: "openai-responses",
-        modelId: "gpt-5.4",
-        messages,
-      } as never),
-    ).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "visible" }],
-      },
-    ]);
-    expect(
-      provider.sanitizeReplayHistory?.({
-        modelApi: "openai-completions",
-        modelId: "gpt-5.4",
-        messages,
-      } as never),
-    ).toBe(messages);
-  });
-
   it("registers embedding provider", () => {
     const registerEmbeddingProviderMock = vi.fn<OpenClawPluginApi["registerEmbeddingProvider"]>();
 
@@ -611,21 +523,14 @@ describe("github-copilot plugin", () => {
     },
   ])("uses $label when discovering its live Copilot model catalog", async (testCase) => {
     const agentDir = await createAgentDir();
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "github-copilot:first": {
-            type: "token",
-            provider: "github-copilot",
-            token: "first-token",
-          },
-          "github-copilot:preferred": testCase.profile,
-        },
+    writeProfiles(agentDir, {
+      "github-copilot:first": {
+        type: "token",
+        provider: "github-copilot",
+        token: "first-token",
       },
-      agentDir,
-      { filterExternalAuthProfiles: false, syncExternalCli: false },
-    );
+      "github-copilot:preferred": testCase.profile,
+    });
     mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
       apiKey: "preferred-copilot-token",
       baseUrl: "https://api.githubcopilot.preferred",
@@ -724,18 +629,6 @@ describe("github-copilot plugin", () => {
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
-  it("exposes xhigh thinking for catalog-supported Copilot reasoning efforts", () => {
-    const provider = registerProviderWithPluginConfig({});
-
-    const profile = provider.resolveThinkingProfile({
-      provider: "github-copilot",
-      modelId: "claude-opus-4.7-1m-internal",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-    });
-
-    expect(profile?.levels.map((level) => level.id)).toContain("xhigh");
-  });
-
   it("exposes xhigh and max thinking for the bundled Claude Opus 5 model", () => {
     const provider = registerProviderWithPluginConfig({});
     const model = expectDefined(
@@ -754,30 +647,6 @@ describe("github-copilot plugin", () => {
     expect(profile?.levels.map((level) => level.id)).toEqual(
       expect.arrayContaining(["xhigh", "max"]),
     );
-  });
-
-  it("exposes max thinking for catalog-supported Copilot reasoning efforts", () => {
-    const provider = registerProviderWithPluginConfig({});
-
-    const profile = provider.resolveThinkingProfile({
-      provider: "github-copilot",
-      modelId: "claude-fable-5",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
-    });
-
-    expect(profile?.levels.map((level) => level.id)).toContain("max");
-  });
-
-  it("does not expose max for non-adaptive Claude Copilot models", () => {
-    const provider = registerProviderWithPluginConfig({});
-
-    const profile = provider.resolveThinkingProfile({
-      provider: "github-copilot",
-      modelId: "claude-opus-4-5",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
-    });
-
-    expect(profile?.levels.map((level) => level.id)).not.toContain("max");
   });
 
   it("exposes xhigh thinking for non-Claude Copilot models with catalog xhigh effort", () => {
@@ -924,56 +793,6 @@ describe("github-copilot plugin", () => {
     },
   );
 
-  it("offers to reuse an existing token profile during interactive onboarding", async () => {
-    const provider = registerProviderWithPluginConfig({});
-    const method = requireAuthMethod(provider.auth, 0);
-    const agentDir = await createAgentDir();
-    writeExistingCopilotTokenProfile(agentDir);
-    const prompter = {
-      confirm: vi.fn(async () => false),
-      note: vi.fn(),
-    };
-
-    const result = await method.run({
-      config: {},
-      env: {},
-      agentDir,
-      workspaceDir: "/tmp/workspace",
-      prompter,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      opts: {},
-      secretInputMode: "plaintext",
-      allowSecretRefPrompt: false,
-      isRemote: false,
-      openUrl: vi.fn(),
-      oauth: { createVpsAwareHandlers: vi.fn() },
-    } as never);
-
-    expect(prompter.confirm).toHaveBeenCalledWith({
-      message: "GitHub Copilot auth already exists. Re-run login?",
-      initialValue: false,
-    });
-    expect(result).toEqual({
-      profiles: [
-        {
-          profileId: "github-copilot:github",
-          credential: {
-            type: "token",
-            provider: "github-copilot",
-            token: "existing-token",
-          },
-        },
-      ],
-      defaultModel: "github-copilot/claude-sonnet-5",
-    });
-    expect(mocks.resolveCopilotStarterModel).toHaveBeenCalledWith({
-      githubToken: "existing-token",
-      env: {},
-      githubDomain: "github.com",
-      config: {},
-    });
-  });
-
   it.each([true, false])(
     "returns a supplied token with credentialOnly=%s without replacing stored credentials or starting login",
     async (credentialOnly) => {
@@ -1033,21 +852,13 @@ describe("github-copilot plugin", () => {
     writeExistingCopilotTokenProfile(agentDir);
 
     const result = await method.run({
-      config: {},
-      env: {},
-      agentDir,
-      workspaceDir: "/tmp/workspace",
+      ...interactiveContext(agentDir),
       prompter: {
         confirm: vi.fn(async () => false),
         note: vi.fn(),
       },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      opts: {},
       secretInputMode: "plaintext",
-      allowSecretRefPrompt: false,
-      isRemote: false,
       openUrl: vi.fn(),
-      oauth: { createVpsAwareHandlers: vi.fn() },
     } as never);
 
     expect(result).toMatchObject({
@@ -1065,25 +876,18 @@ describe("github-copilot plugin", () => {
   describe("github-copilot dynamic model resolution", () => {
     it("uses live catalog metadata for request-time model resolution", async () => {
       const agentDir = await createAgentDir();
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "github-copilot:first": {
-              type: "token",
-              provider: "github-copilot",
-              token: "first",
-            },
-            "github-copilot:selected": {
-              type: "token",
-              provider: "github-copilot",
-              token: "chosen",
-            },
-          },
+      writeProfiles(agentDir, {
+        "github-copilot:first": {
+          type: "token",
+          provider: "github-copilot",
+          token: "first",
         },
-        agentDir,
-        { filterExternalAuthProfiles: false, syncExternalCli: false },
-      );
+        "github-copilot:selected": {
+          type: "token",
+          provider: "github-copilot",
+          token: "chosen",
+        },
+      });
       mocks.resolveCopilotRuntimeAuth
         .mockResolvedValueOnce({
           apiKey: "chosen",
@@ -1172,20 +976,13 @@ describe("github-copilot plugin", () => {
 
     it("rematerializes direct-config metadata after a profile fallback", async () => {
       const agentDir = await createAgentDir();
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "github-copilot:first": {
-              type: "token",
-              provider: "github-copilot",
-              token: "test-auth-token",
-            },
-          },
+      writeProfiles(agentDir, {
+        "github-copilot:first": {
+          type: "token",
+          provider: "github-copilot",
+          token: "test-auth-token",
         },
-        agentDir,
-        { filterExternalAuthProfiles: false, syncExternalCli: false },
-      );
+      });
       mocks.resolveCopilotRuntimeAuth
         .mockResolvedValueOnce({
           apiKey: "test-auth-token",
@@ -1276,92 +1073,43 @@ describe("github-copilot plugin", () => {
     });
   });
 
-  it("can refresh an existing token profile during interactive onboarding", async () => {
-    const provider = registerProviderWithPluginConfig({});
-    const method = requireAuthMethod(provider.auth, 0);
+  it("can refresh a host-authorized token profile during interactive onboarding", async () => {
+    const method = requireAuthMethod(registerProviderWithPluginConfig({}).auth, 0);
     const agentDir = await createAgentDir();
-    writeExistingCopilotTokenProfile(agentDir);
-    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
-      const target =
-        typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : input instanceof Request
-              ? input.url
-              : String(input);
-      if (target === "https://github.com/login/device/code") {
-        return Response.json({
-          device_code: "device-code-stub",
-          user_code: "ABCD-1234",
-          verification_uri: "https://github.com/login/device",
-          expires_in: 900,
-          interval: 0,
-        });
-      }
-      if (target === "https://github.com/login/oauth/access_token") {
-        return Response.json({ access_token: "refreshed-token", token_type: "bearer" });
-      }
-      throw new Error(`unexpected fetch in github-copilot refresh test: ${target}`);
-    });
+    const fetchMock = buildDeviceFlowFetchMock("github.com", "refreshed-token");
     vi.stubGlobal("fetch", fetchMock);
-    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
-      response: await fetchMock(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => {},
-    }));
     const prompter = {
       confirm: vi.fn(async () => true),
       note: vi.fn(),
     };
-    const isTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-    Object.defineProperty(process.stdin, "isTTY", {
-      configurable: true,
-      value: true,
+    const result = await runDeviceAuthWithFakeTimers((openUrl) =>
+      method.run({
+        ...interactiveContext(agentDir),
+        existingProfiles: [
+          {
+            profileId: "github-copilot:authorized",
+            credential: { type: "token", provider: "github-copilot", token: "authorized-token" },
+          },
+        ],
+        prompter,
+        secretInputMode: "plaintext",
+        openUrl,
+      } as never),
+    );
+
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "GitHub Copilot auth already exists. Re-run login?",
+      initialValue: false,
     });
-
-    try {
-      const result = await runDeviceAuthWithFakeTimers((openUrl) =>
-        method.run({
-          config: {},
-          env: {},
-          agentDir,
-          workspaceDir: "/tmp/workspace",
-          prompter,
-          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          opts: {},
-          secretInputMode: "plaintext",
-          allowSecretRefPrompt: false,
-          isRemote: false,
-          openUrl,
-          oauth: { createVpsAwareHandlers: vi.fn() },
-        } as never),
-      );
-
-      expect(prompter.confirm).toHaveBeenCalledWith({
-        message: "GitHub Copilot auth already exists. Re-run login?",
-        initialValue: false,
-      });
-      if (!result) {
-        throw new Error("Expected GitHub Copilot auth result");
-      }
-      expect(result.profiles[0]?.credential).toEqual({
-        type: "token",
-        provider: "github-copilot",
-        token: "refreshed-token",
-      });
-      expect(result.profiles[0]?.secretStorage).toBeUndefined();
-      expect(result.notes).toContain(
-        "Plaintext secret input mode was selected, so the GitHub Copilot token will remain inline in the auth profile and openclaw secrets audit --check will report it.",
-      );
-    } finally {
-      vi.unstubAllGlobals();
-      if (isTtyDescriptor) {
-        Object.defineProperty(process.stdin, "isTTY", isTtyDescriptor);
-      } else {
-        delete (process.stdin as { isTTY?: boolean }).isTTY;
-      }
-    }
+    expect(result?.profiles[0]?.credential).toEqual({
+      type: "token",
+      provider: "github-copilot",
+      token: "refreshed-token",
+    });
+    expect(result?.profiles[0]?.secretStorage).toBeUndefined();
+    expect(result?.notes).toContain(
+      "Plaintext secret input mode was selected, so the GitHub Copilot token will remain inline in the auth profile and openclaw secrets audit --check will report it.",
+    );
   });
 
   function buildDeviceFlowFetchMock(domain: string, accessToken: string) {
@@ -1425,12 +1173,20 @@ describe("github-copilot plugin", () => {
   });
 
   it.each([
-    { methodIndex: 0, domain: "github.com", existing: false },
-    { methodIndex: 0, domain: "github.com", existing: true },
-    { methodIndex: 1, domain: "acme.ghe.com", existing: false },
+    { methodIndex: 0, domain: "github.com", existing: false, credentialOnly: true },
+    { methodIndex: 0, domain: "github.com", existing: true, credentialOnly: true },
+    { methodIndex: 1, domain: "acme.ghe.com", existing: false, credentialOnly: true },
+    { methodIndex: 0, domain: "github.com", existing: true, credentialOnly: false },
+    {
+      methodIndex: 0,
+      domain: "github.com",
+      existing: true,
+      credentialOnly: false,
+      existingProfiles: [],
+    },
   ])(
-    "connects $domain with existing=$existing without starter discovery",
-    async ({ methodIndex, domain, existing }) => {
+    "starts fresh $domain login with stored=$existing, credentialOnly=$credentialOnly, authorized=$existingProfiles",
+    async ({ methodIndex, domain, existing, credentialOnly, existingProfiles }) => {
       const method = requireAuthMethod(registerProviderWithPluginConfig({}).auth, methodIndex);
       const agentDir = await createAgentDir();
       if (existing) {
@@ -1444,7 +1200,7 @@ describe("github-copilot plugin", () => {
       }));
       const prompter = {
         confirm: vi.fn(async () => {
-          throw new Error("Connection login must not prompt to reuse credentials");
+          throw new Error("Login must not offer unauthorized stored credentials");
         }),
         text: vi.fn(async () => domain),
         note: vi.fn(),
@@ -1452,7 +1208,8 @@ describe("github-copilot plugin", () => {
       const result = await runDeviceAuthWithFakeTimers((openUrl) =>
         method.run({
           config: {},
-          credentialOnly: true,
+          credentialOnly,
+          existingProfiles,
           env: {},
           agentDir,
           prompter,
@@ -1470,7 +1227,10 @@ describe("github-copilot plugin", () => {
           secretStorage: { kind: "store", namePrefix: "GITHUB_COPILOT_TOKEN" },
         },
       ]);
-      expect(result?.defaultModel).toBeUndefined();
+      expect(result?.defaultModel).toBe(
+        credentialOnly ? undefined : "github-copilot/claude-sonnet-5",
+      );
+      expect(mocks.resolveCopilotStarterModel).toHaveBeenCalledTimes(credentialOnly ? 0 : 1);
       expect(result?.configPatch).toEqual(
         methodIndex === 1
           ? { models: { providers: { "github-copilot": { params: { githubDomain: domain } } } } }
@@ -1478,65 +1238,34 @@ describe("github-copilot plugin", () => {
       );
       expect(prompter.confirm).not.toHaveBeenCalled();
       expect(prompter.text).toHaveBeenCalledTimes(methodIndex);
-      expect(mocks.resolveCopilotStarterModel).not.toHaveBeenCalled();
       expect(mocks.resolveCopilotRuntimeAuth).not.toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledTimes(2);
     },
   );
 
-  async function runDeviceAuthWithTty<T>(
-    fn: (openUrl: (url: string) => Promise<void>) => Promise<T>,
-  ): Promise<T> {
-    const isTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-    try {
-      return await runDeviceAuthWithFakeTimers(fn);
-    } finally {
-      vi.unstubAllGlobals();
-      if (isTtyDescriptor) {
-        Object.defineProperty(process.stdin, "isTTY", isTtyDescriptor);
-      } else {
-        delete (process.stdin as { isTTY?: boolean }).isTTY;
-      }
-    }
-  }
-
   it("forces re-login and clears the domain when switching from a tenant back to github.com", async () => {
-    const provider = registerProviderWithPluginConfig({});
-    const method = requireAuthMethod(provider.auth, 0);
+    const method = requireAuthMethod(registerProviderWithPluginConfig({}).auth, 0);
     const agentDir = await createAgentDir();
     writeExistingCopilotTokenProfile(agentDir);
     const fetchMock = buildDeviceFlowFetchMock("github.com", "public-fresh-token");
     vi.stubGlobal("fetch", fetchMock);
-    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
-      response: await fetchMock(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => {},
-    }));
     const prompter = {
       confirm: vi.fn(async () => false),
       text: vi.fn(async () => ""),
       note: vi.fn(async (_message: string, _title?: string) => {}),
     };
 
-    const result = await runDeviceAuthWithTty(
+    const result = await runDeviceAuthWithFakeTimers(
       async (openUrl) =>
         await method.run({
+          ...interactiveContext(agentDir),
           config: {
             models: {
               providers: { "github-copilot": { params: { githubDomain: "acme.ghe.com" } } },
             },
           },
-          env: {},
-          agentDir,
-          workspaceDir: "/tmp/workspace",
           prompter,
-          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          opts: {},
-          allowSecretRefPrompt: false,
-          isRemote: false,
           openUrl,
-          oauth: { createVpsAwareHandlers: vi.fn() },
         } as never),
     );
     if (!result) {
@@ -1579,32 +1308,15 @@ describe("github-copilot plugin", () => {
     writeExistingCopilotTokenProfile(agentDir);
     const fetchMock = buildDeviceFlowFetchMock("acme.ghe.com", "tenant-fresh-token");
     vi.stubGlobal("fetch", fetchMock);
-    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
-      response: await fetchMock(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => {},
-    }));
     const prompter = {
       confirm: vi.fn(async () => false),
       text: vi.fn(async () => "acme.ghe.com"),
       note: vi.fn(),
     };
 
-    const result = await runDeviceAuthWithTty(
+    const result = await runDeviceAuthWithFakeTimers(
       async (openUrl) =>
-        await method.run({
-          config: {},
-          env: {},
-          agentDir,
-          workspaceDir: "/tmp/workspace",
-          prompter,
-          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          opts: {},
-          allowSecretRefPrompt: false,
-          isRemote: false,
-          openUrl,
-          oauth: { createVpsAwareHandlers: vi.fn() },
-        } as never),
+        await method.run({ ...interactiveContext(agentDir), prompter, openUrl } as never),
     );
     if (!result) {
       throw new Error("Expected GitHub Copilot auth result");
@@ -1640,32 +1352,20 @@ describe("github-copilot plugin", () => {
     // the domain change is detected and the public token is not reused.
     const fetchMock = buildDeviceFlowFetchMock("acme.ghe.com", "tenant-fresh-token");
     vi.stubGlobal("fetch", fetchMock);
-    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
-      response: await fetchMock(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => {},
-    }));
     const prompter = {
       confirm: vi.fn(async () => false),
-      text: vi.fn(async () => "acme.ghe.com"),
+      text: vi.fn(async () => "typed-tenant.ghe.com"),
       note: vi.fn(),
     };
 
-    const result = await runDeviceAuthWithTty(
+    const result = await runDeviceAuthWithFakeTimers(
       async (openUrl) =>
         await method.run({
-          config: {},
+          ...interactiveContext(agentDir),
           env: { COPILOT_GITHUB_DOMAIN: "acme.ghe.com" },
-          agentDir,
-          workspaceDir: "/tmp/workspace",
           prompter,
-          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          opts: {},
           secretInputMode: "plaintext",
-          allowSecretRefPrompt: false,
-          isRemote: false,
           openUrl,
-          oauth: { createVpsAwareHandlers: vi.fn() },
         } as never),
     );
     if (!result) {
@@ -1689,11 +1389,18 @@ describe("github-copilot plugin", () => {
     expect(params?.githubDomain).toBe("acme.ghe.com");
   });
 
-  it("still offers to reuse the token when re-running enterprise login for the same tenant", async () => {
-    const provider = registerProviderWithPluginConfig({});
-    const method = requireAuthMethod(provider.auth, 1);
+  it("reuses the host-authorized token reference for the same enterprise tenant", async () => {
+    const method = requireAuthMethod(registerProviderWithPluginConfig({}).auth, 1);
     const agentDir = await createAgentDir();
     writeExistingCopilotTokenProfile(agentDir);
+    const authorizedProfile: ProviderAuthResult["profiles"][number] = {
+      profileId: "github-copilot:authorized",
+      credential: {
+        type: "token",
+        provider: "github-copilot",
+        tokenRef: { source: "env", provider: "default", id: "AUTHORIZED_COPILOT_TOKEN" },
+      },
+    };
     const prompter = {
       confirm: vi.fn(async () => false),
       text: vi.fn(async () => "acme.ghe.com"),
@@ -1701,96 +1408,27 @@ describe("github-copilot plugin", () => {
     };
 
     const result = await method.run({
+      ...interactiveContext(agentDir),
+      env: { AUTHORIZED_COPILOT_TOKEN: "authorized-token" },
+      existingProfiles: [authorizedProfile],
       config: {
         models: { providers: { "github-copilot": { params: { githubDomain: "acme.ghe.com" } } } },
       },
-      env: {},
-      agentDir,
-      workspaceDir: "/tmp/workspace",
       prompter,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      opts: {},
       secretInputMode: "plaintext",
-      allowSecretRefPrompt: false,
-      isRemote: false,
       openUrl: vi.fn(),
-      oauth: { createVpsAwareHandlers: vi.fn() },
     } as never);
-    if (!result) {
-      throw new Error("Expected GitHub Copilot auth result");
-    }
-
     expect(prompter.confirm).toHaveBeenCalledWith({
       message: "GitHub Copilot auth already exists. Re-run login?",
       initialValue: false,
     });
-    expect(result.profiles[0]?.credential).toEqual({
-      type: "token",
-      provider: "github-copilot",
-      token: "existing-token",
-    });
-    const params = (
-      result.configPatch as {
-        models?: { providers?: Record<string, { params?: Record<string, unknown> }> };
-      }
-    )?.models?.providers?.["github-copilot"]?.params;
-    expect(params?.githubDomain).toBe("acme.ghe.com");
-  });
-
-  it("honors COPILOT_GITHUB_DOMAIN over a divergent prompt value during enterprise login", async () => {
-    const provider = registerProviderWithPluginConfig({});
-    const method = requireAuthMethod(provider.auth, 1);
-    const agentDir = await createAgentDir();
-    // Device flow is mocked for the env tenant only; if login used the typed
-    // prompt value instead, the fetch mock would throw on an unexpected host.
-    const fetchMock = buildDeviceFlowFetchMock("env-tenant.ghe.com", "env-tenant-token");
-    vi.stubGlobal("fetch", fetchMock);
-    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
-      response: await fetchMock(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => {},
-    }));
-    const prompter = {
-      confirm: vi.fn(async () => false),
-      text: vi.fn(async () => "typed-tenant.ghe.com"),
-      note: vi.fn(),
-    };
-
-    const result = await runDeviceAuthWithTty(
-      async (openUrl) =>
-        await method.run({
-          config: {},
-          env: { COPILOT_GITHUB_DOMAIN: "env-tenant.ghe.com" },
-          agentDir,
-          workspaceDir: "/tmp/workspace",
-          prompter,
-          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          opts: {},
-          secretInputMode: "plaintext",
-          allowSecretRefPrompt: false,
-          isRemote: false,
-          openUrl,
-          oauth: { createVpsAwareHandlers: vi.fn() },
-        } as never),
+    expect(result?.profiles).toEqual([authorizedProfile]);
+    expect(mocks.resolveCopilotStarterModel).toHaveBeenCalledWith(
+      expect.objectContaining({ githubToken: "authorized-token", githubDomain: "acme.ghe.com" }),
     );
-    if (!result) {
-      throw new Error("Expected GitHub Copilot auth result");
-    }
-
-    // The interactive domain prompt must be skipped entirely when the env
-    // override is set, so a typed value can never diverge from it.
-    expect(prompter.text).not.toHaveBeenCalled();
-    expect(result.profiles[0]?.credential).toEqual({
-      type: "token",
-      provider: "github-copilot",
-      token: "env-tenant-token",
-    });
-    const params = (
-      result.configPatch as {
-        models?: { providers?: Record<string, { params?: Record<string, unknown> }> };
-      }
-    )?.models?.providers?.["github-copilot"]?.params;
-    expect(params?.githubDomain).toBe("env-tenant.ghe.com");
+    expect(result?.configPatch?.models?.providers?.["github-copilot"]?.params?.githubDomain).toBe(
+      "acme.ghe.com",
+    );
   });
 
   it("rejects unsafe GitHub device code lifetimes before polling", async () => {
@@ -1900,14 +1538,11 @@ describe("github-copilot plugin", () => {
     }));
 
     const result = await method.runNonInteractive({
+      ...nonInteractiveContext(agentDir),
       authChoice: choice.choiceId,
-      config: {},
-      baseConfig: {},
       opts: { [optionKey]: "ghu_test\r\n123" },
       runtime,
-      agentDir,
       resolveApiKey,
-      toApiKeyCredential: vi.fn(),
     });
 
     expect(provider.id).toBe(choice.provider);
@@ -1948,17 +1583,13 @@ describe("github-copilot plugin", () => {
 
     await expect(
       method.runNonInteractive({
-        authChoice: "github-copilot",
-        config: {},
-        baseConfig: {},
+        ...nonInteractiveContext(agentDir),
         opts: { githubCopilotToken: "ghu_invalid_for_catalog" },
         runtime: { error: vi.fn(), exit: vi.fn() },
-        agentDir,
         resolveApiKey: vi.fn(async () => ({
           key: "ghu_invalid_for_catalog",
           source: "flag" as const,
         })),
-        toApiKeyCredential: vi.fn(),
       }),
     ).rejects.toThrow("no eligible models");
 
@@ -1973,17 +1604,13 @@ describe("github-copilot plugin", () => {
     const runtime = { error: vi.fn(), exit: vi.fn() };
 
     const result = await method.runNonInteractive({
-      authChoice: "github-copilot",
-      config: {},
-      baseConfig: {},
+      ...nonInteractiveContext(agentDir),
       opts: { githubCopilotToken: "ghu_test123" },
       runtime,
-      agentDir,
       resolveApiKey: vi.fn(async () => ({
         key: "ghu_test123",
         source: "flag" as const,
       })),
-      toApiKeyCredential: vi.fn(),
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
@@ -2011,19 +1638,16 @@ describe("github-copilot plugin", () => {
     const runtime = { error: vi.fn(), exit: vi.fn() };
 
     const result = await method.runNonInteractive({
-      authChoice: "github-copilot",
+      ...nonInteractiveContext(agentDir),
       config: {
         models: { providers: { "github-copilot": { params: { githubDomain: "acme.ghe.com" } } } },
       },
-      baseConfig: {},
       opts: { githubCopilotToken: "ghu_public" },
       runtime,
-      agentDir,
       resolveApiKey: vi.fn(async () => ({
         key: "ghu_public",
         source: "flag" as const,
       })),
-      toApiKeyCredential: vi.fn(),
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
@@ -2037,18 +1661,15 @@ describe("github-copilot plugin", () => {
     const runtime = { error: vi.fn(), exit: vi.fn() };
 
     const result = await method.runNonInteractive({
-      authChoice: "github-copilot",
+      ...nonInteractiveContext(agentDir),
       config: { agents: { defaults: { model: { fallbacks: ["openai/gpt-5.4"] } } } },
-      baseConfig: {},
       opts: { secretInputMode: "ref" },
       runtime,
-      agentDir,
       resolveApiKey: vi.fn(async () => ({
         key: "ghu_from_env",
         source: "env" as const,
         envVarName: "COPILOT_GITHUB_TOKEN",
       })),
-      toApiKeyCredential: vi.fn(),
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
@@ -2107,7 +1728,7 @@ describe("github-copilot plugin", () => {
     const runtime = { error: vi.fn(), exit: vi.fn() };
 
     const result = await method.runNonInteractive({
-      authChoice: "github-copilot",
+      ...nonInteractiveContext(agentDir),
       config: {
         agents: {
           defaults: {
@@ -2121,15 +1742,12 @@ describe("github-copilot plugin", () => {
           },
         },
       },
-      baseConfig: {},
       opts: { githubCopilotToken: "ghu_test" },
       runtime,
-      agentDir,
       resolveApiKey: vi.fn(async () => ({
         key: "ghu_test",
         source: "flag" as const,
       })),
-      toApiKeyCredential: vi.fn(),
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
@@ -2170,17 +1788,14 @@ describe("github-copilot plugin", () => {
 
     await expect(
       method.runNonInteractive({
-        authChoice: "github-copilot",
+        ...nonInteractiveContext(agentDir),
         config: { agents: { defaults: { model: { primary: "github-copilot/gpt-5.4" } } } },
-        baseConfig: {},
         opts: { githubCopilotToken: "fresh-invalid-token" },
         runtime: { error: vi.fn(), exit: vi.fn() },
-        agentDir,
         resolveApiKey: vi.fn(async () => ({
           key: "fresh-invalid-token",
           source: "flag" as const,
         })),
-        toApiKeyCredential: vi.fn(),
       }),
     ).rejects.toThrow("invalid credential");
 
@@ -2197,14 +1812,9 @@ describe("github-copilot plugin", () => {
     writeExistingCopilotTokenProfile(agentDir);
 
     const result = await method.runNonInteractive({
-      authChoice: "github-copilot",
-      config: {},
-      baseConfig: {},
-      opts: {},
+      ...nonInteractiveContext(agentDir),
       runtime,
-      agentDir,
       resolveApiKey: vi.fn(async () => null),
-      toApiKeyCredential: vi.fn(),
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
@@ -2221,17 +1831,13 @@ describe("github-copilot plugin", () => {
     const runtime = { error: vi.fn(), exit: vi.fn() };
 
     const result = await method.runNonInteractive({
-      authChoice: "github-copilot",
-      config: {},
-      baseConfig: {},
+      ...nonInteractiveContext(agentDir),
       opts: {
         githubCopilotToken: "ghu_secret",
         secretInputMode: "ref",
       },
       runtime,
-      agentDir,
       resolveApiKey: vi.fn(async () => null),
-      toApiKeyCredential: vi.fn(),
     });
 
     expect(result).toBeNull();

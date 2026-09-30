@@ -2,10 +2,13 @@
 // heavyweight cron, doctor, secret, task, and WebSocket handlers from eager loads.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 function readSource(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
@@ -29,12 +32,12 @@ function resolveRelativeSource(importer: string, specifier: string): string | nu
 }
 
 function staticValueSpecifiers(filePath: string, source: string): string[] {
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(filePath, source);
   const specifiers: string[] = [];
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const clause = statement.importClause;
-      if (clause?.isTypeOnly) {
+      if (clause?.phaseModifier === ts.SyntaxKind.TypeKeyword) {
         continue;
       }
       if (
@@ -175,9 +178,6 @@ describe("gateway startup import boundaries", () => {
       'from "./config-reload.js"',
     );
     expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
-    expect(serverImpl).not.toContain('from "../tasks/task-registry.js"');
-    expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
-    expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
     expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
     expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
       'from "../secrets/runtime.js"',
@@ -245,10 +245,7 @@ describe("gateway startup import boundaries", () => {
     const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
     const runtimeLoad = "loadWorkerEnvironmentRuntimeModule()";
     const prepareStart = workerStartup.indexOf("const prepareInstallation = async");
-    const serviceStart = workerStartup.indexOf(
-      "const workerEnvironmentServiceBase =",
-      prepareStart,
-    );
+    const serviceStart = workerStartup.indexOf("createWorkerEnvironmentService({", prepareStart);
     const identityStart = workerStartup.indexOf("resolveSshIdentity: async", serviceStart);
     const bootstrapStart = workerStartup.indexOf("bootstrapWorker: async", serviceStart);
     const loggerStart = workerStartup.indexOf("logger: workerEnvironmentLog", bootstrapStart);
@@ -283,6 +280,6 @@ describe("gateway startup import boundaries", () => {
     expect(workerStartup).toContain(
       "const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(",
     );
-    expect(workerStartup).toContain("loadWorkerSessionToolExecutorModule().then(");
+    expect(workerStartup).toContain("await loadWorkerSessionToolExecutorModule()");
   });
 });

@@ -21,13 +21,14 @@ import {
   QuestionManagerErrorCodes,
 } from "../gateway/question-manager.js";
 import { questionShapeError } from "../gateway/question-validation.js";
-import { notifyListeners } from "../shared/listeners.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
   validateAgentRunDelegatedAuthority,
 } from "./agent-run-registry.js";
+import type { GatewayScheduler } from "./gateway-scheduler.js";
 
 const EMBEDDED_SECRET_STORE_REQUEST_BLOCKER =
   "Secret store requests need a running Gateway; ask the operator to run `openclaw secrets store` or use the Control UI.";
@@ -44,18 +45,19 @@ function invalidRequest(message: string): GatewayClientRequestError {
 
 /** Serves the question RPC contract for one embedded backend lifetime. */
 export class EmbeddedQuestionBroker {
-  private readonly manager = new QuestionManager();
+  private readonly manager: QuestionManager;
   private readonly listeners = new Set<(event: QuestionEvent) => void>();
   private stopped = false;
   private readonly removeAuthorityListener = registerAgentRunDelegatedAuthorityClosedHandler(() => {
     this.manager.cancelClosedAuthorities();
   });
 
+  constructor(scheduler: GatewayScheduler) {
+    this.manager = new QuestionManager(scheduler);
+  }
+
   subscribe(listener: (event: QuestionEvent) => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return registerListener(this.listeners, listener);
   }
 
   request(params: unknown, signal?: AbortSignal): QuestionRequestResult {
@@ -119,11 +121,11 @@ export class EmbeddedQuestionBroker {
         : undefined,
       onResolved: (event) => {
         signal?.removeEventListener("abort", abort);
-        this.emit({ event: "question.resolved", payload: event });
+        notifyListeners(this.listeners, { event: "question.resolved", payload: event });
       },
     });
     signal?.addEventListener("abort", abort, { once: true });
-    this.emit({ event: "question.requested", payload: record });
+    notifyListeners(this.listeners, { event: "question.requested", payload: record });
     return { id: record.id, expiresAtMs: record.expiresAtMs };
   }
 
@@ -215,10 +217,6 @@ export class EmbeddedQuestionBroker {
     }
     this.manager.close();
     this.listeners.clear();
-  }
-
-  private emit(event: QuestionEvent): void {
-    notifyListeners(this.listeners, event);
   }
 }
 

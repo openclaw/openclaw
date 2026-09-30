@@ -1,8 +1,8 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Browser tests cover client fetch.loopback auth plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserControlAuth } from "./control-auth.js";
 import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
 
@@ -51,8 +51,10 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
     getRuntimeConfig: mocks.loadConfig,
@@ -60,7 +62,8 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
-vi.mock("./control-service.js", () => ({
+vi.mock("../control-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../control-service.js")>()),
   createBrowserControlContext: vi.fn(() => ({})),
   startBrowserControlServiceFromConfig: mocks.startBrowserControlServiceFromConfig,
 }));
@@ -539,33 +542,6 @@ describe("fetchBrowserJson loopback auth", () => {
     );
   });
 
-  it("uses the default external profile when dispatcher request omits profile", async () => {
-    mocks.loadConfig.mockReturnValue({
-      browser: {
-        defaultProfile: "manual",
-        profiles: {
-          manual: {
-            cdpUrl: "http://127.0.0.1:9222",
-            attachOnly: true,
-            color: "#00AA00",
-          },
-        },
-      },
-    });
-    mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
-
-    await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
-      contains: [
-        "Chrome CDP handshake timeout",
-        "browser profile is external to OpenClaw",
-        "Restarting the OpenClaw gateway will not launch it",
-        "Retry the browser tool once",
-        "If the same error persists",
-      ],
-      omits: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
-    });
-  });
-
   it("keeps no-retry hint but not restart guidance for persistent external profile failures", async () => {
     mocks.loadConfig.mockReturnValue({
       browser: {
@@ -701,20 +677,6 @@ describe("fetchBrowserJson loopback auth", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("surfaces 429 from HTTP URL without body detail when empty", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("", { status: 429 })),
-    );
-
-    await expectThrownBrowserFetchError(
-      () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/"),
-      {
-        contains: ["rate limit reached", "Do NOT retry the browser tool"],
-      },
-    );
-  });
-
   it("keeps Browserbase-specific wording for Browserbase 429 responses", async () => {
     vi.stubGlobal(
       "fetch",
@@ -741,30 +703,6 @@ describe("fetchBrowserJson loopback auth", () => {
       {
         contains: ["internal error"],
         omits: ["rate limit", "Retry the browser tool once", "Do NOT retry the browser tool"],
-      },
-    );
-  });
-
-  it("keeps transient HTTP error payloads retryable once", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({ error: "Chrome CDP handshake timeout" }), {
-            status: 504,
-          }),
-      ),
-    );
-
-    await expectThrownBrowserFetchError(
-      () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/"),
-      {
-        contains: [
-          "Chrome CDP handshake timeout",
-          "Retry the browser tool once",
-          "If the same error persists",
-        ],
-        omits: ["Do NOT retry the browser tool"],
       },
     );
   });

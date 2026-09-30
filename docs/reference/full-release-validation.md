@@ -12,6 +12,10 @@ read_when:
 happens in child workflows so a failed box can be rerun without restarting the
 whole release.
 
+Test failures remain failures. Full Release Validation never automatically reruns
+failed or timed out jobs. Diagnose the original failure before using an explicit
+operator recovery command.
+
 This page is an index. The reference is documented on seven pages, one per
 reader job. Open the page that matches your task and complete that validation
 pass there.

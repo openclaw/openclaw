@@ -15,6 +15,7 @@ import type {
   ChatGoalDraftMode,
   ChatGoalRecovery,
   ChatQueueItem,
+  ChatQueueDisplayItem,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
@@ -24,12 +25,10 @@ import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkCameraDevice } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
-import type { RealtimeVoiceSelectionState } from "../talk/voice-selection.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
@@ -63,13 +62,11 @@ type ChatComposerDisabledBannerContent = {
   text: string;
   tone?: "info" | "neutral";
   icon?: "warning" | "archive";
-  actionLabel: string;
   actionStyle?: "primary";
   busy?: boolean;
   busyLabel?: string;
   disabledReason?: string;
-  onAction: () => void;
-};
+} & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
 export type ChatComposerDisabledBanner = ChatComposerDisabledBannerContent &
   ({ kind: "above-composer" } | { kind: "composer-replacement" });
@@ -82,6 +79,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   offline?: boolean;
   queuedOutboxCount?: number;
   canSend: boolean;
+  canCompose?: boolean;
   modelRequiredReason?: string | null;
   submitDisabledReason?: string | null;
   submitPending?: boolean;
@@ -89,7 +87,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   disabledReasonTone?: "info" | "danger";
   disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
-  runError?: { summary: string } | null;
+  runError?: ChatRunError | null;
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
@@ -142,13 +140,11 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkDetail?: string | null;
   realtimeTalkInputNotice?: string | null;
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
-  realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
   realtimeTalkCameraDevices?: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable?: boolean;
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
-  realtimeTalkVoice?: RealtimeVoiceSelectionState;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   realtimeTalkInputDeviceId?: string;
@@ -156,7 +152,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
-  typingActors?: readonly { id: string; label: string; preview?: string }[];
   onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
   footerContent?: TemplateResult | typeof nothing;
@@ -171,7 +166,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
     submissionAction?: Event,
   ) => void | Promise<boolean | void>;
   onToggleRealtimeTalk?: () => void;
-  onSelectRealtimeVoice?: (voice: string) => void;
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
@@ -182,7 +176,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
-  displayQueue?: ChatQueueItem[];
+  displayQueue?: ChatQueueDisplayItem[];
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
   goalRecovery?: ChatGoalRecovery;
@@ -196,12 +190,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
 };
 
-type PendingClearedSubmittedDraft = {
-  key: string;
-  value: string;
-};
-
-type ComposingDraft = {
+type ScopedComposerDraft = {
   key: string;
   value: string;
 };
@@ -213,9 +202,9 @@ export type ChatComposerState = SkillMenuState &
     mentionMenu: HumanMentionMenu;
     emojiMenu: ComposerEmojiMenu;
     mentionInput?: HumanMentionInput;
-    composingDraft: ComposingDraft | null;
+    composingDraft: ScopedComposerDraft | null;
     composerInputIntentKey: string | null;
-    pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
+    pendingClearedSubmittedDraft: ScopedComposerDraft | null;
     goalExpandedId: string | null;
     goalComposer: (ChatGoalDraftMode & { key: string; pending: boolean }) | null;
     activeQuestionKey: string | null;

@@ -104,12 +104,39 @@ openclaw_resolve_frozen_gateway_network_layout() {
 }
 
 openclaw_resolve_frozen_upgrade_survivor_capabilities() {
-  local source_root="${1:?missing selected source root}" authorization_status=0 has_trust has_legacy
+  local source_root="${1:?missing selected source root}" authorization_status=0 has_trust has_legacy has_tool_search_recipe
+  local has_membership_warning has_absent_membership
 
-  export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE="current"
+  export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE="current" \
+    OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE="current" \
+    OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE="absent"
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
   [ "$authorization_status" -eq 1 ] && return 0
   [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  # New tooling may author a migration specimen absent from the selected cut.
+  # Bind coverage to its committed recipe, not release version or migrated state.
+  has_tool_search_recipe="$(openclaw_frozen_target_source_flag has "$source_root" \
+    scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json)" || return 2
+  if [ "$has_tool_search_recipe" = 0 ]; then
+    export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE="absent"
+  fi
+
+  # Preserve native containment for cuts predating absent-membership recovery.
+  # Inspect the committed result owner, never package versions or observed output.
+  has_membership_warning="$(openclaw_frozen_target_source_flag contains "$source_root" \
+    src/cli/update-cli/update-command-terminal-publication.ts \
+    'Service membership unverifiable on this host; using managed stop/update/start.')" || return 2
+  has_absent_membership="$(openclaw_frozen_target_source_flag contains "$source_root" \
+    src/cli/update-cli/update-command-terminal-publication.ts 'serviceMembershipSourceAbsent')" || return 2
+  case "$has_membership_warning:$has_absent_membership" in
+    1:1) ;;
+    0:0) export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE="native" ;;
+    *)
+      echo "unrecognized selected managed-service membership warning contract" >&2
+      return 2
+      ;;
+  esac
 
   # The older shipped installer fetched its official companion through ClawHub
   # and therefore owns a three-request audit instead of the current idle ledger.
@@ -221,9 +248,7 @@ openclaw_resolve_frozen_agent_bundle_mcp_contract() {
 
   # Resolve the reader and parser from tooling, never from the selected checkout.
   resolved="$(node --input-type=module -e '
-import { createRequire } from "node:module";
-import { readFileSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 const [root, sha, trustedHelper] = process.argv.slice(1);
 const fail = (message) => { throw new Error(message); };
@@ -235,44 +260,19 @@ try {
     if (source === null) fail(`missing required bundle source: ${relativePath}`);
     return source;
   };
-  let ts;
+  let loaded;
   try {
-    const tooling = realpathSync(resolve(dirname(trustedHelper), "../.."));
-    const modules = join(tooling, "node_modules");
-    if (realpathSync(modules) !== modules) fail("borrowed parser installation");
-    const manifest = JSON.parse(readFileSync(join(tooling, "package.json"), "utf8"));
-    const pin = manifest.dependencies?.typescript;
-    if (typeof pin !== "string" || !/^\d+\.\d+\.\d+$/.test(pin)) fail("parser is not pinned");
-    // Check the frozen lock entry without loading another installed dependency.
-    // Only the canonical root importer and integrity-bearing package entry count.
-    const lock = readFileSync(join(tooling, "pnpm-lock.yaml"), "utf8");
-    const rootImporters = [...lock.matchAll(/^  \.:\n((?: {4}.*\n|\n)*)/gm)];
-    const lockedPins = rootImporters.flatMap((entry) =>
-      [...entry[1].matchAll(/^      typescript:\n        specifier: ([^\n]+)\n        version: ([^\n]+)\n/gm)]);
-    const packageEntry = new RegExp(`^  typescript@${pin.replaceAll(".", "\\.")}:\\n    resolution: \\{integrity: sha512-[A-Za-z0-9+/=]+\\}`, "gm");
-    if (lockedPins.length !== 1 || lockedPins[0][1] !== pin || lockedPins[0][2] !== pin ||
-        [...lock.matchAll(packageEntry)].length !== 1) fail("parser lock does not match");
-    const require = createRequire(trustedHelper);
-    const metadataPath = realpathSync(require.resolve("typescript/package.json"));
-    const packageRoot = dirname(metadataPath);
-    const ownedRoots = [
-      join(modules, "typescript"),
-      join(modules, ".pnpm", `typescript@${pin}`, "node_modules/typescript"),
-    ];
-    if (!ownedRoots.includes(packageRoot)) fail("parser is outside trusted tooling");
-    const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-    const entry = realpathSync(require.resolve("typescript"));
-    if (metadata.name !== "typescript" || metadata.version !== pin ||
-        entry !== join(packageRoot, "lib/typescript.js")) fail("parser metadata does not match");
-    // Resolution and ownership checks precede the first module execution.
-    ts = require(entry);
-  } catch {
-    fail("unable to load trusted TypeScript parser for bundle contract");
+    const { createTrustedNativeTypeScriptParser } = await import(new URL("./trusted-native-typescript.mjs", pathToFileURL(trustedHelper)));
+    loaded = await createTrustedNativeTypeScriptParser(resolve(dirname(trustedHelper), "../.."));
+  } catch (error) {
+    fail(`unable to load trusted TypeScript parser for bundle contract: ${error.message}`);
   }
+  using parser = loaded.parser;
+  const ts = loaded.ast;
   // Parse source text only: no target imports, config, plugins or type resolution.
   const parse = (relativePath, source) => {
-    const file = ts.createSourceFile(relativePath, source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
-    if (file.parseDiagnostics.length) fail(`invalid selected bundle syntax contract: ${relativePath}`);
+    const file = parser.parseSourceFile(relativePath, source);
+    if (parser.getSyntacticDiagnostics(relativePath).length) fail(`invalid selected bundle syntax contract: ${relativePath}`);
     return file;
   };
   const hasExport = (file, name) => file.statements.some((node) =>
@@ -285,7 +285,7 @@ try {
     ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier));
   const hasImport = (file, module, names) => imports(file).some((node) => {
     const clause = node.importClause;
-    return node.moduleSpecifier.text === module && clause && !clause.isTypeOnly &&
+    return node.moduleSpecifier.text === module && clause && clause.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
       clause.namedBindings && ts.isNamedImports(clause.namedBindings) &&
       names.every((name) => clause.namedBindings.elements.some((element) =>
         !element.isTypeOnly && element.name.text === name &&

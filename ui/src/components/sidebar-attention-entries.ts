@@ -11,7 +11,10 @@ import {
 } from "./sidebar-attention-dismissals.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
-type SidebarAttentionItemKind = Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable">;
+type SidebarAttentionItemKind = Exclude<
+  SidebarAttentionKind,
+  "scopeUpgrade" | "updateAvailable" | "outbox"
+>;
 
 type SidebarInboxEntryBase<
   Category extends Exclude<IssueTab, "all">,

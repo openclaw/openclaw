@@ -1,17 +1,12 @@
-/**
- * Non-interactive gateway daemon installation for local onboarding.
- *
- * It validates daemon runtime options, resolves gateway auth inputs, and then
- * delegates the platform-specific service install.
- */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveGatewayService } from "../../../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
+import { gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../gateway-install-token.js";
+import { prepareGatewayServiceInstall } from "../../gateway-service-setup.js";
 import { resolveGatewaySetupRuntime } from "../../gateway-setup-runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { ensureSystemdUserLingerNonInteractive } from "../../systemd-linger.js";
@@ -81,22 +76,16 @@ export async function installGatewayDaemonNonInteractive(params: {
     existingCommand,
     runtime: opts.daemonRuntime,
   });
-  const plan = await buildGatewayInstallPlan({
-    env: selection.env,
+  const installation = await prepareGatewayServiceInstall({
+    service,
+    selection,
     port,
-    runtime: selection.runtime,
-    pinnedRuntimePath: selection.pinnedRuntimePath,
     existingCommand,
     warn: (message) => runtime.log(message),
     config: params.nextConfig,
   });
   try {
-    await service.install({
-      env: process.env,
-      stdout: process.stdout,
-      ...plan,
-      runtimePinUpdate: selection.runtimePinUpdate,
-    });
+    await installation.install();
   } catch (err) {
     runtime.error(`Gateway service install failed: ${formatErrorMessage(err)}`);
     runtime.log(gatewayInstallErrorHint());

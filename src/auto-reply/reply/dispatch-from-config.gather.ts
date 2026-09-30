@@ -43,7 +43,6 @@ import {
 import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-defaults.js";
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
 import { createFinalizationAwareTtsPayloadApplier } from "./dispatch-from-config.payloads.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import {
   loadPreparedModelRuntime,
   loadRuntimePlugins,
@@ -202,13 +201,18 @@ export async function gatherDispatchRequest(
     });
     messageAuditTerminal?.note(outcome, opts);
     if (diagnosticsEnabled) {
-      replyHotPathTiming.logIfSlow({
-        channel,
-        messageId,
-        sessionKey,
-        outcome,
-        reason: opts?.reason,
-      });
+      replyHotPathTiming.logIfSlow(
+        {
+          channel,
+          messageId,
+          runId: params.replyOptions?.runId,
+          sessionId: lifecycleSessionId,
+          sessionKey,
+          outcome,
+          reason: opts?.reason,
+        },
+        { beforeReplyResolver: agentDispatchStartedAt === 0 },
+      );
     }
     messageLifecycle.markProcessed(outcome, opts);
   };
@@ -231,7 +235,13 @@ export async function gatherDispatchRequest(
       return;
     }
     agentDispatchStartedAt = Date.now();
-    replyHotPathTiming.logPreparationIfSlow({ channel, messageId, sessionKey });
+    replyHotPathTiming.logPreparationIfSlow({
+      channel,
+      messageId,
+      runId: params.replyOptions?.runId,
+      sessionId: lifecycleSessionId,
+      sessionKey,
+    });
     logMessageDispatchStarted({
       channel,
       sessionKey: acpDispatchSessionKey,
@@ -240,11 +250,8 @@ export async function gatherDispatchRequest(
   };
 
   const recordAgentDispatchCompleted = (
-    outcome: "completed" | "skipped" | "error",
-    opts?: {
-      reason?: string;
-      error?: string;
-    },
+    outcome: DispatchProcessedOutcome,
+    opts?: DispatchProcessedOptions,
   ) => {
     if (!diagnosticsEnabled || agentDispatchStartedAt <= 0) {
       return;
@@ -258,14 +265,6 @@ export async function gatherDispatchRequest(
       reason: opts?.reason,
       error: opts?.error,
     });
-  };
-
-  const markProcessing = () => {
-    messageLifecycle.markProcessing();
-  };
-
-  const markIdle = (reason: string) => {
-    messageLifecycle.markIdle(reason);
   };
 
   const markInboundDedupeReplayUnsafe = () => {
@@ -542,7 +541,7 @@ export async function gatherDispatchRequest(
       originalMediaTypes: hookContext.mediaTypes,
     };
   };
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
     ctx,
     cfg,
     dispatcher,
@@ -551,8 +550,8 @@ export async function gatherDispatchRequest(
     recordProcessed,
     recordAgentDispatchStarted,
     recordAgentDispatchCompleted,
-    markProcessing,
-    markIdle,
+    markProcessing: () => messageLifecycle.markProcessing(),
+    markIdle: (reason: string) => messageLifecycle.markIdle(reason),
     markInboundDedupeReplayUnsafe,
     acpDispatchSessionKey,
     dispatchKind,

@@ -69,9 +69,6 @@ export function applySessionMessagePayload(
   source: SessionMessageApplySource,
 ): void {
   const event = asNonArrayRecord(payload);
-  if (!event) {
-    return;
-  }
   const sourceMessage = event.message;
   const sourceRecord = asNonArrayRecord(sourceMessage);
   const incoming = readSessionMessageIdentity(sourceMessage, event);
@@ -131,9 +128,6 @@ export function applySessionMessagePayload(
     return;
   }
   if (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null) {
-    return;
-  }
-  if (!sourceRecord) {
     return;
   }
   const sourceMetadata = asNonArrayRecord(sourceRecord["__openclaw"]);

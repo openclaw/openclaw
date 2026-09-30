@@ -5,14 +5,11 @@ const TERMINAL_OUTPUT_FRAME_BYTES = 64 * 1024;
 
 /** Batches adjacent PTY chunks while keeping each emitted frame UTF-8 bounded. */
 export class TerminalOutputCoalescer {
-  private readonly emit: (data: string) => void;
   private chunks: string[] = [];
   private bufferedBytes = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(emit: (data: string) => void) {
-    this.emit = emit;
-  }
+  constructor(private readonly emit: (data: string) => void) {}
 
   get isEmpty(): boolean {
     return this.chunks.length === 0;
@@ -42,17 +39,11 @@ export class TerminalOutputCoalescer {
   }
 
   flush(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
+    const chunks = this.chunks;
+    this.clear();
+    if (chunks.length > 0) {
+      this.emit(chunks.join(""));
     }
-    if (this.chunks.length === 0) {
-      return;
-    }
-    const data = this.chunks.join("");
-    this.chunks = [];
-    this.bufferedBytes = 0;
-    this.emit(data);
   }
 
   clear(): void {

@@ -1,4 +1,3 @@
-// Handles model directives and persists provider/model selections.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -215,13 +214,8 @@ export async function maybeHandleModelDirectiveInfo(params: {
       : null;
     const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
     const channelData = commandPlugin?.commands?.buildModelBrowseChannelData?.();
-    if (channelData) {
-      return {
-        text: [
-          `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
-          activeRuntimeLine,
-          thinkingLine,
-          "",
+    const instructions = channelData
+      ? [
           "Tap below to select a model, or use:",
           "/model <provider/model> -s for this session only",
           "/model <provider/model> -a to update this agent's default",
@@ -229,27 +223,25 @@ export async function maybeHandleModelDirectiveInfo(params: {
           "/model <provider/model> --runtime <runtime> -s to switch harnesses",
           "/model status for details",
         ]
-          .filter(Boolean)
-          .join("\n"),
-        channelData,
-      };
-    }
-
+      : [
+          "Session: /model <provider/model> -s",
+          "Agent default: /model <provider/model> -a",
+          "Global default: /model <provider/model> -g",
+          "Runtime: /model <provider/model> --runtime <runtime> -s",
+          "Browse: /models (providers) or /models <provider> (models)",
+          "More: /model status",
+        ];
     return {
       text: [
         `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
         activeRuntimeLine,
         thinkingLine,
         "",
-        "Session: /model <provider/model> -s",
-        "Agent default: /model <provider/model> -a",
-        "Global default: /model <provider/model> -g",
-        "Runtime: /model <provider/model> --runtime <runtime> -s",
-        "Browse: /models (providers) or /models <provider> (models)",
-        "More: /model status",
+        ...instructions,
       ]
         .filter(Boolean)
         .join("\n"),
+      ...(channelData ? { channelData } : {}),
     };
   }
 
@@ -261,7 +253,6 @@ export async function maybeHandleModelDirectiveInfo(params: {
     aliasIndex: params.aliasIndex,
     allowedModelCatalog: params.allowedModelCatalog,
   });
-  const formatPath = (value: string) => shortenHomePath(value);
   if (pickerCatalog.length === 0) {
     return { text: "No models available." };
   }
@@ -285,33 +276,26 @@ export async function maybeHandleModelDirectiveInfo(params: {
     modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
     `Default: ${defaultLabel}`,
     `Agent: ${params.activeAgentId}`,
-    `Auth store: ${formatPath(resolveAuthStorePathForDisplay(params.agentDir))}`,
+    `Auth store: ${shortenHomePath(resolveAuthStorePathForDisplay(params.agentDir))}`,
   ].filter((line): line is string => Boolean(line));
   if (params.resetModelOverride) {
     lines.push(`(previous selection reset to default)`);
   }
 
-  const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
   const statusCatalog = filterMissingAuthNestedProviderDuplicates({
     cfg: params.cfg,
     entries: pickerCatalog,
     authByProvider,
   });
+  const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
   for (const entry of statusCatalog) {
     const provider = normalizeProviderId(entry.provider);
-    const models = byProvider.get(provider);
-    if (models) {
-      models.push(entry);
-      continue;
-    }
-    byProvider.set(provider, [entry]);
+    const models = byProvider.get(provider) ?? [];
+    models.push(entry);
+    byProvider.set(provider, models);
   }
 
-  for (const provider of byProvider.keys()) {
-    const models = byProvider.get(provider);
-    if (!models) {
-      continue;
-    }
+  for (const [provider, models] of byProvider) {
     const authLabel = authByProvider.get(provider) ?? "missing";
     const endpoint = prepared.providerEndpoints.get(provider);
     const endpointSuffix = endpoint?.endpoint

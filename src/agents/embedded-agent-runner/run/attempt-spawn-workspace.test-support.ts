@@ -1,3 +1,4 @@
+import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +25,7 @@ import { makeEmptyPluginMetadataOwners } from "../../../plugins/current-plugin-m
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
@@ -669,16 +670,10 @@ vi.mock("../../provider-stream.js", () => ({
   registerProviderStreamForModel: vi.fn(),
 }));
 
-vi.mock("../../sandbox/runtime-status.js", () => ({
-  resolveSandboxRuntimeStatus: () => ({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    mainSessionKey: "agent:main:main",
-    mode: "off",
-    sandboxed: false,
-    toolPolicy: { allow: [], deny: [], sources: { allow: { key: "" }, deny: { key: "" } } },
-  }),
-}));
+vi.mock(
+  "../../sandbox/runtime-status.js",
+  () => import("./attempt-spawn-workspace.sandbox-mock.test-support.js"),
+);
 
 vi.mock("../../tool-fs-policy.js", () => ({
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
@@ -799,12 +794,6 @@ vi.mock("../thinking.js", async (importOriginal) => {
     dropThinkingBlocks: <T>(messages: T) => messages,
   };
 });
-
-vi.mock("../tool-split.js", () => ({
-  splitSdkTools: ({ tools }: { tools: unknown[] }) => ({
-    customTools: tools,
-  }),
-}));
 
 vi.mock("../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
@@ -1355,18 +1344,10 @@ export async function createContextEngineAttemptRunner(params: {
       contextTokenBudget: 2048,
       contextEngine: {
         ...contextEngineRest,
-        ingest:
-          params.contextEngine.ingest ??
-          (async () => ({
-            ingested: true,
-          })),
+        ingest: params.contextEngine.ingest ?? (async () => ({ ingested: true })),
         compact:
           params.contextEngine.compact ??
-          (async () => ({
-            ok: false,
-            compacted: false,
-            reason: "not used in this test",
-          })),
+          (async () => ({ ok: false, compacted: false, reason: "not used in this test" })),
         ...(maintain ? { maintain } : {}),
         info: {
           ...params.contextEngine.info,
@@ -1377,6 +1358,12 @@ export async function createContextEngineAttemptRunner(params: {
       },
       ...params.attemptOverrides,
     };
+    const admittedRunContext = params.attemptOverrides?.admittedRunContext;
+    if (admittedRunContext) {
+      return await (
+        await loadRunEmbeddedAttempt()
+      )({ ...attempt, admittedRunContext });
+    }
     const admission = prepareSystemAgentRunAdmission(
       attempt.config ?? {},
       attempt.runId,

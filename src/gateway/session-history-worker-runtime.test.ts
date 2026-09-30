@@ -13,9 +13,14 @@ import {
   sessionHistoryCleanupError,
 } from "../config/sessions/session-history-worker-errors.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import * as reconcile from "../config/sessions/session-transcript-reconcile.js";
 import type { SessionTranscriptHistoryWorkerInput } from "../config/sessions/session-transcript-worker.types.js";
+import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
+import { AgentDatabaseRegistryChangedError } from "../state/openclaw-agent-db-registry-listing.js";
 import * as stateContext from "../state/openclaw-state-worker-context.js";
+import * as storeSources from "./session-utils-store-sources.js";
 
 const { runWorker, readerAdmitted } = vi.hoisted(() => ({
   runWorker: vi.fn(),
@@ -30,9 +35,17 @@ vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
       assertCurrent: () => void;
     }) => unknown,
   ) => {
-    const result = operation({ generation: 1, run: runWorker, assertCurrent: () => {} });
-    readerAdmitted();
-    return result;
+    let admitted = false;
+    return operation({
+      generation: 1,
+      run: runWorker,
+      assertCurrent: () => {
+        if (!admitted) {
+          admitted = true;
+          readerAdmitted();
+        }
+      },
+    });
   },
 }));
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
@@ -68,9 +81,7 @@ beforeEach(() => {
       env: scope.env,
       path: path.join(path.dirname(scope.storePath), "openclaw-agent.sqlite"),
       ownerStorePath: scope.storePath,
-      ...(scope.sessionKey
-        ? { sessionKey: sqliteScope.normalizeSqliteSessionKey(scope.sessionKey) }
-        : {}),
+      ...(scope.sessionKey ? { sessionKey: normalizeStoreSessionKey(scope.sessionKey) } : {}),
     };
   });
   queued.length = 0;
@@ -92,6 +103,95 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["timeout", "cancel"] as const)(
+  "bounds projection recovery and preserves caller %s",
+  async (boundary) => {
+    vi.useFakeTimers();
+    const waiting = createDeferred();
+    const controller = new AbortController();
+    const unavailable = new SessionTranscriptProjectionUnavailableError("history-worker");
+    vi.spyOn(reconcile, "startSessionTranscriptIndexReconcile").mockImplementation(() => {});
+    vi.spyOn(reconcile, "waitForSessionTranscriptProjection").mockImplementation(
+      async (_scope, signal) => {
+        if (!signal) {
+          throw new Error("Projection recovery requires a bounded signal");
+        }
+        waiting.resolve();
+        return new Promise((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              const reason: unknown = signal.reason;
+              reject(reason instanceof Error ? reason : new Error(String(reason)));
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+    let settled = false;
+    const pending = readSessionHistoryPageInWorker(request(), controller.signal)
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      )
+      .finally(() => {
+        settled = true;
+      });
+    try {
+      await waitForReaderAdmission(1);
+      queued[0]!.prepare();
+      queued[0]!.result.reject(unavailable);
+      expect(
+        await Promise.race([waiting.promise.then(() => "waiting"), pending.then(() => "refused")]),
+      ).toBe("waiting");
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(settled).toBe(false);
+      const cancelled = new Error("history caller disconnected");
+      if (boundary === "cancel") {
+        controller.abort(cancelled);
+      } else {
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(await pending).toEqual({ error: boundary === "cancel" ? cancelled : unavailable });
+      expect(queued).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort();
+      await pending;
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("does not schedule projection writes for read-only history", async () => {
+  const start = vi
+    .spyOn(reconcile, "startSessionTranscriptIndexReconcile")
+    .mockImplementation(() => {});
+  const wait = vi.spyOn(reconcile, "waitForSessionTranscriptProjection");
+  const rpc = request().params;
+  const pending = readSessionHistoryPageInWorker({
+    kind: "message-page",
+    params: {
+      target: {
+        agentId: rpc.sessionAgentId,
+        sessionId: rpc.sessionId,
+        sessionKey: rpc.canonicalKey,
+        storePath: rpc.storePath,
+      },
+      options: { offset: 0, maxMessages: 20, maxBytes: 100_000, readOnly: true },
+    },
+  });
+  const unavailable = new SessionTranscriptProjectionUnavailableError("history-worker");
+  const rejected = expect(pending).rejects.toBe(unavailable);
+  await waitForReaderAdmission(1);
+  queued[0]!.prepare();
+  queued[0]!.result.reject(unavailable);
+  await rejected;
+  expect(start).not.toHaveBeenCalled();
+  expect(wait).not.toHaveBeenCalled();
+});
 
 function request(overrides: Partial<RpcRequest["params"]> = {}): RpcRequest {
   return {
@@ -119,6 +219,83 @@ function page(text: string): SessionHistoryWorkerResult {
     page: { messages: [{ role: "assistant", content: [{ type: "text", text }] }] },
   };
 }
+
+it.each([
+  { kind: "message-by-id", revoke: false },
+  { kind: "message-count", revoke: false },
+  { kind: "message-by-id", revoke: true },
+  { kind: "message-count", revoke: true },
+] as const)(
+  "keeps $kind independent of auxiliary registry churn but retains primary authority (revoke: $revoke)",
+  async ({ kind, revoke }) => {
+    vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(
+      new AgentDatabaseRegistryChangedError(),
+    );
+    const capture = stateContext.captureOpenClawStateWorkerContext;
+    const revoked = new Error("primary history owner revoked");
+    let workerReturned = false;
+    vi.spyOn(stateContext, "captureOpenClawStateWorkerContext").mockImplementation((...args) => {
+      const captured = capture(...args);
+      return {
+        ...captured,
+        admission: {
+          ...captured.admission,
+          assertCurrent() {
+            captured.admission.assertCurrent();
+            if (revoke && workerReturned) {
+              throw revoked;
+            }
+          },
+        },
+      };
+    });
+    const message = { role: "assistant", content: [{ type: "text", text: "primary answer" }] };
+    const found = { found: true, oversized: false, message, seq: 2 };
+    runWorker.mockImplementationOnce(async () => {
+      workerReturned = true;
+      return kind === "message-by-id" ? { kind, result: found } : { kind, count: 2 };
+    });
+    const rpc = request().params;
+    const target = {
+      agentId: rpc.sessionAgentId,
+      sessionId: rpc.sessionId,
+      sessionKey: rpc.canonicalKey,
+      storePath: rpc.storePath,
+    };
+    const pending =
+      kind === "message-by-id"
+        ? readSessionHistoryPageInWorker({ kind, params: { target, messageId: "answer" } })
+        : readSessionHistoryPageInWorker({ kind, params: { target } });
+    if (revoke) {
+      await expect(pending).rejects.toBe(revoked);
+    } else {
+      await expect(pending).resolves.toEqual(kind === "message-by-id" ? found : 2);
+    }
+  },
+);
+
+it.each(["rpc", "http", "delta"] as const)(
+  "retains auxiliary registry refusal for %s lineage projection",
+  async (kind) => {
+    const failure = new AgentDatabaseRegistryChangedError();
+    vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(failure);
+    const rpc = request();
+    const target = {
+      agentId: rpc.params.sessionAgentId,
+      sessionId: rpc.params.sessionId,
+      sessionKey: rpc.params.canonicalKey,
+      storePath: rpc.params.storePath,
+    };
+    const pending =
+      kind === "rpc"
+        ? readSessionHistoryPageInWorker(rpc)
+        : kind === "http"
+          ? readSessionHistoryPageInWorker({ kind, params: { target, maxChars: 8000, limit: 10 } })
+          : readSessionHistoryPageInWorker({ kind, params: { target, limits: {} } });
+    await expect(pending).rejects.toBe(failure);
+    expect(runWorker).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["rpc", "http"] as const)(
   "captures %s request identity and selectors before target preparation and queue dispatch",
@@ -249,7 +426,7 @@ it.each(["rpc", "http"] as const)(
   },
 );
 
-it.each(["delta", "message-lookup", "recent"] as const)(
+it.each(["delta", "message-lookup", "recent", "message-by-id", "message-count"] as const)(
   "captures %s selectors and target before asynchronous dispatch",
   async (kind) => {
     const target = {
@@ -271,12 +448,31 @@ it.each(["delta", "message-lookup", "recent"] as const)(
               kind,
               params: { target, maxMessages: 10, maxLines: 220, allowResetArchiveFallback: true },
             }
-          : { kind, params: { target, messageId: "original" } };
+          : kind === "message-count"
+            ? { kind, params: { target } }
+            : kind === "message-by-id"
+              ? {
+                  kind,
+                  params: {
+                    target,
+                    messageId: "original",
+                    options: {
+                      currentOnly: true as const,
+                      maxBytes: 8000,
+                      allowResetArchiveFallback: true,
+                    },
+                  },
+                }
+              : { kind, params: { target, messageId: "original" } };
     const expected = structuredClone(supplied);
     const pending =
-      supplied.kind === "delta"
+      supplied.kind === "message-by-id"
         ? readSessionHistoryPageInWorker(supplied)
-        : readSessionHistoryPageInWorker(supplied);
+        : supplied.kind === "message-count"
+          ? readSessionHistoryPageInWorker(supplied)
+          : supplied.kind === "delta"
+            ? readSessionHistoryPageInWorker(supplied)
+            : readSessionHistoryPageInWorker(supplied);
     target.sessionId = "successor";
     target.sessionEntry.sessionId = "successor";
     target.env.OPENCLAW_STATE_DIR = "/tmp/successor-history-state";
@@ -287,7 +483,11 @@ it.each(["delta", "message-lookup", "recent"] as const)(
       supplied.params.maxMessages = 1;
       supplied.params.maxLines = 2;
       supplied.params.allowResetArchiveFallback = false;
-    } else {
+    } else if (supplied.kind === "message-by-id") {
+      supplied.params.messageId = "successor";
+      supplied.params.options.maxBytes = 1;
+      supplied.params.options.allowResetArchiveFallback = false;
+    } else if (supplied.kind === "message-lookup") {
       supplied.params.messageId = "successor";
     }
     await waitForReaderAdmission(1);
@@ -299,7 +499,11 @@ it.each(["delta", "message-lookup", "recent"] as const)(
             delta: { kind: "reset", cursor: "next", reason: "invalid_cursor" },
             subagentCoordination: { sessions: [], runMessages: [] },
           }
-        : { kind, messages: [] },
+        : kind === "message-by-id"
+          ? { kind, result: { found: false, oversized: false } }
+          : kind === "message-count"
+            ? { kind, count: 0 }
+            : { kind, messages: [] },
     );
     await pending;
     expect(input.request).toMatchObject({

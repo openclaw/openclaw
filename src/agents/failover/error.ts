@@ -17,6 +17,8 @@ export type CliTimeoutContext = {
   observedActivity: boolean;
   activeToolCount: number;
   backgroundTaskCount: number;
+  /** Native compaction (or similar backend maintenance) is running: silent but busy. */
+  compactionActive?: boolean;
 };
 
 export type FallbackAttemptRecord = {
@@ -52,25 +54,7 @@ export class FailoverError extends Error {
 
   constructor(
     message: string,
-    params: {
-      reason: FailoverReason;
-      provider?: string;
-      model?: string;
-      profileId?: string;
-      authMode?: string;
-      status?: number;
-      code?: string;
-      rawError?: string;
-      authProfileFailure?: { allInCooldown: boolean };
-      sessionId?: string;
-      lane?: string;
-      cause?: unknown;
-      suspend?: boolean;
-      cliTimeout?: CliTimeoutContext;
-      timeout?: FailoverError["timeout"];
-      attempts?: readonly FallbackAttemptRecord[];
-      soonestCooldownExpiry?: number | null;
-    },
+    params: Omit<FailoverError, keyof Error | "requestSizeCeiling"> & { cause?: unknown },
   ) {
     super(message, { cause: params.cause });
     this.name = "FailoverError";

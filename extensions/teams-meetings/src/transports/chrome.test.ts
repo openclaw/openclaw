@@ -1,8 +1,8 @@
 import { defineMeetingChromeCleanupTests } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, vi } from "vitest";
-import { teamsMeetingsConfig } from "../config.js";
+import { teamsMeetingsPlugin } from "../../index.js";
 
-const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+const resolveTeamsMeetingsConfig = teamsMeetingsPlugin.config.resolveConfig;
 
 const engineMocks = vi.hoisted(() => ({
   localDispose: vi.fn(async () => {}),
@@ -12,6 +12,7 @@ const engineMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
   const original = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-runtime")>();
+  const adapter = original.MeetingPlatformAdapter;
   const transport = (dispose: () => Promise<void>) => ({
     clearOutput: vi.fn(async () => {}),
     dispose,
@@ -20,22 +21,21 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
     stop: dispose,
     writeOutput: vi.fn(async () => {}),
   });
-  return {
-    ...original,
-    MeetingPlatformAdapter: {
-      ...original.MeetingPlatformAdapter,
-      createChromeRuntimeBindings: () => ({
-        createBindings: original.createMeetingRealtimeEngineBindings,
+  const defineBrowserMeetingPlugin: typeof adapter.defineBrowserMeetingPlugin = (spec) =>
+    adapter.defineBrowserMeetingPlugin({
+      ...spec,
+      chromeRuntime: {
+        ...adapter.createChromeRuntimeBindings(),
         createLocalAudioTransport: () => transport(engineMocks.localDispose),
         createNodeAudioTransport: () => transport(engineMocks.nodeDispose),
         startAgentRealtimeEngine: engineMocks.startAgent,
-        startRealtimeEngine: original.startMeetingRealtimeEngine,
-      }),
-    },
+      },
+    });
+  return {
+    ...original,
+    MeetingPlatformAdapter: { ...adapter, defineBrowserMeetingPlugin },
   };
 });
-
-import { launchTeamsMeetingInChrome, launchTeamsMeetingOnNode } from "./chrome.js";
 
 const URL = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_rollback%40thread.v2/0";
 
@@ -47,8 +47,8 @@ describe("Microsoft Teams meeting Chrome startup cleanup", () => {
     nodeCommand: "teamsmeetings.chrome",
     preserveTrackedBrowser: false,
     resolveConfig: resolveTeamsMeetingsConfig,
-    launchInChrome: launchTeamsMeetingInChrome,
-    launchOnNode: launchTeamsMeetingOnNode,
+    launchInChrome: teamsMeetingsPlugin.chrome.launchInChrome,
+    launchOnNode: teamsMeetingsPlugin.chrome.launchOnNode,
     engineMocks,
   });
 });

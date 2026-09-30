@@ -56,6 +56,17 @@ not just runner noise.
 - Harness host capabilities capture the exact admitted authority. Gate tool binding, preparation, execution, hooks, and approvals, and revalidate after awaited work before an allowed result crosses the action boundary.
 - Retained tools, preparers, callbacks, and approval handles must fail after close, replacement, release, abort, claim loss, or lifecycle rotation.
 
+## Source Reply Completion
+
+- A message action suppresses required-reply finalization only through the
+  canonical host-owned current-source completion fact after settled, complete,
+  non-dry-run delivery. A terminal reaction qualifies only when explicit
+  `final: true` adds a nonempty reaction to the current
+  channel/account/conversation/message. Acknowledgments, progress reactions,
+  removals, empty reactions, wrong targets, failures, partial delivery, no-ops,
+  and dry runs never qualify. Do not special-case a channel or the fallback
+  finalizer.
+
 ## Verification
 
 - For agent performance changes, record seconds and RSS before/after in the

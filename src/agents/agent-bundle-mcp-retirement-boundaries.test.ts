@@ -6,6 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
@@ -14,6 +15,7 @@ import {
   releaseSessionMcpRuntime,
   reloadSessionMcpRuntimes,
   retireSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
 } from "./agent-bundle-mcp-manager-api.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { prepareCliBundleMcpConfig } from "./cli-runner/bundle-mcp.js";
@@ -92,6 +94,8 @@ async function withMcpFixture(
   const baseUrl = `http://127.0.0.1:${address.port}`;
   await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
     await disposeAllSessionMcpRuntimes();
+    const scheduler = createTestGatewayScheduler();
+    await setSessionMcpRuntimeScheduler(scheduler);
     try {
       await run({
         workspaceDir,
@@ -114,6 +118,7 @@ async function withMcpFixture(
         release();
       }
       await disposeAllSessionMcpRuntimes();
+      await scheduler.stop();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

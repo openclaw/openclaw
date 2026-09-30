@@ -3,7 +3,7 @@
  *
  * Wraps pi-tui keybindings with OpenClaw-specific actions and per-agent overrides.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type Keybinding,
@@ -17,49 +17,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAgentDir } from "../config.js";
 
 /** OpenClaw-specific key ids added to the shared pi-tui keybinding registry. */
-interface AppKeybindings {
-  "app.interrupt": true;
-  "app.clear": true;
-  "app.exit": true;
-  "app.suspend": true;
-  "app.thinking.cycle": true;
-  "app.model.cycleForward": true;
-  "app.model.cycleBackward": true;
-  "app.model.select": true;
-  "app.tools.expand": true;
-  "app.thinking.toggle": true;
-  "app.session.toggleNamedFilter": true;
-  "app.editor.external": true;
-  "app.message.followUp": true;
-  "app.message.dequeue": true;
-  "app.clipboard.pasteImage": true;
-  "app.session.new": true;
-  "app.session.tree": true;
-  "app.session.fork": true;
-  "app.session.resume": true;
-  "app.tree.foldOrUp": true;
-  "app.tree.unfoldOrDown": true;
-  "app.tree.editLabel": true;
-  "app.tree.toggleLabelTimestamp": true;
-  "app.session.togglePath": true;
-  "app.session.toggleSort": true;
-  "app.session.rename": true;
-  "app.session.delete": true;
-  "app.session.deleteNoninvasive": true;
-  "app.models.save": true;
-  "app.models.enableAll": true;
-  "app.models.clearAll": true;
-  "app.models.toggleProvider": true;
-  "app.models.reorderUp": true;
-  "app.models.reorderDown": true;
-  "app.tree.filter.default": true;
-  "app.tree.filter.noTools": true;
-  "app.tree.filter.userOnly": true;
-  "app.tree.filter.labeledOnly": true;
-  "app.tree.filter.all": true;
-  "app.tree.filter.cycleForward": true;
-  "app.tree.filter.cycleBackward": true;
-}
+type AppKeybindings = Record<Exclude<keyof typeof KEYBINDINGS, keyof typeof TUI_KEYBINDINGS>, true>;
 
 declare module "@earendil-works/pi-tui" {
   interface Keybindings extends AppKeybindings {}
@@ -270,88 +228,42 @@ const KEYBINDING_NAME_MIGRATIONS = {
 } as const satisfies Record<string, Keybinding>;
 
 function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAME_MIGRATIONS {
-  return key in KEYBINDING_NAME_MIGRATIONS;
-}
-
-function toKeybindingsConfig(value: unknown): KeybindingsConfig {
-  if (!isRecord(value)) {
-    return {};
-  }
-
-  const config: KeybindingsConfig = {};
-  for (const [key, binding] of Object.entries(value)) {
-    if (typeof binding === "string") {
-      config[key] = binding as KeyId;
-      continue;
-    }
-    if (Array.isArray(binding) && binding.every((entry) => typeof entry === "string")) {
-      config[key] = binding as KeyId[];
-    }
-  }
-  return config;
+  return Object.hasOwn(KEYBINDING_NAME_MIGRATIONS, key);
 }
 
 /** Migrates legacy keybinding names and orders known entries ahead of unknown extras. */
-function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
-  config: Record<string, unknown>;
-  migrated: boolean;
-} {
-  const config: Record<string, unknown> = {};
-  let migrated = false;
-
-  for (const [key, value] of Object.entries(rawConfig)) {
+function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): KeybindingsConfig {
+  const config = new Map<string, KeyId | KeyId[]>();
+  for (const [key, binding] of Object.entries(rawConfig)) {
     const nextKey = isLegacyKeybindingName(key) ? KEYBINDING_NAME_MIGRATIONS[key] : key;
-    if (nextKey !== key) {
-      migrated = true;
-    }
     if (key !== nextKey && Object.hasOwn(rawConfig, nextKey)) {
-      // New names win when both legacy and migrated keys are present.
-      migrated = true;
+      // New names win even when their configured value is invalid.
       continue;
     }
-    config[nextKey] = value;
-  }
-
-  return { config: orderKeybindingsConfig(config), migrated };
-}
-
-function orderKeybindingsConfig(config: Record<string, unknown>): Record<string, unknown> {
-  const ordered: Record<string, unknown> = {};
-  for (const keybinding of Object.keys(KEYBINDINGS)) {
-    if (Object.hasOwn(config, keybinding)) {
-      ordered[keybinding] = config[keybinding];
+    if (typeof binding === "string") {
+      config.set(nextKey, binding as KeyId);
+    } else if (Array.isArray(binding) && binding.every((entry) => typeof entry === "string")) {
+      config.set(nextKey, binding as KeyId[]);
     }
   }
-
-  const extras = Object.keys(config)
-    .filter((key) => !Object.hasOwn(ordered, key))
-    .toSorted();
-  for (const key of extras) {
-    ordered[key] = config[key];
-  }
-
-  return ordered;
+  return orderKeybindingsConfig(Object.fromEntries(config));
 }
 
-function loadRawConfig(path: string): Record<string, unknown> | undefined {
-  if (!existsSync(path)) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+function orderKeybindingsConfig(config: KeybindingsConfig): KeybindingsConfig {
+  const known = Object.keys(KEYBINDINGS).filter((key) => Object.hasOwn(config, key));
+  const extras = Object.keys(config)
+    .filter((key) => !Object.hasOwn(KEYBINDINGS, key))
+    .toSorted();
+  return Object.fromEntries([...known, ...extras].map((key) => [key, config[key]]));
 }
 
 /** Keybinding manager that loads OpenClaw defaults plus optional user overrides. */
 export class KeybindingsManager extends TuiKeybindingsManager {
-  private configPath: string | undefined;
-
-  constructor(userBindings: KeybindingsConfig = {}, configPath?: string) {
+  constructor(
+    userBindings: KeybindingsConfig = {},
+    private configPath?: string,
+  ) {
     super(KEYBINDINGS, userBindings);
-    this.configPath = configPath;
   }
 
   /** Creates a manager from the agent keybindings.json file. */
@@ -375,11 +287,12 @@ export class KeybindingsManager extends TuiKeybindingsManager {
   }
 
   private static loadFromFile(path: string): KeybindingsConfig {
-    const rawConfig = loadRawConfig(path);
-    if (!rawConfig) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+      return isRecord(parsed) ? migrateKeybindingsConfig(parsed) : {};
+    } catch {
       return {};
     }
-    return toKeybindingsConfig(migrateKeybindingsConfig(rawConfig).config);
   }
 }
 

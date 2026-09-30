@@ -1,4 +1,3 @@
-// Shared MCP channel helpers normalize channel tool payloads and responses.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString as toText,
@@ -252,10 +251,4 @@ export function extractAttachmentsFromMessage(message: unknown): unknown[] {
       media: Object.fromEntries(Object.entries(media).filter(([, value]) => value !== undefined)),
     }));
   return [...contentAttachments, ...mediaAttachments];
-}
-
-/** Normalize approval identifiers before local tracking or resolution. */
-export function normalizeApprovalId(value: unknown): string | undefined {
-  const id = toText(value);
-  return id ? id.trim() : undefined;
 }

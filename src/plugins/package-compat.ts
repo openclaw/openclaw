@@ -1,4 +1,3 @@
-// Checks package compatibility metadata for plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { prerelease as parseSemverPrerelease, satisfies as satisfiesSemver } from "semver";
@@ -83,13 +82,7 @@ type PackagePluginApiRangeResult = { ok: true; range?: string } | { ok: false; e
 export function resolvePackagePluginApiRange(
   packageMetadata: unknown,
 ): PackagePluginApiRangeResult {
-  if (packageMetadata === undefined || packageMetadata === null) {
-    return { ok: true };
-  }
-  if (!isRecord(packageMetadata)) {
-    return { ok: true };
-  }
-  if (!("compat" in packageMetadata)) {
+  if (!isRecord(packageMetadata) || !("compat" in packageMetadata)) {
     return { ok: true };
   }
   const compat = packageMetadata.compat;

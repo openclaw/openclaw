@@ -1,6 +1,29 @@
 // Command secret target import tests cover lazy import safety for secret target metadata.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+function secretTarget(
+  id: string,
+  overrides: {
+    targetType?: string;
+    pathPattern?: string;
+    refPathPattern?: string;
+    secretShape?: "secret_input" | "sibling_ref";
+  } = {},
+) {
+  return {
+    id,
+    targetType: id,
+    configFile: "openclaw.json",
+    pathPattern: id,
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    ...overrides,
+  };
+}
+
 describe("command secret targets module import", () => {
   let lazyImportProbe: {
     channelsError: unknown;
@@ -80,70 +103,24 @@ describe("command secret targets module import", () => {
         id: "telegram",
         secrets: {
           secretTargetRegistryEntries: [
-            {
-              id: "channels.telegram.botToken",
-              targetType: "channels.telegram.botToken",
-              configFile: "openclaw.json",
-              pathPattern: "channels.telegram.botToken",
-              secretShape: "secret_input",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
-            {
-              id: "channels.telegram.gatewayToken",
+            secretTarget("channels.telegram.botToken"),
+            secretTarget("channels.telegram.gatewayToken", {
               targetType: "gateway.auth.token",
-              configFile: "openclaw.json",
               pathPattern: "gateway.auth.token",
-              secretShape: "secret_input",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
-            {
-              id: "channels.telegram.gatewayTokenRef",
-              targetType: "channels.telegram.gatewayTokenRef",
-              configFile: "openclaw.json",
+            }),
+            secretTarget("channels.telegram.gatewayTokenRef", {
               pathPattern: "channels.telegram.gatewayToken",
               refPathPattern: "gateway.auth.token",
               secretShape: "sibling_ref",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
-            {
-              id: "channels.discord.token",
-              targetType: "channels.discord.token",
-              configFile: "openclaw.json",
-              pathPattern: "channels.discord.token",
-              secretShape: "secret_input",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
+            }),
+            secretTarget("channels.discord.token"),
           ],
         },
       },
       {
         id: "external-chat",
         secrets: {
-          secretTargetRegistryEntries: [
-            {
-              id: "channels.external-chat.token",
-              targetType: "channels.external-chat.token",
-              configFile: "openclaw.json",
-              pathPattern: "channels.external-chat.token",
-              secretShape: "secret_input",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
-          ],
+          secretTargetRegistryEntries: [secretTarget("channels.external-chat.token")],
         },
       },
     ]);

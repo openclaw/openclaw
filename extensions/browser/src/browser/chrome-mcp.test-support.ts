@@ -59,9 +59,9 @@ export function installChromeMcpSessionTestHooks() {
 }
 
 export const FAKE_TARGET_1 = "chrome-mcp:000000000001:1";
-export const FAKE_TARGET_2 = "chrome-mcp:000000000001:2";
+const FAKE_TARGET_2 = "chrome-mcp:000000000001:2";
 const FAKE_TARGET_3 = "chrome-mcp:000000000001:3";
-export const FAKE_REF = "mcp-ref:000000000001:1";
+const FAKE_REF = "mcp-ref:000000000001:1";
 
 export function createFakeSession(screenshotError?: string): ChromeMcpSession {
   let currentUrl =

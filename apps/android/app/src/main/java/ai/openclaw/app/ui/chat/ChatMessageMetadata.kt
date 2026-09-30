@@ -70,7 +70,7 @@ internal fun ChatMessageTimestamp(
   Box(modifier) {
     Text(
       text = label,
-      style = ClawTheme.type.caption.copy(fontSize = 11.5.sp, lineHeight = 14.sp, fontWeight = FontWeight.Normal),
+      style = ClawTheme.type.caption.copy(lineHeight = 14.sp, fontWeight = FontWeight.Normal),
       color = ClawTheme.colors.textSubtle,
       modifier =
         if (metadata.isEmpty()) {

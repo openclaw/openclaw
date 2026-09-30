@@ -9,6 +9,8 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
+import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import {
@@ -61,9 +63,13 @@ import type {
   ToolSearchConfig,
   ToolSearchToolContext,
   UnknownToolErrorOptions,
-  UnknownToolRecoverySurface,
 } from "./tool-search-types.js";
 import { textResult, ToolInputError } from "./tools/common.js";
+
+type ToolSearchExactCallOptions = Pick<
+  ToolSearchCallOptions,
+  "parentToolCallId" | "signal" | "onUpdate" | "recoverySurface" | "mcpNamespaceGuest"
+>;
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
@@ -90,6 +96,32 @@ function toolSearchEntryText(entry: ToolSearchCatalogEntry, parameterText?: stri
   return [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
     .filter(Boolean)
     .join(" ");
+}
+
+// Code Mode creates runtimes per cell. Share tokens for the owner's entries snapshot;
+// replacing that array retires the cache, and text changes refresh individual entries.
+const toolSearchDocuments = new WeakMap<
+  readonly ToolSearchCatalogEntry[],
+  WeakMap<ToolSearchCatalogEntry, { text: string; terms: string[] }>
+>();
+
+function toolSearchEntryTerms(
+  entries: readonly ToolSearchCatalogEntry[],
+  entry: ToolSearchCatalogEntry,
+  parameterText: string,
+): readonly string[] {
+  let documents = toolSearchDocuments.get(entries);
+  if (!documents) {
+    documents = new WeakMap();
+    toolSearchDocuments.set(entries, documents);
+  }
+  const text = toolSearchEntryText(entry, parameterText);
+  let document = documents.get(entry);
+  if (!document || document.text !== text) {
+    document = { text, terms: tokenizeDocument(text) };
+    documents.set(entry, document);
+  }
+  return document.terms;
 }
 
 function findEntry(
@@ -350,7 +382,7 @@ export class ToolSearchRuntime {
         index: buildLexicalIndex(
           indexedEntries.map(({ entry, parameterText }) => ({
             value: entry,
-            terms: tokenizeDocument(toolSearchEntryText(entry, parameterText)),
+            terms: toolSearchEntryTerms(catalog.entries, entry, parameterText),
           })),
         ),
       };
@@ -379,9 +411,7 @@ export class ToolSearchRuntime {
   };
 
   all = (options?: CatalogVisibilityOptions) =>
-    visibleCatalogEntries(resolveCatalog(this.ctx), options).map((entry) =>
-      compactToolSearchCatalogEntry(entry),
-    );
+    visibleCatalogEntries(resolveCatalog(this.ctx), options).map(compactToolSearchCatalogEntry);
 
   namespaceEntries = () =>
     // Snapshot host metadata without rendering hints or retaining the executable tool.
@@ -414,16 +444,7 @@ export class ToolSearchRuntime {
     );
   };
 
-  callExactId = async (
-    id: string,
-    input?: unknown,
-    options?: {
-      parentToolCallId?: string;
-      signal?: AbortSignal;
-      onUpdate?: ToolSearchCallOptions["onUpdate"];
-      recoverySurface?: UnknownToolRecoverySurface;
-    },
-  ) => {
+  callExactId = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
     const catalog = resolveCatalog(this.ctx);
     return await this.callEntry(
       findEntryByExactId(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
@@ -433,7 +454,10 @@ export class ToolSearchRuntime {
   };
 
   callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
-    unwrapToolResultValue((await this.call(id, input, options)).result);
+    projectToolResultValue((await this.call(id, input, options)).result);
+
+  callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) =>
+    projectToolResultValue((await this.callExactId(id, input, options)).result);
 
   observeNetworkContent(parentToolCallId: string): void {
     const state = this.networkInvocations.get(parentToolCallId) ?? { active: 0, observed: false };
@@ -496,17 +520,16 @@ export class ToolSearchRuntime {
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
     input?: unknown,
-    options?: {
-      parentToolCallId?: string;
-      signal?: AbortSignal;
-      onUpdate?: ToolSearchCallOptions["onUpdate"];
-    },
+    options?: Pick<
+      ToolSearchCallOptions,
+      "parentToolCallId" | "signal" | "onUpdate" | "mcpNamespaceGuest"
+    >,
   ) => {
     this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
     const normalizedInput = input ?? {};
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
-    const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
+    const toolCallId = `tool_call:${parentId}:${entry.name}:${++this.callSequence}`;
     bindJoinedCollectorInvocation(entry.tool, toolCallId);
     await assertCatalogOutputSchemaIsValid(entry);
     const outputVariants =
@@ -534,6 +557,19 @@ export class ToolSearchRuntime {
       if (isPreExecutionBlockedToolResult(candidate)) {
         // The JSON-safe snapshot drops the private blocked-result marker.
         preExecutionBlocked = true;
+        if (entry.source === "mcp") {
+          const operation = entry.mcp?.operation ?? "tool";
+          if (operation === "tool") {
+            setMcpCodeModeGuestResultFromAgentResult(candidate);
+          } else if (options?.mcpNamespaceGuest) {
+            const details = isRecord(candidate.details) ? candidate.details : undefined;
+            const reason =
+              typeof details?.reason === "string" && details.reason.trim()
+                ? details.reason.trim()
+                : "Tool call blocked by policy";
+            throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
+          }
+        }
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
       const snapshot =
@@ -690,4 +726,37 @@ export function formatToolSearchControlError(
 
 function unwrapToolResultValue(result: AgentToolResult<unknown>): unknown {
   return isRecord(result) && "details" in result ? result.details : result;
+}
+
+/**
+ * Project a target result into the value Code Mode guests receive. Output
+ * contracts validate the raw details; only the guest value gains error text.
+ */
+function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
+  if (!isRecord(result) || !("details" in result)) {
+    return result;
+  }
+  const { details } = result;
+  // An explicit error can explain itself only in model-facing text; keep that reason.
+  if (result.isError !== true || hasErrorMessage(details)) {
+    return details;
+  }
+  const message = collectTextContentBlocks(result.content)
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .join("\n");
+  if (!message) {
+    return details;
+  }
+  if (details === undefined || details === null) {
+    return { message };
+  }
+  return isRecord(details) ? { ...details, message } : details;
+}
+
+function hasErrorMessage(details: unknown): boolean {
+  return (
+    isRecord(details) &&
+    [details.message, details.error].some((value) => typeof value === "string" && value.trim())
+  );
 }

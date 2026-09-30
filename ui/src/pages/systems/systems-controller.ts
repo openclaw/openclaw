@@ -1,4 +1,3 @@
-import type { SystemInfoResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -9,6 +8,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 import {
   loadSystemsInventory,
   projectSystemsInventory,
@@ -49,9 +49,8 @@ export class SystemsController {
   private subscriptions: Array<() => void> = [];
   private request: AbortController | undefined;
   private telemetryRequest: AbortController | undefined;
-  private generation = 0;
   private presented = false;
-  private refreshQueued = false;
+  private refreshQueued?: "automatic" | "manual";
 
   constructor(readonly context: ApplicationContext) {
     this.scope = gatewayPresentationScope(context.gateway);
@@ -64,6 +63,10 @@ export class SystemsController {
 
   get connected(): boolean {
     return this.current && this.context.gateway.snapshot.phase === "connected";
+  }
+
+  get needsInventoryRefresh(): boolean {
+    return this.inventory === null || this.refreshQueued !== undefined;
   }
 
   get desktopAvailable(): boolean {
@@ -310,13 +313,12 @@ export class SystemsController {
   }
 
   private cancelRefresh(): void {
-    this.generation += 1;
     this.request?.abort();
     this.telemetryRequest?.abort();
     this.request = undefined;
     this.telemetryRequest = undefined;
     this.loading = false;
-    this.refreshQueued = false;
+    this.refreshQueued = undefined;
   }
 
   private clear(): void {
@@ -331,7 +333,7 @@ export class SystemsController {
     this.query = "";
   }
 
-  async refresh(): Promise<void> {
+  async refresh(intent: "automatic" | "manual" = "automatic"): Promise<void> {
     const snapshot = this.context.gateway.snapshot;
     if (this.lifecycle.transition(snapshot)) {
       this.telemetry.clear();
@@ -345,35 +347,36 @@ export class SystemsController {
     ) {
       return;
     }
-    // Bursts of presence events must not continually cancel the only useful response.
-    if (this.loading) {
-      this.refreshQueued = true;
+    const refreshIntent = this.refreshQueued === "manual" ? "manual" : intent;
+    // Hidden pages and event bursts retain one refresh without cancelling useful work.
+    if (this.loading || document.visibilityState === "hidden") {
+      this.refreshQueued = refreshIntent;
       return;
     }
     this.cancelRefresh();
-    const generation = this.generation;
     const request = new AbortController();
     this.request = request;
     const isCurrent = () =>
-      this.presented &&
-      this.current &&
-      generation === this.generation &&
-      this.lifecycle.isCurrent(scope);
+      this.presented && this.current && this.request === request && this.lifecycle.isCurrent(scope);
     this.loading = true;
     this.error = null;
     this.notify();
     try {
-      const inventory = await loadSystemsInventory(scope.client, {
+      const inventory = await loadSystemsInventory(this.context.gateway, {
         signal: request.signal,
         isCurrent,
+        fresh: refreshIntent === "manual",
       });
+      if (!inventory && isCurrent()) {
+        this.refreshQueued = this.refreshQueued === "manual" ? "manual" : refreshIntent;
+      }
       if (!inventory || !isCurrent()) {
         return;
       }
       const initial = this.inventory === null;
       this.inventory = inventory;
       this.projectRows();
-      this.sampledAtMs = Date.now();
+      this.sampledAtMs = inventory.gatewaySampledAtMs;
       this.recordTelemetry(true);
       // Only initial entry picks a default. Later updates never replace an explicit or missing selection.
       if (initial && this.selectedId === null) {
@@ -394,10 +397,8 @@ export class SystemsController {
       if (isCurrent()) {
         this.loading = false;
         this.request = undefined;
-        const refreshQueued = this.refreshQueued;
-        this.refreshQueued = false;
         this.notify();
-        if (refreshQueued) {
+        if (this.refreshQueued) {
           void this.refresh();
         }
       }
@@ -426,28 +427,27 @@ export class SystemsController {
     }
     const request = new AbortController();
     this.telemetryRequest = request;
-    const generation = this.generation;
     const id = this.selectedId;
     const isCurrent = () =>
       this.presented &&
       this.current &&
       this.lifecycle.isCurrent(scope) &&
       this.telemetryRequest === request &&
-      generation === this.generation &&
       this.selectedId === id;
     try {
       if (gatewayHost) {
-        const info = await scope.client.request<SystemInfoResult>(
-          "system.info",
-          {},
-          { signal: request.signal },
-        );
+        const sample = await readSystemInfo(this.context.gateway, request.signal);
         if (!isCurrent() || !this.inventory) {
           return;
         }
         const { systemInfo: _previousError, ...errors } = this.inventory.errors;
-        this.inventory = { ...this.inventory, gatewaySystemInfo: info, errors };
-        this.sampledAtMs = Date.now();
+        this.inventory = {
+          ...this.inventory,
+          gatewaySystemInfo: sample.value,
+          gatewaySampledAtMs: sample.at,
+          errors,
+        };
+        this.sampledAtMs = sample.at;
       } else {
         const result = await scope.client.request<{ nodes: NodeListNode[] }>(
           "node.list",
@@ -463,6 +463,9 @@ export class SystemsController {
       this.projectRows();
       this.recordTelemetry(gatewayHost);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
       if (isCurrent() && this.inventory) {
         this.inventory = {
           ...this.inventory,

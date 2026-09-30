@@ -23,6 +23,7 @@ export async function buildSubagentListForTests(params: {
       subagentRuns,
       (snapshot) => ({ snapshot, runIds: [], sessionKeys: [] }),
       ({ snapshot }) => snapshot,
+      "all",
     ));
   const context = captureSubagentListReadContext(
     params.runs,
@@ -32,7 +33,7 @@ export async function buildSubagentListForTests(params: {
   );
   return buildSubagentList({
     context,
-    sessionEntries: readSubagentListSessionEntries(params.cfg, context),
+    sessionEntries: await readSubagentListSessionEntries(params.cfg, context),
     taskMaxChars: params.taskMaxChars,
   });
 }

@@ -1,4 +1,4 @@
-// Node location commands: invokes location.get on a paired node and formats the location payload.
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
@@ -7,8 +7,7 @@ import {
   buildNodeInvokeParams,
   callNodesGatewayCli,
   nodesCallOpts,
-  parseOptionalNodeNonNegativeInteger,
-  parseOptionalNodePositiveInteger,
+  parseOptionalNodeInteger,
   resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -41,15 +40,9 @@ export function registerNodesLocationCommands(nodes: Command) {
           if (opts.accuracy !== undefined && desiredAccuracy === undefined) {
             throw new Error("invalid --accuracy (use coarse|balanced|precise)");
           }
-          const maxAgeMs = parseOptionalNodeNonNegativeInteger(opts.maxAge, "--max-age");
-          const timeoutMs = parseOptionalNodePositiveInteger(
-            opts.locationTimeout,
-            "--location-timeout",
-          );
-          const invokeTimeoutMs = parseOptionalNodePositiveInteger(
-            opts.invokeTimeout,
-            "--invoke-timeout",
-          );
+          const maxAgeMs = parseOptionalNodeInteger(opts.maxAge, "--max-age", "non-negative");
+          const timeoutMs = parseOptionalNodeInteger(opts.locationTimeout, "--location-timeout");
+          const invokeTimeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
 
           const invokeParams = buildNodeInvokeParams({
@@ -64,11 +57,7 @@ export function registerNodesLocationCommands(nodes: Command) {
           });
 
           const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-          const payload =
-            res.payload && typeof res.payload === "object"
-              ? (res.payload as Record<string, unknown>)
-              : {};
+          const payload = asRecord(asRecord(raw).payload);
 
           if (opts.json) {
             defaultRuntime.writeJson(payload);

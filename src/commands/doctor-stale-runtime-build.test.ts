@@ -25,6 +25,20 @@ async function makeCheckout(options: { built?: string; head?: string }): Promise
 }
 
 describe("collectStaleRuntimeBuildFindings", () => {
+  it("does not recommend rebuilding a host-owned payload with checkout metadata", async () => {
+    const root = await makeCheckout({ built: BUILT, head: HEAD });
+    await fs.writeFile(
+      path.join(root, "openclaw-install-owner.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      }),
+    );
+
+    await expect(collectStaleRuntimeBuildFindings({ root, env: {} })).resolves.toEqual([]);
+  });
   it("warns when the built commit differs from the checkout commit", async () => {
     const root = await makeCheckout({ built: BUILT, head: HEAD });
 

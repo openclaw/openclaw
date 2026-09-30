@@ -429,8 +429,9 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         const profileId = client?.authenticatedUserProfile?.profileId;
         const recentProfileIds = profileId ? readCurrentUserProfileAliases(profileId) : undefined;
         const recents = recentProfileIds
-          ? listProjectRecents(store, recentProfileIds, registryProjects)
+          ? await listProjectRecents(store, recentProfileIds, registryProjects)
           : undefined;
+        assertCurrent();
         diagnostics?.mark("response");
         if (canWrite()) {
           respond(
@@ -449,19 +450,8 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         respond(
           true,
           {
-            projects: projects.map((project) =>
-              project.agentId
-                ? {
-                    id: project.id,
-                    displayName: project.displayName,
-                    source: project.source,
-                    agentId: project.agentId,
-                  }
-                : {
-                    id: project.id,
-                    displayName: project.displayName,
-                    source: project.source,
-                  },
+            projects: projects.map(({ id, displayName, source, agentId }) =>
+              agentId ? { id, displayName, source, agentId } : { id, displayName, source },
             ),
             ...(recents ? { recents: recents.filter((recent) => recent.kind === "project") } : {}),
           },

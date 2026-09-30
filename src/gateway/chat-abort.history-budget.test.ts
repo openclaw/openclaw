@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { boundInFlightRunSnapshotForChatHistory } from "./chat-abort.js";
 import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
+import { boundInFlightRunSnapshotForChatHistory } from "./server-methods/chat-history-budget.js";
 
 it.each([2, 50])("keeps the newest %i progress events with bounded serialization", (retained) => {
   let progress: ReturnType<typeof updateChatRunProgressSnapshot>;

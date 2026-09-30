@@ -44,13 +44,6 @@ type ChannelAccountRow = ChannelAccountTokenSummaryRow & {
   configured: boolean | undefined;
 };
 
-type ResolvedChannelAccountRowParams = {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-  accountId: string;
-};
-
 function existsSyncMaybe(p: string | undefined): boolean | null {
   const path = normalizeOptionalString(p) ?? "";
   if (!path) {
@@ -61,20 +54,6 @@ function existsSyncMaybe(p: string | undefined): boolean | null {
   } catch {
     return null;
   }
-}
-
-/** Resolves one configured/default account into the normalized row shape used by status rendering. */
-async function resolveChannelAccountRow(
-  params: ResolvedChannelAccountRowParams,
-): Promise<ChannelAccountRow> {
-  const { plugin, cfg, sourceConfig, accountId } = params;
-  const inspected = await resolveInspectedChannelAccount({
-    plugin,
-    cfg,
-    sourceConfig,
-    accountId,
-  });
-  return { accountId, ...inspected };
 }
 
 const formatAccountLabel = (params: { accountId: string; name?: string }) => {
@@ -100,20 +79,15 @@ const buildAccountNotes = (params: {
   if (snapshot.dmPolicy) {
     notes.push(`dm:${snapshot.dmPolicy}`);
   }
-  if (snapshot.tokenSource && snapshot.tokenSource !== "none") {
-    notes.push(`token:${snapshot.tokenSource}`);
-  }
-  if (snapshot.botTokenSource && snapshot.botTokenSource !== "none") {
-    notes.push(`bot:${snapshot.botTokenSource}`);
-  }
-  if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
-    notes.push(`app:${snapshot.appTokenSource}`);
-  }
-  if (
-    snapshot.signingSecretSource &&
-    snapshot.signingSecretSource !== "none" /* pragma: allowlist secret */
-  ) {
-    notes.push(`signing:${snapshot.signingSecretSource}`);
+  for (const [label, source] of [
+    ["token", snapshot.tokenSource],
+    ["bot", snapshot.botTokenSource],
+    ["app", snapshot.appTokenSource],
+    ["signing", snapshot.signingSecretSource],
+  ]) {
+    if (source && source !== "none") {
+      notes.push(`${label}:${source}`);
+    }
   }
   if (entry.kind === "unavailable") {
     notes.push("secret unavailable in this command path");
@@ -258,14 +232,10 @@ export async function buildChannelsTable(
 
     const accounts: ChannelAccountRow[] = [];
     for (const accountId of resolvedAccountIds) {
-      accounts.push(
-        await resolveChannelAccountRow({
-          plugin,
-          cfg,
-          sourceConfig,
-          accountId,
-        }),
-      );
+      accounts.push({
+        accountId,
+        ...(await resolveInspectedChannelAccount({ plugin, cfg, sourceConfig, accountId })),
+      });
     }
     const liveAccounts = getRuntimeChannelAccounts({
       payload: opts?.liveChannelStatus,
@@ -322,19 +292,13 @@ export async function buildChannelsTable(
       if (!anyEnabled) {
         return "off";
       }
-      if (missingPaths.length > 0) {
-        return "warn";
-      }
-      if (issues.length > 0) {
-        return "warn";
-      }
-      if (unavailableConfiguredAccounts.length > 0) {
-        return "warn";
-      }
-      if (configurationUnknown) {
-        return "warn";
-      }
-      if (link.statusState === "unstable") {
+      if (
+        missingPaths.length > 0 ||
+        issues.length > 0 ||
+        unavailableConfiguredAccounts.length > 0 ||
+        configurationUnknown ||
+        link.statusState === "unstable"
+      ) {
         return "warn";
       }
       if (link.linked === false) {
@@ -343,13 +307,7 @@ export async function buildChannelsTable(
       if (tokenSummary.state) {
         return tokenSummary.state;
       }
-      if (link.linked === true) {
-        return "ok";
-      }
-      if (configuredAccounts.length > 0) {
-        return "ok";
-      }
-      return "setup";
+      return link.linked === true || configuredAccounts.length > 0 ? "ok" : "setup";
     })();
 
     const detail = (() => {
@@ -370,32 +328,21 @@ export async function buildChannelsTable(
       if (configurationUnknown) {
         return "configuration status unavailable";
       }
-      if (link.statusState) {
-        if (link.statusState === "linked") {
-          const extra: string[] = [];
-          if (link.selfE164) {
-            extra.push(formatPhoneNumberForCli(link.selfE164));
-          }
-          if (link.authAgeMs != null && link.authAgeMs >= 0) {
-            extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
-          }
-          if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
-            extra.push(`accounts ${accounts.length || 1}`);
-          }
-          return extra.length > 0
-            ? `${formatChannelStatusState(link.statusState)} · ${extra.join(" · ")}`
-            : formatChannelStatusState(link.statusState);
+      if (link.statusState || link.linked !== null) {
+        if (link.statusState && link.statusState !== "linked") {
+          return formatChannelStatusState(link.statusState);
         }
-        return formatChannelStatusState(link.statusState);
-      }
-
-      if (link.linked !== null) {
-        const base = link.linked ? "linked" : "not linked";
+        const linked = link.statusState === "linked" || link.linked === true;
+        const base = link.statusState
+          ? formatChannelStatusState(link.statusState)
+          : linked
+            ? "linked"
+            : "not linked";
         const extra: string[] = [];
-        if (link.linked && link.selfE164) {
+        if (linked && link.selfE164) {
           extra.push(formatPhoneNumberForCli(link.selfE164));
         }
-        if (link.linked && link.authAgeMs != null && link.authAgeMs >= 0) {
+        if (linked && link.authAgeMs != null && link.authAgeMs >= 0) {
           extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
         }
         if (accounts.length > 1 || plugin.meta.forceAccountBinding) {

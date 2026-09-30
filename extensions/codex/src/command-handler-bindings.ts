@@ -4,14 +4,15 @@ import {
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
 import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-profile.js";
 import {
   consumeCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
-  type CodexAppServerLiveThreadOwnership,
 } from "./app-server/client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./app-server/client-thread-owner.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import { isCodexFastServiceTier } from "./app-server/config.js";
 import {
@@ -54,7 +55,6 @@ import {
   readCodexConversationBindingData,
 } from "./conversation-binding-data.js";
 import { formatPermissionsMode } from "./conversation-control.js";
-import { isIncognitoSessionKey } from "./incognito-session.js";
 import { formatCodexCliSessions } from "./node-cli-sessions.js";
 
 export function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext): boolean {
@@ -429,6 +429,7 @@ export async function resumeThread(
               // is gone; otherwise another session can claim and lose it.
               await releaseCodexAppServerBindingSubscription(bindingBeforeCommit, {
                 assertCurrent,
+                retainedClientId: clientId,
               });
             }
             assertCurrent();

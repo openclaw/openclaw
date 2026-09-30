@@ -5,10 +5,11 @@ import type { VitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 export const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 export const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
 
-// Separate build steps in runs 33364762120/33364935118: runtime median 100s;
-// private-QA 104s. Test-group measurements exclude this once-per-job prerequisite.
+// Five broad PR runs 36208291831..36208949888: 52 runtime builds on the
+// 8-class took 41–55s (median 47s). Retain five seconds above that maximum.
+// Private-QA retains its separate 104s sample; preparation is once per job.
 export const VITEST_PRETEST_BUILD_SECONDS: Record<VitestPretestBuildMode, number> = {
-  runtime: 100,
+  runtime: 60,
   "private-qa": 104,
 };
 
@@ -126,6 +127,40 @@ export function resolveShardTimingKey(spec: VitestShardTimingSpec): string {
 // files use the default, which mostly reflects the per-file module-graph
 // re-evaluation cost that dominates these serial suites.
 const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
+  // Five broad green PR runs, 36208291831 through 36208949888: median case
+  // seconds balance files; complete shard spans still own elapsed admission.
+  ["src/gateway/server-methods/agent.test.ts", 82],
+  ["src/gateway/server-methods/chat.directive-tags.test.ts", 38],
+  ["src/gateway/server-methods/sessions-rewind.storage.test.ts", 33],
+  ["src/gateway/server-methods/sessions-rewind.test.ts", 32],
+  ["src/gateway/server-methods/session-catalog-privacy.test.ts", 24],
+  ["src/gateway/server-methods/chat.reset-visible-yield.test.ts", 24],
+  ["src/gateway/server-methods/task-history.test.ts", 24],
+  ["src/gateway/server-methods/question.session-access.test.ts", 23],
+  ["src/gateway/server-methods/board.approval.test.ts", 23],
+  ["src/gateway/server-methods/sessions-reset-subagent-cleanup.test.ts", 21],
+  ["src/gateway/server-methods/task-history.archived.test.ts", 21],
+  ["src/gateway/server-methods/artifacts.request-authority.test.ts", 20],
+  ["src/gateway/server-methods/sessions-create.child-custody.test.ts", 19],
+  ["src/gateway/server-methods/tasks.test.ts", 19],
+  ["src/gateway/server-methods/usage.sessions-usage-owner-attribution.integration.test.ts", 19],
+  ["src/gateway/server-methods/system-agent-approval.test.ts", 18],
+  ["src/gateway/server-methods/sessions-mutations.catalog-queue.test.ts", 18],
+  ["src/gateway/server-methods/chat-history-handler.test.ts", 17],
+  ["src/gateway/server-methods/board.test.ts", 16],
+  ["src/gateway/server-methods/chat-history-delta.test.ts", 15],
+  ["src/gateway/server-methods/sessions-mutations.owner.test.ts", 14],
+  ["src/gateway/server-methods/approval.test.ts", 14],
+  ["src/gateway/server-methods/users-github.test.ts", 13],
+  ["src/gateway/server-methods/chat-history-handler.cli-import.test.ts", 12],
+  ["src/gateway/server-methods/board.runtime-boundaries.test.ts", 12],
+  ["src/gateway/server-methods/models-auth-status.test.ts", 12],
+  ["src/gateway/server-methods/question.own-run.test.ts", 12],
+  ["src/gateway/server-methods/chat-send-compaction-handoff.test.ts", 11],
+  ["src/gateway/server-methods/chat.abort-errors.test.ts", 11],
+  ["src/gateway/server-methods/approval-shared.test.ts", 11],
+  ["src/gateway/server-methods/board.plugin-capabilities.test.ts", 11],
+  ["src/gateway/server-methods/plugin-approval.test.ts", 11],
   // Healthy two-worker Gateway proof: native-fork case spans were 24.8-29.9s
   // and 37.1s. Keep conservative serial floors; group weights retain import overhead.
   ["src/gateway/server.sessions.fixture-lifecycle.test.ts", 30],
@@ -217,9 +252,21 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/embedded-agent-runner/run.harness-auth-failover.test.ts", 8],
   ["src/agents/embedded-agent-runner/run.shared-integration.test.ts", 77],
   ["src/gateway/dashboard-session-title.test.ts", 23],
+  // Three one-worker Testbox runs: rounded median case sums for relative packing.
+  ["src/gateway/server.sessions.create.accounts.test.ts", 20],
+  ["src/gateway/server.sessions.create.authority.test.ts", 13],
+  ["src/gateway/server.sessions.create.dispatch.test.ts", 14],
+  ["src/gateway/server.sessions.create.forks.test.ts", 19],
+  ["src/gateway/server.sessions.create.incognito.test.ts", 3],
+  ["src/gateway/server.sessions.create.lifecycle.test.ts", 4],
+  ["src/gateway/server.sessions.create.models.test.ts", 17],
+  ["src/gateway/server.sessions.create.spawn.test.ts", 11],
+  ["src/gateway/server.sessions.create.stores.test.ts", 14],
+  ["src/gateway/server.sessions.create.workspace-policy.test.ts", 24],
+  ["src/gateway/server.sessions.create.worktree-selection.test.ts", 22],
+  ["src/gateway/server.sessions.create.worktrees.test.ts", 23],
   // Two-run median case-body anchors from main runs 33504478720/33509347578.
   // These balance files; membership-specific wrapper spans own admission.
-  ["src/gateway/server.sessions.create.test.ts", 52],
   ["src/gateway/server.sessions.archive-worktree-lifecycle.test.ts", 34],
   ["src/gateway/server.sessions.delete-worktree-lifecycle.test.ts", 31],
   ["src/gateway/server.chat.gateway-server-chat-b.test.ts", 37],
@@ -248,7 +295,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/worktrees/service.diagnostics.test.ts", 18],
   ["src/agents/worktrees/service.naming.test.ts", 10],
   ["src/agents/worktrees/service.provisioned.test.ts", 24],
-  ["src/agents/worktrees/service.run-end-cleanup.test.ts", 11],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).
@@ -271,6 +317,18 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
   ["test/scripts/changed-lanes.test.ts", 5],
   // Updated process-fixture walls include imports/setup from run 33364935118.
+  // Preserved case maxima from PR runs 36394634707, 36394423189 and
+  // 36394835419, plus 20s for each newly split file's process/import overhead.
+  // Policy retains the tooling-owner table; process owners also cover leaf configs.
+  // Keep cold projections until complete split-file CI walls arrive.
+  ["test/scripts/ci-changed-node-test-plan.test.ts", 143],
+  ["test/scripts/ci-changed-node-test-plan.source-owners.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.policy.test.ts", 130],
+  // Two-CPU / 7.65-GiB native replay took 146.24s plus the outer shard wrapper.
+  ["test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts", 148],
+  ["test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.config-fallback.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.process-owners.test.ts", 143],
   ["test/scripts/ci-git-owner.test.ts", 187],
   // Blacksmith PR runs 33532741896/33545657559 recorded 127.288s/135.808s wrapper
   // spans; canonical push plans omit this tooling workload.

@@ -20,7 +20,7 @@ export function createGitHubPublishTool(
     label: "GitHub Publish",
     name: "github_publish",
     description:
-      "Publish the current session's repository changes as a draft pull request. Supports local workspaces and cloud repository sessions without a Gateway checkout. Call after the work is complete, then finish the turn so its changes can be saved. The Gateway publishes the accepted workspace, creates or reuses the draft pull request, and posts the result into the session transcript. Requests wait while the workspace is busy or recovering. Publication credentials stay on the Gateway.",
+      "Publish the current session's repository changes as a draft pull request. Supports local workspaces and cloud repository sessions without a Gateway checkout. Call when the source changes are ready, then finish the turn so its changes can be saved. The Gateway publishes the accepted workspace, creates or reuses the draft pull request, and posts the result into the session transcript without resuming the agent. If review, CI, or landing remains in the authorized task, arrange a continuation before ending the turn; a publication receipt is not completion of that work. Requests wait while the workspace is busy or recovering. Publication credentials stay on the Gateway.",
     parameters: Type.Object(
       {
         title: Type.Optional(GitHubPublicationTitleSchema),

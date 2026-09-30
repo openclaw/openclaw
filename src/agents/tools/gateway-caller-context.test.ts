@@ -3,6 +3,13 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import {
+  claimAgentRunApprovalAuthority,
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -26,6 +33,54 @@ import {
 } from "./gateway-caller-context.js";
 
 describe("gateway caller context wrapper", () => {
+  it.each(["outer", "inner"])("retains the narrower %s approval lifetime", async (narrower) => {
+    const run = { instanceId: `context-${narrower}`, runId: `context-${narrower}` };
+    const root = claimAgentRunDelegatedAuthority(run);
+    const lifetime = new AbortController();
+    const worker = claimAgentRunApprovalAuthority(root, [lifetime.signal]);
+    const caller = { agentId: "main", sessionKey: "agent:main:scope", operationalRunInstance: run };
+    try {
+      await withGatewayToolCallerIdentity(
+        { ...caller, approvalAuthority: narrower === "outer" ? worker : root },
+        () =>
+          withGatewayToolCallerIdentity(
+            { ...caller, approvalAuthority: narrower === "inner" ? worker : root },
+            () => {
+              const retained = getGatewayToolCallerIdentity()?.approvalAuthority;
+              if (!retained) {
+                throw new Error("Expected retained approval authority");
+              }
+              expect(validateAgentRunDelegatedAuthority(retained)).toBe(true);
+              lifetime.abort();
+              expect(validateAgentRunDelegatedAuthority(retained)).toBe(false);
+              expect(validateAgentRunDelegatedAuthority(root)).toBe(true);
+            },
+          ),
+      );
+    } finally {
+      releaseAgentRunDelegatedAuthority(root);
+    }
+  });
+
+  it("refuses unrelated same-run approval scopes before entering the wrapper", async () => {
+    const run = { instanceId: "context-unrelated", runId: "context-unrelated" };
+    const root = claimAgentRunDelegatedAuthority(run);
+    const first = claimAgentRunApprovalAuthority(root, [new AbortController().signal]);
+    const second = claimAgentRunApprovalAuthority(root, [new AbortController().signal]);
+    const caller = { agentId: "main", sessionKey: "agent:main:scope", operationalRunInstance: run };
+    const entered = vi.fn();
+    try {
+      await expect(
+        withGatewayToolCallerIdentity({ ...caller, approvalAuthority: first }, () =>
+          withGatewayToolCallerIdentity({ ...caller, approvalAuthority: second }, entered),
+        ),
+      ).rejects.toThrow("approval scopes do not retain the same source");
+      expect(entered).not.toHaveBeenCalled();
+    } finally {
+      releaseAgentRunDelegatedAuthority(root);
+    }
+  });
+
   it("preserves every delegated tool restriction through same-run wrappers", async () => {
     const identity = { agentId: "main", sessionKey: "agent:main:preview" };
     await withGatewayToolCallerIdentity(
@@ -127,21 +182,46 @@ describe("gateway caller context wrapper", () => {
   it("pins caller identity to the Gateway present at admission", async () => {
     const admitted = {} as GatewayRequestContext;
     const replacement = {} as GatewayRequestContext;
+    admitted.resolveGatewayContext = () => admitted;
+    replacement.resolveGatewayContext = () => replacement;
     let current = admitted;
+    const selectGateway = vi.fn(() => current);
 
-    await withGatewayToolCallerIdentity(
+    const first = await withGatewayToolCallerIdentity(
       {
         agentId: "agent-a",
         sessionKey: "agent-a:session",
-        gatewayContextResolver: () => current,
+        gatewayContextResolver: selectGateway,
       },
       () => {
-        const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-        expect(resolveGatewayContext?.()).toBe(admitted);
+        const resolveGatewayContext = expectDefined(
+          getGatewayToolCallerIdentity()?.gatewayContextResolver,
+          "admitted caller Gateway",
+        );
+        expect(resolveGatewayContext()).toBe(admitted);
         current = replacement;
-        expect(resolveGatewayContext?.()).toBeUndefined();
+        expect(resolveGatewayContext()).toBeUndefined();
+        return resolveGatewayContext;
       },
     );
+    const second = await withGatewayToolCallerIdentity(
+      {
+        agentId: "agent-a",
+        sessionKey: "agent-a:session",
+        gatewayContextResolver: selectGateway,
+      },
+      () =>
+        expectDefined(
+          getGatewayToolCallerIdentity()?.gatewayContextResolver,
+          "replacement caller Gateway",
+        ),
+    );
+    const callsBeforeLookup = selectGateway.mock.calls.length;
+    expect(getCanonicalGatewayContextResolver(first)).toBe(admitted.resolveGatewayContext);
+    expect(getCanonicalGatewayContextResolver(second)).toBe(replacement.resolveGatewayContext);
+    expect(selectGateway).toHaveBeenCalledTimes(callsBeforeLookup);
+    expect(first()).toBeUndefined();
+    expect(second()).toBe(replacement);
   });
 
   it("scopes nested approval ownership without replacing the native runtime owner", async () => {

@@ -14,6 +14,7 @@ import type { WorkerSessionPlacementStore } from "./worker-environments/placemen
 
 export function createGatewayWorkerPlacementMoveBarrier(params: {
   placements: Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease">;
+  awaitTurnClaimRelease: (sessionId: string, wait: () => Promise<void>) => Promise<void>;
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
   persistAbandonedPartial?: (request: {
@@ -47,7 +48,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
       identities: lifecycleIdentities,
       signal,
       prepare: async () => {
-        resolveWorkerPlacementSessionTarget({
+        const resolved = await resolveWorkerPlacementSessionTarget({
           sessionRuntime,
           config: getRuntimeConfig(),
           sessionId,
@@ -56,6 +57,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
           expectedTarget: target,
           errorMessage: `Session ${sessionKey} changed before placement move. Retry.`,
         });
+        resolved.assertCurrent(getRuntimeConfig());
         authorize?.();
         begun = await begin(async (runId) => {
           if (params.persistAbandonedPartial) {
@@ -76,16 +78,19 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
           });
           return;
         }
-        const released = await interruptSessionWorkAdmissions({
-          scope: target.storePath,
-          identities: lifecycleIdentities,
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        });
-        if (!released) {
-          throw new Error(`Session ${sessionKey} is still active; placement move interrupted`);
-        }
-        await params.placements.waitForTurnClaimRelease(sessionId, {
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        await params.awaitTurnClaimRelease(sessionId, async () => {
+          const released = await interruptSessionWorkAdmissions({
+            scope: target.storePath,
+            identities: lifecycleIdentities,
+            timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          });
+          if (!released) {
+            throw new Error(`Session ${sessionKey} is still active; placement move interrupted`);
+          }
+          await params.placements.waitForTurnClaimRelease(sessionId, {
+            timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+            signal,
+          });
         });
         await runExclusiveSessionStoreWrite(target.storePath, async () => {}, {
           reentrant: true,

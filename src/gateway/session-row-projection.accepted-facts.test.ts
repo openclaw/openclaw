@@ -16,6 +16,7 @@ import {
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import {
   deleteSessionEntryLifecycle,
   persistSessionTranscriptTurn,
@@ -148,7 +149,11 @@ async function withAcceptedSuffix(
     try {
       await projection.ensureMaterialized();
       const query = { agentId: "main", key: keys[1]! };
-      const previous = projection.describe(query)!;
+      const previous = await withReadySessionRows(
+        projection,
+        () => [query],
+        (read) => read.describe(query)!,
+      );
       const count = projection.materializedCount;
       const releases: string[] = [];
       const continuations: SharedArrayBuffer[] = [];
@@ -451,7 +456,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             ...entries[1]!,
             activitySummary: {
               version: 1,
-              formatRevision: 2,
+              formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
               text: "Stored archive summary",
               updatedAt: 1,
               sessionId: suffixScope.sessionId,
@@ -523,6 +528,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               sessionKeys: [],
             }),
             (selection) => selection.runIds,
+            { sessionKeys: [previous.childSessionKey], descendants: true },
           );
           await registryPending.promise;
           expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
@@ -722,7 +728,7 @@ it("replaces the whole accepted entry, board, and watermark snapshot after a com
       label: "committed value",
       activitySummary: {
         version: 1,
-        formatRevision: 2,
+        formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
         text: "Current summary",
         updatedAt: 3,
         sessionId: entry.sessionId,
@@ -785,6 +791,18 @@ it.each(["runtime facts", "invalidated presentation facts"] as const)(
 it("keeps accepted resident facts after their native reader is retired", async () => {
   await withAcceptedSuffix(async ({ projection, suffix, query, reads, resume }) => {
     await closeOpenClawAgentDatabaseByPathAsync(suffix.storeTarget.storePath, "main");
+    await resume();
+    expect(reads).toHaveLength(1);
+    expect(projection.snapshot(query).row?.label).toBe("accepted-1");
+    expect(projection.dirtyRowCount).toBe(0);
+  });
+});
+
+it("retains accepted facts through catalog publication between presentation slices", async () => {
+  await withAcceptedSuffix(async ({ projection, suffix, query, reads, resume }) => {
+    const pending = suffix.pendingDatabaseFacts;
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    expect(suffix.pendingDatabaseFacts).toBe(pending);
     await resume();
     expect(reads).toHaveLength(1);
     expect(projection.snapshot(query).row?.label).toBe("accepted-1");
@@ -933,7 +951,13 @@ it("demotes an accepted suffix without rendering it during the bulk drain", asyn
     expect(isColdArchivedSessionRow(cold)).toBe(true);
     expect(cold.pendingDatabaseFacts).toBeUndefined();
     expect(projection.dirtyRowCount).toBe(0);
-    expect(projection.snapshot(query).row?.label).toBe("archived suffix");
+    await withReadySessionRows(
+      projection,
+      () => [query],
+      () => {
+        expect(projection.snapshot(query).row?.label).toBe("archived suffix");
+      },
+    );
   });
 });
 

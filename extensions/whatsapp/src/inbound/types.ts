@@ -1,4 +1,3 @@
-// Whatsapp type declarations define plugin contracts.
 import type { AnyMessageContent, MiscMessageGenerationOptions } from "baileys";
 import type {
   ChannelInboundMediaInput,

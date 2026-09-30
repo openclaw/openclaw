@@ -1,4 +1,3 @@
-// JSON schema default helpers fill object values from TypeBox schema defaults.
 import {
   normalizeJsonSchemaForTypeBox,
   type JsonSchemaValue,
@@ -109,9 +108,10 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
     return jsonSchemaTypes.has(type) ? undefined : `${path}.type: unsupported JSON Schema type`;
   }
   if (Array.isArray(type) && type.length > 0) {
-    const invalid = type.find((entry) => typeof entry !== "string" || !jsonSchemaTypes.has(entry));
-    if (invalid !== undefined) {
-      return `${path}.type: unsupported JSON Schema type`;
+    for (const entry of type) {
+      if (typeof entry !== "string" || !jsonSchemaTypes.has(entry)) {
+        return `${path}.type: unsupported JSON Schema type`;
+      }
     }
     return new Set(type).size === type.length
       ? undefined
@@ -121,13 +121,7 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
 }
 
 function decodePointerSegment(segment: string): string {
-  let decodedSegment;
-  try {
-    decodedSegment = decodeURIComponent(segment);
-  } catch {
-    decodedSegment = segment;
-  }
-  return decodedSegment.replace(/~1/g, "/").replace(/~0/g, "~");
+  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
 function parseJsonPointerArrayIndex(segment: string): number | undefined {
@@ -168,14 +162,25 @@ function resolveLocalRef(
       return resolveLocalRef(resourceRoot, ref.slice(resourceRoot.$id.length), resourceBaseId);
     }
   }
-  if (ref === "#") {
+  if (!ref.startsWith("#")) {
+    return { found: false };
+  }
+  // Decode the URI fragment before recognizing or splitting its JSON Pointer;
+  // encoded slashes are separators, while ~1 belongs to a single token.
+  let fragment: string;
+  try {
+    fragment = decodeURIComponent(ref.slice(1));
+  } catch {
+    return { found: false };
+  }
+  if (fragment === "") {
     return { found: true, schema: resourceRoot, resourceRoot, resourceBaseId };
   }
-  if (ref.startsWith("#/")) {
+  if (fragment.startsWith("/")) {
     let current: unknown = resourceRoot;
     let currentResourceRoot = resourceRoot;
     let currentResourceBaseId = resourceBaseId;
-    for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
+    for (const segment of fragment.slice(1).split("/").map(decodePointerSegment)) {
       if (Array.isArray(current)) {
         const index = parseJsonPointerArrayIndex(segment);
         if (index === undefined) {
@@ -201,22 +206,10 @@ function resolveLocalRef(
         }
       : { found: false };
   }
-  if (ref.startsWith("#")) {
-    // The pointer branch decodes through decodePointerSegment's try/catch;
-    // anchor fragments deserve the same tolerance so a malformed escape
-    // resolves to "not found" instead of throwing a raw URIError.
-    let anchor: string;
-    try {
-      anchor = decodeURIComponent(ref.slice(1));
-    } catch {
-      return { found: false };
-    }
-    const resolved = resolveLocalAnchor(resourceRoot, anchor);
-    return resolved === undefined
-      ? { found: false }
-      : { found: true, schema: resolved, resourceRoot, resourceBaseId };
-  }
-  return { found: false };
+  const resolved = resolveLocalAnchor(resourceRoot, fragment);
+  return resolved === undefined
+    ? { found: false }
+    : { found: true, schema: resolved, resourceRoot, resourceBaseId };
 }
 
 function splitResourceRef(ref: string): { resource: string; fragment: string } {
@@ -481,6 +474,8 @@ function findJsonSchemaNodeError(
   const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
   const currentResourceBaseId =
     typeof schema.$id === "string" ? resolveSchemaId(schema.$id, resourceBaseId) : resourceBaseId;
+  const findChildError = (child: unknown, childPath: string) =>
+    findJsonSchemaNodeError(child, childPath, root, currentResourceRoot, currentResourceBaseId);
   if (typeof schema.$ref === "string") {
     if (!resolveSchemaRef(root, currentResourceRoot, schema.$ref, currentResourceBaseId).found) {
       return `${path}.$ref: unresolved ref`;
@@ -502,13 +497,7 @@ function findJsonSchemaNodeError(
       return `${path}.${key}: expected schema map`;
     }
     for (const [entryKey, entry] of Object.entries(value)) {
-      const error = findJsonSchemaNodeError(
-        entry,
-        `${path}.${key}.${entryKey}`,
-        root,
-        currentResourceRoot,
-        currentResourceBaseId,
-      );
+      const error = findChildError(entry, `${path}.${key}.${entryKey}`);
       if (error) {
         return error;
       }
@@ -519,13 +508,7 @@ function findJsonSchemaNodeError(
       if (isStringArray(value)) {
         continue;
       }
-      const error = findJsonSchemaNodeError(
-        value,
-        `${path}.dependencies.${key}`,
-        root,
-        currentResourceRoot,
-        currentResourceBaseId,
-      );
+      const error = findChildError(value, `${path}.dependencies.${key}`);
       if (error) {
         return error;
       }
@@ -541,26 +524,14 @@ function findJsonSchemaNodeError(
         return `${path}.${key}: expected schema`;
       }
       for (const [index, entry] of value.entries()) {
-        const error = findJsonSchemaNodeError(
-          entry,
-          `${path}.${key}.${index}`,
-          root,
-          currentResourceRoot,
-          currentResourceBaseId,
-        );
+        const error = findChildError(entry, `${path}.${key}.${index}`);
         if (error) {
           return error;
         }
       }
       continue;
     }
-    const error = findJsonSchemaNodeError(
-      value,
-      `${path}.${key}`,
-      root,
-      currentResourceRoot,
-      currentResourceBaseId,
-    );
+    const error = findChildError(value, `${path}.${key}`);
     if (error) {
       return error;
     }
@@ -574,13 +545,7 @@ function findJsonSchemaNodeError(
       return `${path}.${key}: expected schema array`;
     }
     for (const [index, entry] of value.entries()) {
-      const error = findJsonSchemaNodeError(
-        entry,
-        `${path}.${key}.${index}`,
-        root,
-        currentResourceRoot,
-        currentResourceBaseId,
-      );
+      const error = findChildError(entry, `${path}.${key}.${index}`);
       if (error) {
         return error;
       }
@@ -592,20 +557,6 @@ function findJsonSchemaNodeError(
 /** Return the first structural JSON Schema error that would make validation/defaulting unsafe. */
 export function findJsonSchemaShapeError(schema: JsonSchemaValue): string | undefined {
   return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined);
-}
-
-function cloneDefault<T>(value: T): T {
-  if (value === undefined || value === null) {
-    return value;
-  }
-  return structuredClone(value);
-}
-
-function getDefault(schema: JsonSchemaValue): unknown {
-  if (!isRecord(schema) || !Object.hasOwn(schema, "default")) {
-    return undefined;
-  }
-  return cloneDefault(schema.default);
 }
 
 function schemaWithResourceContext(
@@ -657,7 +608,9 @@ function inlineLocalRefsForMatch(
   const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
   const currentResourceBaseId =
     typeof schema.$id === "string" ? resolveSchemaId(schema.$id, resourceBaseId) : resourceBaseId;
-  if (isRecord(schema) && typeof schema.$ref === "string") {
+  const inlineChild = (child: JsonSchemaValue) =>
+    inlineLocalRefsForMatch(child, root, currentResourceRoot, currentResourceBaseId, resolvingRefs);
+  if (typeof schema.$ref === "string") {
     const refKey = schemaResourceRefKey(currentResourceRoot, schema.$ref, currentResourceBaseId);
     const target = resolvingRefs.has(refKey)
       ? { found: false as const }
@@ -677,68 +630,27 @@ function inlineLocalRefsForMatch(
         return inlinedTarget;
       }
       return {
-        allOf: [
-          inlinedTarget,
-          inlineLocalRefsForMatch(
-            siblingSchema as JsonSchemaValue,
-            root,
-            currentResourceRoot,
-            currentResourceBaseId,
-            resolvingRefs,
-          ),
-        ],
+        allOf: [inlinedTarget, inlineChild(siblingSchema as JsonSchemaValue)],
       };
     }
   }
   return Object.fromEntries(
     Object.entries(schema).map(([key, value]) => {
-      if (schemaMapKeywords.has(key) && isRecord(value)) {
+      if ((schemaMapKeywords.has(key) || key === "dependencies") && isRecord(value)) {
         return [
           key,
           Object.fromEntries(
             Object.entries(value).map(([entryKey, entry]) => [
               entryKey,
-              inlineLocalRefsForMatch(
-                entry as JsonSchemaValue,
-                root,
-                currentResourceRoot,
-                currentResourceBaseId,
-                resolvingRefs,
-              ),
-            ]),
-          ),
-        ];
-      }
-      if (key === "dependencies" && isRecord(value)) {
-        return [
-          key,
-          Object.fromEntries(
-            Object.entries(value).map(([entryKey, entry]) => [
-              entryKey,
-              isStringArray(entry)
+              key === "dependencies" && isStringArray(entry)
                 ? entry
-                : inlineLocalRefsForMatch(
-                    entry as JsonSchemaValue,
-                    root,
-                    currentResourceRoot,
-                    currentResourceBaseId,
-                    resolvingRefs,
-                  ),
+                : inlineChild(entry as JsonSchemaValue),
             ]),
           ),
         ];
       }
       if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
-        return [
-          key,
-          inlineLocalRefsForMatch(
-            value as JsonSchemaValue,
-            root,
-            currentResourceRoot,
-            currentResourceBaseId,
-            resolvingRefs,
-          ),
-        ];
+        return [key, inlineChild(value as JsonSchemaValue)];
       }
       return [key, value];
     }),
@@ -847,28 +759,19 @@ function applyObjectDependencyDefaults(
   currentResourceBaseId: string | undefined,
 ): Record<string, unknown> {
   let nextValue = value;
-  if (isRecord(schema.dependencies)) {
-    for (const [key, dependencySchema] of Object.entries(schema.dependencies)) {
-      if (!Object.hasOwn(nextValue, key) || isStringArray(dependencySchema)) {
+  for (const keyword of ["dependencies", "dependentSchemas"] as const) {
+    if (!isRecord(schema[keyword])) {
+      continue;
+    }
+    for (const [key, dependencySchema] of Object.entries(schema[keyword])) {
+      if (
+        !Object.hasOwn(nextValue, key) ||
+        (keyword === "dependencies" && isStringArray(dependencySchema))
+      ) {
         continue;
       }
       nextValue = applySchemaDefaults(
         dependencySchema as JsonSchemaValue,
-        nextValue,
-        root,
-        resolvingRefs,
-        currentResourceRoot,
-        currentResourceBaseId,
-      ) as Record<string, unknown>;
-    }
-  }
-  if (isRecord(schema.dependentSchemas)) {
-    for (const [key, dependentSchema] of Object.entries(schema.dependentSchemas)) {
-      if (!Object.hasOwn(nextValue, key)) {
-        continue;
-      }
-      nextValue = applySchemaDefaults(
-        dependentSchema as JsonSchemaValue,
         nextValue,
         root,
         resolvingRefs,
@@ -1003,21 +906,17 @@ function applySchemaDefaults(
   resourceRoot = root,
   resourceBaseId?: string,
 ): unknown {
-  let value = valueInput;
-  if (value === undefined) {
-    const defaultValue = getDefault(schema);
-    if (defaultValue !== undefined) {
-      value = defaultValue;
-    }
-  }
+  let nextValue = valueInput;
   if (!isRecord(schema)) {
-    return value;
+    return nextValue;
+  }
+  if (nextValue === undefined && Object.hasOwn(schema, "default")) {
+    nextValue = structuredClone(schema.default);
   }
 
   const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
   const currentResourceBaseId =
     typeof schema.$id === "string" ? resolveSchemaId(schema.$id, resourceBaseId) : resourceBaseId;
-  let nextValue = value;
   const refKey =
     typeof schema.$ref === "string"
       ? schemaResourceRefKey(currentResourceRoot, schema.$ref, currentResourceBaseId)

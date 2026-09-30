@@ -94,7 +94,7 @@ describe("Gateway worker-turn selected transcript preparation", () => {
     "does not hydrate inactive branches for %s input",
     async (persistence) => {
       const expectedMessages = seedBranchedHistory(persistence === "already-persisted");
-      seedActivePlacement();
+      await seedActivePlacement();
       const reachedCredential = createDeferredCore();
       const releaseCredential = createDeferredCore();
       const deliberateStop = new WorkerRunnerUnavailableError();

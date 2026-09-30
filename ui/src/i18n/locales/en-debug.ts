@@ -37,6 +37,7 @@ const enDebug = {
       lane: en.debug.lanes.lane,
       sessionLanes: "Session lanes · {count}",
       active: en.debug.lanes.active,
+      activePerSession: "{active} · {limit}/session",
       queued: en.debug.lanes.queued,
       group: "Group",
       blocked: en.debug.lanes.blocked,

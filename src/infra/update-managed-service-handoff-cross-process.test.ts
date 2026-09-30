@@ -45,7 +45,7 @@ vi.mock("node:child_process", async () => {
 
 vi.mock("../daemon/systemd-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/systemd-scope.js")>()),
-  findInstalledSystemdGatewayScope: vi.fn(async () => null),
+  findSystemdGatewayInstallation: vi.fn(async () => ({ kind: "none" })),
 }));
 
 beforeEach(async () => {

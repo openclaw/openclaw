@@ -15,6 +15,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createExpectedProfileBinding,
@@ -31,6 +32,79 @@ import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-ut
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("projects send policy and recipient restrictions, clearing them when the current role permits sending", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = rolePolicyConfig();
+    cfg.gateway!.roles!.definitions.write!.sandbox = "required";
+    cfg.gateway!.roles!.definitions.restricted = {
+      sessions: { others: "write" },
+      agents: ["other"],
+      scopes: ["operator.read", "operator.write"],
+    };
+    cfg.session = {
+      sendPolicy: { rules: [{ action: "deny", match: { keyPrefix: "policy-blocked" } }] },
+    };
+    const clients = ["write", "view", "suggest", "restricted"].map((role) => {
+      const profile = ensureProfileForEmail(`${role}@send-presentation.test`);
+      setUserProfileRole(profile.id, role);
+      const client = sharingPolicyClient({ user: profile.id });
+      prepareGatewayRecipientProfile(client);
+      return client;
+    });
+    const creatorId = clients[0]!.authenticatedUserProfile!.profileId;
+    const keys = ["host", "sandbox", "entry-blocked", "policy-blocked"];
+    for (const key of keys) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:${key}` },
+        {
+          sessionId: key,
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: creatorId },
+          ...(key === "host" ? {} : { sandbox: "required" as const }),
+          ...(key === "entry-blocked" ? { sendPolicy: "deny" as const } : {}),
+        },
+      );
+    }
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      for (const [index, key, reason] of [
+        [
+          0,
+          "host",
+          'Your operator role requires a sandboxed session; create a new session instead of running in "agent:main:host".',
+        ],
+        [0, "sandbox", null],
+        [0, "entry-blocked", "send blocked by session policy"],
+        [0, "policy-blocked", "send blocked by session policy"],
+        [1, "sandbox", "session is shared for this connection"],
+        [2, "sandbox", "session is shared for this connection"],
+        [
+          3,
+          "sandbox",
+          'Your operator role cannot create sessions for agent "main"; choose an allowed agent or ask a gateway administrator to update your role.',
+        ],
+      ] as const) {
+        expect(
+          prepareProjectedSessionPresentation(projection, clients[index]!).snapshot({
+            agentId: "main",
+            key: `agent:main:${key}`,
+          }).row?.sendDisabledReason,
+        ).toBe(reason);
+      }
+      setUserProfileRole(creatorId, "view");
+      prepareGatewayRecipientProfile(clients[0]!);
+      expect(
+        prepareProjectedSessionPresentation(projection, clients[0]!).snapshot({
+          agentId: "main",
+          key: "agent:main:host",
+        }).row?.sendDisabledReason,
+      ).toBeNull();
+    } finally {
+      projection.dispose();
+    }
+  });
+});
 
 it.each(["running", "queued", "capacity-wait"] as const)(
   "projects %s follow-up activity through completed subagent lineage outside the selected list page",
@@ -97,7 +171,11 @@ it.each(["running", "queued", "capacity-wait"] as const)(
         }
       }
       const projection = await createSessionRowProjection({ cfg });
-      const connection = createGatewayConnectionState({ bootId: "follow-up", cfg });
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "follow-up",
+        cfg,
+      });
       const runId = "follow-up";
       const claim = claimAgentRunContext(
         runId,
@@ -246,7 +324,11 @@ it("presents current recipient roles without SQLite while rejecting source overr
     );
     addSessionMember(scope, { identityId: member.id, addedBy: owner.id });
     const projection = await createSessionRowProjection({ cfg });
-    const connection = createGatewayConnectionState({ bootId: "presentation", cfg });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "presentation",
+      cfg,
+    });
     const detach = connection.attachSessionRowProjection(projection);
     for (const client of clients) {
       connection.clients.add(client);
@@ -258,6 +340,9 @@ it("presents current recipient roles without SQLite while rejecting source overr
       expect(
         prepareProjectedSessionPresentation(projection).present(captured)?.sharingRole,
       ).toBeUndefined();
+      expect(
+        prepareProjectedSessionPresentation(projection).present(captured)?.sendDisabledReason,
+      ).toBeUndefined();
       for (const [index, expectedRole, visible] of [
         [0, "owner", true],
         [1, "member", true],
@@ -267,7 +352,11 @@ it("presents current recipient roles without SQLite while rejecting source overr
         const presentation = prepareProjectedSessionPresentation(projection, client);
         expect(
           presentation.present(captured, { excludedChildKeys: new Set(["agent:main:child"]) }),
-        ).toMatchObject({ sharingRole: expectedRole });
+        ).toMatchObject({
+          sharingRole: expectedRole,
+          sendDisabledReason:
+            expectedRole === "viewer" ? `Session "${query.key}" was not found.` : null,
+        });
         expect(
           presentation.present(captured, { excludedChildKeys: new Set(["agent:main:child"]) })
             ?.childSessions,
@@ -294,6 +383,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
               key: query.key,
               sessionId: entry.sessionId,
               label: null,
+              sendDisabledReason: "Untrusted source restriction",
               endedAt: null,
               status: "completed",
               activitySummary: { state: "stale", text: "Retained event summary" },
@@ -320,6 +410,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
             }),
           );
           expect(frame.payload.session).toEqual(JSON.parse(expectedWire));
+          expect(frame.payload.session.sendDisabledReason).toBeNull();
           expect(frame.payload.session).not.toMatchObject({ status: "completed", label: null });
         } else {
           expect(socket.send.mock.calls).toHaveLength(0);
@@ -340,6 +431,22 @@ it("presents current recipient roles without SQLite while rejecting source overr
         expiresAtMs: Date.now() + 60_000,
       };
       connection.chatAbortControllers.set("old-run", activeRun);
+      for (let index = 0; index < 49; index++) {
+        connection.chatAbortControllers.set(`unrelated-${index}`, {
+          ...activeRun,
+          sessionKey: `agent:main:unrelated-${index}`,
+          sessionId: `unrelated-session-${index}`,
+        });
+      }
+      const controllerScans = vi.spyOn(connection.chatAbortControllers, Symbol.iterator);
+      connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+      expect(controllerScans).toHaveBeenCalledTimes(1);
+      controllerScans.mockRestore();
+      for (const client of clients.slice(0, 2)) {
+        expect(
+          JSON.parse(String(vi.mocked(client.socket).send.mock.lastCall?.[0])).payload.session,
+        ).toMatchObject({ hasActiveRun: true, activeRunIds: ["old-run"] });
+      }
       for (const client of clients) {
         vi.mocked(client.socket).send.mockClear();
       }
@@ -368,6 +475,66 @@ it("presents current recipient roles without SQLite while rejecting source overr
         });
       }
       expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
+      const replacement = connection.chatAbortControllers.get("replacement-run")!;
+      for (const change of [
+        "session-id",
+        "session-key",
+        "terminal",
+        "visibility",
+        "agent",
+      ] as const) {
+        replacement.sessionKey = change === "session-key" ? query.key : "agent:main:adopted-source";
+        replacement.sessionId = change === "session-key" ? "adopted-session" : entry.sessionId;
+        replacement.agentId = query.agentId;
+        replacement.projectSessionActive = true;
+        replacement.controlUiVisible = true;
+        for (const client of clients) {
+          vi.mocked(client.socket).send.mockClear();
+        }
+        vi.mocked(clients[0]!.socket).send.mockImplementationOnce(() => {
+          if (change === "session-id") {
+            replacement.sessionId = "adopted-session";
+          } else if (change === "session-key") {
+            replacement.sessionKey = "agent:main:adopted-source";
+          } else if (change === "terminal") {
+            replacement.projectSessionActive = false;
+          } else if (change === "visibility") {
+            replacement.controlUiVisible = false;
+          } else {
+            replacement.agentId = "other";
+          }
+        });
+        connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+        for (const [index, hasActiveRun] of [true, false].entries()) {
+          const sends = vi.mocked(clients[index]!.socket).send.mock.calls;
+          expect(sends).toHaveLength(1);
+          expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
+            hasActiveRun,
+            activeRunIds: hasActiveRun ? ["replacement-run"] : [],
+          });
+        }
+        expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
+      }
+      Object.assign(replacement, activeRun);
+      const joining = connection.chatAbortControllers.get("unrelated-0")!;
+      for (const client of clients) {
+        vi.mocked(client.socket).send.mockClear();
+      }
+      vi.mocked(clients[0]!.socket).send.mockImplementationOnce(() => {
+        joining.sessionKey = query.key;
+      });
+      connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+      for (const [index, activeRunIds] of [
+        [0, ["replacement-run"]],
+        [1, ["replacement-run", "unrelated-0"]],
+      ] as const) {
+        const sends = vi.mocked(clients[index]!.socket).send.mock.calls;
+        expect(sends).toHaveLength(1);
+        expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
+          hasActiveRun: true,
+          activeRunIds,
+        });
+      }
       connection.chatAbortControllers.clear();
       expect(prepares).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();

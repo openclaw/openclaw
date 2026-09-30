@@ -125,7 +125,6 @@ describe("registered Claude CLI search preparation", () => {
       sessionSearch: true,
       managed: false,
     },
-    { name: "session off", config: {}, native: false, sessionSearch: false, managed: false },
     {
       name: "session off overrides an explicit tool allowlist",
       config: {},

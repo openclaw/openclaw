@@ -58,8 +58,6 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
-export { formatDiscordReplySkip } from "./reply-delivery.js";
-
 type DiscordMessageProcessObserver = {
   onFinalReplyStart?: () => void;
   onFinalReplyDelivered?: () => void;
@@ -92,10 +90,11 @@ export async function processDiscordMessage(
     threadBindings,
     route,
     abortSignal,
+    isPolicyCurrent,
     turnAdoptionLifecycle,
     preparedMedia: mediaList,
   } = ctx;
-  if (abortSignal?.aborted) {
+  if (abortSignal?.aborted || isPolicyCurrent?.() === false) {
     return;
   }
   const text = messageText;
@@ -106,7 +105,19 @@ export async function processDiscordMessage(
 
   const boundThreadId = ctx.threadBinding?.conversation?.conversationId?.trim();
   if (boundThreadId && typeof threadBindings.touchThread === "function") {
-    threadBindings.touchThread({ threadId: boundThreadId });
+    try {
+      await threadBindings.touchThread({ threadId: boundThreadId });
+    } catch (error) {
+      // Activity persistence must not suppress an otherwise authorized inbound turn.
+      runtime.error(
+        danger(
+          `discord: failed to refresh thread binding activity (${boundThreadId}): ${String(error)}`,
+        ),
+      );
+    }
+    if (abortSignal?.aborted || isPolicyCurrent?.() === false) {
+      return;
+    }
   }
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
@@ -277,7 +288,6 @@ export async function processDiscordMessage(
       token,
       accountId,
       rest: reactions.deliveryRest,
-      runtime,
       replyToMode,
       textLimit,
       maxLinesPerMessage,
@@ -494,7 +504,7 @@ export async function processDiscordMessage(
     }
   };
   try {
-    if (abortSignal?.aborted) {
+    if (abortSignal?.aborted || isPolicyCurrent?.() === false) {
       dispatchAborted = true;
       return;
     }
@@ -610,10 +620,6 @@ export async function processDiscordMessage(
     await draftPreview.cleanup({ failed: finalDeliveryFailed || dispatchError });
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
   }
-  if (dispatchAborted) {
-    return;
-  }
-
   const finalDispatchResult = dispatchResult;
   if (!finalDispatchResult || !hasFinalInboundReplyDispatch(finalDispatchResult)) {
     return;

@@ -1,4 +1,3 @@
-// Verifies sessions_history visibility defaults and sandbox clamps.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -56,28 +55,18 @@ describe("sessions tools visibility", () => {
       session: { mainKey: "main", scope: "per-sender" },
       tools: { agentToAgent: { enabled: false } },
     };
-    mockGatewayWithHistory((req) => {
-      if (req.method === "sessions.resolve") {
-        const key = typeof req.params?.key === "string" ? req.params.key : "";
-        if (req.params?.spawnedBy === "main" && key !== "subagent:child-1") {
-          return {};
-        }
-        return { key };
-      }
-      return undefined;
-    });
+    mockGatewayWithHistory((req) =>
+      req.method === "sessions.resolve" ? { key: req.params?.key } : undefined,
+    );
 
     const tool = getSessionsHistoryTool();
 
     const sibling = await tool.execute("call1", {
       sessionKey: "agent:main:quietchat:direct:someone-else",
     });
-    expect((sibling.details as { sessionKey?: string }).sessionKey).toBe(
-      "agent:main:quietchat:direct:someone-else",
-    );
-
-    const allowed = await tool.execute("call2", { sessionKey: "subagent:child-1" });
-    expect((allowed.details as { sessionKey?: string }).sessionKey).toBe("subagent:child-1");
+    expect(sibling.details).toMatchObject({
+      sessionKey: "agent:main:quietchat:direct:someone-else",
+    });
 
     const denied = await tool.execute("call-cross-agent", { sessionKey: "agent:other:main" });
     expect(denied.details).toEqual({
@@ -135,6 +124,6 @@ describe("sessions tools visibility", () => {
     const denied = await tool.execute("call4", {
       sessionKey: "agent:other:main",
     });
-    expect((denied.details as { status?: string }).status).toBe("forbidden");
+    expect(denied.details).toMatchObject({ status: "forbidden" });
   });
 });

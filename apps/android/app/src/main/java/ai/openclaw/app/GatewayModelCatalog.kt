@@ -28,7 +28,6 @@ data class GatewayModelSummary(
   val thinkingDefault: String? = null,
   val supportsTools: Boolean? = null,
   val agentRuntime: JsonObject? = null,
-  val unavailableUntil: Long? = null,
 ) {
   val runtimeName: String?
     get() =
@@ -95,6 +94,5 @@ internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
       thinkingDefault = row["thinkingDefault"]?.jsonPrimitive?.content,
       supportsTools = row["supportsTools"]?.jsonPrimitive?.booleanOrNull,
       agentRuntime = row["agentRuntime"]?.jsonObject,
-      unavailableUntil = row["unavailableUntil"]?.jsonPrimitive?.longOrNull,
     )
   }

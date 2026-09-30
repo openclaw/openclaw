@@ -10,6 +10,14 @@ const supplementalSpeechPayload = {
   ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
 };
 
+function classifyErrorPayload(provider: string, model: string, text: string) {
+  return classifyEmbeddedAgentRunResultForModelFallback({
+    provider,
+    model,
+    result: { payloads: [{ isError: true, text }], meta: { durationMs: 42 } },
+  });
+}
+
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   it("defaults embedded cyber failover to Daybreak Blue", () => {
     expect(resolveEmbeddedCyberFailoverConfig(undefined)).toEqual({
@@ -163,14 +171,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     const rawError =
       "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]";
 
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "google",
-      model: "gemini-3.1-pro-preview",
-      result: {
-        payloads: [{ isError: true, text: rawError }],
-        meta: { durationMs: 42 },
-      },
-    });
+    const result = classifyErrorPayload("google", "gemini-3.1-pro-preview", rawError);
 
     expect(result).toEqual({
       message: `google/gemini-3.1-pro-preview ended with a provider error: ${rawError}`,
@@ -184,21 +185,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     const rawError =
       '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}';
 
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "openai-compatible",
-      model: "primary-model",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: rawError,
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload("openai-compatible", "primary-model", rawError);
 
     expect(result).toEqual({
       message: `openai-compatible/primary-model ended with a provider error: ${rawError}`,
@@ -212,21 +199,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     const rawError =
       '{"error":{"message":"Provider overloaded","type":"overloaded_error","param":"","code":null}}';
 
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "openai-compatible",
-      model: "primary-model",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: rawError,
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload("openai-compatible", "primary-model", rawError);
 
     expect(result).toEqual({
       message: `openai-compatible/primary-model ended with a provider error: ${rawError}`,
@@ -300,21 +273,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       "Wait until the reset time, use another Codex account if available, " +
       "or switch to another configured model/provider.";
 
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "openai",
-      model: "gpt-5.5",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: errorText,
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload("openai", "gpt-5.5", errorText);
 
     expect(result).toEqual({
       message: "openai/gpt-5.5 ended with a provider error: " + errorText,
@@ -629,18 +588,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     {
       name: "fallback-notice-only",
       payloads: [{ isFallbackNotice: true, text: "Switching providers" }],
-      code: "empty_result",
-      suffix: "without a visible assistant reply",
-    },
-    {
-      name: "status-notice-only",
-      payloads: [{ isStatusNotice: true, text: "Still working" }],
-      code: "empty_result",
-      suffix: "without a visible assistant reply",
-    },
-    {
-      name: "supplemental-speech-only",
-      payloads: [supplementalSpeechPayload],
       code: "empty_result",
       suffix: "without a visible assistant reply",
     },

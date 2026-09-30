@@ -63,14 +63,23 @@ mock.module(new URL(`../config/sessions.${extension}`, import.meta.url), {
   },
 });
 mock.module(new URL(`../gateway/call.${extension}`, import.meta.url), {
-  namedExports: { callGateway: unexpected, isGatewayTransportError: () => false },
+  namedExports: {
+    buildGatewayConnectionDetails: unexpected,
+    callGateway: unexpected,
+    isImplicitLocalGatewayTarget: unexpected,
+  },
+});
+mock.module(new URL(`../gateway/call-mutation-fallback.${extension}`, import.meta.url), {
+  namedExports: { resolveGatewayMutationFallback: unexpected },
 });
 mock.module(new URL(`../config/sessions/session-sqlite-target.${extension}`, import.meta.url), {
   namedExports: { resolveSqliteTargetFromSessionStorePath: () => ({ path: storePath }) },
 });
 mock.module(new URL(`./sessions-display-model.${extension}`, import.meta.url), {
   namedExports: {
-    resolveSessionDisplayModel: (_cfg: unknown, row: { model: string }) => row.model,
+    resolveSessionDisplayModelRef: (_cfg: unknown, row: { model: string }) => ({
+      model: row.model,
+    }),
   },
 });
 

@@ -4,18 +4,13 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  killMatrixQaCliChild,
-  resolveMatrixQaOpenClawCliEntryPath,
-} from "./scenario-runtime-cli-process.js";
+import { killMatrixQaCliChild } from "./scenario-runtime-cli-process.js";
 import {
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
 } from "./scenario-runtime-cli.js";
-
-const testing = { killMatrixQaCliChild, resolveMatrixQaOpenClawCliEntryPath };
 
 function isProcessRunning(pid: number): boolean {
   try {
@@ -122,13 +117,13 @@ describe("Matrix QA CLI runtime", () => {
       const child = {
         pid: 12345,
         kill: killMock,
-      } as unknown as Parameters<typeof testing.killMatrixQaCliChild>[0];
+      } as unknown as Parameters<typeof killMatrixQaCliChild>[0];
       const runTaskkill = vi
         .fn()
         .mockReturnValueOnce({ status: statuses[0] })
         .mockReturnValueOnce({ status: statuses[1] });
 
-      testing.killMatrixQaCliChild(child, "SIGTERM", runTaskkill);
+      killMatrixQaCliChild(child, "SIGTERM", runTaskkill);
 
       expect(runTaskkill).toHaveBeenCalledTimes(2);
       if (fallsBack) {
@@ -140,19 +135,6 @@ describe("Matrix QA CLI runtime", () => {
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);
       }
-    }
-  });
-
-  it("prefers the ESM OpenClaw CLI entrypoint when present", async () => {
-    const root = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-entry-"));
-    try {
-      await mkdir(path.join(root, "dist"));
-      await writeFile(path.join(root, "dist", "index.mjs"), "");
-      expect(testing.resolveMatrixQaOpenClawCliEntryPath(root)).toBe(
-        path.join(root, "dist", "index.mjs"),
-      );
-    } finally {
-      await rm(root, { force: true, recursive: true });
     }
   });
 
@@ -211,7 +193,7 @@ describe("Matrix QA CLI runtime", () => {
     }
   });
 
-  it("can close stdin after interactive CLI prompts", async () => {
+  it("closes stdin after interactive prompts and settles every waiting caller", async () => {
     const root = await mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-interactive-"),
     );
@@ -240,11 +222,15 @@ describe("Matrix QA CLI runtime", () => {
         "interactive prompt acknowledgement",
         5_000,
       );
+      const firstWait = session.wait();
+      const secondWait = session.wait();
       session.endStdin();
-      const result = await session.wait();
+      const result = await secondWait;
 
       expect(result.stdout).toContain('"input":"yes"');
       expect(result.stdout).toContain('"ended":true');
+      await expect(firstWait).resolves.toEqual(result);
+      await expect(session.wait()).resolves.toEqual(result);
     } finally {
       await rm(root, { force: true, recursive: true });
     }

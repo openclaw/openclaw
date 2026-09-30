@@ -1,9 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   listSessionEntryKeysReadOnly,
   rewriteDoctorSessionEntries,
 } from "../config/sessions/session-accessor.js";
 import { publishSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import {
+  attachSessionEntrySnapshots,
+  sessionEntrySnapshotColumns,
+} from "../config/sessions/session-entry-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   executeSqliteQuerySync,
@@ -224,17 +229,11 @@ function legacyIncognitoSessionKey(sessionKey: string): string {
 function listReservedIncognitoKeys(database: DatabaseSync): string[] {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
   const keys = new Set<string>();
-  for (const row of executeSqliteQuerySync(
-    database,
-    db.selectFrom("session_nodes").select("session_key"),
-  ).rows) {
-    keys.add(row.session_key);
-  }
-  for (const row of executeSqliteQuerySync(
-    database,
-    db.selectFrom("session_windows").select("session_key"),
-  ).rows) {
-    keys.add(row.session_key);
+  for (const table of ["session_nodes", "session_windows"] as const) {
+    for (const row of executeSqliteQuerySync(database, db.selectFrom(table).select("session_key"))
+      .rows) {
+      keys.add(row.session_key);
+    }
   }
   return [...keys].filter(isIncognitoSessionKey).toSorted();
 }
@@ -276,10 +275,13 @@ function collectOccupiedSessionKeys(database: DatabaseSync): Set<string> {
   );
   for (const row of iterateSqliteQuerySync(
     database,
-    db.selectFrom("session_nodes").select("entry_json"),
+    db.selectFrom("session_nodes").select("entry_json").select(sessionEntrySnapshotColumns),
   )) {
     try {
-      collectSessionEntryKeyFields(JSON.parse(row.entry_json), keys);
+      const entry: unknown = JSON.parse(row.entry_json);
+      if (isRecord(entry)) {
+        collectSessionEntryKeyFields(attachSessionEntrySnapshots(entry, row), keys);
+      }
     } catch {
       // Canonical rows are valid JSON; a malformed row is reported by the existing integrity pass.
     }
@@ -305,86 +307,27 @@ function collectOccupiedSessionKeys(database: DatabaseSync): Set<string> {
 
 function updateSessionKeyColumns(database: DatabaseSync, rename: ReservedKeyRename): void {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
-  const update = (query: Parameters<typeof executeSqliteQuerySync>[1]) =>
-    executeSqliteQuerySync(database, query);
-  update(
-    db
-      .updateTable("session_windows")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_windows")
-      .set({ parent_session_key: rename.to })
-      .where("parent_session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_windows")
-      .set({ spawned_by: rename.to })
-      .where("spawned_by", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_nodes")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_nodes")
-      .set({ parent_session_key: rename.to })
-      .where("parent_session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_nodes")
-      .set({ spawned_by: rename.to })
-      .where("spawned_by", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_nodes")
-      .set({ fork_source_session_key: rename.to })
-      .where("fork_source_session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("conversation_deliveries")
-      .set({ source_session_key: rename.to })
-      .where("source_session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_members")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("board_tabs")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("board_widgets")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("heartbeat_outcomes")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("heartbeat_outcomes")
-      .set({ run_session_key: rename.to })
-      .where("run_session_key", "=", rename.from),
-  );
+  for (const [table, column] of [
+    ["session_windows", "session_key"],
+    ["session_windows", "parent_session_key"],
+    ["session_windows", "spawned_by"],
+    ["session_nodes", "session_key"],
+    ["session_entry_snapshots", "session_key"],
+    ["session_nodes", "parent_session_key"],
+    ["session_nodes", "spawned_by"],
+    ["session_nodes", "fork_source_session_key"],
+    ["conversation_deliveries", "source_session_key"],
+    ["session_members", "session_key"],
+    ["board_tabs", "session_key"],
+    ["board_widgets", "session_key"],
+    ["heartbeat_outcomes", "session_key"],
+    ["heartbeat_outcomes", "run_session_key"],
+  ] as const) {
+    executeSqliteQuerySync(
+      database,
+      db.updateTable(table).set(column, rename.to).where(column, "=", rename.from),
+    );
+  }
 }
 
 function rewriteSessionEntryKeyFields<T>(value: T, renames: ReadonlyMap<string, string>): T {
@@ -410,41 +353,28 @@ function visitSessionEntryKeyFields(
   value: unknown,
   visit: (record: Record<string, unknown>, key: string) => void,
 ): void {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return;
   }
-  const entry = value as Record<string, unknown>;
   for (const key of [
     "heartbeatIsolatedBaseSessionKey",
     "spawnedBy",
     "completionOwnerSessionKey",
     "parentSessionKey",
   ]) {
-    visit(entry, key);
+    visit(value, key);
   }
-  if (
-    entry.forkSource &&
-    typeof entry.forkSource === "object" &&
-    !Array.isArray(entry.forkSource)
-  ) {
-    const forkSource = entry.forkSource as Record<string, unknown>;
-    visit(forkSource, "sessionKey");
+  if (isRecord(value.forkSource)) {
+    visit(value.forkSource, "sessionKey");
   }
-  if (Array.isArray(entry.compactionCheckpoints)) {
-    for (const checkpoint of entry.compactionCheckpoints) {
-      if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
-        continue;
+  if (Array.isArray(value.compactionCheckpoints)) {
+    for (const checkpoint of value.compactionCheckpoints) {
+      if (isRecord(checkpoint)) {
+        visit(checkpoint, "sessionKey");
       }
-      const record = checkpoint as Record<string, unknown>;
-      visit(record, "sessionKey");
     }
   }
-  if (
-    entry.systemPromptReport &&
-    typeof entry.systemPromptReport === "object" &&
-    !Array.isArray(entry.systemPromptReport)
-  ) {
-    const report = entry.systemPromptReport as Record<string, unknown>;
-    visit(report, "sessionKey");
+  if (isRecord(value.systemPromptReport)) {
+    visit(value.systemPromptReport, "sessionKey");
   }
 }

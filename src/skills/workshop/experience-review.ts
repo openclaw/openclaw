@@ -23,6 +23,7 @@ import {
   runWithGatewayDetachedWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
@@ -65,11 +66,9 @@ export async function prepareSkillExperienceReviewCandidate(
     agentAccountId: foreground.agentAccountId,
     messageProvider: foreground.messageProvider,
     messageChannel: foreground.messageChannel,
-    chatType: foreground.chatType,
     groupId: foreground.groupId,
     groupChannel: foreground.groupChannel,
     groupSpace: foreground.groupSpace,
-    memberRoleIds: foreground.memberRoleIds,
     spawnedBy: foreground.spawnedBy,
     senderId: foreground.senderId,
     senderName: foreground.senderName,
@@ -129,6 +128,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   if (mode === "off") {
     return;
   }
+  const outcomeStore = { context: captureOpenClawStateWorkerContext() };
   const executionRoot =
     mode === "auto" ? resolveWorkshopSkillsDir(config, foregroundPromptContext.agentId) : undefined;
   const runId = `skill-workshop-review:${randomUUID()}`;
@@ -278,11 +278,16 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         }
       : undefined;
   } catch (error) {
-    recordSkillExperienceReviewOutcome(foregroundPromptContext.agentId, workspaceDir, {
-      attemptedAtMs,
-      outcome: "failed",
-      error: truncateUtf16Safe(String(error), 300),
-    });
+    await recordSkillExperienceReviewOutcome(
+      foregroundPromptContext.agentId,
+      workspaceDir,
+      {
+        attemptedAtMs,
+        outcome: "failed",
+        error: truncateUtf16Safe(String(error), 300),
+      },
+      outcomeStore,
+    );
     throw error;
   } finally {
     if (executionRoot) {
@@ -290,10 +295,15 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     }
     clearAgentRunContext(runId);
   }
-  recordSkillExperienceReviewOutcome(foregroundPromptContext.agentId, workspaceDir, {
-    attemptedAtMs,
-    outcome,
-    ...(proposalId ? { proposalId } : {}),
-    ...(usage ? { usage } : {}),
-  });
+  await recordSkillExperienceReviewOutcome(
+    foregroundPromptContext.agentId,
+    workspaceDir,
+    {
+      attemptedAtMs,
+      outcome,
+      ...(proposalId ? { proposalId } : {}),
+      ...(usage ? { usage } : {}),
+    },
+    outcomeStore,
+  );
 }

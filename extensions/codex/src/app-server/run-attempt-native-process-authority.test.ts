@@ -291,6 +291,15 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       settled: child.settled,
     };
     terminals.set(processId, terminal);
+    const commandItem = {
+      id: terminal.itemId,
+      type: "commandExecution" as const,
+      command: terminal.command,
+      cwd: "/workspace",
+      processId,
+      commandActions: [],
+      aggregatedOutput: "",
+    };
     void child.closed.then(async () => {
       terminal.alive = false;
       await harness.notify({
@@ -299,14 +308,8 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
           threadId: commandThreadId,
           turnId: commandTurnId,
           item: {
-            id: terminal.itemId,
-            type: "commandExecution",
-            command: terminal.command,
-            cwd: "/workspace",
-            processId,
+            ...commandItem,
             status: "completed",
-            commandActions: [],
-            aggregatedOutput: "",
             exitCode: 0,
             durationMs: 1,
           },
@@ -319,14 +322,8 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         threadId: commandThreadId,
         turnId: commandTurnId,
         item: {
-          id: terminal.itemId,
-          type: "commandExecution",
-          command: terminal.command,
-          cwd: "/workspace",
-          processId,
+          ...commandItem,
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: "",
           exitCode: null,
           durationMs: null,
         },
@@ -344,8 +341,29 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         }
       },
       run,
-      complete: async () => {
-        await harness.completeTurn({ threadId, turnId });
+      complete: async (answer?: string) => {
+        if (answer) {
+          await harness.notify({
+            method: "turn/completed",
+            params: {
+              threadId,
+              turn: {
+                id: turnId,
+                status: "completed",
+                items: [
+                  {
+                    id: `${actor}-answer`,
+                    type: "agentMessage",
+                    phase: "final_answer",
+                    text: answer,
+                  },
+                ],
+              },
+            },
+          });
+        } else {
+          await harness.completeTurn({ threadId, turnId });
+        }
         const result = await run;
         completed = true;
         return result;
@@ -487,7 +505,19 @@ describe("native background process source authority", () => {
     try {
       const staff = await f.begin("maintainer");
       await f.retainSecondConsumer();
-      expect(readAttemptTerminal(await staff.complete()).aborted).toBe(false);
+      const completed = await staff.complete("Retained the running process for the next turn.");
+      expect(readAttemptTerminal(completed).aborted).toBe(false);
+      expect(completed.messagesSnapshot).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: staff.terminal.itemId,
+          isError: false,
+          content: [{ type: "text", text: expect.stringContaining("still running") }],
+          __openclaw: expect.objectContaining({
+            toolOutput: expect.objectContaining({ outcome: "unknown" }),
+          }),
+        }),
+      );
       expect(staff.terminal.alive).toBe(true);
       expect(f.terminated).toEqual([]);
       const guest = await f.begin("guest");
@@ -528,129 +558,117 @@ describe("native background process source authority", () => {
 });
 
 describe("managed-only Codex sandbox compatibility", () => {
-  it.each(["fresh", "native catalog upgrade"] as const)(
-    "executes the advertised sandbox alias under managed-only policy (%s)",
-    async (mode) => {
-      const f = createSandboxPolicyRun();
-      const options = {
-        pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
-      };
-      const savedText = "Keep this saved conversation across the native catalog change.";
-      let priorMessages: Array<Record<string, unknown>> = [];
-      const createPolicyHarness = (managedOnly: boolean, threadId: string) => {
-        const started = createDeferred<void>();
-        const harness = createStartedThreadHarness(async (method) => {
-          if (method === "configRequirements/read") {
-            f.preparation.push(managedOnly ? "managed" : "allowed");
-            return { requirements: { allowManagedHooksOnly: managedOnly } };
-          }
-          if (method === "thread/start") {
-            return threadStartResult(threadId, { cwd: f.params.workspaceDir });
-          }
-          if (method === "thread/read") {
-            return {
-              thread: {
-                ...threadStartResult("native-original").thread,
-                status: { type: "notLoaded" },
-                turns: [],
-              },
-            };
-          }
-          if (method === "turn/start") {
-            started.resolve();
-          }
-          return undefined;
-        });
-        vi.spyOn(harness.client, "getInstanceId").mockReturnValue(`${threadId}-client`);
-        return { ...harness, started: started.promise };
-      };
-      let harness = createPolicyHarness(mode === "fresh", "native-original");
-      let run: ReturnType<typeof runCodexAppServerAttempt> | undefined;
-      try {
-        if (mode === "native catalog upgrade") {
-          await attachSqliteSessionTarget(
-            f.params,
-            path.join(tempDir, "managed-history.sqlite"),
-            f.params.sessionId,
-          );
-          await appendSqliteHistoryMessage(f.params, userMessage(savedText, 1));
-          priorMessages = await readTranscriptMessagesByIdentity(f.params);
-          run = runCodexAppServerAttempt(f.params, options);
-          await Promise.race([harness.started, run]);
-          await nextTurn();
-          expect(
-            harness.requests.find(({ method }) => method === "thread/start")?.params,
-          ).toMatchObject({
-            config: { "features.code_mode": true },
-            environments: [expect.objectContaining({ environmentId: expect.any(String) })],
-          });
-          await harness.completeTurn({ threadId: "native-original", turnId: "turn-1" });
-          expect(readAttemptTerminal(await run).aborted).toBe(false);
-          expect((await readCodexAppServerBinding(f.params.sessionFile))?.threadId).toBe(
-            "native-original",
-          );
-          harness.close();
-          harness = createPolicyHarness(true, "managed-fallback");
-          f.params.runId = "managed-policy-upgrade";
-          f.preparation.length = 0;
+  it("executes the advertised sandbox alias after a managed-only native catalog upgrade", async () => {
+    const f = createSandboxPolicyRun();
+    const options = {
+      pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
+    };
+    const savedText = "Keep this saved conversation across the native catalog change.";
+    const createPolicyHarness = (managedOnly: boolean, threadId: string) => {
+      const started = createDeferred<void>();
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "configRequirements/read") {
+          f.preparation.push(managedOnly ? "managed" : "allowed");
+          return { requirements: { allowManagedHooksOnly: managedOnly } };
         }
-        run = runCodexAppServerAttempt(f.params, options);
-        await Promise.race([harness.started, run]);
-        await nextTurn();
-        const start = harness.requests.find(({ method }) => method === "thread/start")
-          ?.params as CodexThreadStartParams;
-        const turn = harness.requests.find(({ method }) => method === "turn/start")
-          ?.params as CodexTurnStartParams;
-        expect(start).toMatchObject({
-          environments: [],
-          config: { "features.code_mode": false, "features.code_mode_only": false },
-        });
-        expect(turn.environments).toEqual([]);
-        expect(f.preparation.indexOf("managed")).toBeGreaterThanOrEqual(0);
-        expect(f.preparation.indexOf("managed")).toBeLessThan(f.preparation.indexOf("tools"));
-        const alias = flattenCodexDynamicToolFunctions(start.dynamicTools ?? undefined).find(
-          (tool) => tool.name === "sandbox_exec",
-        );
-        expect(alias).toBeDefined();
-        const response = await harness.handleServerRequest({
-          id: "managed-exec",
-          method: "item/tool/call",
-          params: {
-            threadId: turn.threadId,
-            turnId: "turn-1",
-            callId: "managed-exec",
-            namespace: null,
-            tool: alias!.name,
-            arguments: {},
-          },
-        });
-        expect(response).toMatchObject({
-          success: true,
-          contentItems: [{ type: "inputText", text: "exec done" }],
-        });
-        expect(f.exec.execute).toHaveBeenCalledOnce();
-        if (mode === "native catalog upgrade") {
-          expect(JSON.stringify(turn.input)).toContain(savedText);
-          expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(false);
+        if (method === "thread/start") {
+          return threadStartResult(threadId, { cwd: f.params.workspaceDir });
         }
-        await harness.completeTurn({ threadId: turn.threadId, turnId: "turn-1" });
-        expect(readAttemptTerminal(await run).aborted).toBe(false);
-        expect((await readCodexAppServerBinding(f.params.sessionFile))?.threadId).toBe(
-          turn.threadId,
-        );
-        if (mode === "native catalog upgrade") {
-          expect(turn.threadId).toBe("managed-fallback");
-          expect(await readTranscriptMessagesByIdentity(f.params)).toEqual(
-            expect.arrayContaining(priorMessages),
-          );
+        if (method === "thread/read") {
+          return {
+            thread: {
+              ...threadStartResult("native-original").thread,
+              status: { type: "notLoaded" },
+              turns: [],
+            },
+          };
         }
-      } finally {
-        f.controller.abort(new Error("managed policy fixture cleanup"));
-        await Promise.allSettled([run]);
-        harness.close();
-      }
-    },
-  );
+        if (method === "turn/start") {
+          started.resolve();
+        }
+        return undefined;
+      });
+      vi.spyOn(harness.client, "getInstanceId").mockReturnValue(`${threadId}-client`);
+      return { ...harness, started: started.promise };
+    };
+    let harness = createPolicyHarness(false, "native-original");
+    let run: ReturnType<typeof runCodexAppServerAttempt> | undefined;
+    try {
+      await attachSqliteSessionTarget(
+        f.params,
+        path.join(tempDir, "managed-history.sqlite"),
+        f.params.sessionId,
+      );
+      await appendSqliteHistoryMessage(f.params, userMessage(savedText, 1));
+      const priorMessages = await readTranscriptMessagesByIdentity(f.params);
+      run = runCodexAppServerAttempt(f.params, options);
+      await Promise.race([harness.started, run]);
+      await nextTurn();
+      expect(
+        harness.requests.find(({ method }) => method === "thread/start")?.params,
+      ).toMatchObject({
+        config: { "features.code_mode": true },
+        environments: [expect.objectContaining({ environmentId: expect.any(String) })],
+      });
+      await harness.completeTurn({ threadId: "native-original", turnId: "turn-1" });
+      expect(readAttemptTerminal(await run).aborted).toBe(false);
+      expect((await readCodexAppServerBinding(f.params.sessionFile))?.threadId).toBe(
+        "native-original",
+      );
+      harness.close();
+      harness = createPolicyHarness(true, "managed-fallback");
+      f.params.runId = "managed-policy-upgrade";
+      f.preparation.length = 0;
+      run = runCodexAppServerAttempt(f.params, options);
+      await Promise.race([harness.started, run]);
+      await nextTurn();
+      const start = harness.requests.find(({ method }) => method === "thread/start")
+        ?.params as CodexThreadStartParams;
+      const turn = harness.requests.find(({ method }) => method === "turn/start")
+        ?.params as CodexTurnStartParams;
+      expect(start).toMatchObject({
+        environments: [],
+        config: { "features.code_mode": false, "features.code_mode_only": false },
+      });
+      expect(turn.environments).toEqual([]);
+      expect(f.preparation.indexOf("managed")).toBeGreaterThanOrEqual(0);
+      expect(f.preparation.indexOf("managed")).toBeLessThan(f.preparation.indexOf("tools"));
+      const alias = flattenCodexDynamicToolFunctions(start.dynamicTools ?? undefined).find(
+        (tool) => tool.name === "sandbox_exec",
+      );
+      expect(alias).toBeDefined();
+      const response = await harness.handleServerRequest({
+        id: "managed-exec",
+        method: "item/tool/call",
+        params: {
+          threadId: turn.threadId,
+          turnId: "turn-1",
+          callId: "managed-exec",
+          namespace: null,
+          tool: alias!.name,
+          arguments: {},
+        },
+      });
+      expect(response).toMatchObject({
+        success: true,
+        contentItems: [{ type: "inputText", text: "exec done" }],
+      });
+      expect(f.exec.execute).toHaveBeenCalledOnce();
+      expect(JSON.stringify(turn.input)).toContain(savedText);
+      expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(false);
+      await harness.completeTurn({ threadId: turn.threadId, turnId: "turn-1" });
+      expect(readAttemptTerminal(await run).aborted).toBe(false);
+      expect((await readCodexAppServerBinding(f.params.sessionFile))?.threadId).toBe(turn.threadId);
+      expect(turn.threadId).toBe("managed-fallback");
+      expect(await readTranscriptMessagesByIdentity(f.params)).toEqual(
+        expect.arrayContaining(priorMessages),
+      );
+    } finally {
+      f.controller.abort(new Error("managed policy fixture cleanup"));
+      await Promise.allSettled([run]);
+      harness.close();
+    }
+  });
 
   it.each(["same client", "replacement client"] as const)(
     "revalidates managed hook policy at actual startup (%s)",

@@ -1,8 +1,3 @@
-/**
- * Channel ingress decision graph builder.
- *
- * Evaluates route, sender, command, and mention gates into one admission decision.
- */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCommandAuthorizedFromAuthorizers } from "../command-gating.js";
 import {
@@ -212,52 +207,6 @@ function eventGate(params: {
   );
 }
 
-function activationMetadata(params: {
-  activation?: ChannelIngressPolicyInput["activation"];
-  mentionFacts: NormalizedIngressState["mentionFacts"];
-  shouldSkip: boolean;
-  effectiveWasMentioned?: boolean;
-  shouldBypassMention?: boolean;
-}) {
-  const mentionFacts = params.mentionFacts;
-  const allowedImplicitMentionKinds = resolveAllowedImplicitMentionKinds(params.activation);
-  return {
-    hasMentionFacts: mentionFacts != null,
-    requireMention: params.activation?.requireMention ?? false,
-    allowTextCommands: params.activation?.allowTextCommands ?? false,
-    ...(allowedImplicitMentionKinds !== undefined ? { allowedImplicitMentionKinds } : {}),
-    ...(params.activation?.order ? { order: params.activation.order } : {}),
-    shouldSkip: params.shouldSkip,
-    ...(mentionFacts?.canDetectMention !== undefined
-      ? { canDetectMention: mentionFacts.canDetectMention }
-      : {}),
-    ...(mentionFacts?.wasMentioned !== undefined
-      ? { wasMentioned: mentionFacts.wasMentioned }
-      : {}),
-    ...(mentionFacts?.hasAnyMention !== undefined
-      ? { hasAnyMention: mentionFacts.hasAnyMention }
-      : {}),
-    ...(mentionFacts?.implicitMentionKinds !== undefined
-      ? { implicitMentionKinds: mentionFacts.implicitMentionKinds }
-      : {}),
-    ...(params.effectiveWasMentioned !== undefined
-      ? { effectiveWasMentioned: params.effectiveWasMentioned }
-      : {}),
-    ...(params.shouldBypassMention !== undefined
-      ? { shouldBypassMention: params.shouldBypassMention }
-      : {}),
-  };
-}
-
-function resolveAllowedImplicitMentionKinds(activation: ChannelIngressPolicyInput["activation"]) {
-  return (
-    activation?.allowedImplicitMentionKinds ??
-    (activation?.implicitMentions
-      ? allowedImplicitMentionKindsFromConfig(activation.implicitMentions)
-      : undefined)
-  );
-}
-
 function activationGate(params: {
   state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
@@ -265,7 +214,11 @@ function activationGate(params: {
 }): AccessGraphGate {
   const activation = params.policy.activation;
   const mentionFacts = params.state.mentionFacts;
-  const allowedImplicitMentionKinds = resolveAllowedImplicitMentionKinds(activation);
+  const allowedImplicitMentionKinds =
+    activation?.allowedImplicitMentionKinds ??
+    (activation?.implicitMentions
+      ? allowedImplicitMentionKindsFromConfig(activation.implicitMentions)
+      : undefined);
   const activationResult = (input: {
     shouldSkip: boolean;
     effectiveWasMentioned?: boolean;
@@ -277,13 +230,32 @@ function activationGate(params: {
     effect: input.shouldSkip ? "skip" : "allow",
     allowed: !input.shouldSkip,
     reasonCode: input.shouldSkip ? "activation_skipped" : "activation_allowed",
-    activation: activationMetadata({
-      activation,
-      mentionFacts,
+    activation: {
+      hasMentionFacts: mentionFacts != null,
+      requireMention: activation?.requireMention ?? false,
+      allowTextCommands: activation?.allowTextCommands ?? false,
+      ...(allowedImplicitMentionKinds !== undefined ? { allowedImplicitMentionKinds } : {}),
+      ...(activation?.order ? { order: activation.order } : {}),
       shouldSkip: input.shouldSkip,
-      effectiveWasMentioned: input.effectiveWasMentioned,
-      shouldBypassMention: input.shouldBypassMention,
-    }),
+      ...(mentionFacts?.canDetectMention !== undefined
+        ? { canDetectMention: mentionFacts.canDetectMention }
+        : {}),
+      ...(mentionFacts?.wasMentioned !== undefined
+        ? { wasMentioned: mentionFacts.wasMentioned }
+        : {}),
+      ...(mentionFacts?.hasAnyMention !== undefined
+        ? { hasAnyMention: mentionFacts.hasAnyMention }
+        : {}),
+      ...(mentionFacts?.implicitMentionKinds !== undefined
+        ? { implicitMentionKinds: mentionFacts.implicitMentionKinds }
+        : {}),
+      ...(input.effectiveWasMentioned !== undefined
+        ? { effectiveWasMentioned: input.effectiveWasMentioned }
+        : {}),
+      ...(input.shouldBypassMention !== undefined
+        ? { shouldBypassMention: input.shouldBypassMention }
+        : {}),
+    },
   });
   if (!activation || !mentionFacts) {
     // Without activation policy or mention facts, sender/event authorization is enough.
@@ -382,9 +354,6 @@ export function decideChannelIngress(
   }
   if (activation.effect === "skip") {
     return decisiveDecision({ admission: "skip", decision: "allow", gate: activation, gates });
-  }
-  if (activation.effect === "observe") {
-    return decisiveDecision({ admission: "observe", decision: "allow", gate: activation, gates });
   }
   return decisiveDecision({ admission: "dispatch", decision: "allow", gate: activation, gates });
 }

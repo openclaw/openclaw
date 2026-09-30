@@ -197,6 +197,32 @@ openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
 
+### Steering and input cancellation
+
+When retained reply-delivery state prevents steering, the Gateway logs
+`chat steering rejected; falling back to follow-up dispatch`. Its structured
+fields distinguish the incoming input's `runId` from `activeRunId` and record
+the session, active source turn, recovery claim, and exact `reason`:
+
+- `terminal-pending` or `delivered-terminal`: a final-reply receipt is present.
+- `unresolved-terminal-tool` or `delivery-ambiguous`: a final-reply delivery is unresolved.
+- `already-delivered`: the active source turn is recorded as completed.
+- `unknown-source-with-terminal-history`: the active source is unknown and
+  completed source turns are retained.
+- `stale-claim`: the recovery claim does not authorize the active source turn.
+- `session-entry-unavailable`: the Gateway could not read the current session state.
+
+These checks also run during ordinary conversations; the warning does not mean
+a Gateway restart is in progress. Rejection falls back to follow-up dispatch;
+it does not itself cancel the input.
+
+`chat pending input aborted` records an accepted input that was aborted before
+consumption, including inputs waiting in the follow-up queue. The message includes
+the cause and whether the saved input became `cancelled` or `interrupted`.
+Structured fields include its run, session, and agent IDs. Causes distinguish
+`rpc`, `stop`, `timeout`, `restart`, `archive`, `delete`, `authority-revoked`, and `superseded`;
+unclassified aborts use `aborted`. These records omit message text and attachments.
+
 ## Configuring logging
 
 All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
@@ -256,6 +282,16 @@ response without a refusal; conflicts before that terminal cannot be retried
 because the final outcome is unknown. Failed or incomplete terminal responses,
 including content filtering, cannot be overridden by identity recovery. The
 identity checks stay enforced on every attempt.
+
+When OpenAI Responses cuts off a tool call at `max_output_tokens`, the embedded
+runner can continue once in the same run after earlier tools have settled. It
+appends a runtime transcript notice identifying the unfinished call when its ID
+is available and instructing the model to split the work into smaller tool calls.
+The incomplete call is not executed, completed tool results remain available,
+and earlier transcript entries are unchanged. A second truncation ends the run
+with the existing unfinished-tool-call warning. Transport error logs include the
+allowlisted incomplete reason without raw provider text; content-filtered and
+unrecognized incomplete responses retain their existing failure behavior.
 
 A worker message-size failure is separate from a model context-window limit.
 Retry with a smaller response or continue on the Gateway. If the worker cannot
@@ -670,19 +706,22 @@ both fields absent because its parent cannot measure the callback itself.
 
 SQLite reclamation Workers also emit `slow SQLite reclamation Worker operation`
 at `warn` when their joined operation takes at least one second. The record is
-emitted after Worker exit and parent admission settlement. It includes the
+emitted after a settled Worker result or native exit and parent admission settlement. It includes the
 parent's `pid`, `threadId` and `isMainThread`, the actual Node `workerThreadId`,
 `reclamationKind`, `elapsedMs`, terminal `outcome` (`resolved` or `rejected`), and
 `exitCode`. Timing starts after admission to the archive Worker queue and includes
 startup, validation, admission waits, work, and cleanup. It does not measure CPU
-time or isolate a validation phase. Short writer sections can therefore remain
+time, isolate a validation phase, or establish that the emitting parent thread blocked. Short writer sections can therefore remain
 quiet while this whole-operation warning exposes slow preparation between them.
 The record inherits an existing parent trace when available. Failed retained
 reclamation operations also include `sessionIdHash` (when targeting one session),
 `error` (the redacted message and causes), and `errorFrame` (the first stack frame).
 These failures emit one warning even below one second, named
 `SQLite reclamation Worker failed`; slower failures use the existing slow-operation
-warning. Session identifiers use the same hash as other session SQLite diagnostics;
+warning. Automatic maintenance that a newer session write supersedes before commit
+is not a Worker failure: maintenance retries after the write quiet window, and a
+fast superseded Worker logs `SQLite reclamation Worker superseded by newer inputs`
+at debug level. Session identifiers use the same hash as other session SQLite diagnostics;
 the failure fields are redacted and bounded to 2,048 characters each.
 Cold-storage operations use the same warning with `reclamationKind` set to
 `cold-batch` (archive or externalize), `cold-maintain` (reclaim free pages), or
@@ -712,10 +751,10 @@ and scheduling delays; they do not establish lock contention. The separate
 errors. These elapsed durations do not measure SQL CPU time or establish a
 causal link to a nearby request.
 
-The operation `session.reclamation.commit-settlement` identifies the parent's
-synchronous join after it authorizes a reclamation Worker to commit. Its lock
-wait is separate from the Worker's integrity scan and deletion work. This label
-also applies to cold-storage operations using that commit boundary.
+Older builds report `session.reclamation.commit-settlement` for a parent-side
+synchronous SQLite probe after authorizing a reclamation or cold-storage commit.
+The parent now atomically accepts the commit after checking live authority and
+awaits settlement asynchronously, without that probe or its lock wait.
 
 Hot transcript reads identify their purpose in `operation`: `session transcript
 <purpose> read`, where `<purpose>` is `identity`, `header`, `tail`, `incremental`,
@@ -848,6 +887,13 @@ flags, they warn at 10 seconds elapsed or 5 seconds in one preparation stage. Co
 logs each completed slow stage immediately, including failures, and emits a
 `native-turn-handoff` summary before submitting the native turn. Timing records
 contain stage names and identifiers, not prompts or tool arguments.
+
+Dispatch preparation separates `reply.wait_admission_ticket` from
+`reply.admit_pre_dispatch`, `reply.admit_dispatch`, and
+`reply.admit_command_resolution`. These spans distinguish waiting behind an
+earlier input from waiting for the session's execution owner. A cancelled or
+failed request that never reaches the reply resolver still reports slow
+preparation under the same thresholds.
 
 Embedded-run startup, prep, core-plugin-tool and auth stage summaries include
 `pid`, `threadId` and `isMainThread` in the message to distinguish emitters sharing

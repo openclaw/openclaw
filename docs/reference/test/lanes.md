@@ -8,7 +8,7 @@ read_when:
 
 ## Control UI, TUI, and extension lanes
 
-- **Browser MCP contract:** `pnpm test:e2e:browser-mcp` installs the pinned Playwright Chromium and starts the configured Chrome DevTools MCP server over stdio against disposable browser profiles. It covers native actions, refs across condition waits, frame labels, navigation-policy checks, and preservation of the patched dependency through npm/pnpm packing and offline npm installation. The path-filtered `Browser MCP contract` workflow runs this command for MCP implementation and dependency changes. To validate a candidate server build, set `OPENCLAW_BROWSER_MCP_TEST_COMMAND` to its executable launcher. The launcher must forward its arguments and enable `--experimentalVision` for coordinate actions; OpenClaw supplies the endpoint and structured-content flags. Record the server source/version with that proof. These tests do not attach to a user's Chrome or require model credentials.
+- **Browser MCP contract:** `pnpm test:e2e:browser-mcp` installs the pinned Playwright Chromium and starts the configured Chrome DevTools MCP server over stdio against disposable browser profiles. It covers native actions, refs across condition waits, frame labels, navigation-policy checks, and preservation of the patched dependency through npm/pnpm packing and offline npm installation. The path-filtered `Browser MCP contract` workflow runs this command for MCP implementation and dependency changes. Its `contract-bun` job runs the Chromium contract files on the pinned Bun fork (`OPENCLAW_VITEST_RUNTIME=bun`), the only runtime of the macOS and Linux desktop apps. To validate a candidate server build, set `OPENCLAW_BROWSER_MCP_TEST_COMMAND` to its executable launcher. The launcher must forward its arguments and enable `--experimentalVision` for coordinate actions; OpenClaw supplies the endpoint and structured-content flags. Record the server source/version with that proof. These tests do not attach to a user's Chrome or require model credentials.
 - **Control UI E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane, usually against a mocked Gateway WebSocket. Four resource groups retain two execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` run first with at most two workers total; `ui-e2e-serial` and `ui-e2e-serial-standalone` then share one worker. The two bundle consumers lazily share one temporary UI bundle/preview until the invocation closes. Standalone projects own their fixture, source, or custom-build servers; selecting only standalone suites avoids the shared bundle build. Every selected project receives Chromium metadata, and new E2E files default to parallel bundled ownership. The root config retains the full discovery inventory: `ui/src/**/*.e2e.test.ts` plus the QA Lab media-transcript and OpenClaw-delegation real-Gateway suites. Shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. Some suites start isolated real Gateways; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes them. `pnpm test:e2e` includes this lane, with no additional CI jobs for resource groups. Use Testbox/Crabbox only when clean Linux/browser parity is part of the proof. In a linked worktree, `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts` avoids pnpm dependency reconciliation for a targeted local run.
 - **Control UI real-Gateway approval proof:** Check default and explicit Full Access delegation against an isolated Gateway with a mock provider. Build the runtime before running the targeted proof:
 
@@ -29,6 +29,14 @@ read_when:
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
 
 ### Real-Gateway Control UI fixture lifetimes
+
+Use `pairControlUiPage` from `ui/src/test-helpers/control-ui-browser-pairing.ts`
+with the isolated Gateway's CLI runner to authenticate each new page. It obtains
+and consumes a fresh `dashboard --json` browser handoff and waits for the Gateway
+handshake. Dashboard pairing links are single-use; do not reuse a captured URL
+for another tab or browser context. Pass this operation as `preparePage` to
+`withControlUiRunInspector` so collection authenticates its own page while leaving
+the caller's Chat and draft in place. Reload uses the browser's paired credential.
 
 Use `createControlUiE2eSuite` from
 `ui/src/e2e/control-ui-e2e-suite.test-support.ts` for real-Gateway browser fixtures.
@@ -124,6 +132,10 @@ local, alongside an allowlisted `failure.public.json` summary. Automatic CI uplo
 match only `failure-*/failure.public.json`; raw reports and screenshots remain
 private. Older frozen targets without the public summary produce no matching
 upload and never fall back to raw captures.
+
+The shared suite captures native test timeouts before draining routes and closing
+the owned browser context. Cleanup and the pending test body join the same capture,
+so a later closed-page error does not replace the original timeout evidence.
 
 The shared failure collector gives renderer evaluation and screenshot capture one
 five-second budget. If the renderer stalls, it records incomplete diagnostics and

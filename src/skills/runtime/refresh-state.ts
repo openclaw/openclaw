@@ -1,21 +1,23 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type { Skill } from "../loading/skill-contract.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 
-// Skill refresh state types describe change notifications emitted by runtime reloads.
 type SkillsChangeEvent = {
   workspaceDir?: string;
   reason:
     | "watch"
     | "watch-targets"
     | "watch-unavailable"
+    | "watch-available"
     | "manual"
     | "remote-node"
     | "config-change"
     | "workshop";
   changedPath?: string;
+  sourceScope?: SkillsSourceScope;
 };
 
 export type SkillsSourceScope = { executionWorkspaceDir?: string };
@@ -56,13 +58,7 @@ function bumpVersion(current: number): number {
 }
 
 function emit(event: SkillsChangeEvent) {
-  for (const listener of listeners) {
-    try {
-      listener(event);
-    } catch (err) {
-      listenerErrorHandler?.(err);
-    }
-  }
+  notifyListeners(listeners, event, (err) => listenerErrorHandler?.(err));
 }
 
 function publishChange(event: SkillsChangeEvent): number {
@@ -85,6 +81,14 @@ export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent
   return () => {
     listeners.delete(listener);
   };
+}
+
+/** Coverage recovery follows content reconciliation; it never creates a source revision. */
+export function notifySkillsWatchAvailable(params: {
+  workspaceDir: string;
+  sourceScope: SkillsSourceScope;
+}): void {
+  emit({ ...params, reason: "watch-available" });
 }
 
 function sourceScopeKey(workspaceDir: string, scope: SkillsSourceScope = {}): string {

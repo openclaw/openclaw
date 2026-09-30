@@ -2,13 +2,6 @@ import { readFileSync, statSync } from "node:fs";
 import { win32 } from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { z } from "zod";
-import {
-  DEFAULT_SANDBOX_BASELINE,
-  resolveSandboxBaseline,
-  type BaselineFilesystemPolicyInput,
-  type SandboxBaselinePolicy,
-  type SandboxBaselinePolicyInput,
-} from "./sandbox-baseline.js";
 
 type SandboxPolicyLoaderOptions = {
   policyPaths?: readonly string[];
@@ -28,17 +21,14 @@ type SandboxConfiguredPaths = {
   readwritePaths: readonly SandboxConfiguredPathEntry[];
 };
 
-type SandboxPolicyLayer = SandboxBaselinePolicyInput & {
+type SandboxPolicyLayer = {
+  process?: { timeoutSeconds?: number };
   configuredPaths: SandboxConfiguredPaths;
 };
 
-export type LoadedSandboxBaselinePolicy = SandboxBaselinePolicy & {
+export type LoadedSandboxBaselinePolicy = {
+  process: { timeoutSeconds: number };
   configuredPaths: SandboxConfiguredPaths;
-};
-
-type SandboxPolicySource = {
-  label: string;
-  policy: SandboxPolicyLayer;
 };
 
 type MutableConfiguredPathMaps = {
@@ -71,35 +61,13 @@ const SandboxPolicyLayerSchema = z
 export function loadSandboxBaselinePolicy(
   options: SandboxPolicyLoaderOptions = {},
 ): LoadedSandboxBaselinePolicy {
-  const sources: SandboxPolicySource[] = [];
-
-  for (const policyPath of options.policyPaths ?? []) {
-    sources.push({ label: policyPath, policy: readSandboxPolicyFile(policyPath) });
-  }
-
-  const merged = mergeSandboxPolicyLayers(sources);
-  const resolved = resolveSandboxBaseline(merged);
-  return {
-    ...resolved,
-    process: {
-      ...resolved.process,
-      timeoutSecondsConfigured: sources.some(
-        ({ policy }) => policy.process?.timeoutSeconds !== undefined,
-      ),
-    },
-    configuredPaths: merged.configuredPaths,
-  };
+  const layers = (options.policyPaths ?? []).map(readSandboxPolicyFile);
+  return mergeSandboxPolicyLayers(layers);
 }
 
 function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(policyPath, "utf-8"));
-  } catch (err) {
-    throw policyFileError(policyPath, err);
-  }
-
-  try {
+    const parsed: unknown = JSON.parse(readFileSync(policyPath, "utf-8"));
     return parseSandboxPolicyLayer(parsed, policyPath);
   } catch (err) {
     throw policyFileError(policyPath, err);
@@ -125,22 +93,7 @@ function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): SandboxPo
   );
 
   return {
-    ...parsed.data,
-    filesystem: filesystem
-      ? {
-          ...filesystem,
-          ...(readonlyPaths.length > 0
-            ? {
-                additionalReadonlyPaths: readonlyPaths.map((entry) => entry.path),
-              }
-            : {}),
-          ...(readwritePaths.length > 0
-            ? {
-                additionalReadwritePaths: readwritePaths.map((entry) => entry.path),
-              }
-            : {}),
-        }
-      : undefined,
+    process: parsed.data.process,
     configuredPaths: {
       readonlyPaths,
       readwritePaths,
@@ -148,20 +101,16 @@ function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): SandboxPo
   };
 }
 
-function mergeSandboxPolicyLayers(sources: readonly SandboxPolicySource[]): SandboxPolicyLayer {
-  const timeoutCandidates = [DEFAULT_SANDBOX_BASELINE.process.timeoutSeconds];
-  const filesystem: BaselineFilesystemPolicyInput = {
-    restrictToProjectDir: DEFAULT_SANDBOX_BASELINE.filesystem.restrictToProjectDir,
-    additionalReadonlyPaths: [],
-    additionalReadwritePaths: [],
-  };
+function mergeSandboxPolicyLayers(
+  layers: readonly SandboxPolicyLayer[],
+): LoadedSandboxBaselinePolicy {
+  const timeoutCandidates = [300];
   const configuredPathMaps: MutableConfiguredPathMaps = {
     readonlyPaths: new Map<string, SandboxConfiguredPathEntry>(),
     readwritePaths: new Map<string, SandboxConfiguredPathEntry>(),
   };
 
-  for (const { policy, label } of sources) {
-    mergeFilesystemPolicy(filesystem, policy.filesystem);
+  for (const policy of layers) {
     mergeConfiguredPathEntries(
       configuredPathMaps.readonlyPaths,
       policy.configuredPaths.readonlyPaths,
@@ -172,21 +121,11 @@ function mergeSandboxPolicyLayers(sources: readonly SandboxPolicySource[]): Sand
     );
     const timeoutSeconds = policy.process?.timeoutSeconds;
     if (timeoutSeconds !== undefined) {
-      assertPositiveFiniteNumber(timeoutSeconds, `${label}.process.timeoutSeconds`);
       timeoutCandidates.push(timeoutSeconds);
     }
   }
 
   return {
-    filesystem: {
-      ...filesystem,
-      additionalReadonlyPaths: [...configuredPathMaps.readonlyPaths.values()].map(
-        (entry) => entry.path,
-      ),
-      additionalReadwritePaths: [...configuredPathMaps.readwritePaths.values()].map(
-        (entry) => entry.path,
-      ),
-    },
     process: {
       timeoutSeconds: Math.min(...timeoutCandidates),
     },
@@ -195,21 +134,6 @@ function mergeSandboxPolicyLayers(sources: readonly SandboxPolicySource[]): Sand
       readwritePaths: [...configuredPathMaps.readwritePaths.values()],
     },
   };
-}
-
-function mergeFilesystemPolicy(
-  target: BaselineFilesystemPolicyInput | undefined,
-  layer: BaselineFilesystemPolicyInput | undefined,
-): void {
-  if (!target || !layer) {
-    return;
-  }
-
-  target.restrictToProjectDir = mostRestrictiveBoolean(
-    DEFAULT_SANDBOX_BASELINE.filesystem.restrictToProjectDir,
-    target.restrictToProjectDir,
-    layer.restrictToProjectDir,
-  );
 }
 
 function mergeConfiguredPathEntries(
@@ -287,19 +211,6 @@ function assertConfiguredPathExists(pathValue: string, source: string): void {
   }
 }
 
-function mostRestrictiveBoolean(
-  defaultValue: boolean,
-  ...values: readonly (boolean | undefined)[]
-): boolean {
-  return defaultValue || values.some((value) => value === true);
-}
-
-function assertPositiveFiniteNumber(value: unknown, label: string): asserts value is number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
-    throw new TypeError(`Sandbox policy field ${label} must be a positive number.`);
-  }
-}
-
 function policyFileError(policyPath: string, err: unknown): Error {
   if (isNodeError(err) && err.code === "ENOENT") {
     return new Error(
@@ -329,9 +240,6 @@ function formatSandboxPolicyIssue(sourceLabel: string, issue: z.ZodIssue | undef
   }
   if (issue.code === "invalid_type" && issue.path.length === 1) {
     return `Sandbox policy section ${fieldLabel} must be a JSON object.`;
-  }
-  if (issue.code === "invalid_type") {
-    return `Sandbox policy field ${fieldLabel} ${issue.message}.`;
   }
   if (issue.code === "too_small") {
     return `Sandbox policy field ${fieldLabel} must be a positive number.`;

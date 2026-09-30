@@ -6,6 +6,7 @@ export function createWizardVitestConfig(env?: Record<string, string | undefined
   return createScopedVitestConfig(["src/wizard/**/*.test.ts"], {
     dir: "src",
     env,
+    intersectIncludeFile: true,
     exclude: databaseWorkerCoreTestFiles,
     name: "wizard",
     passWithNoTests: true,

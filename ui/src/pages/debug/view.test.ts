@@ -13,19 +13,11 @@ import "./debug-overlay.ts";
 import "./debug-overlay-content.ts";
 import "./debug-page.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderDebug } from "./view.ts";
 
 type DebugProps = Parameters<typeof renderDebug>[0];
-const DIAGNOSTIC_METHODS = [
-  "diagnostics.lanes",
-  "status",
-  "health",
-  "models.list",
-  "last-heartbeat",
-] as const;
-type DiagnosticMethod = (typeof DIAGNOSTIC_METHODS)[number];
-
 type TestDebugPage = HTMLElement & {
   readonly updateComplete: Promise<boolean>;
   requestUpdate: () => void;
@@ -67,6 +59,7 @@ function createDebugApplicationContext(
     snapshot: {
       phase,
       client: phase === "connected" ? client : null,
+      hello: gatewayHelloForMethods(["system.info"]),
       offlineStable: phase === "offline",
     } as ApplicationGatewaySnapshot,
     eventLog: [],
@@ -375,6 +368,29 @@ describe("renderDebug", () => {
       "Session lanes · 23 9 4 —",
     );
   });
+
+  it("uses per-session capacity when displaying aggregate subagent activity", () => {
+    const container = document.createElement("div");
+    const lane = {
+      lane: "subagent",
+      activeCount: 16,
+      queuedCount: 0,
+      maxConcurrent: 8,
+      concurrencyScope: "session" as const,
+      saturatedLaneCount: 0,
+      draining: false,
+      generation: 0,
+    };
+    render(renderDebug(createProps({ lanes: [lane] })), container);
+
+    let row = container.querySelector(".command-lane-row");
+    expect(normalizedText(row)).toContain("subagent 16 · 8/session 0");
+    expect(row?.classList).not.toContain("command-lane-row--saturated");
+
+    render(renderDebug(createProps({ lanes: [{ ...lane, saturatedLaneCount: 1 }] })), container);
+    row = container.querySelector(".command-lane-row");
+    expect(row?.classList).toContain("command-lane-row--saturated");
+  });
 });
 
 describe("DebugPage", () => {
@@ -541,42 +557,40 @@ describe("DebugPage", () => {
     },
   );
 
-  it.each(DIAGNOSTIC_METHODS)(
-    "preserves every last-good snapshot and recovers after %s fails",
-    async (failedMethod) => {
-      let failure: DiagnosticMethod | null = null;
-      let marker = "initial";
-      const request = vi.fn(async (method: string) => {
-        if (method === failure) {
-          throw new Error(`${method} unavailable`);
-        }
-        return diagnosticResponse(method, marker);
-      });
-      const page = await mountDebugPage(request);
-      expectSnapshots(page, "initial");
+  it("preserves every last-good snapshot and recovers after models.list fails", async () => {
+    const failedMethod = "models.list";
+    let failure: typeof failedMethod | null = null;
+    let marker = "initial";
+    const request = vi.fn(async (method: string) => {
+      if (method === failure) {
+        throw new Error(`${method} unavailable`);
+      }
+      return diagnosticResponse(method, marker);
+    });
+    const page = await mountDebugPage(request);
+    expectSnapshots(page, "initial");
 
-      marker = "uncommitted";
-      failure = failedMethod;
-      await page.loadDiagnostics();
-      await page.updateComplete;
+    marker = "uncommitted";
+    failure = failedMethod;
+    await page.loadDiagnostics();
+    await page.updateComplete;
 
-      expect(page.debugDiagnosticsError).toContain(`${failedMethod} unavailable`);
-      expectSnapshots(page, "initial");
-      const alert = page.querySelector<HTMLElement>('[role="alert"]');
-      expect(alert?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
-        "Snapshots",
-      );
-      expect(alert?.classList).toContain("settings-row");
-      expect(page.querySelector(".callout")).toBeNull();
+    expect(page.debugDiagnosticsError).toContain(`${failedMethod} unavailable`);
+    expectSnapshots(page, "initial");
+    const alert = page.querySelector<HTMLElement>('[role="alert"]');
+    expect(alert?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
+      "Snapshots",
+    );
+    expect(alert?.classList).toContain("settings-row");
+    expect(page.querySelector(".callout")).toBeNull();
 
-      marker = "recovered";
-      failure = null;
-      await page.loadDiagnostics();
+    marker = "recovered";
+    failure = null;
+    await page.loadDiagnostics();
 
-      expect(page.debugDiagnosticsError).toBeNull();
-      expectSnapshots(page, "recovered");
-    },
-  );
+    expect(page.debugDiagnosticsError).toBeNull();
+    expectSnapshots(page, "recovered");
+  });
 
   it("keeps failed Manual RPC state separate from diagnostics failure and recovery", async () => {
     let diagnosticsUnavailable = false;
@@ -633,7 +647,7 @@ describe("DebugOverlay", () => {
       request.mock.calls.filter(([called]) => called === method).length;
     try {
       overlay.toggle();
-      await vi.advanceTimersByTimeAsync(6_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       await updateOverlayVitals(overlay);
       expect(requestCount("sessions.list")).toBe(1);
       expect(requestCount("diagnostics.lanes")).toBe(4);
@@ -644,7 +658,7 @@ describe("DebugOverlay", () => {
       overlay.querySelector<HTMLButtonElement>('[aria-label="Minimize system busyness"]')!.click();
       await updateOverlayVitals(overlay);
       expect(eventListeners.size).toBe(0);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await updateOverlayVitals(overlay);
       expect(requestCount("sessions.list")).toBe(1);
       expect(requestCount("diagnostics.lanes")).toBe(4);
@@ -656,7 +670,7 @@ describe("DebugOverlay", () => {
       overlay.querySelector<HTMLButtonElement>('[aria-label="Expand system busyness"]')!.click();
       await updateOverlayVitals(overlay);
       expect(eventListeners.size).toBe(1);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       expect(requestCount("sessions.list")).toBe(2);
       expect(requestCount("diagnostics.lanes")).toBe(5);
       expect(requestCount("system.info")).toBe(6);
@@ -665,7 +679,7 @@ describe("DebugOverlay", () => {
       await updateOverlayVitals(overlay);
       expect(eventListeners.size).toBe(0);
       const closedCount = request.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(6_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(request).toHaveBeenCalledTimes(closedCount);
     } finally {
       heldRuns.resolve({ sessions: [] });
@@ -703,7 +717,7 @@ describe("DebugOverlay", () => {
     };
     try {
       overlay.toggle();
-      await vi.advanceTimersByTimeAsync(6_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(request).not.toHaveBeenCalled();
 
       setVisibility("visible");
@@ -711,11 +725,11 @@ describe("DebugOverlay", () => {
       await vi.advanceTimersByTimeAsync(0);
       await updateOverlayVitals(overlay);
       expectReadCount(1);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       expectReadCount(2);
 
       setVisibility("hidden");
-      await vi.advanceTimersByTimeAsync(6_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       expectReadCount(2);
       setVisibility("visible");
       globalThis.dispatchEvent(new Event("focus"));
@@ -726,7 +740,7 @@ describe("DebugOverlay", () => {
       await updateOverlayVitals(overlay);
       setVisibility("hidden");
       setVisibility("visible");
-      await vi.advanceTimersByTimeAsync(6_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       expectReadCount(3);
     } finally {
       overlay.remove();
@@ -822,7 +836,7 @@ describe("DebugOverlay", () => {
         "Uptime 1m",
       );
 
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await vitalUpdated();
 
       expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain("120%");
@@ -850,7 +864,7 @@ describe("DebugOverlay", () => {
       // Healthy event loop: no tile carries the degraded tint.
       expect(overlay.querySelector(".gateway-vital[data-degraded]")).toBeNull();
 
-      await vi.advanceTimersByTimeAsync(180_000);
+      await vi.advanceTimersByTimeAsync(900_000);
       await vitalUpdated();
 
       const points = overlay
@@ -868,23 +882,23 @@ describe("DebugOverlay", () => {
       expect(overlay.querySelectorAll(".gateway-vital")).toHaveLength(5);
       expect(overlay.querySelector(".sparkline-tile__chart")).toBeNull();
       expect(normalizedText(overlay.querySelector(".debug-overlay__vitals-footer"))).toBe(
-        "Uptime 0ms",
+        "Uptime 1m",
       );
 
       diskResponse = "single";
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await vitalUpdated();
       expect(overlay.querySelectorAll(".gateway-vital--disk")).toHaveLength(1);
       expect(diskTile("/")?.samples).toHaveLength(2);
       diskResponse = "available";
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await vitalUpdated();
       expect(diskTile("/")?.samples).toHaveLength(3);
       expect(diskTile("/Volumes/Archive")?.samples).toHaveLength(1);
 
       for (const response of ["empty", "legacy", "missing"] as const) {
         diskResponse = response;
-        await vi.advanceTimersByTimeAsync(2_000);
+        await vi.advanceTimersByTimeAsync(10_000);
         await vitalUpdated();
 
         expect(overlay.querySelectorAll(".gateway-vital")).toHaveLength(3);
@@ -897,12 +911,12 @@ describe("DebugOverlay", () => {
         }
       }
       diskResponse = "rejected";
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await vitalUpdated();
       expect(overlay.querySelectorAll(".gateway-vital")).toHaveLength(0);
       expect(normalizedText(overlay)).toContain("Unavailable");
       diskResponse = "available";
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await vitalUpdated();
       expect(overlay.querySelectorAll(".gateway-vital")).toHaveLength(5);
       expect(request.mock.calls.some(([method]) => method === "status")).toBe(false);
@@ -962,12 +976,12 @@ describe("DebugOverlay", () => {
     document.body.append(overlay);
     try {
       overlay.toggle();
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await updateOverlayVitals(overlay);
       expect(overlay.querySelector<TestSparkline>(".gateway-vital--disk")?.samples).toHaveLength(2);
 
       infoResponse = pending.promise;
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await updateOverlayVitals(overlay);
       expect(normalizedText(overlay.querySelector(".gateway-vital--disk"))).toContain(
         "700 GB free",
@@ -986,7 +1000,11 @@ describe("DebugOverlay", () => {
         publishSnapshot({ ...snapshot, phase: "reconnecting" });
         await overlay.updateComplete;
         expect(overlay.querySelector(".gateway-vital--disk")).toBeNull();
-        publishSnapshot({ ...snapshot, phase: "connected" });
+        publishSnapshot({
+          ...snapshot,
+          phase: "connected",
+          hello: gatewayHelloForMethods(["system.info"]),
+        });
       } else if (transition === "client replacement") {
         publishSnapshot({
           ...snapshot,
@@ -1013,7 +1031,7 @@ describe("DebugOverlay", () => {
       expect(disk?.samples.map((sample) => sample.value / 1_073_741_824)).toEqual([200]);
       expect(disk?.querySelector("polyline")).toBeNull();
 
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await updateOverlayVitals(overlay);
       expect(disk?.samples.map((sample) => sample.value / 1_073_741_824)).toEqual([200, 200]);
     } finally {

@@ -31,10 +31,12 @@ import {
   isAgentHarnessPreflightError,
 } from "./harness/errors.js";
 import { isRecordedModelFallbackStop } from "./model-fallback-stop.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import {
   isSessionPlacementSettlementClosedError,
   isAgentRunSupersededAbortReason,
 } from "./run-termination.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "./sessions/transcript-turn-error.js";
 
 export {
   FailoverError,
@@ -69,6 +71,7 @@ export function hasModelFallbackStop(error: unknown): boolean {
     collectErrorGraphCandidates(error, resolveNestedErrors).some(
       (candidate) =>
         isRecordedModelFallbackStop(candidate) ||
+        isSessionTranscriptTurnMismatchErrorMessage(readDirectErrorMessage(candidate)) ||
         (isFailoverError(candidate) && isCliTerminalStopCode(candidate.code)),
     )
   );
@@ -317,6 +320,12 @@ function hasRuntimeCoordinationFailure(err: unknown): boolean {
   );
 }
 
+function hasPreparedModelRuntimeOwnerNotPublished(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some(
+    (candidate) => candidate instanceof PreparedModelRuntimeOwnerNotPublishedError,
+  );
+}
+
 function hasDirectProviderFailureIdentity(err: unknown): boolean {
   if (isFailoverError(err)) {
     return true;
@@ -408,6 +417,13 @@ function resolveFailoverClassificationFromErrorInternal(
     seen.add(err);
   }
   if (isFailoverError(err)) {
+    const classification = classifyFailoverSignal({
+      ...normalizeErrorSignal(err, providerHint),
+      message: err.rawError ?? err.message,
+    });
+    if (classification?.kind === "reason" && classification.sameModelRetry === false) {
+      return { kind: "reason", reason: err.reason, sameModelRetry: false };
+    }
     return {
       kind: "reason",
       reason: err.reason,
@@ -461,7 +477,7 @@ function resolveFailoverClassificationFromErrorInternal(
   return null;
 }
 
-function resolveFailoverClassificationFromError(
+export function resolveFailoverClassificationFromError(
   err: unknown,
   providerHint?: string,
 ): FailoverClassification | null {
@@ -664,6 +680,11 @@ export function resolveModelFallbackError(
   context?: FailoverErrorContext,
 ): ModelFallbackErrorResolution {
   if (err instanceof AgentHarnessSessionSupersededError) {
+    return { kind: "coordination", error: err };
+  }
+  // Prepared-owner publication is an OpenClaw runtime fact, not a provider
+  // failure. Changing models cannot republish the current owner (#156975).
+  if (hasPreparedModelRuntimeOwnerNotPublished(err)) {
     return { kind: "coordination", error: err };
   }
   // Gateway admission can fail before any provider turn starts. Preserve that

@@ -4,7 +4,6 @@ import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import type {
   WorkerProvider,
   WorkerNodeRuntimePreparation,
@@ -12,10 +11,9 @@ import type {
 } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import * as support from "./service.test-support.js";
-import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
 type ProjectPreparation = NonNullable<
@@ -75,7 +73,7 @@ describe("worker provider project preparation ownership", () => {
           const preparation = expectDefined(project.preparation, "prepared identity");
           const directory = `/worker/.openclaw-worker/prepared/gateway/${preparation.cacheKey}`;
           await project.prepare({
-            runScript: async () => JSON.stringify({ ready: true }),
+            runScript: async () => JSON.stringify({ ready: true, retainedWorkspace: null }),
             upload: async () => {
               throw new Error("cached seed must not upload");
             },
@@ -91,20 +89,13 @@ describe("worker provider project preparation ownership", () => {
           if (enrollment.mode !== "connect") {
             throw new Error("Fresh worker must use its pending enrollment");
           }
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              const { environmentId, ...patch } = bindCloudWorkerSetupCompletion({
-                db,
-                completion: {
-                  setupId: enrollment.setupId,
-                  deviceId,
-                  completedAtMs: support.testState.nowMs,
-                },
-              });
-              publishWorkerEnvironmentNativeMutation(db, environmentId, patch);
-            },
-            { database: support.testState.stateDb },
-          );
+          await completeWorkerNodeSetupForTest({
+            baseDir: support.testState.root,
+            store: support.testState.store,
+            setupId: enrollment.setupId,
+            deviceId,
+            completedAtMs: support.testState.nowMs,
+          });
           return {
             leaseId: "lease-prepared-host",
             node: { deviceId: await enrollment.waitForDeviceId() },

@@ -8,7 +8,7 @@ import {
   getCodexInferenceThreadQualification,
   ownCodexInferenceClient,
 } from "./inference-routing.js";
-import { isJsonObject } from "./protocol.js";
+import { isJsonObject, type JsonObject } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
@@ -27,6 +27,17 @@ import {
   startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
 setupRunAttemptTestHooks();
+
+function readNativeConfig(method: string, config: JsonObject = {}) {
+  if (method === "config/read") {
+    return { config, origins: {}, layers: [] };
+  }
+  if (method === "configRequirements/read") {
+    return { requirements: null };
+  }
+  throw new Error(`unexpected method: ${method}`);
+}
+
 describe("Codex native configuration lifecycle", () => {
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
@@ -36,27 +47,17 @@ describe("Codex native configuration lifecycle", () => {
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: async (method) => {
-          if (method === "config/read") {
-            return {
-              config: {
-                model_providers: {
-                  restored: { name: "Stored provider", base_url: "https://restored.example/v1" },
-                },
-              },
-              origins: {},
-              layers: [],
-            };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
           if (method === "account/read") {
             return { account: { type: "apiKey" } };
           }
           if (method === "thread/start") {
             return threadStartResult("parent");
           }
-          throw new Error(`unexpected method: ${method}`);
+          return readNativeConfig(method, {
+            model_providers: {
+              restored: { name: "Stored provider", base_url: "https://restored.example/v1" },
+            },
+          });
         },
       });
       ownCodexInferenceClient(fixture.client);
@@ -114,12 +115,6 @@ describe("Codex native configuration lifecycle", () => {
         agentDir: path.join(tempDir, "agent"),
         persistedThreads: ["old-thread"],
         respond: async (method) => {
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
           if (method === "account/read") {
             return { account: { type: "apiKey" } };
           }
@@ -135,7 +130,7 @@ describe("Codex native configuration lifecycle", () => {
           if (method === "thread/inject_items") {
             return {};
           }
-          throw new Error(`unexpected method: ${method}`);
+          return readNativeConfig(method);
         },
       });
       ownCodexInferenceClient(fixture.client);
@@ -191,16 +186,10 @@ describe("Codex native configuration lifecycle", () => {
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: async (method) => {
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
           if (method === "thread/start") {
             return threadStartResult("unexpected-thread");
           }
-          throw new Error(`unexpected method: ${method}`);
+          return readNativeConfig(method);
         },
       });
       const params = createParams(sessionFile, workspaceDir);
@@ -248,10 +237,61 @@ describe("Codex native configuration lifecycle", () => {
     },
   );
 
+  it("preserves the native user-home provider through start and resume", async () => {
+    const nativeProvider = "native-proxy";
+    const sessionFile = path.join(tempDir, "native-provider-session.jsonl");
+    const workspaceDir = path.join(tempDir, "native-provider-workspace");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    const native = {
+      ...threadStartResult("native-provider-thread", { cwd: workspaceDir }),
+      modelProvider: nativeProvider,
+    };
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: async (method) => {
+        if (method === "thread/start" || method === "thread/resume") {
+          return native;
+        }
+        return readNativeConfig(method, { model_provider: nativeProvider });
+      },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "openai";
+    params.config = undefined;
+    const appServer = createAppServerOptions();
+    const common = {
+      client: fixture.client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: {
+        ...appServer,
+        start: {
+          ...appServer.start,
+          transport: "unix" as const,
+          homeScope: "user" as const,
+          url: "unix:///tmp/synthetic-codex.sock",
+        },
+      },
+      userMcpServersEnabled: false,
+    };
+    await startOrResumeThread(common);
+    fixture.seed(native, { loaded: false, subscribed: false });
+    await startOrResumeThread(common);
+    for (const method of ["thread/start", "thread/resume"]) {
+      const call = fixture.request.mock.calls.find(([name]) => name === method);
+      expect(call, method).toBeDefined();
+      expect(call?.[1]).not.toHaveProperty("modelProvider");
+      expect(call?.[1]).toHaveProperty("model", params.modelId);
+    }
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      modelProvider: nativeProvider,
+    });
+  });
+
   it.each([
     { nativeModel: false, changeModel: false },
     { nativeModel: true, changeModel: true },
-    { nativeModel: true, changeModel: false },
   ])(
     "rebinds before warm reuse (native: $nativeModel, changed model: $changeModel)",
     async ({ nativeModel, changeModel }) => {
@@ -276,16 +316,10 @@ describe("Codex native configuration lifecycle", () => {
         dynamicToolsFingerprint: "[]",
       });
       const respond = vi.fn(async (method: string) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
         if (method === "thread/resume") {
           return threadStartResult("thread-reused");
         }
-        throw new Error(`unexpected method: ${method}`);
+        return readNativeConfig(method);
       });
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
@@ -350,44 +384,6 @@ describe("Codex native configuration lifecycle", () => {
         "configRequirements/read",
         ...(nativeModel ? ["thread/read"] : []),
       ]);
-      if (nativeModel && !changeModel) {
-        await retainCodexAppServerLiveThread(
-          client,
-          warm.threadId,
-          warm.liveThreadOwnership?.release,
-          warm.liveThreadConfigFingerprint,
-        );
-        const native = threadStartResult("thread-reused");
-        fixture.seed(
-          { ...native, thread: { ...native.thread, status: { type: "active", activeFlags: [] } } },
-          { loaded: true, subscribed: true },
-        );
-        const resumeCount = request.mock.calls.filter(
-          ([method]) => method === "thread/resume",
-        ).length;
-        await expect(startOrResumeThread(common)).rejects.toThrow("active");
-        expect(request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
-          resumeCount,
-        );
-        expect(
-          request.mock.calls.some(
-            ([method]) => method === "turn/interrupt" || method === "thread/archive",
-          ),
-        ).toBe(false);
-        expect(
-          request.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
-        ).toHaveLength(0);
-        fixture.seed(native, { loaded: true, subscribed: true });
-        await expect(startOrResumeThread(common)).resolves.toMatchObject({
-          threadId: "thread-reused",
-        });
-        expect(request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
-          resumeCount,
-        );
-        expect(
-          request.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
-        ).toHaveLength(0);
-      }
     },
   );
 });

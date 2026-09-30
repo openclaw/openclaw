@@ -1,10 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type {
-  SessionsSearchHit,
-  SessionsSearchResult,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
+import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { clampText } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 
@@ -42,13 +40,6 @@ function sessionMetadataMatchRank(
   return fields.some((field) => field.includes(normalizedSearch)) ? 1 : 0;
 }
 
-function transcriptSearchSnippet(snippet: string): string {
-  const compact = snippet.replace(/\s+/gu, " ").trim();
-  return compact.length > SESSION_SEARCH_SNIPPET_MAX_CHARS
-    ? `${truncateUtf16Safe(compact, SESSION_SEARCH_SNIPPET_MAX_CHARS - 1)}…`
-    : compact;
-}
-
 export function buildCommandPaletteSessionItems(params: {
   visibleRows: readonly GatewaySessionRow[];
   visibleKeys: ReadonlySet<string>;
@@ -57,12 +48,10 @@ export function buildCommandPaletteSessionItems(params: {
 }): CommandPaletteItem[] {
   const { visibleRows, visibleKeys, transcriptResult } = params;
   const normalizedSearch = normalizeLowercaseStringOrEmpty(params.search);
-  const transcriptHitByKey = new Map<string, SessionsSearchHit>();
-  for (const hit of transcriptResult?.results ?? []) {
-    if (!transcriptHitByKey.has(hit.sessionKey)) {
-      transcriptHitByKey.set(hit.sessionKey, hit);
-    }
-  }
+  const transcriptHitByKey = indexFirstByKey(
+    transcriptResult?.results ?? [],
+    (hit) => hit.sessionKey,
+  );
   const rowsByKey = new Map(visibleRows.map((row) => [row.key, row] as const));
   for (const row of transcriptResult?.sessions ?? []) {
     if (!rowsByKey.has(row.key)) {
@@ -103,7 +92,10 @@ export function buildCommandPaletteSessionItems(params: {
       // The server match floor affects ordering, not whether the local metadata matched.
       description:
         transcriptHit && rawMetadataRank === 0
-          ? transcriptSearchSnippet(transcriptHit.snippet)
+          ? clampText(
+              transcriptHit.snippet.replace(/\s+/gu, " ").trim(),
+              SESSION_SEARCH_SNIPPET_MAX_CHARS,
+            )
           : undefined,
     }));
 }

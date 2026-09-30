@@ -52,12 +52,23 @@ describe("resolveSubagentCompletionResultText", () => {
     ).toBe("legacy fallback");
   });
 
+  it.each(["error", "timeout", "unknown"] as const)(
+    "preserves a %s outcome even when its captured reply is ANNOUNCE_SKIP",
+    (status) => {
+      expect(
+        resolveSubagentCompletionResultText({
+          completion: {
+            terminalReply: { disposition: "visible", text: "ANNOUNCE_SKIP" },
+          },
+          execution: { status: "terminal", outcome: { status } },
+        }),
+      ).toBe("ANNOUNCE_SKIP");
+    },
+  );
+
   it.each([
-    { status: "error", resultText: "" },
     { status: "error", resultText: " \n\t " },
     { status: "timeout", resultText: "" },
-    { status: "timeout", resultText: " \n\t " },
-    { status: "unknown", resultText: "" },
     { status: "unknown", resultText: " \n\t " },
   ] as const)(
     "preserves captured findings when a $status completion has blank primary text ($#)",

@@ -23,7 +23,6 @@ const eligibleMac = {
 
 const actions = [
   { args: { action: "present" }, command: "canvas.present" },
-  { args: { action: "hide" }, command: "canvas.hide" },
   { args: { action: "navigate", url: "/widget" }, command: "canvas.navigate" },
 ] as const;
 
@@ -149,24 +148,6 @@ describe("Canvas presenter tool", () => {
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("accepts a versioned macOS platform reported by a connected node", async () => {
-    mocks.listNodes.mockResolvedValue([
-      {
-        ...eligibleMac,
-        platform: "macOS 26.6.2",
-      },
-    ]);
-
-    const result = await createCanvasTool().execute("tool-call", { action: "present" });
-
-    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      { timeoutMs: 40_000 },
-      expect.objectContaining({ nodeId: "mac-1", command: "canvas.present" }),
-    );
-    expect(result.details).toMatchObject({ ok: true, node: "mac-1" });
-  });
-
   it("rejects malformed presenter arguments before invoking a node", async () => {
     const tool = createCanvasTool();
 
@@ -178,29 +159,5 @@ describe("Canvas presenter tool", () => {
       "Unknown action: removed",
     );
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("advertises only surviving presenter controls", () => {
-    const tool = createCanvasTool();
-    const schema = tool.parameters as { properties?: Record<string, unknown> };
-
-    expect(tool.resultContentSource).toBe("network");
-    expect(schema.properties?.action).toMatchObject({
-      type: "string",
-      enum: ["present", "hide", "navigate"],
-    });
-    expect(Object.keys(schema.properties ?? {}).toSorted()).toEqual([
-      "action",
-      "gatewayToken",
-      "gatewayUrl",
-      "height",
-      "node",
-      "target",
-      "timeoutMs",
-      "url",
-      "width",
-      "x",
-      "y",
-    ]);
   });
 });

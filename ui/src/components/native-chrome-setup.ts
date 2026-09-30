@@ -23,10 +23,7 @@ class NativeChromeSetup extends OpenClawLightDomElement {
   @state() private legacyResult: LegacyChromeInstallResult | null = null;
   private generation = 0;
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.nativeDeviceSettings,
-      (capability, notify) => capability.subscribe(notify),
-    )
+    .watchStore(() => this.context?.nativeDeviceSettings)
     .effect(
       () => this.context?.nativeDeviceSettings,
       () => () => this.reset(),

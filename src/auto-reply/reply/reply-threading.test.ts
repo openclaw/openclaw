@@ -80,19 +80,11 @@ describe("resolveReplyToMode", () => {
           pluginId: "whatsapp",
           source: "test",
           plugin: {
-            id: "whatsapp",
-            meta: {
+            ...createChannelTestPluginBase({
               id: "whatsapp",
               label: "WhatsApp",
-              selectionLabel: "WhatsApp",
-              docsPath: "/channels/whatsapp",
-              blurb: "test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "group"] },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
+              capabilities: { chatTypes: ["direct", "group"] },
+            }),
             threading: {
               resolveReplyToMode: ({ accountId }: { accountId?: string | null }) =>
                 accountId === "work" ? "first" : "all",
@@ -112,21 +104,14 @@ describe("resolveReplyToMode", () => {
         {
           pluginId: "whatsapp",
           source: "test",
-          plugin: {
+          plugin: createChannelTestPluginBase({
             id: "whatsapp",
-            meta: {
-              id: "whatsapp",
-              label: "WhatsApp",
-              selectionLabel: "WhatsApp",
-              docsPath: "/channels/whatsapp",
-              blurb: "test stub.",
-            },
+            label: "WhatsApp",
             capabilities: { chatTypes: ["direct", "group"] },
             config: {
               listAccountIds: () => ["work"],
-              resolveAccount: () => ({}),
             },
-          },
+          }),
         },
       ]),
     );

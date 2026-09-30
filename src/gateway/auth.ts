@@ -49,7 +49,7 @@ export type GatewayAuthResult = {
     | "trusted-proxy";
   user?: string;
   /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
-  tailscaleIdentity?: VerifiedTailscaleIdentity;
+  tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
   rateLimited?: boolean;
@@ -97,8 +97,6 @@ type AuthorizeGatewayConnectParams = {
   };
 };
 
-type VerifiedTailscaleIdentity = VerifiedTailscaleIngressIdentity;
-
 type GatewayAuthRequestContext = {
   authSurface: GatewayAuthSurface;
   limiter?: AuthRateLimiter;
@@ -122,9 +120,7 @@ function resolveGatewayAuthRequestContext(
     attributed?.clientIp ??
     resolveRequestClientIpFromHeaders(req, trustedProxies, params.allowRealIpFallback === true) ??
     req?.socket?.remoteAddress;
-  const localDirect = attributed
-    ? attributed.kind === "direct-local"
-    : isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true);
+  const localDirect = attributed ? attributed.kind === "direct-local" : isLocalDirectRequest(req);
 
   return {
     authSurface,
@@ -308,10 +304,7 @@ function authorizeHttpBrowserOrigin(params: {
     allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
     isLocalClient: params.isLocalClient,
   });
-  if (originCheck.ok) {
-    return null;
-  }
-  return { ok: false, reason: params.reason };
+  return originCheck.ok ? null : { ok: false, reason: params.reason };
 }
 
 function authorizeTrustedProxyBrowserOrigin(params: {
@@ -325,65 +318,39 @@ function authorizeTrustedProxyBrowserOrigin(params: {
   });
 }
 
-async function authorizeTokenAuth(params: {
-  authToken?: string;
-  connectToken?: string;
+async function authorizeSharedSecretAuth(params: {
+  method: "token" | "password";
+  configuredSecret?: string;
+  providedSecret?: string;
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
   deferRateLimitFailure?: boolean;
   resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
-  if (!params.authToken || isInvalidGatewaySecret(params.authToken)) {
-    return { ok: false, reason: "token_missing_config" };
-  }
-  if (!params.connectToken) {
-    // Don't burn rate-limit slots for missing credentials — the client
-    // simply hasn't provided a token yet (e.g. bare browser open).
-    // Only actual *wrong* credentials should count as failures.
-    return { ok: false, reason: "token_missing" };
-  }
-  if (!safeEqualSecret(params.connectToken, params.authToken)) {
-    if (!params.deferRateLimitFailure) {
-      await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
-    }
-    return { ok: false, reason: "token_mismatch" };
-  }
-  if (params.resetOnSuccess !== false) {
-    params.limiter?.reset(params.ip, params.rateLimitScope);
-  }
-  return { ok: true, method: "token" };
-}
-
-async function authorizePasswordAuth(params: {
-  authPassword?: string;
-  connectPassword?: string;
-  limiter?: AuthRateLimiter;
-  ip?: string;
-  rateLimitScope: string;
-  deferRateLimitFailure?: boolean;
-  resetOnSuccess?: boolean;
-}): Promise<GatewayAuthResult> {
-  if (isRedactedSecretValue(params.authPassword)) {
+  if (params.method === "password" && isRedactedSecretValue(params.configuredSecret)) {
     return { ok: false, reason: "password_redacted_config" };
   }
-  if (!params.authPassword) {
-    return { ok: false, reason: "password_missing_config" };
+  if (
+    !params.configuredSecret ||
+    (params.method === "token" && isInvalidGatewaySecret(params.configuredSecret))
+  ) {
+    return { ok: false, reason: `${params.method}_missing_config` };
   }
-  if (!params.connectPassword) {
-    // Same as token_missing — don't penalize absent credentials.
-    return { ok: false, reason: "password_missing" };
+  if (!params.providedSecret) {
+    // Missing credentials do not consume the wrong-credential rate limit.
+    return { ok: false, reason: `${params.method}_missing` };
   }
-  if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
+  if (!safeEqualSecret(params.providedSecret, params.configuredSecret)) {
     if (!params.deferRateLimitFailure) {
       await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
     }
-    return { ok: false, reason: "password_mismatch" };
+    return { ok: false, reason: `${params.method}_mismatch` };
   }
   if (params.resetOnSuccess !== false) {
     params.limiter?.reset(params.ip, params.rateLimitScope);
   }
-  return { ok: true, method: "password" };
+  return { ok: true, method: params.method };
 }
 
 function rejectIfRateLimited(params: {
@@ -525,9 +492,10 @@ async function authorizeGatewayConnectCore(
       if (rateLimitResult) {
         return rateLimitResult;
       }
-      return await authorizePasswordAuth({
-        authPassword: auth.password,
-        connectPassword: connectAuth.password,
+      return await authorizeSharedSecretAuth({
+        method: "password",
+        configuredSecret: auth.password,
+        providedSecret: connectAuth.password,
         limiter,
         ip: subject,
         rateLimitScope,
@@ -582,22 +550,11 @@ async function authorizeGatewayConnectCore(
     return rateLimitResult;
   }
 
-  if (auth.mode === "token") {
-    return await authorizeTokenAuth({
-      authToken: auth.token,
-      connectToken: resolveConnectSecret(auth.mode, connectAuth),
-      limiter,
-      ip: subject,
-      rateLimitScope,
-      deferRateLimitFailure: params.deferRateLimitFailure,
-      resetOnSuccess,
-    });
-  }
-
-  if (auth.mode === "password") {
-    return await authorizePasswordAuth({
-      authPassword: auth.password,
-      connectPassword: resolveConnectSecret(auth.mode, connectAuth),
+  if (auth.mode === "token" || auth.mode === "password") {
+    return await authorizeSharedSecretAuth({
+      method: auth.mode,
+      configuredSecret: auth[auth.mode],
+      providedSecret: resolveConnectSecret(auth.mode, connectAuth),
       limiter,
       ip: subject,
       rateLimitScope,

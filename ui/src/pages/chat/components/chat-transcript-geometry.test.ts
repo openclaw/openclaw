@@ -2,13 +2,15 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { VirtualizerController } from "@tanstack/lit-virtual";
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { measureConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -24,6 +26,83 @@ import {
 describe("chat transcript geometry", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it.each([null, 4_800])(
+    "bounds the first presented frame then restores the scrolling buffer at offset %s",
+    (offset) => {
+      const flushFrames = stubAnimationFrames();
+      let presented = true;
+      const paneId = `render-window-${offset}`;
+      const sessionKey = `agent:main:${paneId}`;
+      if (offset !== null) {
+        saveChatSessionScrollPosition(paneId, sessionKey, {
+          scrollTop: offset,
+          anchorToEnd: false,
+        });
+      }
+      const host = Object.assign(document.createElement("div"), {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: vi.fn(),
+        updateComplete: Promise.resolve(true),
+      });
+      Object.defineProperties(host, {
+        clientWidth: { value: 800 },
+        clientHeight: { value: 600 },
+      });
+      const transcript = new ChatTranscriptController(host, () => paneId, {
+        visuallyPresented: () => presented,
+      });
+      const rows = Array.from({ length: 100 }, (_, index) => ({
+        kind: "content" as const,
+        key: `row:${index}`,
+        content: html`<div>Turn ${index}</div>`,
+      }));
+      const renderRow = vi.fn((row: TranscriptRow) =>
+        row.kind === "content" ? row.content : nothing,
+      );
+      const container = document.body.appendChild(document.createElement("div"));
+      const renderWindow = (windowRows = rows) => {
+        renderRow.mockClear();
+        render(
+          transcript.renderSession(sessionKey, (session) =>
+            session.render(windowRows, renderRow, null, false),
+          ),
+          container,
+        );
+        transcript.hostUpdated();
+        return renderRow.mock.calls.length;
+      };
+      transcript.hostConnected();
+      expect(renderWindow([])).toBe(0);
+      flushFrames();
+
+      // A saved viewport needs five estimated rows; the implicit end starts
+      // with the tail row. Neither needs more than two neighbors per edge.
+      expect(renderWindow()).toBe(offset === null ? 3 : 9);
+      const mounted = transcriptRows(container).map((row) => Number(row.dataset.index));
+      expect(mounted).toEqual(expect.arrayContaining(offset === null ? [99] : [40, 44]));
+      // Multiple commits before the next frame must not consume the first-paint budget.
+      expect(renderWindow()).toBe(offset === null ? 3 : 9);
+      flushFrames();
+      expect(renderWindow()).toBe(offset === null ? 7 : 17);
+
+      // A retained pane gets the small window again. Hiding before its queued
+      // frame (even without rendering rows) must not widen its next presentation.
+      presented = false;
+      transcript.hostUpdated();
+      presented = true;
+      expect(renderWindow()).toBe(offset === null ? 3 : 9);
+      presented = false;
+      transcript.hostUpdated();
+      flushFrames();
+      presented = true;
+      expect(renderWindow()).toBe(offset === null ? 3 : 9);
+      flushFrames();
+      expect(renderWindow()).toBe(offset === null ? 7 : 17);
+      transcript.hostDisconnected();
+    },
+  );
 
   it("measures fractional layout height instead of a containing transform", () => {
     const container = document.body.appendChild(document.createElement("div"));
@@ -68,6 +147,10 @@ describe("chat transcript geometry", () => {
   });
 
   it("keeps fractional observer sizes as the sole skipped-row sizing input", async () => {
+    saveChatSessionScrollPosition("fractional-rows", "agent:main:fractional-rows", {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
     const rows = Array.from({ length: 4 }, (_, index) => ({
       kind: "content" as const,
       key: `fractional:${index}`,
@@ -131,10 +214,143 @@ describe("chat transcript geometry", () => {
     },
   );
 
-  it("updates transcript extent from freshly wrapped heights while scrolling", async () => {
+  it("updates rail geometry for size changes without measuring streamed content or retired transcripts", () => {
+    const flushFrames = stubAnimationFrames();
     const transcript = createTestTranscript();
+    const region = document.body.appendChild(document.createElement("div"));
+    region.className = "chat-main__conversation";
+    let regionHeight = 600;
+    let gutter = 100;
+    let innerWidth = 768;
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("chat-thread-inner") ? innerWidth : 1200;
+    });
+    const readInnerBounds = vi.fn(() => new DOMRect(gutter, 0, innerWidth, 1200));
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      return this.classList.contains("chat-thread-inner")
+        ? readInnerBounds()
+        : new DOMRect(0, 0, 1200, 600);
+    });
+    Object.defineProperty(region, "clientHeight", { get: () => regionHeight });
+    const props = {
+      ...threadProps("rail-geometry"),
+      runActive: true,
+      stream: "Live start",
+      streamStartedAt: 1000,
+    };
+    const renderTranscript = () => {
+      render(renderChatThread(props, transcript), region);
+      transcript.hostUpdated();
+    };
+    const emitResize = (element: Element, width: number, height: number) => {
+      for (const observer of resizeObservers) {
+        observer.emitTarget(element, width, height);
+      }
+    };
+    try {
+      renderTranscript();
+      transcript.hostConnected();
+      transcript.hostUpdated();
+      const viewport = expectDefined(transcript.scrollElement, "rail viewport");
+      const inner = expectDefined(viewport.querySelector(".chat-thread-inner"), "rail column");
+      const column = expectDefined(inner.querySelector(".chat-virtual-sizer"), "column width");
+      emitResize(column, innerWidth, 0);
+      emitResize(region, 1200, regionHeight);
+      flushFrames();
+      expect(viewport.hasAttribute("data-position-rail-gutter")).toBe(true);
+      expect(viewport.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("600px");
+      expect(viewport.style.getPropertyValue("--chat-transcript-column-width")).toBe("768px");
+      readInnerBounds.mockClear();
+
+      for (const [index, text] of ["one", "two", "three"].entries()) {
+        props.stream = `Live ${text}`;
+        renderTranscript();
+        emitResize(inner, innerWidth, 1300 + index * 100);
+        flushFrames();
+        expect(viewport.textContent).toContain(`Live ${text}`);
+      }
+      expect(readInnerBounds).not.toHaveBeenCalled();
+
+      // Saved message width changes the column without resizing its viewport.
+      gutter = 20;
+      innerWidth = 1160;
+      emitResize(column, innerWidth, 0);
+      flushFrames();
+      expect(viewport.hasAttribute("data-position-rail-gutter")).toBe(false);
+      expect(viewport.style.getPropertyValue("--chat-transcript-column-width")).toBe("1160px");
+      expect(readInnerBounds).toHaveBeenCalledOnce();
+      readInnerBounds.mockClear();
+
+      regionHeight = 720;
+      emitResize(region, 1200, regionHeight);
+      flushFrames();
+      expect(viewport.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("720px");
+      expect(readInnerBounds).toHaveBeenCalledOnce();
+
+      // A restamped shell retires its old column observation and binds the new one.
+      props.loading = true;
+      props.messages = [];
+      props.stream = "";
+      props.runActive = false;
+      render(nothing, region);
+      transcript.hostUpdated();
+      renderTranscript();
+      const replacementViewport = expectDefined(
+        transcript.scrollElement,
+        "replacement rail viewport",
+      );
+      const replacement = expectDefined(
+        replacementViewport.querySelector(".chat-thread-inner"),
+        "replacement rail column",
+      );
+      expect(replacement).not.toBe(inner);
+      gutter = 100;
+      innerWidth = 768;
+      emitResize(replacement, innerWidth, 400);
+      flushFrames();
+      expect(replacementViewport.hasAttribute("data-position-rail-gutter")).toBe(true);
+      expect(replacementViewport.style.getPropertyValue("--chat-transcript-column-width")).toBe(
+        "768px",
+      );
+      readInnerBounds.mockClear();
+      emitResize(inner, 400, 400);
+      flushFrames();
+      expect(readInnerBounds).not.toHaveBeenCalled();
+
+      emitResize(replacement, 700, 400);
+      transcript.hostDisconnected();
+      render(nothing, region);
+      flushFrames();
+      expect(readInnerBounds).not.toHaveBeenCalled();
+      vi.mocked(requestAnimationFrame).mockClear();
+      emitResize(replacement, 600, 400);
+      emitResize(region, 1200, 800);
+      expect(requestAnimationFrame).not.toHaveBeenCalled();
+
+      transcript.hostConnected();
+      renderTranscript();
+      flushFrames();
+      const restored = expectDefined(transcript.scrollElement, "restored rail viewport");
+      expect(restored.hasAttribute("data-position-rail-gutter")).toBe(true);
+      expect(restored.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("720px");
+    } finally {
+      transcript.hostDisconnected();
+      render(nothing, region);
+    }
+  });
+
+  it("updates transcript extent from freshly wrapped heights while scrolling", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     const props = threadProps("pane-width-remeasure");
+    saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    const transcript = createTestTranscript(props.paneId);
     const renderTranscript = async () => {
       render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
@@ -178,6 +394,12 @@ describe("chat transcript geometry", () => {
   });
 
   it("remeasures every visible pane transcript while preserving hidden transcript rows", async () => {
+    for (const pane of ["main", "detail"]) {
+      saveChatSessionScrollPosition(`pane-geometry-${pane}`, `agent:main:geometry-${pane}`, {
+        scrollTop: 0,
+        anchorToEnd: false,
+      });
+    }
     const host = Object.assign(document.body.appendChild(document.createElement("div")), {
       addController: vi.fn(),
       removeController: vi.fn(),

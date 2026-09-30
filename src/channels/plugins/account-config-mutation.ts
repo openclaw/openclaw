@@ -79,16 +79,13 @@ export async function prepareChannelAccountConfiguration(params: {
 
   // Input resolution can perform plugin-owned reads. Keep it behind setup
   // capability discovery so unsupported channels retain their existing failure path.
-  const rawInput = params.resolveInput();
-  let input: unknown;
+  let input = params.resolveInput();
   if (params.plugin.setupContract) {
-    const parsed = params.plugin.setupContract.parseInput(rawInput);
+    const parsed = params.plugin.setupContract.parseInput(input);
     if (!parsed.ok) {
       return resultError({ kind: "invalid-input", message: parsed.error });
     }
     input = parsed.value;
-  } else {
-    input = rawInput;
   }
 
   const requestedAccountId =

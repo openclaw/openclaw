@@ -25,8 +25,8 @@ import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
+import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./worker-environments/workspace-reconcile-core.js";
 
 const exec = promisify(execFile);
 const git = async (cwd: string, args: string[]) =>
@@ -89,13 +89,13 @@ describe("explicit repository move to Gateway", () => {
           const scope = { agentId: "main", sessionKey: "agent:main:dashboard:private-move" };
           const sessionId = "private-materialization-session";
           const repositories = getSessionRepositoryWorkspaceStore();
-          const created = repositories.create({
+          const created = await repositories.create({
             ...scope,
             url: "https://github.com/openclaw/private-materialization-fixture.git",
             runSetupScript: false,
             assertCurrent: () => {},
           });
-          const repository = repositories.bindBase({
+          const repository = await repositories.bindBase({
             workspaceId: created.workspaceId,
             expectedRevision: created.revision,
             baseCommit: "a".repeat(40),
@@ -196,7 +196,7 @@ describe("explicit repository move to Gateway", () => {
       const baseCommit = await git(source, ["rev-parse", "HEAD"]);
       const url = "https://github.com/openclaw/materialization-fixture.git";
       await registerClonedProjectRegistry({ path: source, name: "Fixture", originUrl: url });
-      const base = await readActualWorkspaceManifest({ root: source, baseCommit });
+      const base = await captureWorkspaceManifest({ root: source, baseCommit });
       const remote = state.path("remote");
       await exec("git", ["clone", "--", source, remote]);
       await fsp.writeFile(path.join(remote, "published[1].ignored"), "publishable\n");
@@ -205,7 +205,7 @@ describe("explicit repository move to Gateway", () => {
       await fsp.writeFile(path.join(remote, "edited.txt"), "accepted\n");
       await fsp.writeFile(path.join(remote, "added.txt"), "new\n");
       await fsp.rm(path.join(remote, "deleted.txt"));
-      const current = await readActualWorkspaceManifest({ root: remote, baseCommit });
+      const current = await captureWorkspaceManifest({ root: remote, baseCommit });
       const publicationStagingRoot = state.path("publication-snapshot");
       const publicationDigest =
         outcome === "publication unavailable"
@@ -221,14 +221,14 @@ describe("explicit repository move to Gateway", () => {
             ).stdout.trim();
       const scope = { agentId: "main", sessionKey: "agent:main:dashboard:materialization" };
       const repositories = getSessionRepositoryWorkspaceStore();
-      let repository = repositories.create({
+      let repository = await repositories.create({
         ...scope,
         url,
         requestedRef: outcome === "requested topic" ? "topic" : undefined,
         runSetupScript: false,
         assertCurrent: () => {},
       });
-      repository = repositories.bindBase({
+      repository = await repositories.bindBase({
         workspaceId: repository.workspaceId,
         expectedRevision: repository.revision,
         baseCommit,
@@ -335,7 +335,7 @@ describe("explicit repository move to Gateway", () => {
         expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)?.id).toBe(worktree.id);
       }
       // Retained publication may still need the original immutable source after the move.
-      expect(repositories.get(repository.workspaceId)).toEqual(repository);
+      expect(await repositories.get(repository.workspaceId)).toEqual(repository);
       expect(fs.existsSync(repositories.artifactPath(repository.workspaceId))).toBe(true);
       expect(await fsp.readFile(path.join(source, "edited.txt"), "utf8")).toBe("base\n");
     });

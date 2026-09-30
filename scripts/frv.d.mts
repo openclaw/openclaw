@@ -26,6 +26,7 @@ interface FrvReadOptions {
 
 export interface FrvClient {
   repository?: string;
+  loadFlakeClassifications: typeof import("./full-release-flake-classification.mjs").loadFlakeClassifications;
   getReleaseEvidenceClient: () => ReturnType<
     typeof import("./release-ci-summary.mjs").createReleaseEvidenceClient
   >;
@@ -34,13 +35,22 @@ export interface FrvClient {
     runAttempt: number,
     options?: FrvReadOptions,
   ) => Promise<Record<string, unknown>[]>;
-  getJobLog: (jobId: number) => Promise<string>;
-  getParentJobs: (runId: string) => Promise<Record<string, unknown>[]>;
+  getJobLog: (jobId: number, options?: FrvReadOptions) => Promise<string>;
+  getParentJobs: (runId: string, options?: FrvReadOptions) => Promise<Record<string, unknown>[]>;
   getRun: (runId: string, options?: FrvReadOptions) => Promise<Record<string, unknown>>;
-  getRunAttempt: (runId: string, runAttempt: number) => Promise<Record<string, unknown>>;
+  getRunAttempt: (
+    runId: string,
+    runAttempt: number,
+    options?: FrvReadOptions,
+  ) => Promise<Record<string, unknown>>;
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunJob?: (jobId: number) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
+  cancelRun?: (runId: string) => Promise<unknown>;
+  rerunRun?: (runId: string) => Promise<unknown>;
+  listRuns?: (query: string) => Promise<Record<string, unknown>[]>;
+  getVariable?: (name: string) => Promise<string>;
+  deleteVariable?: (name: string) => Promise<unknown>;
   verify?: (
     runId: string,
     plan: Record<string, unknown>,
@@ -56,11 +66,39 @@ export interface FrvClient {
 }
 
 export type FrvConcreteClient = FrvClient &
-  Required<Pick<FrvClient, "rerunFailed" | "rerunJob" | "rerunParent" | "verify" | "verifySeal">>;
+  Required<
+    Pick<
+      FrvClient,
+      "rerunFailed" | "rerunJob" | "rerunParent" | "listRuns" | "verify" | "verifySeal"
+    >
+  >;
 
+export function restoreReleasePriority(
+  recordPath: string,
+  client: Partial<FrvClient>,
+  options?: { dryRun?: boolean },
+): Promise<Record<string, unknown>>;
+export function clearReleasePriority(
+  client: Partial<FrvClient>,
+  parentRunId: string,
+): Promise<boolean>;
+export function watchRelease(
+  parentRunId: string,
+  client: Pick<
+    FrvClient,
+    "getAttemptJobs" | "getJobLog" | "getParentJobs" | "getRun" | "repository"
+  >,
+  options?: {
+    emit?: (event: { message: string; url?: string }) => void;
+    intervalMs?: number;
+    once?: boolean;
+    operationDeadline?: number;
+    statePath?: string;
+  },
+): Promise<{ complete: boolean; statePath: string }>;
 export function inspectContinuation(
   plan: Record<string, unknown>,
-  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository">,
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository" | "loadFlakeClassifications">,
   options?: FrvReadOptions,
 ): Promise<FrvContinuationStatus>;
 export function createClient(
@@ -75,6 +113,7 @@ export function preflightContinuation(
     "getJobLog" | "getParentJobs" | "getRunAttempt" | "getReleaseEvidenceClient" | "getRun"
   >,
   repository?: string,
+  options?: FrvReadOptions,
 ): Promise<Record<string, unknown>>;
 export function loadPlan(
   options: Record<string, unknown>,

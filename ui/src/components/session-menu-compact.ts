@@ -9,11 +9,13 @@ export type CompactSessionMenuView =
   | "open-in"
   | "assign-owner"
   | "icon"
-  | "group";
+  | "group"
+  | "snooze";
 
 const COMPACT_SESSION_MENU_VIEW_BY_VALUE: Record<string, CompactSessionMenuView> = {
   "compact:back": "root",
   "compact:open-copy": "copy",
+  "compact:open-snooze": "snooze",
   "compact:open-assign-owner": "assign-owner",
   "compact:open-group": "group",
   "compact:open-icon": "icon",

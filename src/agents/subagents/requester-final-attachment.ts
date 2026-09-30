@@ -13,8 +13,6 @@ type RequesterFinalAttachmentBatch = {
 };
 
 type RequesterFinalAttachment = {
-  requesterAgentId: string;
-  requesterSessionKey: string;
   requesterSessionId: string;
   requesterTurnRunId: string;
   lifecycleGeneration: string;
@@ -88,8 +86,6 @@ export function registerRequesterFinalAttachment(params: {
 } {
   const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
   const attachment: RequesterFinalAttachment = {
-    requesterAgentId: params.requesterAgentId,
-    requesterSessionKey: params.requesterSessionKey,
     requesterSessionId: params.requesterSessionId,
     requesterTurnRunId: params.requesterTurnRunId,
     lifecycleGeneration: params.lifecycleGeneration,

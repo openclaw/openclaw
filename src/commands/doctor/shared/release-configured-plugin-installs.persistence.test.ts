@@ -35,6 +35,8 @@ const updateEnv = {
 };
 
 beforeEach(() => {
+  // Backfill fixtures must not inherit provider credentials from the test host.
+  vi.stubEnv("ZAI_API_KEY", "synthetic-doctor-backfill-key");
   mocks.repair.mockReset().mockResolvedValue({ changes: [], warnings: [], records: {} });
 });
 
@@ -53,7 +55,7 @@ async function createContext(state: OpenClawTestState, cfg: OpenClawConfig) {
       },
       sourceLastTouchedVersion: cfg.meta?.lastTouchedVersion,
     },
-    env: state.env,
+    env: state.envVars,
   });
   ctx.prompter.shouldRepair = true;
   return ctx;
