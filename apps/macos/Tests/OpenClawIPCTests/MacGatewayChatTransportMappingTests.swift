@@ -123,6 +123,10 @@ struct MacGatewayChatTransportMappingTests {
                     try String(decoding: JSONEncoder().encode(AgentIdentityResult(
                         agentid: #require(params?["agentId"] as? String),
                         name: "Assistant", namesource: "default", avatar: "A")), as: UTF8.self)
+                case "sessions.patch":
+                    params?["agentId"] as? String == "agent-a"
+                        ? #"{"key":"global","entry":{"sessionId":"global-a","pinnedAt":10,"updatedAt":11}}"#
+                        : #"{"key":"global","entry":{"sessionId":"global-b","color":null,"updatedAt":12}}"#
                 case "sessions.rewind": #"{"editorText":"rewound draft"}"#
                 case "sessions.fork": #"{"sessionKey":"forked","editorText":"continued draft"}"#
                 case "sessions.list":
@@ -248,7 +252,7 @@ struct MacGatewayChatTransportMappingTests {
     @Test func `mutation lease resolves the current global agent for each request`() async throws {
         try await self.withSessionTransport { transport, recorder in
             let lease = try #require(await transport.acquireSessionMutationRouteLease())
-            try await lease.patchSession(
+            let firstReceipt = try await lease.patchSession(
                 key: "global",
                 label: nil,
                 category: nil,
@@ -257,7 +261,7 @@ struct MacGatewayChatTransportMappingTests {
                 unread: nil)
             let observerTransport = transport
             observerTransport.updateDefaultGlobalAgentID(" Agent-B ")
-            try await lease.patchSession(
+            let secondReceipt = try await lease.patchSession(
                 key: "global",
                 label: nil,
                 category: nil,
@@ -265,6 +269,8 @@ struct MacGatewayChatTransportMappingTests {
                 pinned: nil,
                 archived: nil,
                 unread: nil)
+            #expect(firstReceipt != nil)
+            #expect(secondReceipt != nil)
             try await lease.deleteSession(key: "agent:agent-b:work")
 
             let frames = try await recorder.snapshot().map {
