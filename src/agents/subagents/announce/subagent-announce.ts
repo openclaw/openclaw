@@ -406,6 +406,20 @@ async function runSubagentAnnounceFlowBound(
       isOwnResultCurrent = prepared.isCurrent;
     }
 
+    if (
+      outcome.status === "ok" &&
+      params.terminalReply?.disposition === "visible" &&
+      isAnnounceSkip(params.terminalReply.text)
+    ) {
+      if (isCronSessionKey(targetRequesterSessionKey)) {
+        logWarn(
+          `cron job completion for session=${targetRequesterSessionKey} ` +
+            `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
+            `the agent replied with the skip sentinel instead of delivering a result`,
+        );
+      }
+      return "delivered";
+    }
     if (params.terminalReply?.disposition === "silent") {
       if (!hasVisibleFallback && (isAnnounceSkip(fallbackReply) || !expectsCompletionMessage)) {
         return "delivered";
