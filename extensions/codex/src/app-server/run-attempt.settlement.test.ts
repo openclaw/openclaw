@@ -566,10 +566,13 @@ describe("Codex app-server terminal settlement", () => {
         if (boundary === "final" && release === "after cutoff") {
           // Successor I/O and relay retirement must outlive the completed deadline simulation.
           vi.useRealTimers();
+          let nextThreadId = "thread-1";
           const nextHarness = createStartedThreadHarness(
             async (method) => {
-              if (method === "thread/resume") {
-                return threadStartResult("thread-1");
+              if (method === "thread/start" || method === "thread/resume") {
+                // A rotated native thread cannot reuse its persisted predecessor's ID.
+                nextThreadId = method === "thread/start" ? "thread-next" : "thread-1";
+                return threadStartResult(nextThreadId);
               }
               return method === "turn/start" ? turnStartResult("turn-next") : undefined;
             },
@@ -580,14 +583,18 @@ describe("Codex app-server terminal settlement", () => {
             runId: "run-next",
             abortSignal: successorAbort.signal,
           });
-          await nextHarness.waitForMethod("turn/start");
-          await nextHarness.notify(
-            turnCompleted({
-              id: "turn-next",
-              status: "completed",
-              items: [{ id: "next-answer", type: "agentMessage", text: "Next turn saved." }],
-            }),
-          );
+          await successor.waitForTurnAccepted();
+          await nextHarness.notify({
+            method: "turn/completed",
+            params: {
+              threadId: nextThreadId,
+              turn: {
+                id: "turn-next",
+                status: "completed",
+                items: [{ id: "next-answer", type: "agentMessage", text: "Next turn saved." }],
+              },
+            },
+          });
           const next = await successor;
           expect(readAttemptTerminal(next)).toMatchObject({ aborted: false, timedOut: false });
           expect(next.assistantTranscriptOwned).toBe(true);

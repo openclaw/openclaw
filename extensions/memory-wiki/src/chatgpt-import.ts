@@ -719,33 +719,29 @@ async function importChatGptConversationsUnlocked(params: {
 
   let indexUpdatedFiles: string[] = [];
   if (!params.dryRun && importRunRecord) {
-    if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
-      await writeMemoryWikiImportRunRecord(params.config.vault.path, importRunRecord);
-      const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Memory Wiki ChatGPT import run ${importRunRecord.runId} changed source pages, but vault compilation failed: ${message}. After fixing the compile error, run \`openclaw wiki chatgpt rollback ${importRunRecord.runId}\` to restore the imported pages.`,
-          { cause: error },
-        );
-      });
-      indexUpdatedFiles = compile.updatedFiles;
-      await appendMemoryWikiLog(params.config.vault.path, {
-        type: "ingest",
-        timestamp: nowIso,
-        details: {
-          sourceType: "chatgpt-export",
-          runId: importRunRecord.runId,
-          exportPath,
-          sourcePath: conversationsPath,
-          conversationCount: records.length,
-          createdCount: importRunRecord.createdPaths.length,
-          updatedCount: importRunRecord.updatedPaths.length,
-          skippedCount,
-        },
-      });
-    } else {
-      runId = undefined;
-    }
+    await writeMemoryWikiImportRunRecord(params.config.vault.path, importRunRecord);
+    const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Memory Wiki ChatGPT import run ${importRunRecord.runId} changed source pages, but vault compilation failed: ${message}. After fixing the compile error, run \`openclaw wiki chatgpt rollback ${importRunRecord.runId}\` to restore the imported pages.`,
+        { cause: error },
+      );
+    });
+    indexUpdatedFiles = compile.updatedFiles;
+    await appendMemoryWikiLog(params.config.vault.path, {
+      type: "ingest",
+      timestamp: nowIso,
+      details: {
+        sourceType: "chatgpt-export",
+        runId: importRunRecord.runId,
+        exportPath,
+        sourcePath: conversationsPath,
+        conversationCount: records.length,
+        createdCount: importRunRecord.createdPaths.length,
+        updatedCount: importRunRecord.updatedPaths.length,
+        skippedCount,
+      },
+    });
   }
 
   return {

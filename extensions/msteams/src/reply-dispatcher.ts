@@ -52,7 +52,6 @@ export function createMSTeamsReplyDispatcher(params: {
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
   app: MSTeamsApp;
-  appId: string;
   conversationRef: StoredConversationReference;
   context: MSTeamsTurnContext;
   replyStyle: MSTeamsReplyStyle;
@@ -194,7 +193,6 @@ export function createMSTeamsReplyDispatcher(params: {
     return sendMSTeamsMessages({
       replyStyle: params.replyStyle,
       app: params.app,
-      appId: params.appId,
       conversationRef: params.conversationRef,
       context: params.context,
       messages,

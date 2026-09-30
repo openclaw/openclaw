@@ -41,9 +41,9 @@ function peekSessionMcpRuntimeManager():
     : undefined;
 }
 
-export async function acquireSessionMcpRuntime(
-  params: Parameters<SessionMcpRuntimeManager["acquire"]>[0],
-): Promise<SessionMcpRuntimeLease> {
+async function acquireManagedRuntime<T extends SessionMcpRuntimeLease | undefined>(
+  acquire: (manager: SessionMcpRuntimeManager) => Promise<T>,
+): Promise<T> {
   const host = getBoundLegacyPluginSdkResourceHost();
   const scheduler = host?.scheduler;
   if (scheduler) {
@@ -51,32 +51,7 @@ export async function acquireSessionMcpRuntime(
     host?.assertOpen();
     scheduler.signal.throwIfAborted();
   }
-  const lease = await getSessionMcpRuntimeManager().acquire(params);
-  try {
-    host?.assertOpen();
-    scheduler?.signal.throwIfAborted();
-    return lease;
-  } catch (error) {
-    await releaseSessionMcpRuntime(lease);
-    throw error;
-  }
-}
-
-/**
- * Requester-scoped MCP runtime only (no static partition).
- * Shared-thread harnesses use this so static MCP stays harness-native.
- */
-export async function acquireRequesterScopedMcpRuntime(
-  params: Parameters<SessionMcpRuntimeManager["acquireRequesterScoped"]>[0],
-): Promise<RequesterScopedMcpRuntimeHandle | undefined> {
-  const host = getBoundLegacyPluginSdkResourceHost();
-  const scheduler = host?.scheduler;
-  if (scheduler) {
-    await setSessionMcpRuntimeScheduler(scheduler);
-    host?.assertOpen();
-    scheduler.signal.throwIfAborted();
-  }
-  const lease = await getSessionMcpRuntimeManager().acquireRequesterScoped(params);
+  const lease = await acquire(getSessionMcpRuntimeManager());
   try {
     host?.assertOpen();
     scheduler?.signal.throwIfAborted();
@@ -87,6 +62,22 @@ export async function acquireRequesterScopedMcpRuntime(
     }
     throw error;
   }
+}
+
+export function acquireSessionMcpRuntime(
+  params: Parameters<SessionMcpRuntimeManager["acquire"]>[0],
+): Promise<SessionMcpRuntimeLease> {
+  return acquireManagedRuntime((manager) => manager.acquire(params));
+}
+
+/**
+ * Requester-scoped MCP runtime only (no static partition).
+ * Shared-thread harnesses use this so static MCP stays harness-native.
+ */
+export function acquireRequesterScopedMcpRuntime(
+  params: Parameters<SessionMcpRuntimeManager["acquireRequesterScoped"]>[0],
+): Promise<RequesterScopedMcpRuntimeHandle | undefined> {
+  return acquireManagedRuntime((manager) => manager.acquireRequesterScoped(params));
 }
 
 export function rememberAdvertisedScopedMcpCatalog(

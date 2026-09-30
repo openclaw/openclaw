@@ -220,8 +220,9 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
           params.onEditPinnedItems();
           return;
         }
-        if (value && moreRoutes.includes(value as SidebarNavRoute)) {
-          params.onNavigateRoute(value as SidebarNavRoute);
+        const route = moreRoutes.find((routeId) => routeId === value);
+        if (route) {
+          params.onNavigateRoute(route);
         }
       }}
       @keydown=${(event: KeyboardEvent) => trackDropdownKeyboardDismissal(event, params.onTabAway)}
@@ -250,6 +251,22 @@ type SidebarCustomizeMenuParams = {
 
 export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
   const position = params.position;
+  const choices = [
+    ...SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => ({
+      value: routeId,
+      entry: serializeSidebarEntry({ type: "route", route: routeId }),
+      icon: navigationIconForRoute(routeId),
+      label: titleForRoute(routeId),
+    })),
+    ...params.pluginNavigation
+      .filter((entry) => entry.value.defaultVisible === false)
+      .map((entry) => ({
+        value: `plugin:${entry.key}`,
+        entry: `plugin:${entry.key}`,
+        icon: "plug" as const,
+        label: entry.value.label,
+      })),
+  ];
   return html`
     <wa-dropdown
       class="sidebar-customize-menu sidebar-pin-editor-menu"
@@ -267,8 +284,11 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           if (params.pluginNavigation.some((entry) => entry.key === key)) {
             params.onTogglePlugin(key);
           }
-        } else if (value && SIDEBAR_NAV_ROUTES.includes(value as SidebarNavRoute)) {
-          params.onToggleRoute(value as SidebarNavRoute);
+        } else {
+          const route = SIDEBAR_NAV_ROUTES.find((routeId) => routeId === value);
+          if (route) {
+            params.onToggleRoute(route);
+          }
         }
       }}
       @keydown=${(event: KeyboardEvent) => trackDropdownKeyboardDismissal(event, params.onTabAway)}
@@ -283,37 +303,19 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
             </div>`
           : nothing
       }
-      ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
-        const visible = params.sidebarEntries.includes(
-          serializeSidebarEntry({ type: "route", route: routeId }),
-        );
-        return html`
+      ${choices.map(
+        (choice) => html`
           <wa-dropdown-item
             class="sidebar-customize-menu__item"
             type="checkbox"
-            value=${routeId}
-            .checked=${visible}
+            value=${choice.value}
+            .checked=${params.sidebarEntries.includes(choice.entry)}
           >
-            <span slot="icon" class="nav-item__icon" aria-hidden="true"
-              >${icons[navigationIconForRoute(routeId)]}</span
-            >
-            <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
+            <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons[choice.icon]}</span>
+            <span class="sidebar-customize-menu__text">${choice.label}</span>
           </wa-dropdown-item>
-        `;
-      })}
-      ${params.pluginNavigation
-        .filter((entry) => entry.value.defaultVisible === false)
-        .map(
-          (entry) => html` <wa-dropdown-item
-            class="sidebar-customize-menu__item"
-            type="checkbox"
-            value=${`plugin:${entry.key}`}
-            .checked=${params.sidebarEntries.includes(`plugin:${entry.key}`)}
-          >
-            <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.plug}</span>
-            <span class="sidebar-customize-menu__text">${entry.value.label}</span>
-          </wa-dropdown-item>`,
-        )}
+        `,
+      )}
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       ${renderSidebarMenuAction("reset", t("nav.customizeReset"), "refresh")}
     </wa-dropdown>

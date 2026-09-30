@@ -94,7 +94,6 @@ export function normalizeProviders(params: {
       sourceInput,
       provider: normalizedProvider,
       secretDefaults: params.secretDefaults,
-      profileApiKey: undefined,
       secretRefManagedProviders: params.secretRefManagedProviders,
     });
 

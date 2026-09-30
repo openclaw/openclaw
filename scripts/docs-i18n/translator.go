@@ -46,10 +46,9 @@ type CodexTranslator struct {
 type docsTranslator interface {
 	Translate(context.Context, string, string, string) (string, error)
 	TranslateRaw(context.Context, string, string, string) (string, error)
-	Close()
 }
 
-type docsTranslatorFactory func(string, string, []GlossaryEntry, string) (docsTranslator, error)
+type docsTranslatorFactory func(string, string, []GlossaryEntry, string) docsTranslator
 
 type codexPromptRunner func(context.Context, codexPromptRequest) (string, error)
 
@@ -60,13 +59,13 @@ type codexPromptRequest struct {
 	Thinking     string
 }
 
-func NewCodexTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*CodexTranslator, error) {
+func NewCodexTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) *CodexTranslator {
 	return &CodexTranslator{
 		systemPrompt:          translationPrompt(srcLang, tgtLang, glossary),
 		exactGlossaryMappings: exactGlossaryMappings(glossary),
 		thinking:              normalizeThinking(thinking),
 		runPrompt:             runCodexExecPrompt,
-	}, nil
+	}
 }
 
 func (t *CodexTranslator) Translate(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
@@ -390,8 +389,6 @@ func sleepWithContext(ctx context.Context, delay time.Duration) error {
 		return nil
 	}
 }
-
-func (t *CodexTranslator) Close() {}
 
 func normalizeThinking(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))

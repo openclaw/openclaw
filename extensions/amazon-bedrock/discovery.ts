@@ -53,13 +53,7 @@ const DEFAULT_MAX_TOKENS = 4096;
  */
 const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic Claude
-  "anthropic.claude-fable-5": 1_000_000,
-  "anthropic.claude-mythos-5": 1_000_000,
-  // AWS publishes Sonnet 5 on both bedrock-runtime (Invoke/Converse) and Mantle.
-  "anthropic.claude-sonnet-5": 1_000_000,
-  "anthropic.claude-opus-5": 1_000_000,
   "anthropic.claude-3-7-sonnet-20250219-v1:0": 200_000,
-  "anthropic.claude-opus-4-8": 1_000_000,
   "anthropic.claude-opus-4-7": 1_000_000,
   "anthropic.claude-opus-4-6-v1": 1_000_000,
   "anthropic.claude-sonnet-4-6": 1_000_000,

@@ -391,16 +391,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                   lastError: host.lastError,
                   announce: false,
                 })
-              : html`
-                  ${
-                    gateway
-                      ? html`<span class="sidebar-identity-card__gateway" aria-hidden="true">
-                          <span class="sidebar-gateway-name">${gateway.name}</span>
-                          ${gatewayPrimaryTag ? html`<span class="sidebar-gateway-primary">${gatewayPrimaryTag}</span>` : nothing}
-                        </span>`
-                      : nothing
-                  }
-                `
+              : gateway
+                ? html`<span class="sidebar-identity-card__gateway" aria-hidden="true">
+                    <span class="sidebar-gateway-name">${gateway.name}</span>
+                    ${gatewayPrimaryTag ? html`<span class="sidebar-gateway-primary">${gatewayPrimaryTag}</span>` : nothing}
+                  </span>`
+                : nothing
           }
         </span>
       </button>

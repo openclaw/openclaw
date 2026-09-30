@@ -202,9 +202,7 @@ function renderSessions(
               },
             )}
           </div>`
-        : html`<p class="person-activity-card__muted">
-            ${t(recent ? "presence.card.noRecentSessions" : "presence.card.noVisibleSessions")}
-          </p>`
+        : html`<p class="person-activity-card__muted">${t("presence.card.noRecentSessions")}</p>`
     }
   </section>`;
 }

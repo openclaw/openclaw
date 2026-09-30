@@ -20,6 +20,7 @@ import {
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { commitSubagentRunReplacement } from "./subagent-registry-replacement-store.js";
+import { resetRequesterSettleWakeRetry } from "./subagent-registry-run-pause.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { nextSubagentRunGeneration } from "./subagent-run-generation.js";
@@ -115,7 +116,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const remapRequesterSettleWake = (
       wake: RequesterSettleWakeState,
     ): RequesterSettleWakeState => ({
-      ...wake,
+      ...(wake === sourceRequesterSettleWake && wake.pauseNotice
+        ? { ...resetRequesterSettleWakeRetry(wake), pauseNotice: undefined }
+        : wake),
       ...(wake.batchRunIds
         ? {
             batchRunIds: wake.batchRunIds
@@ -164,9 +167,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       killReconciliation: undefined,
       killIntent: undefined,
       suppressCompletionDelivery: undefined,
-      delivery: {
-        status: source.expectsCompletionMessage === false ? "not_required" : "pending",
-      },
       spawnMode,
       archiveAtMs: undefined,
       runTimeoutSeconds,
