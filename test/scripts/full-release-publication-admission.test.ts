@@ -120,6 +120,7 @@ const toolingPaths = [
   "scripts/lib/release-publish-inputs.mjs",
   "scripts/npm-preflight-tooling-identity.mjs",
   "scripts/npm-prepared-bundle.mjs",
+  "scripts/lib/npm-core-release-packages.mjs",
   "scripts/plugin-sdk-api-release-evidence.mjs",
   "scripts/lib/plain-gh.mjs",
   "scripts/lib/release-context.mjs",

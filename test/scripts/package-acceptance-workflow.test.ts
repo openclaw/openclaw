@@ -4341,6 +4341,7 @@ function writePreflightConsumerTooling(toolingDir: string) {
     "openclaw-npm-extended-stable-release.mjs",
     "release-tooling-identity.mjs",
     "lib/actions-artifact-archive.mjs",
+    "lib/npm-core-release-packages.mjs",
     "lib/npm-core-release-packages.json",
     "lib/npm-shrinkwrap-dependencies.mjs",
     "lib/record-shared.mjs",
