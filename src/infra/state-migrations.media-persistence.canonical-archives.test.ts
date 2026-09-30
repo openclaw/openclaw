@@ -14,14 +14,17 @@ import {
   resolveRegisteredSqliteTranscriptArchiveName,
 } from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
+import * as agentDatabaseLease from "../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-session-transcript-archive-schema.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { cleanupMediaPersistenceFixtures } from "./state-migrations.media-persistence.test-support.js";
+import { migrateCanonicalTranscriptArchives } from "./state-migrations.transcript-directives-archives.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 
 type ArchiveEncoding = "identity" | "zstd";
@@ -200,6 +203,63 @@ afterEach(() => {
 });
 
 describe("media migration of canonical SQLite transcript archives", () => {
+  it("advances a fully current archive batch with one cursor transaction", async () => {
+    const f = fixture({ content: canonicalContent });
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(f.databasePath);
+    const rows = Array.from({ length: 31 }, (_, index) => {
+      const session = `archive-${String(index).padStart(3, "0")}`;
+      const archiveName = `${session}.jsonl`;
+      const bytes = Buffer.from(canonicalContent, "utf8");
+      database
+        .prepare(
+          `INSERT INTO session_transcript_archives(
+            session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
+            archive_name,created_at,published_at
+          ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+        )
+        .run(
+          session,
+          "generation",
+          `agent:main:${session}`,
+          "deleted",
+          "identity",
+          bytes,
+          sha256(bytes),
+          archiveName,
+          publishedAt,
+          publishedAt,
+        );
+      fs.writeFileSync(path.join(f.archiveDirectory, archiveName), bytes);
+      return session;
+    });
+    database.close();
+
+    const authority = vi
+      .spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority")
+      .mockImplementation(() => {});
+    const cursors: Array<{ generation: string; sessionId: string } | { phase: "complete" }> = [];
+    const opened = new DatabaseSync(f.databasePath);
+    try {
+      await migrateCanonicalTranscriptArchives({
+        agentId: "main",
+        database: opened,
+        pathname: f.databasePath,
+        start: { generation: "", sessionId: "" },
+        transformContent: (content) => ({ changed: false, content }),
+        writeCursor: (cursor) => cursors.push(cursor),
+      });
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(opened);
+      opened.close();
+      authority.mockRestore();
+    }
+
+    expect(rows).toHaveLength(31);
+    expect(cursors.filter((cursor) => "phase" in cursor)).toEqual([{ phase: "complete" }]);
+    expect(cursors.filter((cursor) => !("phase" in cursor))).toHaveLength(1);
+  });
+
   it("seeks across archive batches without skipping retained generations", async () => {
     const f = fixture({ fileContent: null });
     const { DatabaseSync } = requireNodeSqlite();

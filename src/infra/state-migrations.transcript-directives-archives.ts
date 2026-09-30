@@ -295,6 +295,24 @@ function repairPublishedArchiveFile(params: {
   return true;
 }
 
+function publishedArchiveFileIsCurrent(params: {
+  archiveDirectory: string;
+  planned: ArchiveRowPlan;
+}): boolean {
+  const archiveDirectory = path.resolve(params.archiveDirectory);
+  const archivePath = path.resolve(archiveDirectory, params.planned.archiveName);
+  if (
+    path.dirname(archivePath) !== archiveDirectory ||
+    path.basename(archivePath) !== params.planned.archiveName
+  ) {
+    throw new Error(`Cannot migrate transcript archive outside ${archiveDirectory}`);
+  }
+  return (
+    fs.existsSync(archivePath) &&
+    sha256Hex(fs.readFileSync(archivePath)) === params.planned.nextSha256
+  );
+}
+
 function finalizeArchiveCursor(params: {
   database: DatabaseSync;
   fileCurrent: boolean;
@@ -382,6 +400,47 @@ export async function migrateCanonicalTranscriptArchives(
               ]
             : [],
       };
+    }
+    // Doctor owns this stopped-writer window, so a fully current batch needs no
+    // per-row blob or file work; commit its source checks and cursor together.
+    if (
+      batch.every((planned) => !planned.changed) &&
+      batch.every((planned) => publishedArchiveFileIsCurrent({ archiveDirectory, planned }))
+    ) {
+      const last = batch.at(-1);
+      if (!last) {
+        throw new Error("Transcript archive migration produced an empty batch");
+      }
+      for (const planned of batch) {
+        params.onArchive?.(path.resolve(archiveDirectory, planned.archiveName));
+      }
+      runSqliteImmediateTransactionSync(
+        params.database,
+        () => {
+          assertAgentDatabaseMaintenanceAuthority();
+          for (const planned of batch) {
+            assertArchiveSourceUnchanged(params.database, planned);
+            finalizeArchiveCursor({
+              database: params.database,
+              fileCurrent: true,
+              planned,
+              writeCursor: () => {},
+            });
+          }
+          params.writeCursor({ generation: last.generation, sessionId: last.sessionId });
+          assertAgentDatabaseMaintenanceAuthority();
+        },
+        {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: params.pathname,
+          operationLabel: "historical-transcript-archive-unchanged-batch",
+        },
+      );
+      cursor = { generation: last.generation, sessionId: last.sessionId };
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      continue;
     }
     for (const planned of batch) {
       const archivePath = path.resolve(archiveDirectory, planned.archiveName);
