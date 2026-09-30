@@ -25,6 +25,7 @@ import {
 } from "./update-git-metadata.js";
 import { readBuiltRuntimeCommit, readGitRuntimeArtifactStatus } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
+import type { UpdateInstallKind } from "./update-install-kind.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 import { createUpdatePreflightFailure } from "./update-preflight-details.js";
@@ -60,8 +61,6 @@ type GitUpdateStatus = {
   stale?: UpdateFetchFailure;
   error?: string;
 };
-
-export type UpdateInstallKind = "git" | "package" | "unknown" | "host";
 
 export type UpdateInstallIdentity = {
   installKind: UpdateInstallKind;
