@@ -423,6 +423,29 @@ describe("release concurrency observations", () => {
     expect(runGh.mock.calls.some(([args]) => args[1]?.includes("/releases?"))).toBe(false);
   });
 
+  it("replays a failed filtered release-inventory read with its exact --jq filter", () => {
+    const result = observeReleaseGitHubState({
+      repository: "openclaw/openclaw",
+      releaseTag: `v${version}`,
+      sourceSha,
+      npmDistTag: "latest",
+      runGh(args) {
+        if (args[1]?.includes("/releases/tags/")) {
+          throw new Error("HTTP 404: Not Found");
+        }
+        if (args[1]?.includes("/releases?")) {
+          throw new Error("HTTP 502: Bad Gateway");
+        }
+        return JSON.stringify({ total_count: 0, workflow_runs: [] });
+      },
+    });
+    const gate = result.gates.find((entry) => entry.id === "github.release");
+    expect(gate).toMatchObject({ status: "WARN", message: expect.stringContaining("HTTP 502") });
+    expect(gate?.remediation).toContain(
+      `gh api 'repos/openclaw/openclaw/releases?per_page=100&page=1' --method GET --jq 'map(if .tag_name == "v${version}" then . else {tag_name} end)'`,
+    );
+  });
+
   it("recognizes the npm target from the exact preflight title because it shares the publish group", () => {
     const gates = observeRuns({
       workflow: "plugin-npm-release.yml",

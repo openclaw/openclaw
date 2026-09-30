@@ -326,7 +326,10 @@ export function observeReleaseGitHubState(input: {
   const execute = input.runGh ?? createPublishPreflightGh();
   let readCommand = "";
   const runGh: PublishPreflightGh = (args) => {
-    readCommand = `gh api '${args[1]}' --method GET${args.includes("--allow-escape-sequences") ? " --allow-escape-sequences" : ""}`;
+    // Replay the exact read, including any --jq filter, so remediation stays cheap.
+    readCommand = ["gh", ...args]
+      .map((arg) => (/^[-\w]+$/u.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`))
+      .join(" ");
     const remaining = deadline - now();
     if (remaining <= 0) {
       throw new Error(
