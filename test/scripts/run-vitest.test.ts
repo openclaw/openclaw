@@ -48,6 +48,7 @@ import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.m
 const posixIt = process.platform === "win32" ? it.skip : it;
 // These bounds only guard broken fixtures; readiness and exit are asserted via process signals.
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
+const PINNED_LOCALE = { LANG: "C.UTF-8", LC_ALL: "C.UTF-8" };
 
 describe("scripts/run-vitest", () => {
   it("reports an actionable error when Vitest cannot be resolved", () => {
@@ -1031,7 +1032,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
         });
       }
       expect(resolveRunVitestSpawnEnv(env, ["--watch"])).toEqual(env);
-      expect(resolveVitestSpawnParams(env, "linux").env).toEqual(env);
+      expect(resolveVitestSpawnParams(env, "linux").env).toEqual({ ...env, ...PINNED_LOCALE });
     },
   );
 
@@ -1142,12 +1143,12 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
   it("spawns vitest in a detached process group on Unix hosts", () => {
     expect(resolveVitestSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
-      env: { PATH: "/usr/bin" },
+      env: { PATH: "/usr/bin", ...PINNED_LOCALE },
       detached: true,
       stdio: ["inherit", "pipe", "pipe"],
     });
     expect(resolveVitestSpawnParams({ PATH: "/usr/bin" }, "win32")).toEqual({
-      env: { PATH: "/usr/bin" },
+      env: { PATH: "/usr/bin", ...PINNED_LOCALE },
       detached: false,
       stdio: ["inherit", "pipe", "pipe"],
     });
@@ -1304,7 +1305,17 @@ registerHooks({resolve(specifier, context, nextResolve) {
     ).toEqual({
       OPENCLAW_LOCAL_CHECK: "1",
       PATH: "/usr/bin",
+      ...PINNED_LOCALE,
     });
+  });
+
+  it("pins the child locale so host locales cannot change formatted test output", () => {
+    expect(
+      resolveVitestSpawnParams(
+        { LANG: "de_DE.UTF-8", LC_ALL: "de_DE.UTF-8", PATH: "/usr/bin" },
+        "linux",
+      ).env,
+    ).toMatchObject(PINNED_LOCALE);
   });
 
   it("preserves explicit local-check disablement in CI", () => {
@@ -1321,6 +1332,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       CI: "true",
       OPENCLAW_LOCAL_CHECK: "0",
       PATH: "/usr/bin",
+      ...PINNED_LOCALE,
     });
   });
 
@@ -1338,6 +1350,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       PATH: "/usr/bin",
       RAYON_NUM_THREADS: "1",
       TOKIO_WORKER_THREADS: "1",
+      ...PINNED_LOCALE,
     });
   });
 
@@ -1357,6 +1370,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       PATH: "/usr/bin",
       RAYON_NUM_THREADS: "8",
       TOKIO_WORKER_THREADS: "6",
+      ...PINNED_LOCALE,
     });
   });
 
@@ -1376,6 +1390,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       PATH: "/usr/bin",
       RAYON_NUM_THREADS: "1",
       TOKIO_WORKER_THREADS: "1",
+      ...PINNED_LOCALE,
     });
   });
 
