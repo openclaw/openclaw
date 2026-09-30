@@ -1,4 +1,3 @@
-// Policy plugin data, secret, and auth evidence.
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import {
@@ -13,7 +12,6 @@ import type {
   PolicyEvidenceBuilder,
   PolicySecretEvidence,
   SecretRefDefaults,
-  SecretRefEvidence,
 } from "./policy-state-types.js";
 
 export function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
@@ -106,13 +104,7 @@ function telemetryContentCaptureEnabled(
   if (value === true) {
     return signals.tracesEnabled || signals.logsEnabled;
   }
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (!signals.tracesEnabled) {
-    return false;
-  }
-  if (value.enabled !== true) {
+  if (!isRecord(value) || !signals.tracesEnabled || value.enabled !== true) {
     return false;
   }
   return (
@@ -133,9 +125,7 @@ function pushMemorySessionTranscriptIndexing(
   const defaultsMemorySearch = asNonArrayRecord(memory.search);
   const defaultSessionMemory = memorySearchSessionTranscriptIndexing(defaultsMemorySearch);
   if (defaultSessionMemory !== undefined) {
-    const defaultExperimental = isRecord(defaultsMemorySearch.experimental)
-      ? defaultsMemorySearch.experimental
-      : {};
+    const defaultExperimental = asNonArrayRecord(defaultsMemorySearch.experimental);
     entries.push({
       id: "agents-defaults-memory-session-transcripts",
       kind: "memorySessionTranscriptIndexing",
@@ -151,11 +141,7 @@ function pushMemorySessionTranscriptIndexing(
   }
 
   const agents = asNonArrayRecord(cfg.agents);
-  const configuredAgents = collectPolicyConfiguredAgents(agents);
-  if (configuredAgents.length === 0) {
-    return;
-  }
-  configuredAgents.forEach((configured) => {
+  collectPolicyConfiguredAgents(agents).forEach((configured) => {
     const { agentId, value: rawAgent } = configured;
     if (!isRecord(rawAgent)) {
       return;
@@ -288,8 +274,8 @@ function collectSecretInputs(
     const childPath = [...path, key];
     const source = configPathSource(childPath);
     const secretInputPath = isSecretInputPath(childPath);
-    const ref = secretInputPath ? secretRefEvidence(child, defaults) : undefined;
-    if (ref !== undefined) {
+    const ref = secretInputPath ? coerceSecretRef(child, defaults) : null;
+    if (ref !== null) {
       entries.push({
         id: source,
         kind: "input",
@@ -470,14 +456,6 @@ function secretRefDefaults(value: unknown): SecretRefDefaults | undefined {
     defaults.store = value.store;
   }
   return defaults;
-}
-
-function secretRefEvidence(
-  value: unknown,
-  defaults: SecretRefDefaults | undefined,
-): SecretRefEvidence | undefined {
-  const ref = coerceSecretRef(value, defaults);
-  return ref === null ? undefined : { source: ref.source, provider: ref.provider, id: ref.id };
 }
 
 function isValidAuthProfileMetadata(value: unknown): boolean {
