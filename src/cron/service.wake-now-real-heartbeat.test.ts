@@ -15,7 +15,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { runHeartbeatOnce, startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "../infra/heartbeat-runner.test-harness.js";
-import { seedMainSessionStore, seedSessionStore } from "../infra/heartbeat-runner.test-utils.js";
+import { seedMainSessionStore } from "../infra/heartbeat-runner.test-utils.js";
 import {
   getHeartbeatWakeAbortSignal,
   requestHeartbeat as queueHeartbeat,
@@ -572,103 +572,6 @@ describe("main cron with the real heartbeat runner", () => {
     } finally {
       releaseReply.resolve();
       await outcome;
-    }
-  });
-});
-
-describe("failure repair with the real heartbeat runner", () => {
-  it("answers in the owning topic when heartbeat output stays internal and quiet", async () => {
-    const sandbox = makeSandbox();
-    const group = "-100155462274";
-    const topicTarget = `telegram:${group}:topic:42`;
-    const ownerSessionKey = `agent:main:telegram:group:${group}:topic:42`;
-    const hour = new Date().getUTCHours();
-    const quietWindow = {
-      start: `${String((hour + 2) % 24).padStart(2, "0")}:00`,
-      end: `${String((hour + 3) % 24).padStart(2, "0")}:00`,
-      timezone: "UTC",
-    };
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: sandbox.dir,
-          heartbeat: {
-            every: "1h",
-            target: "none",
-            isolatedSession: true,
-            lightContext: true,
-            activeHours: quietWindow,
-          },
-        },
-      },
-      channels: { telegram: { allowFrom: ["*"] } },
-      session: { store: sandbox.sessionStorePath },
-    };
-    await seedSessionStore(sandbox.sessionStorePath, ownerSessionKey, {
-      lastChannel: "telegram",
-      lastProvider: "telegram",
-      lastTo: topicTarget,
-      lastThreadId: 42,
-      chatType: "group",
-    });
-    const getReply = vi.fn().mockResolvedValue({ text: "Fixed scripts/sync.md." });
-    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: group });
-    const heartbeatRunner = startHeartbeatRunner({
-      cfg,
-      runOnce: (opts) =>
-        runHeartbeatOnce({
-          ...opts,
-          cfg,
-          deps: { getReplyFromConfig: getReply, telegram: sendTelegram },
-        }),
-    });
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      storePath: sandbox.cronStorePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: (text, opts) => {
-        const remove = enqueueSystemEventWithReceipt(text, {
-          sessionKey: opts?.sessionKey ?? ownerSessionKey,
-          contextKey: opts?.contextKey,
-          deliveryContext: opts?.deliveryContext,
-        });
-        return remove ? { accepted: true, remove } : { accepted: false };
-      },
-      requestHeartbeat: (wake) => queueHeartbeat({ ...wake, coalesceMs: 0 }),
-      runIsolatedAgentJob: vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
-        status: "error",
-        error: "cron: job execution timed out",
-      })),
-    });
-    try {
-      await cron.start();
-      const job = await cron.add({
-        enabled: true,
-        name: "meeting sync",
-        schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "Follow scripts/sync.md." },
-        delivery: { mode: "announce", channel: "telegram", to: group, threadId: 42 },
-        owner: { agentId: "main", sessionKey: ownerSessionKey },
-      });
-      await cron.run(job.id, "force");
-      await cron.run(job.id, "force");
-
-      await vi.waitFor(() => expect(sendTelegram).toHaveBeenCalledOnce(), { timeout: 10_000 });
-      const [to, text, options] = sendTelegram.mock.calls[0] ?? [];
-      expect(to).toBe(topicTarget);
-      // The owner's reply alone: no first-heartbeat onboarding preamble.
-      expect(text).toBe("Fixed scripts/sync.md.");
-      expect(options).toMatchObject({ messageThreadId: 42 });
-      const replyCtx = getReply.mock.calls[0]?.[0] as MsgContext | undefined;
-      expect(replyCtx?.SessionKey).toBe(`${ownerSessionKey}:heartbeat`);
-      expect(replyCtx?.Body).toContain(`Automation repair request from the scheduler`);
-    } finally {
-      cron.stop();
-      heartbeatRunner.stop();
-      await vi.waitFor(() => expect(getActiveCronJobCount()).toBe(0));
     }
   });
 });

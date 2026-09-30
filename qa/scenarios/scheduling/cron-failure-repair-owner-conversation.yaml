@@ -12,21 +12,22 @@ scenario:
       - automation.isolated-cron-execution
   gatewayConfigPatch:
     tools:
-      # Keep automations directly declared so the owner turn's tool calls are observable.
+      # Keep tools directly declared so the owner turn's scripted write call resolves.
       toolSearch: false
-  objective: Verify a job past its failure-alert threshold wakes its owner conversation to repair it instead of alerting.
+  objective: Verify a job past its failure-alert threshold asks its owner conversation to repair it instead of alerting.
   successCriteria:
     - Two consecutive failed runs of an owned job send no failure alert.
-    - The owner conversation is woken with the repair request for that job.
+    - The owner conversation receives the repair request for that job as an ordinary turn.
     - Its ordinary turn fixes the workspace step file the job follows.
-    - The repair reply lands in the owner conversation.
+    - The repair turn is in the owner session's own transcript and its reply lands in the owner conversation.
     - The same failures on a job without an owner conversation still send the failure alert.
   docsRefs:
     - docs/automation/cron-jobs/delivery.md
   codeRefs:
     - src/cron/service/failure-alerts.ts
     - src/cron/service/failure-repair-brief.ts
-    - src/cron/service/wake.ts
+    - src/cron/service/notification-dispatch.ts
+    - src/gateway/server-cron.ts
     - extensions/qa-lab/src/providers/mock-openai/mock-openai-cron-failure-repair.ts
   execution:
     kind: flow
@@ -121,7 +122,7 @@ flow:
             message:
               expr: "`owned job was not created as requested: ${JSON.stringify(added)}`"
 
-    - name: two consecutive failures wake the owner conversation, which repairs the job
+    - name: two consecutive failures reach the owner conversation, which repairs the job
       actions:
         - forEach:
             items:
@@ -175,6 +176,13 @@ flow:
             expr: "stepFile.includes(config.fixedStep)"
             message:
               expr: "`owner conversation did not fix the step file: ${JSON.stringify(stepFile)}`"
+        - set: ownerHistory
+          value:
+            expr: "JSON.stringify((await env.gateway.call('chat.history', { sessionKey: ownerSessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) })).messages ?? [])"
+        - assert:
+            expr: "ownerHistory.includes(config.repairBriefNeedle) && ownerHistory.includes(config.repairMarker)"
+            message:
+              expr: "`the repair turn is not in the owner session transcript: ${ownerHistory.slice(-2000)}`"
       detailsExpr: "`job=${jobId} repairRequests=${repairRequests.length} stepFile=${JSON.stringify(stepFile)} reply=${JSON.stringify(repairReplies[0].text)}`"
 
     - name: an unowned job with the same failures still alerts

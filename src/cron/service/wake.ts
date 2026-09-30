@@ -1,9 +1,5 @@
 /** Manual cron wake helper for queueing system events into sessions. */
-import {
-  isSubagentSessionKey,
-  normalizeOptionalAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { isSubagentSessionKey, normalizeOptionalAgentId } from "../../routing/session-key.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import {
   resolveCronNotificationQueueOwner,
@@ -12,26 +8,17 @@ import {
 } from "./notification-intents.js";
 import type { CronServiceState } from "./state.js";
 
-/**
- * Keeps safety notices with their creator and limits failure routes to explicit origins; a
- * failure repair request goes to the conversation that owns the job.
- */
+/** Keeps safety notices with their creator and limits failure routes to explicit origins. */
 export function enqueueCronNotification(
   state: CronServiceState,
   job: CronNotificationJob,
   text: string,
-  kind: "auto-disabled" | "failure-alert" | "failure-repair",
+  kind: "auto-disabled" | "failure-alert",
   routing: CronNotificationRouting,
-  repairOwner?: { sessionKey: string; agentId?: string },
 ): void {
-  const queueOwner = resolveCronNotificationQueueOwner(job, kind);
-  const sessionKey = repairOwner?.sessionKey ?? queueOwner.sessionKey;
-  const agentId =
-    normalizeOptionalAgentId(
-      repairOwner?.agentId ?? parseAgentSessionKey(repairOwner?.sessionKey)?.agentId,
-    ) ??
-    queueOwner.agentId ??
-    normalizeOptionalAgentId(routing.defaultAgentId);
+  const owner = resolveCronNotificationQueueOwner(job, kind);
+  const { sessionKey } = owner;
+  const agentId = owner.agentId ?? normalizeOptionalAgentId(routing.defaultAgentId);
   if (!agentId) {
     throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
   }
@@ -52,9 +39,6 @@ export function enqueueCronNotification(
       reason: "wake",
       agentId,
       sessionKey,
-      // The repair turn answers in its owner conversation even when heartbeat output stays
-      // internal (`heartbeat.target: "none"`), as main-session cron reminders do.
-      ...(repairOwner ? { heartbeat: { target: "last" } } : {}),
     });
   }
 }

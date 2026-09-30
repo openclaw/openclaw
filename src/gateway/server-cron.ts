@@ -90,6 +90,7 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   getGatewaySuspendAdmissionPhase,
   runWithGatewayIndependentRootWorkAdmission,
+  runWithGatewayIndependentRootWorkContinuation,
 } from "../process/gateway-work-admission.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
@@ -133,6 +134,7 @@ import {
 import { toPluginCronJob } from "./server-cron-plugin-job.js";
 import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { dispatchGatewayLifecycleMethod } from "./server-recovery-runtime-context.js";
 import {
   invalidateSessionAutomationIndex,
   claimSessionAutomationEpoch,
@@ -995,6 +997,33 @@ export function buildGatewayCronService(params: {
         webhookToken: params.cfg.cron?.webhookToken,
         ssrfPolicy: webhookSsrfPolicy,
       }),
+    // The owner conversation receives the repair request as an ordinary turn: its own session,
+    // workspace, and tool policy, with the reply delivered to its last route (thread included).
+    runCronFailureRepair: async ({ jobId, repairId, agentId, sessionKey, message }) => {
+      await runWithGatewayIndependentRootWorkContinuation(
+        () =>
+          dispatchGatewayLifecycleMethod(
+            "agent",
+            {
+              ...(agentId ? { agentId } : {}),
+              sessionKey,
+              message,
+              deliver: true,
+              bestEffortDeliver: true,
+              inputProvenance: {
+                kind: "internal_system",
+                sourceTool: "cron_failure_repair",
+                jobId,
+              },
+              idempotencyKey: `cron-failure-repair:${repairId}`,
+            },
+            scheduledGatewayContextResolver
+              ? { resolveGatewayContext: scheduledGatewayContextResolver }
+              : {},
+          ),
+        "cron:failure-repair",
+      );
+    },
     log: toPinoLikeLogger(
       getChildLogger({ module: "cron", storeKey: storePath }),
       getResolvedLoggerSettings().level,

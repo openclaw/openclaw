@@ -46,9 +46,9 @@ export function buildCronFailureRepairBrief(params: {
     }),
     "",
     "Diagnose the failure, then do exactly one:",
-    `1. Transient outage (provider, network, rate limit, or temporary upstream error): change nothing and reply exactly ${SILENT_REPLY_TOKEN}.`,
-    `2. Fixable job logic (wrong instructions, broken or missing workspace helper script, wrong tool or arguments): fix it durably in the workspace. When the payload points at a workspace file (for example "follow scripts/<job>.md"), edit that file. If the automation itself (id ${job.id}) must change and your tools cannot change it, propose one concrete change the user can approve with "go ahead". Then reply with one short sentence saying what you fixed or proposing that change, or ${SILENT_REPLY_TOKEN}.`,
-    "3. Needs the user (expired or missing credentials, access only they can grant, or a decision only they can make): tell the user concisely what is wrong and what they need to do.",
+    `1. Transient (provider outage, network, rate limit, or temporary upstream error): change nothing and reply exactly ${SILENT_REPLY_TOKEN}.`,
+    "2. Fixable in the workspace (for example the helper script or instructions file the payload follows): fix it, then reply with one line saying what you fixed.",
+    "3. Otherwise: ask the user for exactly what you need to fix it.",
     "If the automation keeps failing, the user gets the normal failure alert.",
   ].join("\n");
 }
