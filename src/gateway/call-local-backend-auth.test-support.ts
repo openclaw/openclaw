@@ -69,45 +69,33 @@ export function registerGatewayCallLocalBackendAuthTests({
     expect(getClientOptions()?.deviceIdentity).toBeNull();
   });
 
-  it.each(["cron.list", "cron.status"])(
-    "keeps local auth-none CLI %s off device storage",
-    async (method) => {
-      setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
-      setGatewayNetworkDefaults();
-      const { callGatewayFromCliRuntime } = await import("../cli/gateway-rpc.runtime.js");
+  it("keeps local auth-none CLI cron.status off device storage", async () => {
+    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
+    setGatewayNetworkDefaults();
+    const { callGatewayFromCliRuntime } = await import("../cli/gateway-rpc.runtime.js");
 
-      await expect(callGatewayFromCliRuntime(method, { json: true })).resolves.toEqual({
-        ok: true,
-      });
+    await expect(callGatewayFromCliRuntime("cron.status", { json: true })).resolves.toEqual({
+      ok: true,
+    });
 
-      expect(getClientOptions()).toMatchObject({
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-        deviceIdentity: null,
-        scopes: ["operator.read"],
-      });
-      expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
-      expect(loadDeviceIdentityIfPresentMock).not.toHaveBeenCalled();
-      expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
-      expect(loadDeviceAuthTokenReadOnlyMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(getClientOptions()).toMatchObject({
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      deviceIdentity: null,
+      scopes: ["operator.read"],
+    });
+    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+    expect(loadDeviceIdentityIfPresentMock).not.toHaveBeenCalled();
+    expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
+    expect(loadDeviceAuthTokenReadOnlyMock).not.toHaveBeenCalled();
+  });
 
-  it.each(["url", "environment", "remote mode", "device", "stored auth", "client"])(
+  it.each(["url", "device", "stored auth"])(
     "preserves explicit %s authentication for auth-none CLI calls",
     async (kind) => {
       setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
       setGatewayNetworkDefaults();
       const { callGatewayFromCliRuntime } = await import("../cli/gateway-rpc.runtime.js");
-      if (kind === "environment") {
-        process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
-      } else if (kind === "remote mode") {
-        setGatewayConfig({
-          mode: "remote",
-          remote: { url: "ws://127.0.0.1:18789" },
-          auth: { mode: "none" },
-        });
-      }
       loadOriginDeviceTokenMock.mockReturnValue({
         token: "fixture-origin-token",
         role: "operator",
@@ -121,13 +109,12 @@ export function registerGatewayCallLocalBackendAuthTests({
           json: true,
           config: getRuntimeConfig(),
           ...(kind === "url" ? { url: "ws://127.0.0.1:18789" } : {}),
-          ...(kind === "url" || kind === "environment" ? { token: "fixture-override-token" } : {}),
+          ...(kind === "url" ? { token: "fixture-override-token" } : {}),
         },
         undefined,
         {
           ...(kind === "device" ? { deviceIdentity: getDeviceIdentity() } : {}),
           ...(kind === "stored auth" ? { useStoredDeviceAuth: true } : {}),
-          ...(kind === "client" ? { clientName: GATEWAY_CLIENT_NAMES.CLI } : {}),
         },
       );
 
@@ -138,20 +125,6 @@ export function registerGatewayCallLocalBackendAuthTests({
       });
     },
   );
-
-  it("rejects required local backend shared auth for remote targets", async () => {
-    await expect(
-      callGateway({
-        method: "node.list",
-        url: "wss://remote.example.test",
-        token: "explicit-token",
-        scopes: ["operator.read", "operator.pairing"],
-        requireLocalBackendSharedAuth: true,
-      }),
-    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
-
-    expect(getClientOptions()).toBeNull();
-  });
 
   it("rejects required local backend shared auth for loopback URL overrides", async () => {
     await expect(

@@ -83,13 +83,43 @@ suite.define(() => {
           ),
         )
         .toBe(true);
+      const narrationText = "Checking the running session";
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey: secondKey,
+        runId: "run-second",
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: narrationText }] },
+      });
       await gateway.emitGatewayEvent("agent", {
         sessionKey: secondKey,
         runId: "run-second",
         stream: "tool",
-        data: { name: "bash" },
+        data: { name: "bash", toolCallId: "sidebar-tool", phase: "start" },
       });
-      await secondRow.getByText("Using bash").waitFor();
+      await gateway.emitGatewayEvent("agent", {
+        sessionKey: secondKey,
+        runId: "run-second",
+        stream: "item",
+        data: {
+          kind: "tool",
+          itemId: "tool:sidebar-tool",
+          toolCallId: "sidebar-tool",
+          name: "bash",
+          phase: "update",
+          title: "Shell",
+          progressText: "Checking the running session",
+        },
+      });
+      const narration = secondRow.getByText("Checking the running session", { exact: true });
+      const tool = secondRow.getByRole("img", { name: "Tool: bash", exact: true });
+      await narration.waitFor();
+      await tool.waitFor();
+      expect(
+        await secondRow.locator(".sidebar-recent-session__title-row .sidebar-session-tool").count(),
+      ).toBe(0);
+      expect(
+        await secondRow.locator(".sidebar-recent-session__details .sidebar-session-tool").count(),
+      ).toBe(1);
       const heightBefore = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
@@ -98,15 +128,14 @@ suite.define(() => {
             path.join(suite.artifactDir, "sidebar-subtitle-stability"),
             "01-running-before-open.png",
           ),
-          await takeControlUiElementScreenshot(page, secondRow, [
-            secondRow.getByText("Using bash"),
-          ]),
+          await takeControlUiElementScreenshot(page, secondRow, [narration, tool]),
         );
       }
 
       await secondRow.locator("a.sidebar-recent-session__link").click();
       await expect.poll(() => secondRow.getAttribute("class")).toContain("--active");
-      await secondRow.getByText("Using bash").waitFor();
+      await narration.waitFor();
+      await tool.waitFor();
       const heightAfter = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
 
       // Sub-pixel tolerance: getBoundingClientRect returns 1/65536 fractions that
@@ -120,9 +149,7 @@ suite.define(() => {
             path.join(suite.artifactDir, "sidebar-subtitle-stability"),
             "02-running-after-open.png",
           ),
-          await takeControlUiElementScreenshot(page, secondRow, [
-            secondRow.getByText("Using bash"),
-          ]),
+          await takeControlUiElementScreenshot(page, secondRow, [narration, tool]),
         );
       }
     } finally {

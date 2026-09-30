@@ -169,8 +169,8 @@ async function createFixture(
     admins,
     gateway,
     context,
-    replaceGatewayContext: () => {
-      gateway = createCommandOwnerTestGateway(cfg);
+    replaceGatewayContext: (replacement?: GatewayRequestContext) => {
+      gateway = replacement ?? createCommandOwnerTestGateway(cfg);
     },
     unregister,
     retire: () => {

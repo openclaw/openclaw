@@ -30,10 +30,10 @@ import {
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AgentsApiClient } from "./agentsapi-client.js";
-import { collectOutputs, prepareInputs, uploadInputs } from "./agentsapi-files.js";
+import * as files from "./agentsapi-files.js";
 import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
-import { buildAgentsApiInstructions, buildAgentsApiTurnContext } from "./agentsapi-prompt.js";
+import { buildAgentsApiInstructions, buildAgentsApiTurnInput } from "./agentsapi-prompt.js";
 import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
@@ -250,13 +250,15 @@ export async function runAgentsApiAttempt(
       }
       await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
     }
-    if (environment.type === "self_hosted" && params.media?.length) {
-      throw new Error("Agents API file transfers require an OpenAI-hosted environment");
-    }
     const inputs =
       environment.type === "openai_hosted"
-        ? await prepareInputs(params.media, params.workspaceDir, assertCurrent, controller.signal)
-        : { files: [], mappingText: "" };
+        ? await files.prepareInputs(
+            params.media,
+            params.workspaceDir,
+            assertCurrent,
+            controller.signal,
+          )
+        : await files.prepareSelfHostedInputs(params, assertCurrent, controller.signal);
     const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);
     const creatingSession = !remoteSessionId;
@@ -322,7 +324,13 @@ export async function runAgentsApiAttempt(
       assertCurrent();
     }
     if (!creatingSession && inputs.files.length) {
-      await uploadInputs(client, remoteSessionId, inputs.files, assertCurrent, controller.signal);
+      await files.uploadInputs(
+        client,
+        remoteSessionId,
+        inputs.files,
+        assertCurrent,
+        controller.signal,
+      );
     }
     projection = new AgentsApiMessageProjection(
       projectionSettlement.params,
@@ -411,13 +419,13 @@ export async function runAgentsApiAttempt(
     });
     lifecycle.emitLifecycleStart({ provider: "openai", model: params.model.id });
     const result = await native.run(
-      [
-        buildAgentsApiTurnContext(params, surface.declarations),
+      buildAgentsApiTurnInput(
+        params,
+        surface.declarations,
         promptBuild.prompt,
         inputs.mappingText,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
+        environment.type,
+      ),
       async () => {
         await params.userTurnTranscriptRecorder?.persistApproved();
       },
@@ -440,7 +448,7 @@ export async function runAgentsApiAttempt(
       assertCurrent();
       try {
         if (environment.type === "openai_hosted") {
-          outputMedia = await collectOutputs(
+          outputMedia = await files.collectOutputs(
             client,
             remoteSessionId,
             result.turn.id,

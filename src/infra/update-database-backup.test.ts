@@ -61,9 +61,77 @@ async function fixture(externalAgents = false) {
     shared,
     directory,
     external,
+    input,
+    inspectionPlan,
     capture: () => createUpdateDatabaseBackupInProcess({ ...input, inspectionPlan }),
   };
 }
+
+it.each(["legacy", "current"] as const)(
+  "captures the %s parent's database inventory",
+  async (dialect) => {
+    const f = await fixture();
+    const inspectionPlan = structuredClone(f.inspectionPlan);
+    if (dialect === "legacy") {
+      // Released parents parse only spellings and discard the candidate's optional ownership fields.
+      for (const [, database] of inspectionPlan.files) {
+        delete database.owners;
+      }
+    }
+    const before = await fs.readFile(f.shared);
+    const backup = await createUpdateDatabaseBackupInProcess({ ...f.input, inspectionPlan });
+    expect(backup.sourcePaths).toEqual(
+      f.inspectionPlan.files.flatMap(([, database]) => database.spellings).toSorted(),
+    );
+    expect(backup.databaseOwners).toEqual(
+      dialect === "legacy"
+        ? undefined
+        : [
+            { path: f.shared, role: "global" },
+            {
+              path: path.join(f.stateDir, "agents/main/agent/openclaw-agent.sqlite"),
+              role: "agent",
+              agentId: "main",
+            },
+          ].toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    );
+    expect(backup.databases).toHaveLength(1);
+    const snapshot = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+    try {
+      expect(snapshot.prepare("SELECT rowid,value FROM payload").all()).toEqual([
+        { rowid: 42, value: "retained" },
+      ]);
+    } finally {
+      snapshot.close();
+    }
+    expect(await fs.readFile(f.shared)).toEqual(before);
+  },
+);
+
+it.each(["path", "owner"] as const)(
+  "still refuses a changed database %s after discovery",
+  async (change) => {
+    const f = await fixture(true);
+    const db = new DatabaseSync(f.shared);
+    db.exec("ALTER TABLE agent_databases ADD COLUMN agent_id TEXT");
+    db.prepare("UPDATE agent_databases SET agent_id = ?").run("before");
+    db.close();
+    const inspectionPlan = await discoverUpdateStateSchemaInspectionInProcess(f.input);
+    const changed = new DatabaseSync(f.shared);
+    try {
+      if (change === "owner") {
+        changed.prepare("UPDATE agent_databases SET agent_id = ?").run("after");
+      } else {
+        changed.exec("DELETE FROM agent_databases");
+      }
+    } finally {
+      changed.close();
+    }
+    await expect(
+      createUpdateDatabaseBackupInProcess({ ...f.input, inspectionPlan }),
+    ).rejects.toThrow("Update database inventory changed during backup");
+  },
+);
 
 it.each(["", "-wal", "-shm", "-journal"])(
   "refuses a hard-linked database family file %s before publishing any rollback snapshot",

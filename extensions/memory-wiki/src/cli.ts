@@ -337,25 +337,13 @@ function formatGatewayJsonOrText<T>(
     : sanitizeGatewayStringForTerminal(render(result));
 }
 
-async function runWikiCommandWithSummary<T>(params: {
-  json?: boolean;
-  run: () => Promise<T>;
-  render: (result: T) => string;
-}): Promise<T> {
-  const result = await params.run();
-  writeOutput(formatJsonOrText(result, params.json, params.render));
+function printWikiResult<T>(
+  result: T,
+  json: boolean | undefined,
+  render: (result: T) => string,
+): T {
+  writeOutput(formatJsonOrText(result, json, render));
   return result;
-}
-
-async function runSyncedWikiCommandWithSummary<T>(params: {
-  config: ResolvedMemoryWikiConfig;
-  appConfig?: OpenClawConfig;
-  json?: boolean;
-  run: () => Promise<T>;
-  render: (result: T) => string;
-}): Promise<T> {
-  await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-  return runWikiCommandWithSummary(params);
 }
 
 function addWikiSearchConfigOptions<T extends Command>(command: T): T {
@@ -449,15 +437,11 @@ async function runWikiBridgeImport(params: {
     writeOutput(formatGatewayJsonOrText(result, params.json, render));
     return result;
   }
-  return runWikiCommandWithSummary({
-    json: params.json,
-    run: () =>
-      syncMemoryWikiImportedSources({
-        config: params.config,
-        appConfig: params.appConfig,
-      }),
+  return printWikiResult(
+    await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig }),
+    params.json,
     render,
-  });
+  );
 }
 
 function formatChatGptImportSummary(result: ChatGptImportResult): string {
@@ -558,12 +542,12 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       const { config } = requireCommandContext();
-      await runWikiCommandWithSummary({
-        json: opts.json,
-        run: () => initializeMemoryWikiVault(config),
-        render: (value) =>
+      printWikiResult(
+        await initializeMemoryWikiVault(config),
+        opts.json,
+        (value) =>
           `Initialized wiki vault at ${value.rootDir} (${value.createdDirectories.length} dirs, ${value.createdFiles.length} files).`,
-      });
+      );
     });
 
   wiki
@@ -573,14 +557,13 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       const { appConfig, config } = requireCommandContext();
-      await runSyncedWikiCommandWithSummary({
-        config,
-        appConfig,
-        json: opts.json,
-        run: () => compileMemoryWikiVault(config),
-        render: (value) =>
+      await syncMemoryWikiImportedSources({ config, appConfig });
+      printWikiResult(
+        await compileMemoryWikiVault(config),
+        opts.json,
+        (value) =>
           `Compiled wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
-      });
+      );
     });
 
   wiki
@@ -590,14 +573,13 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       const { appConfig, config } = requireCommandContext();
-      await runSyncedWikiCommandWithSummary({
-        config,
-        appConfig,
-        json: opts.json,
-        run: () => lintMemoryWikiVault(config),
-        render: (value) =>
+      await syncMemoryWikiImportedSources({ config, appConfig });
+      printWikiResult(
+        await lintMemoryWikiVault(config),
+        opts.json,
+        (value) =>
           `Linted wiki vault at ${value.vaultRoot} (${value.issueCount} issues, report: ${value.reportPath}).`,
-      });
+      );
     });
 
   wiki
@@ -609,17 +591,12 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (inputPath: string, opts: WikiIngestCommandOptions) => {
       const { config } = requireCommandContext();
-      await runWikiCommandWithSummary({
-        json: opts.json,
-        run: () =>
-          ingestMemoryWikiSource({
-            config,
-            inputPath,
-            title: opts.title,
-          }),
-        render: (value) =>
+      printWikiResult(
+        await ingestMemoryWikiSource({ config, inputPath, title: opts.title }),
+        opts.json,
+        (value) =>
           `Ingested ${value.sourcePath} into ${value.pagePath}. Refreshed ${value.indexUpdatedFiles.length} index file${value.indexUpdatedFiles.length === 1 ? "" : "s"}.`,
-      });
+      );
     });
 
   const okf = wiki.command("okf").description("Import Open Knowledge Format bundles");
@@ -631,15 +608,11 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (bundlePath: string, opts: WikiJsonOptions) => {
       const { config } = requireCommandContext();
-      await runWikiCommandWithSummary({
-        json: opts.json,
-        run: () =>
-          importMemoryWikiOkfBundle({
-            config,
-            bundlePath,
-          }),
-        render: formatOkfImportSummary,
-      });
+      printWikiResult(
+        await importMemoryWikiOkfBundle({ config, bundlePath }),
+        opts.json,
+        formatOkfImportSummary,
+      );
     });
 
   addWikiSearchConfigOptions(
@@ -792,16 +765,12 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       if (config.vault.scope === "agent") {
         throw new Error("Unsafe-local import does not support memory-wiki vault.scope=agent.");
       }
-      await runWikiCommandWithSummary({
-        json: opts.json,
-        run: () =>
-          syncMemoryWikiImportedSources({
-            config,
-            appConfig,
-          }),
-        render: (value) =>
+      printWikiResult(
+        await syncMemoryWikiImportedSources({ config, appConfig }),
+        opts.json,
+        (value) =>
           `Unsafe-local import synced ${value.artifactCount} artifacts (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`,
-      });
+      );
     });
 
   const chatgpt = wiki
@@ -816,16 +785,15 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (opts: WikiChatGptImportCommandOptions) => {
       const { config } = requireCommandContext();
-      await runWikiCommandWithSummary({
-        json: opts.json,
-        run: () =>
-          importChatGptConversations({
-            config,
-            exportPath: opts.export!,
-            dryRun: opts.dryRun,
-          }),
-        render: formatChatGptImportSummary,
-      });
+      printWikiResult(
+        await importChatGptConversations({
+          config,
+          exportPath: opts.export!,
+          dryRun: opts.dryRun,
+        }),
+        opts.json,
+        formatChatGptImportSummary,
+      );
     });
   chatgpt
     .command("rollback")
@@ -835,15 +803,11 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (runId: string, opts: WikiJsonOptions) => {
       const { config } = requireCommandContext();
-      await runWikiCommandWithSummary({
-        json: opts.json,
-        run: () =>
-          rollbackChatGptImportRun({
-            config,
-            runId,
-          }),
-        render: formatChatGptRollbackSummary,
-      });
+      printWikiResult(
+        await rollbackChatGptImportRun({ config, runId }),
+        opts.json,
+        formatChatGptRollbackSummary,
+      );
     });
 
   const obsidian = wiki.command("obsidian").description("Run official Obsidian CLI helpers");
@@ -853,14 +817,11 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       requireCommandContext();
-      await runWikiCommandWithSummary({
-        json: opts.json,
-        run: () => probeObsidianCli(),
-        render: (value) =>
-          value.available
-            ? `Obsidian CLI available at ${value.command}`
-            : "Obsidian CLI is not available on PATH.",
-      });
+      printWikiResult(await probeObsidianCli(), opts.json, (value) =>
+        value.available
+          ? `Obsidian CLI available at ${value.command}`
+          : "Obsidian CLI is not available on PATH.",
+      );
     });
   for (const action of OBSIDIAN_ACTIONS) {
     const command = obsidian.command(action.command).description(action.description);
@@ -871,11 +832,11 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     const run = async (value: string | undefined, opts: WikiJsonOptions) => {
       const { config } = requireCommandContext();
       assertOfficialObsidianCliSupported(config);
-      await runWikiCommandWithSummary({
-        json: opts.json,
-        run: () => runObsidianAction({ config, action, value }),
-        render: (result) => result.stdout.trim() || action.success,
-      });
+      printWikiResult(
+        await runObsidianAction({ config, action, value }),
+        opts.json,
+        (result) => result.stdout.trim() || action.success,
+      );
     };
     if (action.argument) {
       command.action((value: string, opts: WikiJsonOptions) => run(value, opts));

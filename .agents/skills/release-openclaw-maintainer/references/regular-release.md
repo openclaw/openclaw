@@ -109,8 +109,8 @@ class must pass. See [shared release boundaries](../SKILL.md#shared-release-boun
 failures and use the controller's bounded retry for affected required proof.
 Continue eligible parents to seal; a parent that produced its own sealed
 candidate artifacts requires a new parent with verified successful evidence
-reuse. Diagnose selected test failures before rerunning; an untouched test or
-passing replay alone does not prove a flake or a fix. Only a confirmed product
+reuse. Classify each selected test failure as a real blocker or a flake before
+rerunning, per the shared release boundaries. Only a confirmed product
 defect that a required lane blocks on creates a new Code SHA: the
 update/install path (previous stable updates to the candidate, install smoke,
 pack budget, worker bundle), the bytes to publish, or another required gate
