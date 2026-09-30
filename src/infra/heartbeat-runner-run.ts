@@ -8,6 +8,8 @@ import {
 } from "../auto-reply/reply/reply-operation-run-state.js";
 import { withReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { MsgContext } from "../auto-reply/templating.js";
+import { parseSessionDeliveryRoute } from "../routing/session-key.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveHeartbeatTimeoutOverrideSeconds } from "./heartbeat-config.js";
 import { createHeartbeatDispatch, deliverHeartbeatDispatch } from "./heartbeat-dispatch.js";
@@ -50,6 +52,14 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     });
     return { status: "skipped", reason: "alerts-disabled" };
   }
+  // Message tools infer external destinations from encoded session routes.
+  const sourceRoute = parseSessionDeliveryRoute(runSessionKey);
+  const internalSource =
+    prepared.run.kind === "shared" &&
+    delivery.channel === "none" &&
+    (!sourceRoute || sourceRoute.channel === INTERNAL_MESSAGE_CHANNEL)
+      ? prepared.internalProjection
+      : undefined;
   const policy = createHeartbeatDispatch(opts, wake, prepared);
   const state: ReplyOperationRunState = { heartbeat: policy };
   const signal = getHeartbeatWakeAbortSignal();
@@ -83,6 +93,18 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       AccountId: delivery.accountId,
       ChatType: delivery.chatType,
       MessageThreadId: delivery.threadId,
+      // Internal delivery records have no external route. Carry the admitted
+      // WebChat source into prompts and tools instead of the heartbeat placeholder.
+      ...(internalSource
+        ? {
+            Provider: INTERNAL_MESSAGE_CHANNEL,
+            Surface: INTERNAL_MESSAGE_CHANNEL,
+            OriginatingChannel: INTERNAL_MESSAGE_CHANNEL,
+            OriginatingTo: internalSource.sessionKey,
+            To: internalSource.sessionKey,
+            ChatType: "direct",
+          }
+        : {}),
       InternalTurnSource: prepared.hasExecCompletion
         ? "exec"
         : prepared.hasCronEvents
@@ -112,6 +134,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       replyOptions: withReplySystemEventContext<InternalGetReplyOptions>(
         {
           isHeartbeat: true,
+          requireExplicitMessageTarget: !internalSource,
           // Isolated heartbeats mint a fresh session ID per run, so nothing later
           // reuses this run's bundle MCP runtime; retire it at settlement.
           ...(prepared.run.kind === "isolated" ? { cleanupBundleMcpOnRunEnd: true } : {}),
