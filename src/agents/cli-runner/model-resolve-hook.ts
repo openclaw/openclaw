@@ -23,6 +23,11 @@ import {
   buildBeforeModelResolveAttachments,
   resolveHookModelSelection,
 } from "../embedded-agent-runner/run/setup.js";
+import {
+  loadManifestModelCatalog,
+  modelSupportsVision,
+  overlayConfiguredModelCatalog,
+} from "../model-catalog.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -164,6 +169,40 @@ async function runCliModelResolveHookForTurn(
 }
 
 /**
+ * Re-derives image support for a routed model from the same catalog CLI preparation
+ * reads. Returns undefined when the routed model has no catalog entry: an entry is
+ * the only evidence that can overturn the caller's derived capability, and keeping
+ * the caller's value for unknown models avoids inventing a capability change.
+ */
+function resolveRoutedModelVisionCapability(params: {
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  provider: string;
+  modelId: string;
+}): boolean | undefined {
+  if (!params.config) {
+    return undefined;
+  }
+  const catalog = overlayConfiguredModelCatalog({
+    catalog: loadManifestModelCatalog({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    }),
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+  // Literal identity only: the routed id came from the hook and needs no route
+  // canonicalization, and a miss must keep the caller's capability instead of
+  // consulting the provider policy surface (an aliasing side quest here).
+  const provider = params.provider.trim().toLowerCase();
+  const modelId = params.modelId.trim();
+  const entry = catalog.find(
+    (candidate) => candidate.provider.trim().toLowerCase() === provider && candidate.id === modelId,
+  );
+  return entry ? modelSupportsVision(entry) : undefined;
+}
+
+/**
  * Runs the CLI-side hook for one top-level turn and folds any same-backend override
  * into the run's model before CLI preparation normalizes it for the child process.
  * Synthetic turns (isolated completions, backend control operations) never enter
@@ -201,6 +240,19 @@ export async function applyCliModelResolveHookForRun(params: RunCliAgentParams):
     params.model = hookModelId;
     if (params.requesterModel) {
       params.requesterModel = { ...params.requesterModel, model: hookModelId };
+    }
+    // The caller derived modelHasVision for its original selection. Routing to a
+    // different model in the same backend must re-derive it, or CLI preparation
+    // copies the caller model's image support into the MCP grant and the
+    // vision-dependent tool surface reflects the wrong model.
+    const routedVision = resolveRoutedModelVisionCapability({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      provider: params.hookModelProvider ?? params.modelProvider ?? params.provider,
+      modelId: hookModelId,
+    });
+    if (routedVision !== undefined) {
+      params.modelHasVision = routedVision;
     }
   }
 }

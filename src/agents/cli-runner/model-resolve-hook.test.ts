@@ -24,6 +24,35 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunnerStub,
 }));
 
+// The bundled plugin manifest snapshot is unavailable inside the compiled test
+// subprocess; vision re-derivation tests drive a configured-catalog-only overlay.
+vi.mock("../model-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../model-catalog.js")>();
+  return {
+    ...actual,
+    loadManifestModelCatalog: () => [],
+    overlayConfiguredModelCatalog: ({ config }: { config?: OpenClawConfig }) =>
+      Object.entries(config?.models?.providers ?? {}).flatMap(([provider, providerConfig]) =>
+        (providerConfig?.models ?? []).map((model) => {
+          const entry: {
+            provider: string;
+            id: string;
+            name: string;
+            input?: readonly string[];
+          } = {
+            provider,
+            id: model?.id ?? "",
+            name: model?.name ?? model?.id ?? "",
+          };
+          if (Array.isArray(model?.input)) {
+            entry.input = model.input;
+          }
+          return entry;
+        }),
+      ),
+  };
+});
+
 function stubHookRunner(params: {
   hasBeforeModelResolve?: boolean;
   override?: { providerOverride?: string; modelOverride?: string };
@@ -41,6 +70,34 @@ const CLI_CONFIG: OpenClawConfig = {
         "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
         "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
         "openai/gpt-5.6": { agentRuntime: { id: "openclaw" } },
+      },
+    },
+  },
+};
+
+const VISION_CATALOG_CONFIG: OpenClawConfig = {
+  agents: {
+    defaults: {
+      model: "anthropic/claude-opus-5-5",
+      models: {
+        // Runtime mapping: every routable model resolves back to the claude-cli
+        // backend, including the vision-catalog-unlisted one in the keep test.
+        "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
+        "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
+        "anthropic/claude-vision-sonnet": { agentRuntime: { id: "claude-cli" } },
+        "anthropic/claude-vision-unlisted": { agentRuntime: { id: "claude-cli" } },
+        "openai/gpt-5.6": { agentRuntime: { id: "openclaw" } },
+      },
+    },
+  },
+  models: {
+    providers: {
+      anthropic: {
+        models: [
+          { id: "claude-opus-5-5", input: ["text", "image"] },
+          { id: "claude-sonnet-5", input: ["text"] },
+          { id: "claude-vision-sonnet", input: ["text", "image"] },
+        ],
       },
     },
   },
@@ -172,5 +229,57 @@ describe("applyCliModelResolveHookForRun", () => {
     );
     expect(params.model).toBe("claude-opus-5-5");
     expect(hookRunnerStub.runBeforeModelResolve).not.toHaveBeenCalled();
+  });
+
+  it("re-derives vision capability from the catalog when routing to a text-only model", async () => {
+    stubHookRunner({
+      hasBeforeModelResolve: true,
+      override: { providerOverride: "anthropic", modelOverride: "claude-sonnet-5" },
+    });
+    const params = { ...BASE_PARAMS, config: VISION_CATALOG_CONFIG, modelHasVision: true };
+    await applyCliModelResolveHookForRun(
+      params as Parameters<typeof applyCliModelResolveHookForRun>[0],
+    );
+    expect(params.model).toBe("claude-sonnet-5");
+    expect(params.modelHasVision).toBe(false);
+  });
+
+  it("grants vision when routing from a text-only model to a vision-capable model", async () => {
+    stubHookRunner({
+      hasBeforeModelResolve: true,
+      override: { providerOverride: "anthropic", modelOverride: "claude-vision-sonnet" },
+    });
+    const params = { ...BASE_PARAMS, config: VISION_CATALOG_CONFIG, modelHasVision: false };
+    await applyCliModelResolveHookForRun(
+      params as Parameters<typeof applyCliModelResolveHookForRun>[0],
+    );
+    expect(params.model).toBe("claude-vision-sonnet");
+    expect(params.modelHasVision).toBe(true);
+  });
+
+  it("keeps the caller vision capability when the routed model has no catalog entry", async () => {
+    stubHookRunner({
+      hasBeforeModelResolve: true,
+      override: { providerOverride: "anthropic", modelOverride: "claude-vision-unlisted" },
+    });
+    const params = { ...BASE_PARAMS, config: VISION_CATALOG_CONFIG, modelHasVision: true };
+    await applyCliModelResolveHookForRun(
+      params as Parameters<typeof applyCliModelResolveHookForRun>[0],
+    );
+    expect(params.model).toBe("claude-vision-unlisted");
+    expect(params.modelHasVision).toBe(true);
+  });
+
+  it("keeps the caller vision capability when the override is rejected", async () => {
+    stubHookRunner({
+      hasBeforeModelResolve: true,
+      override: { providerOverride: "openai", modelOverride: "gpt-5.6" },
+    });
+    const params = { ...BASE_PARAMS, config: VISION_CATALOG_CONFIG, modelHasVision: true };
+    await applyCliModelResolveHookForRun(
+      params as Parameters<typeof applyCliModelResolveHookForRun>[0],
+    );
+    expect(params.model).toBe("claude-opus-5-5");
+    expect(params.modelHasVision).toBe(true);
   });
 });
