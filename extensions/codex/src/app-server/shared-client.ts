@@ -1281,13 +1281,8 @@ function createOlderDesktopGenerationDrainWait(params: {
     return { promise: Promise.resolve(), cancel: () => undefined };
   }
   const state = getSharedCodexAppServerClientState();
-  let settled = false;
   const { promise, resolve: resolveWait } = createDeferred<void>();
   const cancel = () => {
-    if (settled) {
-      return;
-    }
-    settled = true;
     state.desktopGenerationDrainChecks.delete(check);
     resolveWait();
   };
