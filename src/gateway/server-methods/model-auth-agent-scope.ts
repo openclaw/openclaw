@@ -62,13 +62,12 @@ export function resolveModelAuthAgentScope(
 }
 
 export function modelAuthAgentScopeError(scope: Extract<ModelAuthAgentScopeResult, { ok: false }>) {
-  return scope.error ?? unknownModelAuthAgentIdError(scope.agentId);
-}
-
-function unknownModelAuthAgentIdError(agentId: string) {
   const details: UnknownAgentIdErrorDetails = {
     code: GatewayErrorDetailCodes.UNKNOWN_AGENT_ID,
-    agentId,
+    agentId: scope.agentId,
   };
-  return errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentId}"`, { details });
+  return (
+    scope.error ??
+    errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${scope.agentId}"`, { details })
+  );
 }

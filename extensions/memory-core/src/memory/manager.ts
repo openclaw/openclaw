@@ -26,6 +26,7 @@ import type { EmbeddingProvider } from "./embeddings.js";
 import { getMemoryManagerLifecycle } from "./lifecycle.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
+import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   resolveEffectiveMemorySearchSettings,
   resolveMemoryEmbeddingProviderRequirement,
@@ -33,12 +34,8 @@ import {
   type MemoryEmbeddingProviderRequirement,
 } from "./manager-provider-lifecycle.js";
 import { getLocalEmbeddingRuntimeFacts } from "./manager-provider-runtime-facts.js";
+import type { MemoryProviderLifecycleState } from "./manager-provider-state.js";
 import {
-  createPendingMemoryProviderLifecycle,
-  type MemoryProviderLifecycleState,
-} from "./manager-provider-state.js";
-import {
-  isTransientMemoryIndexManagerPurpose,
   MemoryManagerRegistry,
   type MemoryManagerProviderFactory,
   normalizeMemoryIndexManagerPurpose,
@@ -54,6 +51,7 @@ import {
   collectMemoryStorageStatus,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
+import type { MemoryEmbeddingBatchConfig } from "./manager-sync-base.js";
 import {
   MemoryTargetedSessionSyncQueue,
   hasTargetedSessionSyncParams,
@@ -88,16 +86,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected readonly settings: ResolvedMemorySearchConfig;
   protected readonly providerRequirement: MemoryEmbeddingProviderRequirement;
   private closePromise: Promise<void> | null = null;
-  private closeTeardownComplete = false;
+  private publishedDatabaseReleased = false;
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
-  protected batch: {
-    enabled: boolean;
-    wait: boolean;
-    concurrency: number;
-    pollIntervalMs: number;
-    timeoutMs: number;
-  };
+  protected batch: MemoryEmbeddingBatchConfig;
   protected publishedDatabase: MemoryIndexDatabase;
   protected readonly cache: { enabled: boolean; maxEntries?: number };
   private syncing: Promise<void> | null = null;
@@ -187,7 +179,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                       );
                 // Filesystem discovery is asynchronous and must not hold the
                 // agent database's write admission while attaching watchers.
-                await manager.awaitMemoryWatcherReady();
+                await manager.memoryWatcherReady;
                 if (params.inspectSources) {
                   await manager.inspectDiagnosticSourceState();
                 }
@@ -245,7 +237,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       store: { ...effectiveSettings.store, databasePath: dbPath },
     };
     this.providerRequirement = params.providerRequirement;
-    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.settings.provider);
+    this.providerLifecycle = { mode: "pending", requestedProvider: this.settings.provider };
     for (const memorySource of effectiveSettings.sources) {
       this.sources.add(memorySource);
     }
@@ -289,7 +281,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.indexIdentityDirty =
         this.indexIdentityState.status === "mismatched" ||
         (this.indexIdentityState.status === "missing" && this.sources.has("memory"));
-      const transient = isTransientMemoryIndexManagerPurpose(this.purpose);
+      const transient = this.purpose !== "default";
       const invalidatedSources = new Set(
         (
           this.db
@@ -352,7 +344,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       runMemorySearchMaintenance({
         reason: params.reason,
         takeDirtyGeneration: () => this.takeSearchMaintenanceRequest(),
-        restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
+        restoreDirtyGeneration: (generation) => this.adoptReindexRetryState(generation),
         acquireManager: () =>
           MemoryIndexManager.get({
             cfg: this.cfg,
@@ -487,7 +479,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         const canDegrade =
           this.providerRequirement.mode === "optional" &&
           (options?.allowEmbeddingBootstrapFallback || hadBootstrapFailure) &&
-          this.shouldFallbackOnError(err);
+          isMemoryEmbeddingOperationError(err);
         if (!canDegrade) {
           throw err;
         }
@@ -642,7 +634,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       return;
     }
     const closeOperation = this.withPublishedDatabase(() =>
-      this.closeTeardownComplete ? this.retryFailedClose() : this.closeOnce(),
+      this.publishedDatabaseReleased ? this.retryFailedClose() : this.closeOnce(),
     );
     this.closePromise = closeOperation;
     try {
@@ -657,9 +649,27 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   private async retryFailedClose(): Promise<void> {
+    const errors: unknown[] = [];
+    // A retained observer failure must not strand independently owned resources.
+    await this.closeWatchResources().catch((error: unknown) => errors.push(error));
     const retirementErrors = await this.drainPendingProviderRetirements();
     if (this.providersPendingRetirement.size > 0) {
-      throw toErrorObject(retirementErrors.at(-1), "Embedding provider retirement failed");
+      errors.push(toErrorObject(retirementErrors.at(-1), "Embedding provider retirement failed"));
+    }
+    if (!this.publishedDatabaseReleased) {
+      try {
+        await this.publishedDatabase.closePublicationWorker();
+        this.publishedDatabase.release();
+        this.publishedDatabaseReleased = true;
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Memory manager cleanup failed");
     }
   }
 
@@ -669,8 +679,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     await this.awaitManagerIdle();
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;
-    const pendingFallbackInit = this.getPendingFallbackProviderInitialization();
-    await this.closeWatchResources();
+    const pendingFallbackInit = this.fallbackProviderInitPromise;
     const reportPendingWorkError = (err: unknown) => {
       log.warn(`memory close: pending manager work failed: ${formatErrorMessage(err)}`);
     };
@@ -678,13 +687,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     await pendingFallbackInit?.catch(reportPendingWorkError);
     // Initialization may attach sync work; observe its promise only after it settles.
     await this.syncing?.catch(reportPendingWorkError);
-    try {
-      await this.retryFailedClose();
-    } finally {
-      await this.publishedDatabase.closePublicationWorker();
-      this.publishedDatabase.release();
-      this.closeTeardownComplete = true;
-    }
+    await this.retryFailedClose();
   }
 }
 

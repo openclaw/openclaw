@@ -1,4 +1,3 @@
-/** Main ACP session manager implementation and public control-plane facade. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,10 +13,7 @@ import { runManagerInitializeSession } from "./manager.initialize-session.js";
 import { registerAcpSessionManagerDisposer } from "./manager.lifecycle.js";
 import { registerAcpSessionResetControls } from "./manager.reset-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import {
-  createSupersededActorError,
-  ensureManagerRuntimeHandle,
-} from "./manager.runtime-handle-ensure.js";
+import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
 import {
   runResetManagerSessionRuntimeOptions,
   runSetManagerSessionConfigOption,
@@ -52,6 +48,7 @@ import {
   type WriteManagerSessionMeta,
 } from "./manager.types.js";
 import {
+  createSupersededActorError,
   acpSessionActorKey,
   normalizeAcpErrorCode,
   resolveAcpSessionTarget,
@@ -65,7 +62,6 @@ import {
 } from "./runtime-options.js";
 import { SessionActorQueue } from "./session-actor-queue.js";
 
-/** Coordinates ACP session metadata, runtime handles, per-session queues, and turn execution. */
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
   private readonly runtimeHandles = new ManagerRuntimeHandleCache();

@@ -108,11 +108,7 @@ function assertPinnedHarness(
 }
 
 export function selectEmbeddedRunHarness(
-  params: HarnessSelectionContext & {
-    model: Model;
-    plan?: AgentRuntimeAuthPlan;
-    preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt;
-  },
+  params: Parameters<typeof buildHarnessModelProvider>[0],
 ): AgentHarness {
   const selected = selectAgentHarness({
     provider: params.provider,

@@ -1,6 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Audits channel configuration for exposure, auth, and trust risks.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { resolveChannelAccount } from "../channels/account-resolution.js";
@@ -24,6 +23,7 @@ import {
   type ResolvedAgentRoute,
 } from "../routing/resolve-route.js";
 import { parseSessionDeliveryRoute, resolveLinkedDirectPeerId } from "../routing/session-key.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
 type DmPrincipalRoute = {
@@ -31,26 +31,6 @@ type DmPrincipalRoute = {
   logicalPrincipalKey: string;
   bucketKey: string;
 };
-
-function dedupeFindings(findings: SecurityAuditFinding[]): SecurityAuditFinding[] {
-  const seen = new Set<string>();
-  const out: SecurityAuditFinding[] = [];
-  for (const finding of findings) {
-    const key = [
-      finding.checkId,
-      finding.severity,
-      finding.title,
-      finding.detail ?? "",
-      finding.remediation ?? "",
-    ].join("\n");
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(finding);
-  }
-  return out;
-}
 
 function hasExplicitProviderAccountConfig(
   cfg: OpenClawConfig,
@@ -328,10 +308,7 @@ export async function collectChannelSecurityFindingsCore(params: {
             "Ensure referenced secrets are available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
         });
       }
-      if (!enabled) {
-        continue;
-      }
-      if (!configured) {
+      if (!enabled || !configured) {
         continue;
       }
 
@@ -517,8 +494,7 @@ export async function collectChannelSecurityFindingsCore(params: {
             findings.push(warning);
             continue;
           }
-          const message = warning;
-          const trimmed = message.trim();
+          const trimmed = warning.trim();
           if (!trimmed) {
             continue;
           }
@@ -598,5 +574,13 @@ export async function collectChannelSecurityFindingsCore(params: {
     });
   }
 
-  return dedupeFindings(findings);
+  return dedupeByKey(findings, (finding) =>
+    [
+      finding.checkId,
+      finding.severity,
+      finding.title,
+      finding.detail ?? "",
+      finding.remediation ?? "",
+    ].join("\n"),
+  );
 }

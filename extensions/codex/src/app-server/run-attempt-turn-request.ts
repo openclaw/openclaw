@@ -31,9 +31,9 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
-import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import { buildCodexParentLocalInstructions } from "./turn-params.js";
 import type { CodexThreadRouteReservation } from "./turn-router.js";
+import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export type CodexStartedTurn = {
   turn: CodexTurnStartResponse;
@@ -155,6 +155,7 @@ export async function prepareCodexAttemptTurnRequest(
       connection.assertCurrent();
       liveThreadOwnership?.assertCurrent();
       if (
+        resourceState.client !== turnClient ||
         resourceState.thread !== selectedThread ||
         selectedThread.threadId !== threadId ||
         selectedThread.liveThreadOwnership !== liveThreadOwnership ||
@@ -206,7 +207,8 @@ export async function prepareCodexAttemptTurnRequest(
       ),
     });
     const serviceTier = await resolveCodexUltrafastServiceTier({
-      enabled: turnAppServer.enableUltrafast === true && fastMode !== false,
+      enabled:
+        fastMode === "ultrafast" || (turnAppServer.enableUltrafast === true && fastMode !== false),
       serviceTier: turnStartParams.serviceTier,
       model: turnStartParams.model ?? model,
       modelProvider,
@@ -310,7 +312,6 @@ export async function prepareCodexAttemptTurnRequest(
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     recordCodexTrajectoryContext(resources.trajectoryRecorder, {
       attempt: params,
-      cwd: connection.effectiveCwd,
       developerInstructions: joinPresentSections(
         buildRenderedCodexDeveloperInstructions(),
         attemptTools.configuredMcp?.diagnosticNotice,

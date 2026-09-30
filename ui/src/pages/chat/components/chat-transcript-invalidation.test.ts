@@ -19,8 +19,8 @@ import {
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import * as chatMessage from "./chat-message-group.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
-import * as chatMessage from "./chat-message.ts";
 import {
   renderTranscriptSearch,
   resetTranscriptSession,
@@ -598,7 +598,10 @@ describe("chat transcript invalidation", () => {
 
   it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", () => {
     vi.spyOn(Date, "now").mockReturnValue(60_000);
-    const props = threadProps("pane-session-metadata");
+    const props = threadProps("pane-session-metadata", "agent:main:main", [
+      { role: "user", senderLabel: "Alex", content: "Hello" },
+      { role: "assistant", content: "Hi" },
+    ]);
     props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));

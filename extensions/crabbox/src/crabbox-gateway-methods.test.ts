@@ -13,7 +13,7 @@ import {
   mutateCrabboxImage,
   recoverCrabboxImage,
 } from "./crabbox-gateway-methods.js";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
 import {
   CrabboxWarmImageRequestError,
@@ -95,7 +95,7 @@ function createApi() {
 }
 
 async function createActions() {
-  openWarmImageFixtureStore().register("profile", record());
+  openWarmImageStore().register("profile", record());
   const image = (await listCrabboxWarmImages(crabboxState))[0]!;
   return {
     pin: vi.fn<CrabboxSnapshotActions["pin"]>(async () => image),
@@ -256,9 +256,14 @@ describe("Crabbox snapshots Gateway methods", () => {
       ...allocation,
       choice: { kind: "checkpoint", checkpointId: "chk_fixture" },
     };
-    const store = openWarmImageFixtureStore();
+    const store = openWarmImageStore();
     store.register("current", current);
-    store.register("older", { version: 3, allocations: {} });
+    const captureUnsupported = {
+      atMs: 100,
+      provider: "hetzner",
+      message: "Native checkpoints are unsupported for this coordinator target.",
+    };
+    store.register("older", { version: 3, allocations: {}, captureUnsupported });
     const respond = vi.fn();
 
     await listCrabboxImages(createApi(), { params: {}, respond });
@@ -283,6 +288,7 @@ describe("Crabbox snapshots Gateway methods", () => {
           projectLabel: undefined,
           projectRoot: undefined,
           state: "no-image",
+          captureUnsupported,
           held: false,
           allocationCount: 0,
         }),
@@ -357,7 +363,7 @@ describe("Crabbox snapshots Gateway methods", () => {
     { selector: SELECTOR, acknowledgeProviderCleanup: true, extra: true },
   ])("refuses invalid recovery params without changing capture ownership: %j", async (params) => {
     const current = record();
-    openWarmImageFixtureStore().register("profile", current);
+    openWarmImageStore().register("profile", current);
     const respond = vi.fn();
     await recoverCrabboxImage(crabboxState, { params, respond });
     expect(respond).toHaveBeenCalledWith(
@@ -365,12 +371,12 @@ describe("Crabbox snapshots Gateway methods", () => {
       expect.any(Object),
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(openWarmImageFixtureStore().lookup("profile")).toEqual(current);
+    expect(openWarmImageStore().lookup("profile")).toEqual(current);
   });
 
   it("recovers the exact acknowledged capture and returns the CLI result shape", async () => {
     const current = record();
-    openWarmImageFixtureStore().register("profile", current);
+    openWarmImageStore().register("profile", current);
     const respond = vi.fn();
     await recoverCrabboxImage(crabboxState, {
       params: { selector: SELECTOR, acknowledgeProviderCleanup: true },
@@ -382,7 +388,7 @@ describe("Crabbox snapshots Gateway methods", () => {
       recoveredCapture: SELECTOR,
       nextSteps: expect.stringContaining("Restart the Gateway"),
     });
-    expect(openWarmImageFixtureStore().lookup("profile")).toEqual({
+    expect(openWarmImageStore().lookup("profile")).toEqual({
       ...current,
       operation: undefined,
     });
@@ -434,11 +440,3 @@ describe("Crabbox snapshots Gateway methods", () => {
     );
   });
 });
-
-function openWarmImageFixtureStore() {
-  return createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
-    namespace: "warm-images",
-    maxEntries: 128,
-    overflowPolicy: "reject-new",
-  });
-}

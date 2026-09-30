@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelSummary
+import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewayLoadedMedia
@@ -27,8 +28,8 @@ import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.nonBlankString
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
-import ai.openclaw.app.ui.chat.chatModelSendBlocked
 import ai.openclaw.app.ui.chat.providerQualifiedRef
+import ai.openclaw.app.ui.chat.selectedChatModelSendBlockingReason
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -578,9 +579,7 @@ class ChatController internal constructor(
   )
 
   private data class SwarmProjectionSnapshot(
-    val parentKey: String,
-    val cacheScope: ChatCacheScope,
-    val requestSequence: Long,
+    val lease: SwarmRefreshLease,
     val sessions: List<ChatSessionEntry>,
   )
 
@@ -791,7 +790,7 @@ class ChatController internal constructor(
   private var lastHealthPollAtMs: Long? = null
   private val chatMetadataRequestSequence = AtomicLong(0)
   private var chatMetadataScope: ChatMetadataScope? = null
-  private var chatMetadataLoadState = ChatMetadataLoadState.Unloaded
+  private var chatMetadataLoaded = false
   private var sessionsListArchived = false
 
   // Retained selection and event rows must not enlarge the next requested page.
@@ -946,12 +945,7 @@ class ChatController internal constructor(
             try {
               val existingSession = fetchSessionDescription(requestScope.gatewayId, mainSession.key)
               if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
-              val existingAutoLabel =
-                existingSession
-                  ?.get("autoLabel")
-                  .asStringOrNull()
-                  ?.trim()
-                  ?.takeIf { it.isNotEmpty() }
+              val existingAutoLabel = existingSession.nonBlankString("autoLabel")
               if (existingAutoLabel != mainSession.autoLabel) {
                 // Automatic display metadata atomically upserts the operator.write-scoped row,
                 // avoiding the concurrent-session identity race in sessions.create.
@@ -1116,7 +1110,7 @@ class ChatController internal constructor(
     val key = normalizeRequestedSessionKey(sessionKey)
     val owner = normalizeSessionSelectionOwner(key, ownerAgentId)
     if (key == _sessionKey.value && owner == _sessionOwnerAgentId.value) {
-      if (hasCurrentLiveHistory(key)) return
+      if (hasCurrentHistorySnapshot(key) && _healthOk.value) return
       refreshHistoryForRecovery(forceHealth = true)
       return
     }
@@ -1201,22 +1195,18 @@ class ChatController internal constructor(
   ) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
-    val nextState =
-      applyMainSessionKey(
-        currentSessionKey = normalizeRequestedSessionKey(_sessionKey.value),
-        appliedMainSessionKey = appliedMainSessionKey,
-        nextMainSessionKey = trimmed,
-      )
-    appliedMainSessionKey = nextState.appliedMainSessionKey
-    if (_sessionKey.value == nextState.currentSessionKey) return
+    val currentKey = normalizeRequestedSessionKey(_sessionKey.value)
+    val nextKey = if (currentKey == appliedMainSessionKey) trimmed else currentKey
+    appliedMainSessionKey = trimmed
+    if (_sessionKey.value == nextKey) return
     val generation =
       beginHistoryLoad(
-        nextState.currentSessionKey,
-        ownerAgentId = resolveAgentIdFromMainSessionKey(nextState.currentSessionKey),
+        nextKey,
+        ownerAgentId = resolveAgentIdFromMainSessionKey(nextKey),
         refreshHealth = loadHistory,
       )
     if (!loadHistory) return
-    bootstrap(sessionKey = nextState.currentSessionKey, generation = generation)
+    bootstrap(sessionKey = nextKey, generation = generation)
   }
 
   /** Refreshes chat history, sessions, and model choices without clearing optimistic messages first. */
@@ -1633,13 +1623,7 @@ class ChatController internal constructor(
           .asObjectOrNull()
       // Fork leaves the source branch unchanged; its durable lease is only an entry gate.
       cancelOutboxSessionMutation(snapshot, mutationLease)
-      val createdKey =
-        root
-          ?.get("sessionKey")
-          .asStringOrNull()
-          ?.trim()
-          ?.takeIf { it.isNotEmpty() }
-          ?: return null
+      val createdKey = root.nonBlankString("sessionKey") ?: return null
       if (!isCurrentSessionAction(snapshot)) {
         fetchSessionsForCurrentWindow()
         return null
@@ -3135,8 +3119,6 @@ class ChatController internal constructor(
     return generation
   }
 
-  private fun hasCurrentLiveHistory(sessionKey: String): Boolean = hasCurrentHistorySnapshot(sessionKey) && _healthOk.value
-
   private fun hasCurrentHistorySnapshot(sessionKey: String): Boolean {
     val marker = liveHistoryMarker ?: return false
     // Same-session load may skip refresh only for the exact live snapshot that
@@ -3242,7 +3224,7 @@ class ChatController internal constructor(
     // must not leave with stale model or thinking state while sessions.patch is in flight.
     if (!waitForPendingSessionSettings(sessionSettingsKey(sessionKey))) return false
     if (!canAdmit() || !ownsCapturedUi()) return false
-    if (chatModelSendBlocked(_healthOk.value, _selectedModelRef.value, _modelCatalog.value)) return false
+    if (selectedChatModelSendBlockingReason(_healthOk.value, _selectedModelRef.value, _modelCatalog.value) != null) return false
     // agent-command.ts throws for explicit unsupported levels, so hidden controls must send off.
     // Applied at enqueue time too so durable rows never persist a level the selected model
     // rejects; reconnect flushes with a cleared catalog fail open, matching pre-gating behavior.
@@ -3845,6 +3827,12 @@ class ChatController internal constructor(
         } else {
           handleSessionsChangedEvent(payloadJson)
         }
+      }
+
+      "session.narration" -> {
+        // Native foreground subscriptions use full streams; bounded narration
+        // tails cannot replace transcript messages.
+        return
       }
 
       else -> {
@@ -4938,12 +4926,18 @@ class ChatController internal constructor(
     _commands.value = emptyList()
     _modelCatalog.value = emptyList()
     chatMetadataScope = nextScope
-    chatMetadataLoadState = ChatMetadataLoadState.Unloaded
+    chatMetadataLoaded = false
   }
 
   private suspend fun fetchChatMetadata(requestSequence: Long = chatMetadataRequestSequence.incrementAndGet()) {
     val requestCacheScope = currentCacheScope()
     val metadataScope = currentChatMetadataScope() ?: return
+
+    fun isCurrent(): Boolean =
+      requestSequence == chatMetadataRequestSequence.get() &&
+        requestCacheScope == currentCacheScope() &&
+        metadataScope == currentChatMetadataScope()
+
     val requestSelection =
       synchronized(gatewayScopeApplyLock) {
         if (requestSequence != chatMetadataRequestSequence.get()) return
@@ -4965,8 +4959,8 @@ class ChatController internal constructor(
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val metadataSwarmEnabled = root?.get("swarmEnabled").asBooleanOrNull() == true
       synchronized(gatewayScopeApplyLock) {
-        if (requestSequence != chatMetadataRequestSequence.get() || requestCacheScope != currentCacheScope() || metadataScope != currentChatMetadataScope()) return
-        _commands.value = parseChatCommands(json, res)
+        if (!isCurrent()) return
+        _commands.value = parseChatCommands(root)
         synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
         shouldRefreshSwarm = metadataSwarmEnabled
         shouldDisableSwarm = !metadataSwarmEnabled
@@ -4989,15 +4983,11 @@ class ChatController internal constructor(
           null
         }
       synchronized(gatewayScopeApplyLock) {
-        if (
-          requestSequence == chatMetadataRequestSequence.get() &&
-          requestCacheScope == currentCacheScope() &&
-          metadataScope == currentChatMetadataScope()
-        ) {
+        if (isCurrent()) {
           val catalog = parseGatewayModelCatalog(catalogResult)
           _modelCatalog.value = catalog.models
           val refreshFailed = catalog.refreshFailed
-          chatMetadataLoadState = ChatMetadataLoadState.Loaded
+          chatMetadataLoaded = true
           _sessions.value.firstOrNull { it.key == _sessionKey.value }?.let(::publishSelectedSessionSettings)
           if (requestSelection != null && isCurrentSessionAction(requestSelection)) {
             if (!catalogSupported && _errorText.value == null) {
@@ -5015,9 +5005,7 @@ class ChatController internal constructor(
     } catch (_: Throwable) {
       synchronized(gatewayScopeApplyLock) {
         if (
-          requestSequence == chatMetadataRequestSequence.get() &&
-          requestCacheScope == currentCacheScope() &&
-          metadataScope == currentChatMetadataScope() &&
+          isCurrent() &&
           requestSelection != null &&
           isCurrentSessionAction(requestSelection) &&
           _errorText.value == null
@@ -5026,7 +5014,7 @@ class ChatController internal constructor(
         }
       }
     }
-    if (requestSequence != chatMetadataRequestSequence.get() || requestCacheScope != currentCacheScope() || metadataScope != currentChatMetadataScope()) return
+    if (!isCurrent()) return
     when {
       shouldRefreshSwarm -> refreshSwarmSessions()
       shouldDisableSwarm -> resetSwarmProgress()
@@ -5074,24 +5062,15 @@ class ChatController internal constructor(
         if (expectedLease != null && !isSwarmRefreshLeaseCurrentLocked(expectedLease)) return
         val projectionCacheScope = expectedLease?.cacheScope ?: currentCacheScope() ?: return
         SwarmProjectionSnapshot(
-          parentKey = _sessionKey.value,
-          cacheScope = projectionCacheScope,
-          requestSequence = swarmRequestSequence.get(),
+          lease = SwarmRefreshLease(_sessionKey.value, projectionCacheScope, swarmRequestSequence.get()),
           sessions = swarmActivityTracker.decorate(swarmSessions),
         )
       }
     val groups =
-      buildChatSwarmGroups(snapshot.sessions) { candidate -> sameOutboxSession(candidate, snapshot.parentKey) }
+      buildChatSwarmGroups(snapshot.sessions) { candidate -> sameOutboxSession(candidate, snapshot.lease.parentKey) }
     synchronized(swarmLock) {
-      if (
-        !swarmEnabled ||
-        snapshot.cacheScope != currentCacheScope() ||
-        snapshot.requestSequence != swarmRequestSequence.get() ||
-        !sameOutboxSession(snapshot.parentKey, _sessionKey.value)
-      ) {
-        return
-      }
-      swarmSessionKey = snapshot.parentKey
+      if (!isSwarmRefreshLeaseCurrentLocked(snapshot.lease)) return
+      swarmSessionKey = snapshot.lease.parentKey
       _swarmGroups.value = groups
     }
   }
@@ -5298,7 +5277,7 @@ class ChatController internal constructor(
 
   private fun hasCurrentChatMetadata(): Boolean {
     val currentScope = currentChatMetadataScope() ?: return false
-    return chatMetadataLoadState == ChatMetadataLoadState.Loaded && chatMetadataScope == currentScope
+    return chatMetadataLoaded && chatMetadataScope == currentScope
   }
 
   private fun refreshCommandsAfterReconnect() {
@@ -5366,39 +5345,20 @@ class ChatController internal constructor(
         if (canPublishUi()) updateLocalizedErrorText(chatOutboxQueueFailureText())
         return null
       }
-    return when (result) {
-      is ChatOutboxEnqueueResult.Queued -> {
-        if (canPublishUi()) updateErrorText(null)
-        publishOutbox()
-        result.item
-      }
-
-      ChatOutboxEnqueueResult.QueueFull -> {
-        if (canPublishUi()) {
-          updateLocalizedErrorText(nativeText("Offline queue is full (\$OUTBOX_MAX_QUEUED messages); delete queued items first.", OUTBOX_MAX_QUEUED))
-        }
-        null
-      }
-
-      ChatOutboxEnqueueResult.AttachmentsTooLarge -> {
-        if (canPublishUi()) {
-          updateLocalizedErrorText(nativeText("Attachments are too large to queue for one message; remove some and try again."))
-        }
-        null
-      }
-
-      ChatOutboxEnqueueResult.StorageFull -> {
-        if (canPublishUi()) {
-          updateLocalizedErrorText(nativeText("Offline attachment storage is full; delete queued items first."))
-        }
-        null
-      }
-
-      ChatOutboxEnqueueResult.Unavailable -> {
-        if (canPublishUi()) updateLocalizedErrorText(nativeText("Gateway health not OK; cannot send"))
-        null
-      }
+    if (canPublishUi()) {
+      updateLocalizedErrorText(
+        when (result) {
+          is ChatOutboxEnqueueResult.Queued -> null
+          ChatOutboxEnqueueResult.QueueFull -> nativeText("Offline queue is full (\$OUTBOX_MAX_QUEUED messages); delete queued items first.", OUTBOX_MAX_QUEUED)
+          ChatOutboxEnqueueResult.AttachmentsTooLarge -> nativeText("Attachments are too large to queue for one message; remove some and try again.")
+          ChatOutboxEnqueueResult.StorageFull -> nativeText("Offline attachment storage is full; delete queued items first.")
+          ChatOutboxEnqueueResult.Unavailable -> nativeText("Gateway health not OK; cannot send")
+        },
+      )
     }
+    if (result !is ChatOutboxEnqueueResult.Queued) return null
+    publishOutbox()
+    return result.item
   }
 
   /** Re-queues a failed outbox item and flushes immediately when the gateway is healthy. */
@@ -6729,10 +6689,11 @@ class ChatController internal constructor(
         val ts = payload["ts"].asLongOrNull() ?: System.currentTimeMillis()
         synchronized(gatewayScopeApplyLock) {
           val owner = liveRunOwner(runId)
-          when (phase) {
-            "start" -> {
-              val existing = turnToolCallsById[owner to toolCallId]
-              turnToolCallsById[owner to toolCallId] =
+          val key = owner to toolCallId
+          val existing = turnToolCallsById[key]
+          val updated =
+            when (phase) {
+              "start" -> {
                 ChatPendingToolCall(
                   toolCallId = toolCallId,
                   name = name,
@@ -6743,22 +6704,14 @@ class ChatController internal constructor(
                   activity = existing?.activity,
                   presentationId = existing?.presentationId ?: "${owner?.runId.orEmpty()}:$toolCallId",
                 )
-              publishPendingToolCalls()
-            }
-
-            "result" -> {
-              val existing = turnToolCallsById[owner to toolCallId]
-              if (existing != null) {
-                turnToolCallsById[owner to toolCallId] =
-                  existing.copy(isComplete = true, isError = data["isError"].asBooleanOrNull() ?: existing.isError)
               }
-              publishPendingToolCalls()
-            }
 
-            "input_delta" -> {
-              val diff = parseChatDiffStat(data["diff"], includeFiles = false) ?: return
-              val existing = turnToolCallsById[owner to toolCallId]
-              turnToolCallsById[owner to toolCallId] =
+              "result" -> {
+                existing?.copy(isComplete = true, isError = data["isError"].asBooleanOrNull() ?: existing.isError)
+              }
+
+              "input_delta" -> {
+                val diff = parseChatDiffStat(data["diff"]) ?: return
                 existing?.copy(name = name, liveDiff = diff)
                   ?: ChatPendingToolCall(
                     toolCallId = toolCallId,
@@ -6767,9 +6720,14 @@ class ChatController internal constructor(
                     liveDiff = diff,
                     presentationId = "${owner?.runId.orEmpty()}:$toolCallId",
                   )
-              publishPendingToolCalls()
+              }
+
+              else -> {
+                return
+              }
             }
-          }
+          if (updated != null) turnToolCallsById[key] = updated
+          publishPendingToolCalls()
         }
       }
 
@@ -7422,6 +7380,7 @@ class ChatController internal constructor(
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
     val sessionInfo = root["sessionInfo"].asObjectOrNull()?.let { parseSessionEntry(it, fallbackKey = sessionKey) }
+    val defaults = root["defaults"].asObjectOrNull()
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
 
     val activity = root["activity"]?.let { json.decodeFromJsonElement<List<ChatHistoryActivity>>(it) }?.associate { it.messageId to it.items }
@@ -7437,13 +7396,8 @@ class ChatController internal constructor(
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
       sessionInfo = sessionInfo,
       inFlightRun = parseInFlightRun(root),
-      defaultModelRef = parseDefaultModelRef(root),
+      defaultModelRef = providerQualifiedModelRef(defaults?.get("model").asStringOrNull(), defaults?.get("modelProvider").asStringOrNull()),
     )
-  }
-
-  private fun parseDefaultModelRef(root: JsonObject): String? {
-    val defaults = root["defaults"].asObjectOrNull() ?: return null
-    return providerQualifiedModelRef(defaults["model"].asStringOrNull(), defaults["modelProvider"].asStringOrNull())
   }
 
   private fun parseMessage(
@@ -7629,13 +7583,7 @@ class ChatController internal constructor(
       modelProvider = obj["modelProvider"].asStringOrNull()?.trim(),
       model = obj["model"].asStringOrNull()?.trim(),
       modelSelectionLocked = obj["modelSelectionLocked"].asBooleanOrNull(),
-      agentRuntimeId =
-        obj["agentRuntime"]
-          .asObjectOrNull()
-          ?.get("id")
-          .asStringOrNull()
-          ?.trim()
-          ?.takeIf(String::isNotEmpty),
+      agentRuntimeId = obj["agentRuntime"].asObjectOrNull().nonBlankString("id"),
       thinkingLevel = obj["thinkingLevel"].asStringOrNull()?.trim(),
       thinkingLevels = parseThinkingLevels(obj["thinkingLevels"]),
       thinkingDefault = obj["thinkingDefault"].asStringOrNull()?.trim(),
@@ -7714,14 +7662,7 @@ class ChatController internal constructor(
       modelProvider = resolved?.get("modelProvider").asStringOrNull()?.trim(),
       model = resolved?.get("model").asStringOrNull()?.trim(),
       // The entry is stored state; the ACK's resolved runtime is the current owner.
-      agentRuntimeId =
-        resolved
-          ?.get("agentRuntime")
-          .asObjectOrNull()
-          ?.get("id")
-          .asStringOrNull()
-          ?.trim()
-          ?.takeIf(String::isNotEmpty),
+      agentRuntimeId = resolved?.get("agentRuntime").asObjectOrNull().nonBlankString("id"),
       thinkingLevel = resolved?.get("thinkingLevel").asStringOrNull()?.trim(),
       thinkingLevels = parseThinkingLevels(resolved?.get("thinkingLevels")),
       entry = parseSessionEntry(entry, fallbackKey = key),
@@ -8182,11 +8123,6 @@ class ChatController internal constructor(
   private fun normalizeThinking(raw: String): String = raw.trim().lowercase(Locale.US).ifEmpty { "off" }
 }
 
-private enum class ChatMetadataLoadState {
-  Unloaded,
-  Loaded,
-}
-
 // Group mutations enumerate whole stores; far past any realistic session count.
 private const val GROUP_MEMBER_FETCH_LIMIT = 10_000
 private const val FULL_MESSAGE_TEXT_MAX_CHARS = 1_000_000
@@ -8565,12 +8501,8 @@ private fun parseCreatedSessionKey(
     }
 }
 
-internal fun parseChatCommands(
-  json: Json,
-  commandsJson: String,
-): List<ChatCommandEntry> {
-  val root = json.parseToJsonElement(commandsJson).asObjectOrNull() ?: return emptyList()
-  val commands = root["commands"].asArrayOrNull() ?: return emptyList()
+internal fun parseChatCommands(root: JsonObject?): List<ChatCommandEntry> {
+  val commands = root?.get("commands").asArrayOrNull() ?: return emptyList()
   return commands.mapNotNull { item -> parseChatCommandEntry(item.asObjectOrNull()) }
 }
 
@@ -8598,24 +8530,6 @@ private fun parseChatCommandEntry(obj: JsonObject?): ChatCommandEntry? {
     acceptsArgs = obj["acceptsArgs"].asBooleanOrNull() ?: false,
   )
 }
-
-internal data class MainSessionState(
-  val currentSessionKey: String,
-  val appliedMainSessionKey: String,
-)
-
-/**
- * Rewrite only the active "main" alias when the gateway publishes a new canonical main session key.
- */
-internal fun applyMainSessionKey(
-  currentSessionKey: String,
-  appliedMainSessionKey: String,
-  nextMainSessionKey: String,
-): MainSessionState =
-  MainSessionState(
-    currentSessionKey = if (currentSessionKey == appliedMainSessionKey) nextMainSessionKey else currentSessionKey,
-    appliedMainSessionKey = nextMainSessionKey,
-  )
 
 /**
  * Keep Compose item identity stable across history refreshes by matching existing messages to incoming copies.
@@ -8784,11 +8698,6 @@ private fun parseSessionEditorAttachments(value: JsonElement?): List<SessionEdit
     SessionEditorAttachment(mimeType = mimeType, data = data)
   } ?: emptyList()
 
-private fun JsonElement?.asJsonStringOrNull(): String? =
-  (this as? JsonPrimitive)
-    ?.takeIf(JsonPrimitive::isString)
-    ?.content
-
 private fun JsonElement?.asJsonNumberOrNull(): Double? =
   (this as? JsonPrimitive)
     ?.takeUnless(JsonPrimitive::isString)
@@ -8813,10 +8722,7 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
     else -> null
   }
 
-private fun parseChatDiffStat(
-  element: JsonElement?,
-  includeFiles: Boolean,
-): ChatDiffStat? {
+private fun parseChatDiffStat(element: JsonElement?): ChatDiffStat? {
   val value = element.asObjectOrNull() ?: return null
 
   fun count(key: String): Int? =
@@ -8825,11 +8731,9 @@ private fun parseChatDiffStat(
       ?.takeIf { it in 0..Int.MAX_VALUE.toLong() }
       ?.toInt()
 
-  val files = if (includeFiles) count("files") ?: return null else null
   return ChatDiffStat(
     added = count("added") ?: return null,
     removed = count("removed") ?: return null,
-    files = files,
   )
 }
 
@@ -9150,11 +9054,10 @@ private fun ChatSessionEntry.carriesSessionSettings(): Boolean =
     hasEffectiveFastModeMetadata
 
 private fun sameSessionSettings(
-  previous: ChatSessionEntry?,
+  previous: ChatSessionEntry,
   next: ChatSessionEntry,
 ): Boolean =
-  previous != null &&
-    previous.modelProvider == next.modelProvider &&
+  previous.modelProvider == next.modelProvider &&
     previous.model == next.model &&
     (previous.modelSelectionLocked == true) == (next.modelSelectionLocked == true) &&
     previous.agentRuntimeId == next.agentRuntimeId &&

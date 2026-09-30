@@ -9,6 +9,7 @@ import {
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { execCompletionSchema, execSchema } from "./bash-tools.schemas.js";
@@ -34,6 +35,8 @@ export function createLazyExecTool(
 ): AnyAgentTool {
   // Native tool callbacks can arrive outside the scope that constructed this lazy tool.
   const installationTarget = getInstallationTarget();
+  const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
+  const fileWriteToolAvailabilityRef = defaults?.fileWriteToolAvailabilityRef ?? {};
   let loadedTool: LoadedExecTool | undefined;
   let loadingTool: Promise<LoadedExecTool> | undefined;
   const loadTool = () => {
@@ -41,46 +44,60 @@ export function createLazyExecTool(
       return Promise.resolve(loadedTool);
     }
     loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
-      loadedTool = withInstallationTarget(installationTarget, () => createExecTool(defaults));
+      loadedTool = withInstallationTarget(installationTarget, () =>
+        createExecTool({ ...defaults, processToolAvailabilityRef, fileWriteToolAvailabilityRef }),
+      );
       return loadedTool;
     });
     return loadingTool;
   };
 
-  return {
-    name: "exec",
-    label: "exec",
-    displaySummary: presentation?.displaySummary ?? EXEC_TOOL_DISPLAY_SUMMARY,
-    getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
-    get description() {
-      return (
-        presentation?.description ??
-        describeExecTool({
-          hasCronTool: defaults?.hasCronTool === true,
-          hasProcessTool: defaults?.processToolAvailabilityRef?.value,
-          hasFileWriteTool: defaults?.fileWriteToolAvailabilityRef?.value,
-          autoReview: defaults?.mode === "auto",
-        })
-      );
+  return bindAgentToolAvailability(
+    {
+      name: "exec",
+      label: "exec",
+      displaySummary: presentation?.displaySummary ?? EXEC_TOOL_DISPLAY_SUMMARY,
+      getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
+      get description() {
+        return (
+          presentation?.description ??
+          describeExecTool({
+            hasCronTool: defaults?.hasCronTool === true,
+            hasProcessTool: processToolAvailabilityRef.value,
+            hasFileWriteTool: fileWriteToolAvailabilityRef.value,
+            autoReview: defaults?.mode === "auto",
+          })
+        );
+      },
+      get parameters() {
+        return (
+          presentation?.parameters ??
+          (processToolAvailabilityRef.value === false ? execCompletionSchema : execSchema)
+        );
+      },
+      prepareBeforeToolCallParams: async (...args) =>
+        (await loadTool()).prepareBeforeToolCallParams?.(...args) ?? args[0],
+      finalizeBeforeToolCallParams: (params, preparedParams) =>
+        loadedTool?.finalizeBeforeToolCallParams?.(params, preparedParams) ?? params,
+      execute: async (toolCallId, params, signal, onUpdate) =>
+        (await loadTool()).execute(
+          toolCallId,
+          params as Parameters<LoadedExecTool["execute"]>[1],
+          signal,
+          onUpdate,
+        ),
+    } as AnyAgentTool,
+    {
+      prepareBeforeNormalization: true,
+      prepare: (_tool, callableTools) => {
+        processToolAvailabilityRef.value = callableTools.has("process");
+        fileWriteToolAvailabilityRef.value =
+          callableTools.has("write") ||
+          callableTools.has("edit") ||
+          callableTools.has("apply_patch");
+      },
     },
-    get parameters() {
-      return (
-        presentation?.parameters ??
-        (defaults?.processToolAvailabilityRef?.value === false ? execCompletionSchema : execSchema)
-      );
-    },
-    prepareBeforeToolCallParams: async (...args) =>
-      (await loadTool()).prepareBeforeToolCallParams?.(...args) ?? args[0],
-    finalizeBeforeToolCallParams: (params, preparedParams) =>
-      loadedTool?.finalizeBeforeToolCallParams?.(params, preparedParams) ?? params,
-    execute: async (toolCallId, params, signal, onUpdate) =>
-      (await loadTool()).execute(
-        toolCallId,
-        params as Parameters<LoadedExecTool["execute"]>[1],
-        signal,
-        onUpdate,
-      ),
-  } as AnyAgentTool;
+  );
 }
 
 /** Resolve global and per-agent exec defaults before runtime-only overrides. */

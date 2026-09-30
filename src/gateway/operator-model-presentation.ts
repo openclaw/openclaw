@@ -25,6 +25,7 @@ import { resolveOperatorRolePolicy } from "./operator-role-policy.js";
 import { SerializedJsonArray } from "./serialized-json.js";
 import type { ChatMetadataResult } from "./server-methods/chat-metadata-contract.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { projectModelFastModeCatalog } from "./session-fast-mode-presentation.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "./session-utils.types.js";
 
@@ -109,8 +110,11 @@ export function projectOperatorModelRead<
     agentId: string;
     catalog?: ModelCatalogEntry[];
   },
-  result: T,
+  input: T,
 ): T {
+  const result = input.metadata
+    ? { ...input, metadata: projectModelFastModeCatalog(input.metadata, scope.client) }
+    : input;
   const cfg = scope.context.getRuntimeConfig();
   const presentation = prepareOperatorModelPresentation({
     cfg,

@@ -203,6 +203,11 @@ it("keeps pinned Claude CLI model refs on exact selectors", () => {
 
   expect(aliases?.["opus"]).toBe("opus");
   expect(aliases?.["opus-5"]).toBe("claude-opus-5");
+  expect(aliases?.["sonnet"]).toBe("sonnet");
+  expect(aliases?.["sonnet-5.5"]).toBe("claude-sonnet-5-5");
+  expect(aliases?.["sonnet-5-5"]).toBe("claude-sonnet-5-5");
+  expect(aliases?.["claude-sonnet-5-5"]).toBe("claude-sonnet-5-5");
+  expect(aliases?.["sonnet-5"]).toBe("claude-sonnet-5");
   expect(aliases?.["opus-4.8"]).toBe("claude-opus-4-8");
   expect(aliases?.["opus-4.7"]).toBe("claude-opus-4-7");
   expect(aliases?.["opus-4.6"]).toBe("claude-opus-4-6");

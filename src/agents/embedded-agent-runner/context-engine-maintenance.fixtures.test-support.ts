@@ -1,6 +1,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 
 export function createBackgroundMaintenanceEngine(
@@ -36,4 +37,36 @@ export function expectRecordFields(
   for (const [key, value] of Object.entries(expected)) {
     expect(record[key]).toBe(value);
   }
+}
+
+export async function loadContextEngineMaintenanceModuleForTest() {
+  // Import once and reset the owned singleton state between cases.
+  const { runContextEngineMaintenance, waitForDeferredTurnMaintenanceForSession } =
+    await import("./context-engine-maintenance.js");
+  const { resetDeferredTurnMaintenanceStateForTest } =
+    await import("./context-engine-maintenance.test-support.js");
+  resetDeferredTurnMaintenanceStateForTest();
+  return {
+    runContextEngineMaintenance,
+    waitForDeferredTurnMaintenanceForSession,
+    resetDeferredTurnMaintenanceStateForTest,
+  };
+}
+
+export function createMaintenanceSessionManagerOpenFixture() {
+  let current: { getSessionTarget: () => SessionTranscriptRuntimeTarget } | undefined;
+  const open = vi.fn((target: SessionTranscriptRuntimeTarget) => {
+    current = { getSessionTarget: () => target };
+    return current;
+  });
+  return {
+    open,
+    get current() {
+      return current;
+    },
+    reset() {
+      current = undefined;
+      open.mockClear();
+    },
+  };
 }

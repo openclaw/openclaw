@@ -3,6 +3,11 @@ import { vi, type Mock } from "vitest";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../src/infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../src/infra/node-sqlite.js";
 
+/** Full node reads may add cold snapshot projections beside the node's columns. */
+export function isSessionNodePayloadSelect(sql: string): boolean {
+  return /^select \*(?:, [\s\S]+)? from "session_nodes"(?:\s|$)/i.test(sql);
+}
+
 /** Capture SQL during execution; closing a connection invalidates its statement getters. */
 export function observeSqliteReadSql(prototype: StatementSync): {
   queries: string[];

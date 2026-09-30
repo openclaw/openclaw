@@ -606,6 +606,12 @@ export function runCiManifestFixture(options: {
     for (const name of ["test-prerequisites.mjs", "test-prerequisites.json"]) {
       writeFileSync(path.join(trustedGitOwner, name), readFileSync(path.join(gitOwner, name)));
     }
+    const trustedScripts = path.join(root, ".ci-harness/scripts");
+    mkdirSync(trustedScripts, { recursive: true });
+    copyFileSync(
+      new URL("../../scripts/ci-build-manifest.mjs", import.meta.url),
+      path.join(trustedScripts, "ci-build-manifest.mjs"),
+    );
     const trustedReleasePolicy = path.join(root, ".ci-harness/scripts/lib");
     mkdirSync(trustedReleasePolicy, { recursive: true });
     for (const name of ["release-context.mjs", "release-version.mjs"]) {

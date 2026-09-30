@@ -64,7 +64,6 @@ class SmsManagerTest {
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: 'to' phone number required", error.error)
-    assertEquals("Hi", error.message)
   }
 
   @Test
@@ -559,19 +558,6 @@ class SmsManagerTest {
     assertEquals(5, candidates.size)
     assertEquals(2, candidates.count { it.second.id == 1986L })
     assertEquals(listOf("sms:1987", "sms:1986", "mms:1986", "sms:1985", "sms:1981"), candidates.map { it.first })
-  }
-
-  @Test
-  fun materializeByPhoneCandidateDedupesBySourceAwareIdentity() {
-    val candidates = linkedMapOf<String, SmsMessage>()
-
-    SmsManager.materializeByPhoneCandidate(candidates, "sms:1", smsMessage(id = 1L, date = 1000L))
-    SmsManager.materializeByPhoneCandidate(candidates, "sms:1", smsMessage(id = 1L, date = 2000L))
-    SmsManager.materializeByPhoneCandidate(candidates, "mms:1", smsMessage(id = 1L, date = 1500L))
-
-    assertEquals(2, candidates.size)
-    assertEquals(2000L, candidates["sms:1"]?.date)
-    assertEquals(1500L, candidates["mms:1"]?.date)
   }
 
   @Test

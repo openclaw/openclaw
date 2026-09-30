@@ -108,7 +108,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
       resolveGatewayContext: () => undefined,
       desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
       startup,
-      log: { child: () => ({ warn: () => {} }) },
+      log: { child: () => ({ info: () => {}, warn: () => {} }) },
     });
     owned.runtime = runtime;
     const options = factory.mock.calls.at(-1)?.[0];

@@ -36,6 +36,7 @@ import {
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
   type AuthProfileDatabase,
+  type PreparedAuthProfileStoreOwner,
 } from "../auth-profiles/sqlite.js";
 import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
 import {
@@ -230,6 +231,32 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
     return loadSqliteAuthStorageStore(this.agentDir);
   }
 
+  private persistData(
+    store: AuthProfileStore,
+    next: string,
+    materializedData: AuthStorageData,
+    database: AuthProfileDatabase,
+    owner: PreparedAuthProfileStoreOwner,
+  ): AuthProfileStore {
+    const nextStore = applyAuthStorageData(
+      store,
+      JSON.parse(next) as AuthStorageData,
+      materializedData,
+    );
+    saveAuthProfileStoreWithPreparedOwner(
+      nextStore,
+      this.agentDir,
+      {
+        filterExternalAuthProfiles: false,
+        preserveStateProfileIds: collectStateOnlyAuthProfileIds(store),
+        syncExternalCli: false,
+      },
+      database,
+      owner,
+    );
+    return nextStore;
+  }
+
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
     assertAuthProfileMigrationReady(this.agentDir);
     const snapshots = this.resolveMaterializedRuntimeStores();
@@ -238,26 +265,10 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
       const store = loadSqliteAuthStorageStore(this.agentDir, database);
       const materializedData = projectAuthoritativeAuthStorageData(store, snapshots);
       const { result, next } = fn(JSON.stringify(materializedData));
-      let selectedStore = store;
-      if (next !== undefined) {
-        const nextStore = applyAuthStorageData(
-          store,
-          JSON.parse(next) as AuthStorageData,
-          materializedData,
-        );
-        saveAuthProfileStoreWithPreparedOwner(
-          nextStore,
-          this.agentDir,
-          {
-            filterExternalAuthProfiles: false,
-            preserveStateProfileIds: collectStateOnlyAuthProfileIds(store),
-            syncExternalCli: false,
-          },
-          database,
-          owner,
-        );
-        selectedStore = nextStore;
-      }
+      const selectedStore =
+        next === undefined
+          ? store
+          : this.persistData(store, next, materializedData, database, owner);
       return { result, store: selectedStore, databasePath: owner.databasePath };
     });
     this.captureCredentialSources(selected.store, selected.databasePath);
@@ -289,22 +300,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
               undefined,
             );
           }
-          const nextStore = applyAuthStorageData(
-            authoritative,
-            JSON.parse(next) as AuthStorageData,
-            initialData,
-          );
-          saveAuthProfileStoreWithPreparedOwner(
-            nextStore,
-            this.agentDir,
-            {
-              filterExternalAuthProfiles: false,
-              preserveStateProfileIds: collectStateOnlyAuthProfileIds(authoritative),
-              syncExternalCli: false,
-            },
-            database,
-            owner,
-          );
+          const nextStore = this.persistData(authoritative, next, initialData, database, owner);
           return { store: nextStore, databasePath: owner.databasePath };
         });
         this.captureCredentialSources(selected.store, selected.databasePath);
@@ -451,15 +447,12 @@ export class AuthStorage {
     this.runtimeOverrides.set(provider, apiKey);
   }
 
-  /**
-   * Remove a runtime API key override.
-   */
   removeRuntimeApiKey(provider: string): void {
     this.runtimeOverrides.delete(provider);
   }
 
   /**
-   * Set a fallback resolver for API keys not found in auth.json or env vars.
+   * Set a fallback resolver for API keys not found in canonical storage or env vars.
    * Used for custom provider keys from models.json.
    */
   setFallbackResolver(resolver: (provider: string) => string | undefined): void {
@@ -499,20 +492,11 @@ export class AuthStorage {
     );
   }
 
-  /**
-   * Reload credentials from storage.
-   */
   reload(): void {
-    let content: string | undefined;
     try {
-      if (this.storage.read) {
-        content = this.storage.read();
-      } else {
-        this.storage.withLock((current) => {
-          content = current;
-          return { result: undefined };
-        });
-      }
+      const content = this.storage.read
+        ? this.storage.read()
+        : this.storage.withLock((current) => ({ result: current }));
       this.setData(this.parseStorageData(content));
       this.loadError = null;
     } catch (error) {
@@ -561,40 +545,25 @@ export class AuthStorage {
     }
   }
 
-  /**
-   * Get credential for a provider.
-   */
   get(provider: string): AuthCredential | undefined {
     const credential = this.data[provider];
     return isAuthStorageOAuthRefreshFence(provider, credential) ? undefined : credential;
   }
 
-  /**
-   * Set credential for a provider.
-   */
   set(provider: string, credential: AuthCredential): void {
     this.persistProviderChange(provider, credential);
   }
 
-  /**
-   * Remove credential for a provider.
-   */
   remove(provider: string): void {
     this.persistProviderChange(provider, undefined);
   }
 
-  /**
-   * List all providers with credentials.
-   */
   list(): string[] {
     return Object.keys(this.data).filter(
       (provider) => !isAuthStorageOAuthRefreshFence(provider, this.data[provider]),
     );
   }
 
-  /**
-   * Check if credentials exist for a provider in auth.json.
-   */
   has(provider: string): boolean {
     return this.get(provider) !== undefined;
   }
@@ -604,19 +573,12 @@ export class AuthStorage {
    * Unlike getApiKey(), this doesn't refresh OAuth tokens.
    */
   hasAuth(provider: string): boolean {
-    if (this.runtimeOverrides.has(provider)) {
-      return true;
-    }
-    if (this.get(provider)) {
-      return true;
-    }
-    if (getEnvApiKey(provider)) {
-      return true;
-    }
-    if (this.fallbackResolver?.(provider)) {
-      return true;
-    }
-    return false;
+    return Boolean(
+      this.runtimeOverrides.has(provider) ||
+      this.get(provider) ||
+      getEnvApiKey(provider) ||
+      this.fallbackResolver?.(provider),
+    );
   }
 
   /**
@@ -660,17 +622,11 @@ export class AuthStorage {
     return drained;
   }
 
-  /**
-   * Login to an OAuth provider.
-   */
   async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
     const credentials = await loginAuthStorageOAuthProvider(this, providerId, callbacks);
     this.set(providerId, { type: "oauth", ...credentials });
   }
 
-  /**
-   * Logout from a provider.
-   */
   logout(provider: string): void {
     this.remove(provider);
   }
@@ -707,8 +663,8 @@ export class AuthStorage {
    * Get API key for a provider.
    * Priority:
    * 1. Runtime override (CLI --api-key)
-   * 2. API key from auth.json
-   * 3. OAuth token from auth.json (auto-refreshed with locking)
+   * 2. API key from canonical storage
+   * 3. OAuth token from canonical storage (auto-refreshed with locking)
    * 4. Environment variable
    * 5. Fallback resolver (models.json custom providers)
    */
@@ -716,7 +672,6 @@ export class AuthStorage {
     providerId: string,
     options?: { includeFallback?: boolean; baseUrl?: string },
   ): Promise<string | undefined> {
-    // Runtime override takes highest priority
     const runtimeKey = this.runtimeOverrides.get(providerId);
     if (runtimeKey) {
       return runtimeKey;
@@ -776,11 +731,7 @@ export class AuthStorage {
     if (cred?.type === "oauth") {
       const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
 
-      // Check if token needs refresh
-      const needsRefresh = Date.now() >= cred.expires;
-
-      if (needsRefresh) {
-        // Use locked refresh to prevent race conditions
+      if (Date.now() >= cred.expires) {
         try {
           const result = await this.refreshOAuthTokenWithLock(providerId);
           if (result) {
@@ -791,7 +742,7 @@ export class AuthStorage {
             throw error;
           }
           this.recordError(error);
-          // Refresh failed - re-read file to check if another instance succeeded
+          // Refresh failed - reload the store in case another instance succeeded
           this.reload();
           const canonicalStoreError =
             error instanceof AuthProfileMigrationRequiredError ||
@@ -808,7 +759,6 @@ export class AuthStorage {
           }
 
           if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
-            // Another instance refreshed successfully, use those credentials
             if (provider) {
               return resolved(provider.getApiKey(updatedCred));
             }
@@ -832,13 +782,11 @@ export class AuthStorage {
       }
     }
 
-    // Fall back to environment variable
     const envKey = getEnvApiKey(providerId);
     if (envKey) {
       return resolved(envKey);
     }
 
-    // Fall back to custom resolver (e.g., models.json custom providers)
     if (options?.includeFallback !== false) {
       return resolved(this.fallbackResolver?.(providerId) ?? undefined);
     }
@@ -846,9 +794,6 @@ export class AuthStorage {
     return resolved(undefined);
   }
 
-  /**
-   * Get all OAuth providers registered for this auth/session runtime.
-   */
   getOAuthProviders() {
     return getAuthStorageOAuthProviderRegistry(this).getAll();
   }

@@ -13,7 +13,7 @@ type SourceUpdateBuildResult = { exitCode: number; admissionRefused?: true };
 
 const log = (message: string) => console.error(`[update-gateway] ${message}`);
 
-function preserveNativeCleanupFailure(error: unknown): unknown {
+export function preserveNativeCleanupFailure(error: unknown): unknown {
   return hasCommandProcessCleanupError(error)
     ? Object.assign(new Error("Native source-update cleanup is unverified.", { cause: error }), {
         processTreeState: "indeterminate",

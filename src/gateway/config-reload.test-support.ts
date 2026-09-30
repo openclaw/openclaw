@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import chokidar from "chokidar";
 import { assert, expect, onTestFinished, vi, type TestContext } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -12,12 +11,13 @@ import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as backoff from "../infra/backoff.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   startGatewayConfigReloader as startGatewayConfigReloaderImpl,
   type GatewayConfigReloadTransactionOwnership,
   type GatewayReloadPlan,
 } from "./config-reload.js";
-import { createWatcherMock } from "./config-reload.watcher.test-support.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 
 const activeReloaders = new Set<ReturnType<typeof startGatewayConfigReloaderImpl>>();
 let currentTest: { timeout: number; signal: AbortSignal } | undefined;
@@ -114,10 +114,13 @@ export function createRecoveryRestartMock() {
   return { requestRecoveryRestart, restartEmitted: emitted.promise };
 }
 
-export function startGatewayConfigReloader(
-  ...args: Parameters<typeof startGatewayConfigReloaderImpl>
-) {
-  const reloader = startGatewayConfigReloaderImpl(...args);
+export function startGatewayConfigReloader({
+  scheduler = createTestGatewayScheduler("fake-timers"),
+  ...opts
+}: Omit<Parameters<typeof startGatewayConfigReloaderImpl>[0], "scheduler"> & {
+  scheduler?: Parameters<typeof startGatewayConfigReloaderImpl>[0]["scheduler"];
+}) {
+  const reloader = startGatewayConfigReloaderImpl({ ...opts, scheduler });
   activeReloaders.add(reloader);
   return reloader;
 }
@@ -225,6 +228,7 @@ export function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNot
 export function createReloaderHarness(
   readSnapshot: () => Promise<ConfigFileSnapshot>,
   options: {
+    scheduler?: Parameters<typeof startGatewayConfigReloaderImpl>[0]["scheduler"];
     initialConfig?: OpenClawConfig;
     initialCompareConfig?: OpenClawConfig;
     initialSnapshotRawHash?: string | null;
@@ -252,8 +256,7 @@ export function createReloaderHarness(
     onRestart?: Parameters<typeof startGatewayConfigReloader>[0]["onRestart"];
   } = {},
 ) {
-  const watcher = createWatcherMock();
-  vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+  const watcher = installWatcherMock();
   const onConfigChange = vi.fn(
     options.onConfigChange ?? (async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
   );
@@ -301,6 +304,7 @@ export function createReloaderHarness(
   const log = createInfoWarnErrorLogger();
   const initialConfig = options.initialConfig ?? { gateway: { reload: {} } };
   const reloader = startGatewayConfigReloader({
+    scheduler: options.scheduler,
     testDebounceMs: 0,
     initialConfig,
     initialCompareConfig: options.initialCompareConfig,

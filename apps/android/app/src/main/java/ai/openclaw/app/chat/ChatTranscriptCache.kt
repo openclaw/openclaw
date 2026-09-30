@@ -234,17 +234,6 @@ internal interface ChatCacheDao {
     keep: Int,
   )
 
-  // Owner-local cleanup runs before the gateway-wide bound below; transcripts never outlive
-  // their corresponding session row.
-  @Query(
-    "DELETE FROM cached_messages WHERE gatewayId = :gatewayId AND agentId = :agentId AND sessionKey NOT IN " +
-      "(SELECT sessionKey FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId)",
-  )
-  suspend fun evictOrphanedTranscripts(
-    gatewayId: String,
-    agentId: String,
-  )
-
   // A gateway can expose many agent owners. Cap their aggregate cache by recent writes so
   // switching owners cannot grow the disposable session/transcript tables without bound.
   @Query(
@@ -402,7 +391,6 @@ class RoomChatTranscriptCache internal constructor(
       dao.deleteSessions(gateway, agent)
       dao.insertSessions(rows)
       retainedRow?.let { dao.insertSessions(listOf(it.copy(rowOrder = rows.size))) }
-      dao.evictOrphanedTranscripts(gateway, agent)
       dao.evictGatewaySessionsBeyond(gateway, MAX_CACHED_SESSIONS)
       dao.evictGatewayOrphanedTranscripts(gateway)
     }
@@ -520,7 +508,6 @@ class RoomChatTranscriptCache internal constructor(
         ),
       )
       dao.evictSessionsBeyondKeeping(gateway, agent, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)
-      dao.evictOrphanedTranscripts(gateway, agent)
       dao.evictGatewaySessionsBeyond(gateway, MAX_CACHED_SESSIONS)
       dao.evictGatewayOrphanedTranscripts(gateway)
     }

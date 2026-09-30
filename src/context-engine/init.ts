@@ -11,7 +11,7 @@ import { registerLegacyContextEngine } from "./legacy.registration.js";
  * Additional engines are registered by their own plugins via
  * `api.registerContextEngine()` during plugin load.
  */
-export function ensureContextEnginesInitialized(): void {
+export async function ensureContextEnginesInitialized(): Promise<void> {
   // Always available – safe fallback for the "legacy" slot default.
-  registerLegacyContextEngine();
+  await registerLegacyContextEngine();
 }

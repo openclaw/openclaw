@@ -1,11 +1,6 @@
-import { COLLAPSE_HYPHENS, NON_SLUG_CHARS, TRIM_HYPHENS } from "./policy-state-types.js";
 import type { PolicyToolEvidence } from "./policy-state-types.js";
 
-export function scanPolicyTools(raw: string): Promise<readonly PolicyToolEvidence[]> {
-  return Promise.resolve(scanPolicyToolHeaders(raw));
-}
-
-function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
+export function scanPolicyTools(raw: string): readonly PolicyToolEvidence[] {
   const section = markdownSectionLines(raw, "tools");
   if (section.length === 0) {
     return [];
@@ -159,9 +154,9 @@ function slugify(text: string): string {
   return text
     .toLowerCase()
     .replace(/_/g, "-")
-    .replace(NON_SLUG_CHARS, "-")
-    .replace(COLLAPSE_HYPHENS, "-")
-    .replace(TRIM_HYPHENS, "");
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function riskFromMeta(meta: string): string | undefined {

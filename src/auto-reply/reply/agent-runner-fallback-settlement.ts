@@ -95,16 +95,17 @@ export async function settleAgentFallbackCycle(params: {
       },
     });
   };
-  if (embeddedError && isContextOverflowError(embeddedError.message)) {
+  const isCompactionFailure = embeddedError && isContextOverflowError(embeddedError.message);
+  if (isCompactionFailure || embeddedError?.kind === "role_ordering") {
     emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
-    defaultRuntime.error(
-      `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
-    );
+    if (isCompactionFailure) {
+      defaultRuntime.error(
+        `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
+      );
+    }
     turn.replyOperation?.fail("run_failed", embeddedError);
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({
-        text: buildContextOverflowRecoveryText({
+    const text = isCompactionFailure
+      ? buildContextOverflowRecoveryText({
           cfg: cycle.runtimeConfig,
           agentId: turn.followupRun.run.agentId,
           primaryProvider: turn.followupRun.run.provider,
@@ -112,22 +113,13 @@ export async function settleAgentFallbackCycle(params: {
           runtimeProvider: cycle.state.attemptedRuntimeProvider,
           runtimeModel: cycle.state.attemptedRuntimeModel,
           activeSessionEntry: turn.getActiveSessionEntry(),
-        }),
-      }),
-      postCompactionModelFailure: cycle.state.postCompactionModelAttempted || undefined,
-    };
-  }
-  if (embeddedError?.kind === "role_ordering") {
-    emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
-    turn.replyOperation?.fail("run_failed", embeddedError);
-    const embeddedErrorText = formatErrorMessage(embeddedError);
+        })
+      : cycle.shouldSurfaceToControlUi
+        ? renderControlUiAgentFailureCopy(formatErrorMessage(embeddedError))
+        : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE;
     return {
       kind: "final",
-      payload: markAgentRunFailureReplyPayload({
-        text: cycle.shouldSurfaceToControlUi
-          ? renderControlUiAgentFailureCopy(embeddedErrorText)
-          : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
-      }),
+      payload: markAgentRunFailureReplyPayload({ text }),
       postCompactionModelFailure: cycle.state.postCompactionModelAttempted || undefined,
     };
   }

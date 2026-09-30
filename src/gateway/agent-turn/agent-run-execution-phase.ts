@@ -263,6 +263,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
             runId: params.runId,
             task: message,
             gatewayContextResolver: params.context.resolveGatewayContext,
+            assertCurrent: assertDispatchCurrent,
           });
         }
         if (
@@ -462,7 +463,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
                 groupChannel: params.groupChannel,
                 groupSpace: params.groupSpace,
                 spawnedBy: params.spawnedBy,
-                timeout: params.request.timeout?.toString(),
+                timeout: prepared.timeoutSeconds?.toString(),
                 bestEffortDeliver: params.bestEffortDeliver,
                 messageChannel: params.delivery.originMessageChannel,
                 runId: params.runId,

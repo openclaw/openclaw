@@ -30,14 +30,7 @@ final class CalendarService: CalendarServicing {
         let limit = max(1, min(params.limit ?? 50, 500))
         let formatter = ISO8601DateFormatter()
         let payload = events.prefix(limit).map { event in
-            OpenClawCalendarEventPayload(
-                identifier: event.eventIdentifier ?? UUID().uuidString,
-                title: event.title ?? "(untitled)",
-                startISO: formatter.string(from: event.startDate),
-                endISO: formatter.string(from: event.endDate),
-                isAllDay: event.isAllDay,
-                location: event.location,
-                calendarTitle: event.calendar.title)
+            Self.payload(from: event, fallbackTitle: "(untitled)", formatter: formatter)
         }
 
         return OpenClawCalendarEventsPayload(events: payload)
@@ -89,16 +82,22 @@ final class CalendarService: CalendarServicing {
 
         try store.save(event, span: .thisEvent)
 
-        let payload = OpenClawCalendarEventPayload(
+        return OpenClawCalendarAddPayload(event: Self.payload(from: event, fallbackTitle: title, formatter: formatter))
+    }
+
+    private static func payload(
+        from event: EKEvent,
+        fallbackTitle: String,
+        formatter: ISO8601DateFormatter) -> OpenClawCalendarEventPayload
+    {
+        OpenClawCalendarEventPayload(
             identifier: event.eventIdentifier ?? UUID().uuidString,
-            title: event.title ?? title,
+            title: event.title ?? fallbackTitle,
             startISO: formatter.string(from: event.startDate),
             endISO: formatter.string(from: event.endDate),
             isAllDay: event.isAllDay,
             location: event.location,
             calendarTitle: event.calendar.title)
-
-        return OpenClawCalendarAddPayload(event: payload)
     }
 
     private static func resolveCalendar(

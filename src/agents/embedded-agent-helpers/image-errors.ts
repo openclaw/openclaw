@@ -9,9 +9,6 @@ export function parseImageDimensionError(raw: string): {
   contentIndex?: number;
   raw: string;
 } | null {
-  if (!raw) {
-    return null;
-  }
   if (!/image dimensions exceed max allowed size/i.test(raw)) {
     return null;
   }
@@ -33,9 +30,6 @@ export function parseImageSizeError(raw: string): {
   maxMb?: number;
   raw: string;
 } | null {
-  if (!raw) {
-    return null;
-  }
   if (!/image exceeds[\s\S]*mb/i.test(raw)) {
     return null;
   }

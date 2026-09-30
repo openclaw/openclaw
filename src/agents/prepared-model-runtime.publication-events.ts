@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import type {
@@ -55,23 +56,7 @@ export function createCatalogAttemptReporter(
   source: PreparedModelCatalogAttempt["source"],
   isCurrent: () => boolean,
   beforeProviderFailure: () => void,
-): {
-  setPending: (
-    providers: readonly string[] | undefined,
-    kind?: PreparedModelCatalogAcquisitionKind,
-  ) => void;
-  published: (
-    providers?: readonly string[],
-    kind?: PreparedModelCatalogAcquisitionKind,
-    publication?: () => CatalogPublicationChange,
-  ) => void;
-  failed: (
-    error: unknown,
-    providers?: readonly string[],
-    kind?: PreparedModelCatalogAcquisitionKind,
-  ) => void;
-  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
-} {
+) {
   // Compatible reloads share live status; replacement sources start without the old error.
   const attempt: PreparedModelCatalogAttempt =
     owner.catalogAttempt && isDeepStrictEqual(owner.catalogAttempt.source, source)
@@ -120,10 +105,13 @@ export function createCatalogAttemptReporter(
   const hasFailedProviders = () =>
     attempt.failedProviders.provider.size > 0 || attempt.failedProviders.native.size > 0;
   return {
-    setPending: (providers, kind = "provider") => {
+    setPending: (
+      providers: readonly string[] | undefined,
+      kind: PreparedModelCatalogAcquisitionKind = "provider",
+    ) => {
       pendingProviders[kind] = providers;
     },
-    withRefreshStatus: (catalog) => {
+    withRefreshStatus: (catalog: ModelCatalogSnapshot) => {
       const nativeOutcomes = Object.values(catalog.nativeProviderOutcomes ?? {}).flat();
       // Auth rejection leaves inventory incomplete without making its refresh fail.
       // Provider renewal does not retry a failed native inventory.
@@ -158,7 +146,11 @@ export function createCatalogAttemptReporter(
       });
       return catalog;
     },
-    published: (providers, kind, publication) => {
+    published: (
+      providers?: readonly string[],
+      kind?: PreparedModelCatalogAcquisitionKind,
+      publication?: () => CatalogPublicationChange,
+    ) => {
       const previouslyFailed = hasFailedProviders();
       const previouslyPendingCount = pendingCount();
       const acquisitionKind = kind ?? "provider";
@@ -187,20 +179,15 @@ export function createCatalogAttemptReporter(
 export function registerPreparedModelRuntimePublicationListener(
   listener: (event: PreparedModelRuntimePublicationEvent) => void,
 ): () => void {
-  publicationListeners.add(listener);
-  return () => publicationListeners.delete(listener);
+  return registerListener(publicationListeners, listener);
 }
 
 export function notifyPreparedModelRuntimePublication(
   event: PreparedModelRuntimePublicationEvent,
 ): void {
-  for (const listener of publicationListeners) {
-    try {
-      listener(event);
-    } catch (error) {
-      log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
-    }
-  }
+  notifyListeners(publicationListeners, event, (error) => {
+    log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
+  });
 }
 
 export function resetPreparedModelRuntimePublicationListenersForTest(): void {

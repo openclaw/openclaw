@@ -18,11 +18,6 @@ import {
   stripSystemPromptCacheBoundary,
   stripSystemPromptRelocatableBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
-/**
- * Anthropic-family request payload policy helpers.
- * Applies service-tier and cache-control markers only when provider endpoint
- * capabilities allow them.
- */
 import { resolveProviderEndpoint, resolveProviderRequestCapabilities } from "./host-policy.js";
 import { parsePositiveInteger } from "./transport-utils.js";
 
@@ -72,12 +67,7 @@ function resolveAnthropicCompactThreshold(contextWindow: unknown, configured: un
     return Math.max(ANTHROPIC_COMPACT_THRESHOLD_MIN, configuredThreshold);
   }
   const resolvedContextWindow = parsePositiveInteger(contextWindow);
-  return Math.max(
-    ANTHROPIC_COMPACT_THRESHOLD_MIN,
-    resolvedContextWindow === undefined
-      ? ANTHROPIC_COMPACT_THRESHOLD_MIN
-      : Math.floor(resolvedContextWindow * 0.7),
-  );
+  return Math.max(ANTHROPIC_COMPACT_THRESHOLD_MIN, Math.floor((resolvedContextWindow ?? 0) * 0.7));
 }
 
 /** Resolve the server-compaction gate and effective threshold for an Anthropic route. */
@@ -136,11 +126,7 @@ export function isAnthropicServerToolClearingEnabled(
 }
 
 function resolveBaseUrlHostname(baseUrl: string): string | undefined {
-  try {
-    return new URL(baseUrl).hostname;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(baseUrl)?.hostname;
 }
 
 function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {

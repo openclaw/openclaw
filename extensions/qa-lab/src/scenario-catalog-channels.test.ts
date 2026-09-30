@@ -1,13 +1,18 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
-  validateQaScenarioExecutionConfig,
+  readQaScenarioFile,
 } from "./scenario-catalog.js";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { recentOutboundSummary } from "./suite-runtime-transport.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const telegramStreamingFinalScenarios = [
   {
@@ -506,12 +511,26 @@ describe("qa scenario catalog channel contracts", () => {
     expect(config?.requiredChannelDriver).toBe("crabline");
   });
 
-  it("rejects malformed string matcher lists before running a flow", () => {
-    expect(() =>
-      validateQaScenarioExecutionConfig({
-        gracefulFallbackAny: [{ confirmed: "the hidden fact is present" }],
+  it("rejects malformed string matcher lists before running a flow", async () => {
+    const filePath = path.join(tempDirs.make("qa-catalog-"), "scenario.yaml");
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        title: "Malformed matcher",
+        scenario: {
+          id: "malformed-matcher",
+          surface: "qa",
+          execution: {
+            kind: "flow",
+            config: { gracefulFallbackAny: [{ confirmed: "the hidden fact is present" }] },
+          },
+        },
+        flow: { steps: [{ name: "validate", actions: [{ assert: "true" }] }] },
       }),
-    ).toThrow(/gracefulFallbackAny entries must be strings/);
+    );
+    expect(() => readQaScenarioFile(filePath)).toThrow(
+      /gracefulFallbackAny entries must be strings/,
+    );
   });
 
   it("returns undefined execution config for an unknown scenario id", () => {

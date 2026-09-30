@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Chat split, workspace dock, board, and sidebar layout persistence. Split from
 // settings.node.test.ts to keep each file under the lint size budget.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { openSlot } from "../pages/chat/sidebar-layout.ts";
 import {
   expectedGatewayUrl,
@@ -12,13 +12,11 @@ import { loadSettings, saveSettings } from "./settings.ts";
 
 describe("settings layout persistence", () => {
   installSettingsStorageLifecycle();
+  beforeEach(() => {
+    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+  });
 
   it("persists and parses a chat split layout", () => {
-    setTestLocation({
-      protocol: "https:",
-      host: "gateway.example:8443",
-      pathname: "/",
-    });
     const settings = loadSettings();
     const chatSplitLayout = {
       columns: [
@@ -35,11 +33,6 @@ describe("settings layout persistence", () => {
   });
 
   it("omits an invalid stored chat split layout", () => {
-    setTestLocation({
-      protocol: "https:",
-      host: "gateway.example:8443",
-      pathname: "/",
-    });
     const gwUrl = expectedGatewayUrl("");
     localStorage.setItem(
       `openclaw.control.settings.v1:${gwUrl}`,
@@ -50,23 +43,12 @@ describe("settings layout persistence", () => {
   });
 
   it("preserves an opted-in bottom workspace dock", () => {
-    setTestLocation({
-      protocol: "https:",
-      host: "gateway.example:8443",
-      pathname: "/",
-    });
-
     saveSettings({ ...loadSettings(), chatWorkspaceDock: "bottom" });
 
     expect(loadSettings().chatWorkspaceDock).toBe("bottom");
   });
 
   it("persists dashboard tab and dock state per session", () => {
-    setTestLocation({
-      protocol: "https:",
-      host: "gateway.example:8443",
-      pathname: "/",
-    });
     const settings = loadSettings();
     const boardSessionViews = {
       "agent:main:main": {
@@ -81,11 +63,6 @@ describe("settings layout persistence", () => {
   });
 
   it("silently drops legacy local face while preserving per-device tab state", () => {
-    setTestLocation({
-      protocol: "https:",
-      host: "gateway.example:8443",
-      pathname: "/",
-    });
     const gwUrl = expectedGatewayUrl("");
     localStorage.setItem(
       `openclaw.control.settings.v1:${gwUrl}`,
@@ -103,7 +80,6 @@ describe("settings layout persistence", () => {
   });
 
   it("persists normalized sidebar layouts per session", () => {
-    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
     const settings = loadSettings();
     const sidebarSessionLayouts = {
       "agent:main:main": openSlot({ columns: [] }, "discussion"),
@@ -117,7 +93,6 @@ describe("settings layout persistence", () => {
   });
 
   it("normalizes corrupt stored sidebar layouts to empty columns", () => {
-    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
     const gwUrl = expectedGatewayUrl("");
     localStorage.setItem(
       `openclaw.control.settings.v1:${gwUrl}`,

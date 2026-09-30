@@ -66,7 +66,6 @@ function createFakeNotifications(): FakeNotifications {
   const controller = new AbortController();
   return {
     send: vi.fn<CodexSandboxExecSessionNotifications["send"]>(),
-    isOpen: () => !controller.signal.aborted,
     signal: controller.signal,
     close: () => controller.abort(),
   };

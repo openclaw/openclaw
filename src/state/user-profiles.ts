@@ -28,6 +28,7 @@ import {
 import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 import {
   applyVerifiedGitHubIdentity,
+  assertGitHubEmailIdentityBinding,
   githubAuthenticationSubject,
   selectUserProfileGitHubIdentities,
 } from "./user-profile-github-identity.js";
@@ -139,8 +140,9 @@ export function getUserProfileListItem(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileListItem {
-  ensureUserProfilesSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
+  const database = openOpenClawStateDatabase(options);
+  ensureUserProfilesSchema(options, database);
+  const { db } = database;
   const profile = requireResolvedUserProfileMetadataById(db, profileId);
   return selectUserProfileListItemById(db, profile.id);
 }
@@ -193,12 +195,18 @@ export function setUserProfileRole(
 function ensureProfileForEmailWithInitialName(
   email: string,
   initialDisplayName: string | null,
-  options: UserProfileMutationOptions,
+  options: UserProfileMutationOptions & { expectedGitHubAccountId?: number },
 ): UserProfile {
   const normalizedEmail = normalizeEmail(email);
   ensureUserProfilesSchema(options);
   const { db: reader } = openOpenClawStateDatabase(options);
+  const assertBinding = (database: DatabaseSync) => {
+    if (options.expectedGitHubAccountId !== undefined) {
+      assertGitHubEmailIdentityBinding(database, normalizedEmail, options.expectedGitHubAccountId);
+    }
+  };
   const selectExistingProfile = (database: DatabaseSync) => {
+    assertBinding(database);
     const alias = selectUserProfileEmailAlias(database, normalizedEmail);
     return alias
       ? toUserProfile(requireResolvedUserProfileMetadataById(database, alias.profile_id))
@@ -211,14 +219,16 @@ function ensureProfileForEmailWithInitialName(
   }
   const now = Date.now();
   return runUserProfileWriteTransaction(
-    ({ db }) =>
-      ensureProfileForEmailInDatabase(
+    ({ db }) => {
+      assertBinding(db);
+      return ensureProfileForEmailInDatabase(
         db,
         normalizedEmail,
         initialDisplayName,
         now,
         options.mutation,
-      ),
+      );
+    },
     options,
     { operationLabel: "user-profiles.ensure" },
   );
@@ -227,7 +237,7 @@ function ensureProfileForEmailWithInitialName(
 /** Resolves an email alias or atomically creates its first durable profile. */
 export function ensureProfileForEmail(
   email: string,
-  options: UserProfileMutationOptions = {},
+  options: UserProfileMutationOptions & { expectedGitHubAccountId?: number } = {},
 ): UserProfile {
   return ensureProfileForEmailWithInitialName(email, null, options);
 }
@@ -458,15 +468,12 @@ export function mergeProfiles(
           .distinct()
           .where("profile_id", "in", cohort),
       ).rows;
-      const movedAliasKinds: UsersMergeResult["movedAliasKinds"] = [];
-      if (email) {
-        movedAliasKinds.push("email");
-      }
-      for (const kind of ["provider", "channel"] as const) {
-        if (identities.some((identity) => identity.kind === kind)) {
-          movedAliasKinds.push(kind);
-        }
-      }
+      const movedAliasKinds: UsersMergeResult["movedAliasKinds"] = [
+        ...(email ? ["email" as const] : []),
+        ...(["provider", "channel"] as const).filter((kind) =>
+          identities.some((identity) => identity.kind === kind),
+        ),
+      ];
       mergeUserProfiles(db, source.id, target.id, Date.now(), options.mutation);
       publishUserProfilesChange(db, target.id);
       return { profile: selectUserProfileListItemById(db, target.id), movedAliasKinds };

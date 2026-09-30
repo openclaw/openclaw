@@ -32,8 +32,10 @@ import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 const MODEL = "mock-openai/progress-fixture";
 const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
-// Draft progress uses compact tool rows; native Slack uses task_update chunks.
+// Draft progress uses compact tool rows; the Slack Block Kit card uses plain
+// "Exec — detail" rows; native Slack uses task_update chunks.
 const toolRow = /🛠️ (?:Exec|Bash)\b/u;
+const slackCardToolRow = /\b(?:Exec|Bash) — /u;
 const nativeToolTitle = /^(?:Exec|Bash)\b/u;
 const failedToolRow = /🛠️ (?:Exec|Bash): failed\b/u;
 type WireWrite = {
@@ -367,7 +369,7 @@ async function startPresentationApi(
 function isCompletionUserText(text: string): boolean {
   return (
     text.includes("Internal task completion event") ||
-    text.includes("[Subagent Context] Every subagent spawned from this session has now settled")
+    text.includes("[Subagent Context] Every subagent in this batch has now settled")
   );
 }
 
@@ -582,12 +584,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
     cleanups.push(() => stopQaGatewayFixture(owner));
     const gateway = await owner.start({
       repoRoot: process.cwd(),
-      command: {
-        executablePath: process.execPath,
-        argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
-        cwd: process.cwd(),
-        usePackagedPlugins: true,
-      },
+      // The source QA fixture uses prebuilt dist without installed-package repair.
       providerBaseUrl: `http://127.0.0.1:${providerPort}/v1`,
       providerMode: "mock-openai",
       primaryModel: MODEL,
@@ -878,12 +875,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
     cleanups.push(() => stopQaGatewayFixture(owner));
     const gateway = await owner.start({
       repoRoot: process.cwd(),
-      command: {
-        executablePath: process.execPath,
-        argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
-        cwd: process.cwd(),
-        usePackagedPlugins: true,
-      },
       providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
       mockSessionObserverUrl: provider.sessionObserverUrl,
       providerMode: "mock-openai",
@@ -1293,12 +1284,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
     cleanups.push(() => stopQaGatewayFixture(owner));
     const gateway = await owner.start({
       repoRoot: process.cwd(),
-      command: {
-        executablePath: process.execPath,
-        argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
-        cwd: process.cwd(),
-        usePackagedPlugins: true,
-      },
       providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
       mockSessionObserverUrl: provider.sessionObserverUrl,
       providerMode: "mock-openai",
@@ -1571,14 +1556,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
       }
       const gateway = await owner.start({
         repoRoot: process.cwd(),
-        // The E2E runner owns the build; child startups must not rebuild dist
-        // beneath already-running test workers when the source tree is dirty.
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
-          cwd: process.cwd(),
-          usePackagedPlugins: true,
-        },
         providerBaseUrl: `${provider.baseUrl}/v1`,
         providerMode: "mock-openai",
         primaryModel: MODEL,
@@ -1749,10 +1726,16 @@ describe("channel progress presentation through an isolated Gateway", () => {
         )
         .join("\n");
       expect(progressText).toContain(HEADLINE);
+      const slackCard = channel === "slack" && !native && !compact;
+      const expectedToolRow = slackCard ? slackCardToolRow : toolRow;
       if (!tools) {
-        expect(progressText).not.toMatch(toolRow);
+        expect(progressText).not.toMatch(expectedToolRow);
       } else if (channel !== "slack" || !native) {
-        expect(progressText).toMatch(toolRow);
+        expect(progressText).toMatch(expectedToolRow);
+      }
+      if (slackCard) {
+        // The fallback card adds no emoji status or tool chrome.
+        expect(progressText).not.toMatch(/🛠️|🔄/u);
       }
       if (failTool) {
         if (tools) {

@@ -320,7 +320,8 @@ struct AppStateIsolationTests {
 
 @MainActor
 struct ProfileChatPreferencesTests {
-    @Test func `full chat preferences belong to named profile`() async throws {
+    @Test(.timeLimit(.minutes(1)))
+    func `full chat preferences belong to named profile`() async throws {
         let profile = try #require(AppProfile.current.name)
         try #require(profile.hasPrefix("test-"))
         let favoritesKey = "openclaw.chat.modelFavorites"

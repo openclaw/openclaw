@@ -159,45 +159,20 @@ export function computeNextProfileUsageStats(params: {
       now: params.now,
       recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
     });
-    // Update cooldown metadata based on whether the window is still active
-    // and whether the same or a different model is failing.
     const existingCooldownActive =
       typeof params.existing.cooldownUntil === "number" &&
       params.existing.cooldownUntil > params.now;
-    if (existingCooldownActive) {
-      // Always use the latest failure reason so that downstream consumers
-      // (e.g. isProfileInCooldown model-bypass) see the most recent signal.
-      // A non-rate_limit failure (auth, billing, …) is profile-wide, so
-      // upgrading from rate_limit → auth correctly blocks all models.
-      updatedStats.cooldownReason = params.reason;
-      // If a different model fails during an active window, widen the scope
-      // to all models (undefined) so neither model bypasses the cooldown.
-      if (
-        params.existing.cooldownModel &&
-        params.modelId &&
-        params.existing.cooldownModel !== params.modelId
-      ) {
-        updatedStats.cooldownModel = undefined;
-      } else if (
-        isModelScopedCooldownReason(params.reason) &&
-        !params.modelId &&
-        params.existing.cooldownModel
-      ) {
-        // Unknown originating model during an active model-scoped cooldown:
-        // widen scope conservatively so no model can bypass on stale metadata.
-        updatedStats.cooldownModel = undefined;
-      } else if (!isModelScopedCooldownReason(params.reason)) {
-        // Profile-wide failures (auth, billing, format, server_error, ...) —
-        // clear model scope so that no model can bypass.
-        updatedStats.cooldownModel = undefined;
-      } else {
-        updatedStats.cooldownModel = params.existing.cooldownModel;
-      }
+    updatedStats.cooldownReason = params.reason;
+    if (!isModelScopedCooldownReason(params.reason)) {
+      updatedStats.cooldownModel = undefined;
+    } else if (existingCooldownActive) {
+      // Keep an active scope only while every failure names the same model.
+      // An already profile-wide window cannot narrow until it expires.
+      const previousModel = params.existing.cooldownModel;
+      updatedStats.cooldownModel =
+        !previousModel || previousModel === params.modelId ? previousModel : undefined;
     } else {
-      updatedStats.cooldownReason = params.reason;
-      updatedStats.cooldownModel = isModelScopedCooldownReason(params.reason)
-        ? params.modelId
-        : undefined;
+      updatedStats.cooldownModel = params.modelId;
     }
   }
 

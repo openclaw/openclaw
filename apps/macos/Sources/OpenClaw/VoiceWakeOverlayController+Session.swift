@@ -207,7 +207,7 @@ extension VoiceWakeOverlayController {
                 } else if outcome == .sent {
                     AppStateStore.shared.celebrateSend()
                 }
-                AppStateStore.shared.stopVoiceEars()
+                AppStateStore.shared.earBoostActive = false
                 VoiceSessionCoordinator.shared.overlayDidDismiss(token: dismissedToken)
             }
         }

@@ -96,9 +96,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const shouldSuppressProgressDelivery = () =>
     state.sendPolicyDenied ||
     (state.suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
-  const shouldSuppressDefaultToolProgressMessages = () =>
-    params.replyOptions?.suppressToolProgressMessages === true || !shouldEmitVerboseProgress();
-  const shouldSendToolSummaries = () => !shouldSuppressDefaultToolProgressMessages();
+  const shouldSendToolSummaries = () =>
+    params.replyOptions?.suppressToolProgressMessages !== true && shouldEmitVerboseProgress();
   const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
     params.onSessionMetadataChanges,
   );
@@ -118,12 +117,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   let finalReplyDeliveryStarted = false;
   const isSessionWriterDeliveryAuthorized = (payload: ReplyPayload) =>
     isDispatchFinalReplySessionWriterAuthorized(payload, sessionStoreEntry.storePath, sessionKey);
-  const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
-    if (!finalReplyDeliveryStarted) {
-      return false;
-    }
-    return !requiresDurableToolResultDelivery(payload);
-  };
+  const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) =>
+    finalReplyDeliveryStarted && !requiresDurableToolResultDelivery(payload);
   // Durable inter-tool commentary lane: with verbose progress on, preamble
   // items become standalone progress messages like tool summaries. The latest
   // text per item id is buffered (snapshot producers re-emit the same item)
@@ -613,7 +608,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   replyToSender: state.hookState.hookContext.replyToSender,
                   replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
                 },
-                state.assertCurrentBindingRoute,
+                { prepare: state.assertCurrentBindingRoute },
               ),
               pluginSubagentRequester,
             ),
@@ -680,7 +675,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   }
   const nextState = Object.assign(state, {
     shouldSuppressProgressDelivery,
-    shouldSuppressDefaultToolProgressMessages,
     shouldSendToolSummaries,
     notifySessionMetadataChanges,
     shouldDeliverVerboseProgressDespiteSourceSuppression,

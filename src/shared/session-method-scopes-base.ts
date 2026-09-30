@@ -11,6 +11,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "progressCard.get",
   "projects.list",
   "session.suggestions.list",
+  "session.reactions.list",
   "sessions.groups.list",
   "sessions.list",
   "sessions.subscribe",

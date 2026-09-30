@@ -131,8 +131,7 @@ struct GatewayConnectionDashboardIdentityTests {
                 // Serve withdraws its announcement before retiring connections that received it.
                 try await fixture.reconnect(announcement: announcement)
 
-                let expectedURL = try announcement.flatMap(URL.init(string:)) ?? GatewayEndpointStore.dashboardURL(
-                    for: fixture.config, mode: .remote, authToken: fixture.config.token)
+                let expectedURL = try #require(URL(string: announcement ?? "http://127.0.0.1:28901/"))
                 let unchanged = announcement == originalURL.absoluteString
                 let refreshed = ContinuousClock.now + .seconds(5)
                 while unchanged || manager._testAuxiliaryWindows().contains(where: {

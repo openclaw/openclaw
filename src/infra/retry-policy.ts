@@ -1,4 +1,3 @@
-// Defines reusable retry envelopes for channel and network operations.
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, type RetryOptions, resolveRetryConfig, retryAsync } from "./retry.js";

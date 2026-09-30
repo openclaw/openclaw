@@ -20,6 +20,7 @@ import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import {
   publishServiceFile,
+  matchesServiceFilePublication,
   readServiceFileState,
   type GatewayServiceDefinitionTransactionHooks,
 } from "./service-stage.js";
@@ -119,47 +120,21 @@ exec "$@"
   );
 }
 
-async function resolveLaunchAgentEnvironmentWrapperOverwriteWarnings(params: {
-  wrapperPath: string;
-}): Promise<string[]> {
-  const existingWrapper = await fs.readFile(params.wrapperPath, "utf8").catch(() => null);
-  if (existingWrapper === null || isGeneratedLaunchAgentEnvironmentWrapper(existingWrapper)) {
-    return [];
-  }
-  return [
-    `Existing generated LaunchAgent env wrapper at ${params.wrapperPath} contains custom behavior and will be overwritten; move custom behavior to openclaw gateway install --wrapper <path> or OPENCLAW_WRAPPER.`,
-  ];
-}
-
-function writeLaunchAgentOverwriteWarnings(
+async function warnAboutLaunchAgentWrapperOverwrite(
+  wrapperPath: string,
   stdout: NodeJS.WritableStream | undefined,
   warn: ((message: string) => void) | undefined,
-  warnings: readonly string[],
-): void {
-  for (const warning of warnings) {
-    if (warn) {
-      warn(warning);
-      continue;
-    }
-    if (!stdout) {
-      continue;
-    }
-    stdout.write(`${formatLine("Warning", warning)}\n`);
+): Promise<void> {
+  const existingWrapper = await fs.readFile(wrapperPath, "utf8").catch(() => null);
+  if (existingWrapper === null || isGeneratedLaunchAgentEnvironmentWrapper(existingWrapper)) {
+    return;
   }
-}
-
-function isLaunchAgentEnvironmentWrapperArgs(params: {
-  programArguments: string[];
-  envFilePath: string;
-  wrapperPath: string;
-}): boolean {
-  return (
-    (params.programArguments[0] === params.wrapperPath &&
-      params.programArguments[1] === params.envFilePath) ||
-    (params.programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL &&
-      params.programArguments[1] === params.wrapperPath &&
-      params.programArguments[2] === params.envFilePath)
-  );
+  const warning = `Existing generated LaunchAgent env wrapper at ${wrapperPath} contains custom behavior and will be overwritten; move custom behavior to openclaw gateway install --wrapper <path> or OPENCLAW_WRAPPER.`;
+  if (warn) {
+    warn(warning);
+  } else {
+    stdout?.write(`${formatLine("Warning", warning)}\n`);
+  }
 }
 
 async function prepareLaunchAgentProgramArguments(params: {
@@ -189,10 +164,7 @@ async function prepareLaunchAgentProgramArguments(params: {
     mode: LAUNCH_AGENT_ENV_FILE_MODE,
     definitionTransaction: params.definitionTransaction,
   });
-  const overwriteWarnings = await resolveLaunchAgentEnvironmentWrapperOverwriteWarnings({
-    wrapperPath,
-  });
-  writeLaunchAgentOverwriteWarnings(params.stdout, params.warn, overwriteWarnings);
+  await warnAboutLaunchAgentWrapperOverwrite(wrapperPath, params.stdout, params.warn);
   await publishServiceFile({
     filePath: wrapperPath,
     contents: generatedWrapper,
@@ -200,17 +172,17 @@ async function prepareLaunchAgentProgramArguments(params: {
     definitionTransaction: params.definitionTransaction,
   });
 
+  const { programArguments } = params;
   if (
-    isLaunchAgentEnvironmentWrapperArgs({
-      programArguments: params.programArguments,
-      envFilePath,
-      wrapperPath,
-    })
+    (programArguments[0] === wrapperPath && programArguments[1] === envFilePath) ||
+    (programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL &&
+      programArguments[1] === wrapperPath &&
+      programArguments[2] === envFilePath)
   ) {
-    return params.programArguments;
+    return programArguments;
   }
 
-  return [LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapperPath, envFilePath, ...params.programArguments];
+  return [LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapperPath, envFilePath, ...programArguments];
 }
 
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
@@ -224,11 +196,6 @@ export function resolveLaunchAgentEnvironmentReadOptions(env: GatewayServiceEnv,
     expectedEnvironmentFilePath: resolveLaunchAgentEnvFilePath(env, label),
     generatedEnvironmentLabel: label,
   };
-}
-
-async function ensureLaunchAgentPlistReadable(plistPath: string): Promise<void> {
-  assertGatewayServiceUpdateCurrent();
-  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
 }
 
 type LaunchAgentFileSnapshot = { contents: Buffer; mode: number };
@@ -284,20 +251,12 @@ async function captureLaunchAgentFiles(paths: string[]) {
   );
   const published = new Map<string, LaunchAgentFileState>();
   const prepared = new Map<string, LaunchAgentFileState>();
-  const matchesPublication = (
-    current: LaunchAgentFileState | null,
-    expected: LaunchAgentFileState,
-  ): current is LaunchAgentFileState =>
-    current !== null &&
-    (["dev", "ino", "sha256", "mode", "size", "mtimeMs"] as const).every(
-      (key) => current[key] === expected[key],
-    );
   const verify = async (file: string) => {
     const current = await readServiceFileState(file);
     const expected = published.get(file);
     if (
       expected
-        ? !matchesPublication(current, expected)
+        ? !matchesServiceFilePublication(current, expected)
         : !isDeepStrictEqual(current, originals.get(file)?.state)
     ) {
       throw new Error(`LaunchAgent artifact changed after capture or publication: ${file}`);
@@ -309,7 +268,7 @@ async function captureLaunchAgentFiles(paths: string[]) {
     // A rename may finish before publication confirmation or directory fsync fails.
     for (const [file, pending] of prepared) {
       const current = await readServiceFileState(file);
-      if (matchesPublication(current, pending)) {
+      if (matchesServiceFilePublication(current, pending)) {
         published.set(file, current);
       } else {
         await verify(file);
@@ -344,7 +303,7 @@ async function captureLaunchAgentFiles(paths: string[]) {
       assertGatewayServiceUpdateCurrent();
       if (
         !pending ||
-        !matchesPublication(current, pending) ||
+        !matchesServiceFilePublication(current, pending) ||
         contents === null ||
         current?.sha256 !== createHash("sha256").update(contents).digest("hex")
       ) {
@@ -439,15 +398,6 @@ async function ensureSecureDirectory(
   }
 }
 
-async function ensureLaunchAgentEnvironmentDirectories(
-  environment: Record<string, string | undefined> | undefined,
-): Promise<void> {
-  const tmpDir = environment?.TMPDIR?.trim();
-  if (tmpDir) {
-    await ensureSecureDirectory(tmpDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
-  }
-}
-
 export async function writeLaunchAgentPlist(
   args: GatewayServiceInstallArgs,
   publication?: LaunchAgentFilePublication,
@@ -474,7 +424,10 @@ export async function writeLaunchAgentPlist(
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);
   await ensureSecureDirectory(path.dirname(plistPath));
-  await ensureLaunchAgentEnvironmentDirectories(environment);
+  const tmpDir = environment?.TMPDIR?.trim();
+  if (tmpDir) {
+    await ensureSecureDirectory(tmpDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
+  }
   const prepared = await prepareLaunchAgentProgramArguments({
     env,
     label,
@@ -564,7 +517,8 @@ export async function rewriteLaunchAgentPlistForRestart({
     });
     const previousPlist = await fs.readFile(plistPath, "utf8").catch(() => "");
     if (previousPlist === plist) {
-      await ensureLaunchAgentPlistReadable(plistPath);
+      assertGatewayServiceUpdateCurrent();
+      await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
       return false;
     }
     await publishLaunchAgentPlist({ label, plistPath, contents: plist, definitionTransaction });

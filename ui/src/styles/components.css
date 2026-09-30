@@ -860,13 +860,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   font-size: 12px;
 }
 
-/* Phones (matches the layout.mobile.css breakpoint). The gate renders outside
-   the shell, so it needs its own safe-area padding for notch/home-bar overlap
-   with viewport-fit=cover. */
+/* The outer app owns safe areas for the login gate as well as the shell. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .login-gate {
-    padding: max(16px, var(--safe-area-top)) max(12px, var(--safe-area-right))
-      max(16px, var(--safe-area-bottom)) max(12px, var(--safe-area-left));
+    padding: 16px var(--chat-mobile-edge-inset);
   }
 
   .login-gate__card {
@@ -905,15 +902,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
   .login-gate__connection-cred {
     display: none;
-  }
-}
-
-/* The standalone body already owns safe-area insets. Reusing them inside the
-   gate would double notch/home-bar spacing and shrink its scroll viewport. */
-@media (display-mode: standalone) and (max-width: 768px),
-  (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .login-gate {
-    padding: 16px 12px;
   }
 }
 
@@ -1334,7 +1322,7 @@ openclaw-toast-host[data-toast-placement="shell"]
  * Keep this opt-in so anchored notices and the shell's top placement stay intact. */
 .app-toast--bottom {
   top: auto;
-  bottom: calc(20px + var(--safe-area-bottom));
+  bottom: calc(100% - var(--shell-canvas-height) + 20px + var(--shell-safe-area-bottom));
   transition:
     opacity 180ms ease-out,
     translate 180ms ease-out;
@@ -1505,12 +1493,12 @@ openclaw-toast-host[data-toast-placement="shell"]
   min-width: 36px;
   height: 36px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
 }
 
 .btn--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
 }
 
 .btn--icon svg {
@@ -1675,7 +1663,7 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .person-activity-card__status--idle > span {
-  background: var(--warn);
+  background: var(--presence-idle);
 }
 
 .person-activity-card__status--unknown > span,
@@ -2072,7 +2060,18 @@ select.input {
   padding-right: 36px;
   background-image: var(--select-chevron);
   background-repeat: no-repeat;
-  background-position: right 10px center;
+  background-position:
+    right 18px center,
+    right 14px center;
+  background-size: 5px 5px;
+}
+
+@media (forced-colors: active) {
+  .field select {
+    appearance: auto;
+    padding-inline-end: 10px;
+    background-image: none;
+  }
 }
 
 .field textarea {
@@ -2129,14 +2128,14 @@ select.input {
 }
 
 :root[data-theme-mode="light"] .btn--icon {
-  background: var(--button-icon-bg);
+  background: var(--bg-elevated);
   border-color: var(--border);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  box-shadow: var(--shadow-sm);
   color: var(--muted);
 }
 
 :root[data-theme-mode="light"] .btn--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
-  background: var(--button-icon-bg);
+  background: var(--bg-hover);
   border-color: var(--border-strong);
   color: var(--text);
 }
@@ -2208,7 +2207,7 @@ select.input {
 }
 
 .callout__dismiss:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .callout__dismiss svg {
@@ -2706,11 +2705,7 @@ select.input {
 
 .code-block-copy:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
-}
-
-:root[data-theme-mode="light"] .code-block-copy:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .code-block-copy__done,
@@ -3782,10 +3777,18 @@ td.data-table-key-col {
   width: 100%;
 }
 
+.agent-identity-editor__content {
+  display: grid;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
 .agent-identity-editor__actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
@@ -3810,20 +3813,29 @@ td.data-table-key-col {
 }
 
 .agent-identity-editor__fields {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
   gap: 12px;
-  flex: 1;
   min-width: 0;
 }
 
 .agent-identity-editor__fields .field {
-  flex: 1 1 200px;
   min-width: 0;
 }
 
-.agent-identity-editor__fields .agent-identity-editor__emoji {
-  flex: 0 1 96px;
+.agent-identity-editor__emoji-control {
+  position: relative;
+}
+
+.agent-identity-editor__emoji-control > input {
+  padding-inline-end: 42px;
+}
+
+.agent-identity-editor__emoji-control > openclaw-agent-emoji-picker {
+  position: absolute;
+  inset-inline-end: 3px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .agent-identity-editor__fields input {
@@ -3833,6 +3845,12 @@ td.data-table-key-col {
 
 .agent-identity-editor__hint {
   font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .agent-identity-editor__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .workspace-link {
@@ -3894,8 +3912,8 @@ td.data-table-key-col {
   border-radius: calc(var(--radius-xl) + 6px);
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, black 6%), var(--panel));
   box-shadow:
-    0 32px 96px rgba(0, 0, 0, 0.48),
-    0 1px 0 rgba(255, 255, 255, 0.04) inset;
+    var(--shadow-xl),
+    0 1px 0 var(--card-highlight) inset;
   overflow: hidden;
 }
 
@@ -3983,7 +4001,7 @@ td.data-table-key-col {
   color: color-mix(in srgb, var(--text) 86%, var(--muted));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.045),
-    0 8px 20px rgba(0, 0, 0, 0.18);
+    var(--shadow-md);
 }
 
 .md-preview-icon-btn:hover:not(:disabled) {
@@ -3996,7 +4014,7 @@ td.data-table-key-col {
   color: var(--text-strong);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 10px 24px rgba(0, 0, 0, 0.24);
+    var(--shadow-md);
 }
 
 .md-preview-icon-btn[aria-pressed="true"] {
@@ -4005,7 +4023,7 @@ td.data-table-key-col {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.07),
     0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
-    0 12px 28px rgba(0, 0, 0, 0.28);
+    var(--shadow-lg);
 }
 
 .md-preview-icon-btn > span {
@@ -4031,7 +4049,11 @@ td.data-table-key-col {
       color-mix(in srgb, var(--accent) 5.5%, transparent),
       transparent 32%
     ),
-    radial-gradient(circle at bottom left, rgba(20, 184, 166, 0.045), transparent 28%),
+    radial-gradient(
+      circle at bottom left,
+      color-mix(in srgb, var(--accent-2) 4.5%, transparent),
+      transparent 28%
+    ),
     linear-gradient(
       180deg,
       color-mix(in srgb, var(--panel) 84%, black 16%),
@@ -4106,8 +4128,8 @@ td.data-table-key-col {
     var(--md-preview-document-bg)
   );
   box-shadow:
-    0 22px 54px rgba(0, 0, 0, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+    var(--shadow-lg),
+    inset 0 1px 0 var(--card-highlight);
 }
 
 .md-preview-dialog__reader::before {
@@ -5298,7 +5320,7 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: 22px;
   background: var(--qr-bg);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-lg);
 }
 
 .device-pair-setup__qr {
@@ -6029,10 +6051,7 @@ td.data-table-key-col {
 
 .provider-brand-icon[data-provider-icon="llamacpp"],
 .provider-brand-icon[data-provider-icon="lmstudio"],
-.provider-brand-icon[data-provider-icon="ollama"] {
-  color: var(--text-strong);
-}
-
+.provider-brand-icon[data-provider-icon="ollama"],
 .provider-brand-icon[data-provider-icon="opencode"],
 .provider-brand-icon[data-provider-icon="opencodego"],
 .provider-brand-icon[data-provider-icon="pi"] {

@@ -547,16 +547,15 @@ describe("gateway node pairing authorization", () => {
         type NodeRead = { nodeId: string; displayName?: string; connected?: boolean };
         const readNodes = async (): Promise<NodeRead[]> => {
           const listed = await rpcReq<{ nodes?: NodeRead[] }>(controlWs, "node.list", {});
+          expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
           return listed.payload?.nodes ?? [];
         };
         const readConnectedNode = async (): Promise<NodeRead | undefined> => {
           return (await readNodes()).find((entry) => entry.nodeId === pairedNode.identity.deviceId);
         };
-        await vi.waitFor(async () => {
-          expect(await readConnectedNode()).toMatchObject({
-            displayName: "Operator Name",
-            connected: true,
-          });
+        expect(await readConnectedNode()).toMatchObject({
+          displayName: "Operator Name",
+          connected: true,
         });
         const listedNodes = await readNodes();
         expect(resolveNodeIdFromNodeList(listedNodes, "Operator Name")).toBe(
@@ -581,11 +580,9 @@ describe("gateway node pairing authorization", () => {
           commands: [],
           displayName: "Replacement Live Name",
         });
-        await vi.waitFor(async () => {
-          expect(await readConnectedNode()).toMatchObject({
-            displayName: "Operator Name",
-            connected: true,
-          });
+        expect(await readConnectedNode()).toMatchObject({
+          displayName: "Operator Name",
+          connected: true,
         });
       } finally {
         await nodeClient?.stopAndWait();

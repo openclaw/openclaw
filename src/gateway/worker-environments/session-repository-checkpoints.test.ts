@@ -8,7 +8,8 @@ import type { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import * as processExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { StateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import * as publicationSnapshot from "../github-repository-publication-snapshot.js";
@@ -38,7 +39,7 @@ const hash = (bytes: string) => `sha256:${createHash("sha256").update(bytes).dig
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) {
-    closeOpenClawStateDatabaseByPath(path.join(root, "openclaw.sqlite"));
+    await closeOpenClawStateDatabaseByPathAsync(path.join(root, "openclaw.sqlite"));
     await fs.rm(root, { recursive: true, force: true });
   }
 });
@@ -50,20 +51,20 @@ async function fixture() {
   );
   roots.push(root);
   const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
-  const store = createSessionRepositoryWorkspaceStore({ database });
+  const store = createSessionRepositoryWorkspaceStore({ path: database.path });
   const remote = path.join(root, "remote");
   await fs.mkdir(remote);
   await fs.writeFile(path.join(remote, "keep.txt"), "upstream\n");
   await fs.writeFile(path.join(remote, "remove.txt"), "remove me\n");
   const base = await captureWorkspaceManifest({ root: remote, baseCommit });
   const baseManifestRaw = serializeWorkerWorkspaceManifest(base.manifest);
-  const initial = store.create({
+  const initial = await store.create({
     agentId: "main",
     sessionKey: "agent:main:repository",
     url: "https://github.com/example/project.git",
     assertCurrent,
   });
-  const workspace = store.bindBase({
+  const workspace = await store.bindBase({
     workspaceId: initial.workspaceId,
     expectedRevision: initial.revision,
     baseCommit,
@@ -78,7 +79,7 @@ async function fixture() {
     return await stageSessionRepositoryCheckpoint({
       store,
       workspaceId: workspace.workspaceId,
-      expectedRevision: store.get(workspace.workspaceId)!.revision,
+      expectedRevision: (await store.get(workspace.workspaceId))!.revision,
       checkpointRef: workerWorkspaceResultRef(claim),
       stagingRoot: remote,
       baseManifestRaw,
@@ -111,7 +112,7 @@ async function publicationFixture(root: string, content = "working tree\n") {
   return { sha, input: { publicationStagingRoot, publicationDigest: hash(metadata) } };
 }
 
-it("keeps publication staging workspace-row reads independent of distinct blob count", async () => {
+it("stages publication blobs without caller-thread workspace-row SQL", async () => {
   const measure = async (blobCount: number) => {
     const { root, remote, database, store, workspace, stage } = await fixture();
     const files: Array<{ path: string; content: string; sha: string }> = [];
@@ -142,7 +143,7 @@ it("keeps publication staging workspace-row reads independent of distinct blob c
         ? "workspaceRows"
         : null,
     );
-    // Measure staging only; preparation uses the real store revision predicate.
+    // Measure caller-thread staging SQL; repository reads now belong to the shared-state worker.
     const prepared = await stage(`publication-query-cost-${blobCount}`, {
       publicationStagingRoot,
       publicationDigest: hash(metadata),
@@ -187,8 +188,8 @@ it("keeps publication staging workspace-row reads independent of distinct blob c
       return {
         blobCount,
         distinctBlobs: new Set(files.map((file) => file.sha)).size,
-        workspaceRowReads: counter.counts.workspaceRows,
-        workspaceRowsReturned: counter.rowCounts.workspaceRows,
+        callerWorkspaceRowReads: counter.counts.workspaceRows,
+        callerWorkspaceRowsReturned: counter.rowCounts.workspaceRows,
         candidateCount: candidates.length,
         companionFileCount: payload.size,
         companionBlobsMatching: files.filter(
@@ -220,10 +221,9 @@ it("keeps publication staging workspace-row reads independent of distinct blob c
       bindingMatches: true,
       recoveryFilesMatching: sample.blobCount,
     });
-    expect(sample.workspaceRowReads).toBeGreaterThan(0);
-    expect(sample.workspaceRowsReturned).toBe(sample.workspaceRowReads);
+    expect(sample.callerWorkspaceRowReads).toBe(0);
+    expect(sample.callerWorkspaceRowsReturned).toBe(0);
   }
-  expect(samples[1]!.workspaceRowReads).toBe(samples[0]!.workspaceRowReads);
 });
 
 it.each([false, true])(
@@ -405,14 +405,14 @@ it.for([
       }
       current = closure !== "authority";
       if (closure === "revision") {
-        store.bindBase({
+        await store.bindBase({
           workspaceId: workspace.workspaceId,
           expectedRevision: workspace.revision,
           baseCommit,
           assertCurrent,
         });
       }
-      const atRelease = store.get(workspace.workspaceId);
+      const atRelease = await store.get(workspace.workspaceId);
       release.resolve();
       const outcome = await pending;
       if (outcome.ok) {
@@ -428,7 +428,7 @@ it.for([
               ? "checkpoint authority closed"
               : "Repository workspace revision changed",
         });
-        expect(store.get(workspace.workspaceId)).toEqual(atRelease);
+        expect(await store.get(workspace.workspaceId)).toEqual(atRelease);
       }
       expect(
         imports.mock.calls.filter(
@@ -513,19 +513,19 @@ it.for(["none", "authority", "revision"] as const)(
       expect(await refs()).toBe("");
       current = closure !== "authority";
       if (closure === "revision") {
-        store.bindBase({
+        await store.bindBase({
           workspaceId: workspace.workspaceId,
           expectedRevision: workspace.revision,
           baseCommit,
           assertCurrent,
         });
       }
-      const atRelease = store.get(workspace.workspaceId)!;
+      const atRelease = (await store.get(workspace.workspaceId))!;
       release.resolve();
       const outcome = await pending;
       await prepared.discard();
       const publishedRefs = await refs();
-      const after = store.get(workspace.workspaceId)!;
+      const after = (await store.get(workspace.workspaceId))!;
       const candidateRefs = await requireWorkspaceResultGit(artifact, [
         "for-each-ref",
         "--format=%(refname)",
@@ -567,7 +567,7 @@ it("retains cumulative multi-turn files, deletions and executable modes in a bar
   const { remote, store, workspace, stage } = await fixture();
   await fs.writeFile(path.join(remote, "first.txt"), "first turn\n");
   const first = await stage("turn-first");
-  expect(store.get(workspace.workspaceId)?.checkpointRef).toBeNull();
+  expect((await store.get(workspace.workspaceId))?.checkpointRef).toBeNull();
   await first.verify();
   await first.publish();
   await fs.rm(path.join(remote, "remove.txt"));
@@ -629,7 +629,7 @@ it("recovers a published artifact after the acceptance transaction fails, withou
   });
   live = false;
   await expect(prepared.publish()).rejects.toThrow("claim closed");
-  expect(store.get(workspace.workspaceId)?.checkpointRef).toBeNull();
+  expect((await store.get(workspace.workspaceId))?.checkpointRef).toBeNull();
   live = true;
   const acceptance = vi.spyOn(store, "acceptCheckpoint").mockImplementationOnce(() => {
     throw new Error("transaction interrupted");
@@ -637,9 +637,9 @@ it("recovers a published artifact after the acceptance transaction fails, withou
   await expect(prepared.publish()).rejects.toThrow("transaction interrupted");
   acceptance.mockRestore();
   await prepared.discard();
-  closeOpenClawStateDatabaseByPath(database.path);
+  await closeOpenClawStateDatabaseByPathAsync(database.path);
   const reopened = createSessionRepositoryWorkspaceStore({
-    database: openOpenClawStateDatabase({ path: database.path }),
+    path: database.path,
   });
   const recovered = await recoverSessionRepositoryCheckpoint({
     store: reopened,
@@ -702,6 +702,55 @@ it("retries failed candidate cleanup and keeps completed cleanup independent of 
   });
   expect(snapshot.preview).toEqual(new Uint8Array(Buffer.from("recover after cleanup\n")));
 });
+
+it.each(["caller", "database"] as const)(
+  "keeps fork compensation bound to its original source after %s retirement",
+  async (retired) => {
+    const { store, workspace } = await fixture();
+    const targetOwner = { agentId: "main", sessionKey: "agent:main:fork-compensation" };
+    const create = store.create.bind(store);
+    let created: Awaited<ReturnType<typeof store.create>> | undefined;
+    let current = true;
+    vi.spyOn(store, "create").mockImplementationOnce(async (input) => {
+      created = await create(input);
+      const artifact = store.artifactPath(created.workspaceId);
+      await fs.mkdir(artifact, { recursive: true });
+      await fs.writeFile(path.join(artifact, "retained-owner"), "accepted target");
+      if (retired === "database") {
+        await closeOpenClawStateDatabaseByPathAsync(store.path);
+      } else {
+        current = false;
+      }
+      return created;
+    });
+    const fork = forkSessionRepositoryWorkspace({
+      store,
+      sourceWorkspaceId: workspace.workspaceId,
+      ...targetOwner,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("fork caller revoked");
+        }
+      },
+    });
+    if (retired === "database") {
+      await expect(fork).rejects.toBeInstanceOf(StateDatabaseReadAdmissionInvalidatedError);
+    } else {
+      await expect(fork).rejects.toThrow("fork caller revoked");
+    }
+    if (!created) {
+      throw new Error("Fork did not allocate its real target");
+    }
+    expect(await store.get(workspace.workspaceId)).toEqual(workspace);
+    expect(await store.find(targetOwner)).toEqual(retired === "database" ? created : undefined);
+    const retainedArtifact = path.join(store.artifactPath(created.workspaceId), "retained-owner");
+    if (retired === "database") {
+      expect(await fs.readFile(retainedArtifact, "utf8")).toBe("accepted target");
+    } else {
+      await expect(fs.stat(retainedArtifact)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  },
+);
 
 it.each([false, true])(
   "retains independent raw recovery when the forked publication companion is corrupt: %s",
@@ -825,7 +874,7 @@ it.each(["recovery", "publication"])(
     );
     await requireWorkspaceResultGit(artifact, ["update-ref", "-d", candidate.ref]);
     await expect(prepared.verify()).rejects.toThrow();
-    expect(store.get(workspace.workspaceId)?.checkpointRef).toBeNull();
+    expect((await store.get(workspace.workspaceId))?.checkpointRef).toBeNull();
     await prepared.discard();
   },
 );

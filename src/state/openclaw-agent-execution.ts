@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { addAbortListener } from "node:events";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -9,6 +10,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
@@ -68,7 +70,6 @@ export type OpenClawAgentDatabaseExecution = {
 type ExecutionOwner = {
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
-  assertCurrent(): void;
   borrow(
     pathname: string,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
@@ -198,8 +199,11 @@ function createAgentDatabaseExecution(
   let closing: Promise<void> | undefined;
   let unregisterShared: (() => void) | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let idleDrainListener: Disposable | undefined;
 
   const clearIdleTimer = () => {
+    idleDrainListener?.[Symbol.dispose]();
+    idleDrainListener = undefined;
     clearTimeout(idleTimer);
     idleTimer = undefined;
   };
@@ -380,7 +384,6 @@ function createAgentDatabaseExecution(
     get sharedDatabaseKey() {
       return context.admission.identity.key;
     },
-    assertCurrent,
     borrow(borrowedPath, expected, creating) {
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
@@ -552,7 +555,8 @@ function createAgentDatabaseExecution(
             if (borrowers !== 0 || retired || cleanupFailure) {
               return;
             }
-            if (generation && !nativeClosing && !executionState.idle) {
+            const drainSignal = getGatewayRestartDrainSignal();
+            if (generation && !nativeClosing && !executionState.idle && !drainSignal.aborted) {
               executionState.idle = owner;
               const timer = runInExecutionOwnerContext(() =>
                 setTimeout(() => {
@@ -564,6 +568,13 @@ function createAgentDatabaseExecution(
               );
               idleTimer = timer;
               timer.unref();
+              // Exit cannot join worker leases behind stalled non-storage cleanup.
+              // Only idle generations retire here; accepted writers keep their custody.
+              idleDrainListener = addAbortListener(drainSignal, () => {
+                runInExecutionOwnerContext(() => {
+                  void owner.closeIdle().catch(reportCleanupFailure);
+                });
+              });
               return;
             }
             try {

@@ -323,18 +323,17 @@ export function consolidateMediaCapabilityConfig(
       continue;
     }
     const legacyModels = Array.isArray(config.models) ? config.models.filter(isRecord) : [];
-    const migratedBySignature = new Map<string, Record<string, unknown>>();
-    const eligibleLegacyModels = legacyModels.flatMap((legacyModel) => {
-      const scoped = scopeLegacyMediaModel(legacyModel, capability);
-      return scoped ? [scoped] : [];
-    });
-    for (const migrated of eligibleLegacyModels) {
-      const signature = mediaModelSignature(migrated);
-      const duplicate = migratedBySignature.get(signature);
-      if (duplicate) {
+    const migratedSignatures = new Set<string>();
+    for (const legacyModel of legacyModels) {
+      const migrated = scopeLegacyMediaModel(legacyModel, capability);
+      if (!migrated) {
         continue;
       }
-      migratedBySignature.set(signature, migrated);
+      const signature = mediaModelSignature(migrated);
+      if (migratedSignatures.has(signature)) {
+        continue;
+      }
+      migratedSignatures.add(signature);
       migratedModels.push(migrated);
     }
     if (Object.hasOwn(config, "models")) {

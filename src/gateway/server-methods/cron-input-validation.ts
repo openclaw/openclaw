@@ -21,6 +21,7 @@ import {
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import type { CronCallerScope } from "./cron-caller-scope.js";
 
 /** Validate authored fields before normalization can erase blank or invalid input. */
 export function normalizeCronAddRequest(params: unknown): {
@@ -178,4 +179,25 @@ export function assertCronDoesNotTargetAgentHarness(input: {
   // Cron's detached runner does not carry the owning harness lock. Harness
   // execution targets must enter through ordinary session dispatch instead.
   throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+}
+
+export function createCronCreatorSessionGuard(
+  callerScope: CronCallerScope | undefined,
+  creatorSession: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"],
+): () => void {
+  const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
+  return () => {
+    if (creatorSession && callerScope?.sessionKey) {
+      const latest = loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
+        agentId: callerScope.agentId,
+      }).entry;
+      if (
+        latest?.sessionId !== creatorSession.sessionId ||
+        latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
+        JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
+      ) {
+        throw new Error("Creator session changed before scheduling; retry from the current turn.");
+      }
+    }
+  };
 }

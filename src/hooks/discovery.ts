@@ -1,4 +1,3 @@
-// Hook metadata discovery shared by runtime loading and plugin inspection.
 import fs from "node:fs";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
@@ -85,11 +84,14 @@ function loadHookFromDir(
     let handlerPath: string | undefined;
     for (const candidate of handlerCandidates) {
       const candidatePath = path.join(params.hookDir, candidate);
-      const safeCandidatePath = resolveRootFilePath({
-        absolutePath: candidatePath,
-        rootPath: params.hookDir,
-        boundaryLabel: "hook directory",
-      });
+      const safeCandidatePath = withOpenedRootFileSync(
+        {
+          absolutePath: candidatePath,
+          rootPath: params.hookDir,
+          boundaryLabel: "hook directory",
+        },
+        (opened) => opened.path,
+      );
       if (safeCandidatePath) {
         handlerPath = safeCandidatePath;
         break;
@@ -237,12 +239,4 @@ function withOpenedRootFileSync<T>(
   } finally {
     fs.closeSync(opened.fd);
   }
-}
-
-function resolveRootFilePath(params: {
-  absolutePath: string;
-  rootPath: string;
-  boundaryLabel: string;
-}): string | null {
-  return withOpenedRootFileSync(params, (opened) => opened.path);
 }

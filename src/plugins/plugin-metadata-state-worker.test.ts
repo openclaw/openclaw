@@ -37,7 +37,7 @@ import {
 } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
-import { publishPluginSourceAdmission } from "./plugin-source-admission-store.js";
+import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -127,7 +127,6 @@ it("merges source admissions into the current install without main-thread SQL or
   const current = { ...index("current inventory"), plugins: [plugin] };
   await seed(env, current);
   const publication = {
-    env,
     pluginId: plugin.pluginId,
     rootDir: plugin.rootDir,
     installRecordHash: plugin.installRecordHash,
@@ -168,13 +167,12 @@ it("merges source admissions into the current install without main-thread SQL or
   const sql = observeMainThreadSql();
   try {
     const before = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
-    expect(
-      await withArtifactPreservingStateReads(() => publishPluginSourceAdmission(publication)),
-    ).toBe(false);
+    const publish = createPluginSourceAdmissionPublisher({ env })!;
+    expect(await withArtifactPreservingStateReads(() => publish(publication))).toBe(false);
     expect(await metadataWorker.readPluginMetadataStateRow("installed-index", { env })).toEqual(
       before,
     );
-    expect(await publishPluginSourceAdmission(publication)).toBe(true);
+    expect(await publish(publication)).toBe(true);
     const committed = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
     await withPluginCache(createPluginCache(), async () => {
       const loaded = await readPersistedInstalledPluginIndex({ env });
@@ -183,13 +181,9 @@ it("merges source admissions into the current install without main-thread SQL or
         [publication.key]: publication.receipt,
       });
     });
-    expect(await publishPluginSourceAdmission(publication)).toBe(true);
-    expect(
-      await publishPluginSourceAdmission({ ...publication, rootDir: "/replaced/plugin" }),
-    ).toBe(false);
-    expect(
-      await publishPluginSourceAdmission({ ...publication, installRecordHash: "old-install" }),
-    ).toBe(false);
+    expect(await publish(publication)).toBe(true);
+    expect(await publish({ ...publication, rootDir: "/replaced/plugin" })).toBe(false);
+    expect(await publish({ ...publication, installRecordHash: "old-install" })).toBe(false);
     expect(await metadataWorker.readPluginMetadataStateRow("installed-index", { env })).toEqual(
       committed,
     );

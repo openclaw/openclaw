@@ -77,9 +77,6 @@ export function createLazyXaiRealtimeVoiceBridge(
     return next;
   };
   const flushPendingInput = async (loadedBridge: RealtimeVoiceBridge, isCurrent: () => boolean) => {
-    if (!isCurrent()) {
-      return;
-    }
     while (true) {
       if (!isCurrent()) {
         return;

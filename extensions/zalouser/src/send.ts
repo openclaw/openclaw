@@ -3,21 +3,13 @@ import { chunkTextRanges } from "openclaw/plugin-sdk/text-chunking";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sliceTextStyles } from "./text-styles-ranges.js";
 import { parseZalouserTextStyles } from "./text-styles.js";
-import type { ZaloEventMessage, ZaloSendOptions, ZaloSendResult } from "./types.js";
-import {
-  sendZaloDeliveredEvent,
-  sendZaloLink,
-  sendZaloReaction,
-  sendZaloSeenEvent,
-  sendZaloTextMessage,
-  sendZaloTypingEvent,
-} from "./zalo-js.js";
+import type { ZaloSendOptions, ZaloSendResult } from "./types.js";
+import { sendZaloReaction, sendZaloTextMessage } from "./zalo-js.js";
 
 type ZalouserSendOptions = ZaloSendOptions & {
   /** Persist each concrete platform send before the next internal chunk starts. */
   onDeliveryResult?: (result: ZaloSendResult) => Promise<void> | void;
 };
-type ZalouserSendResult = ZaloSendResult;
 
 const ZALO_TEXT_LIMIT = 2000;
 
@@ -30,7 +22,7 @@ export async function sendMessageZalouser(
   threadId: string,
   text: string,
   options: ZalouserSendOptions = {},
-): Promise<ZalouserSendResult> {
+): Promise<ZaloSendResult> {
   const { onDeliveryResult, ...transportOptions } = options;
   const prepared =
     transportOptions.textMode === "markdown"
@@ -44,7 +36,7 @@ export async function sendMessageZalouser(
     transportOptions.textChunkMode,
   );
 
-  let lastResult: ZalouserSendResult | null = null;
+  let lastResult: ZaloSendResult | null = null;
   for (const [index, chunk] of chunks.entries()) {
     const chunkOptions =
       index === 0
@@ -85,27 +77,12 @@ export async function sendImageZalouser(
   threadId: string,
   imageUrl: string,
   options: ZalouserSendOptions = {},
-): Promise<ZalouserSendResult> {
+): Promise<ZaloSendResult> {
   return await sendMessageZalouser(threadId, options.caption ?? "", {
     ...options,
     caption: undefined,
     mediaUrl: imageUrl,
   });
-}
-
-export async function sendLinkZalouser(
-  threadId: string,
-  url: string,
-  options: ZalouserSendOptions = {},
-): Promise<ZalouserSendResult> {
-  return await sendZaloLink(threadId, url, options);
-}
-
-export async function sendTypingZalouser(
-  threadId: string,
-  options: Pick<ZalouserSendOptions, "profile" | "isGroup"> = {},
-): Promise<void> {
-  await sendZaloTypingEvent(threadId, options);
 }
 
 export async function sendReactionZalouser(params: {
@@ -116,38 +93,13 @@ export async function sendReactionZalouser(params: {
   remove?: boolean;
   profile?: string;
   isGroup?: boolean;
-}): Promise<ZalouserSendResult> {
-  const result = await sendZaloReaction({
-    profile: params.profile,
-    threadId: params.threadId,
-    isGroup: params.isGroup,
-    msgId: params.msgId,
-    cliMsgId: params.cliMsgId,
-    emoji: params.emoji,
-    remove: params.remove,
-  });
+}): Promise<ZaloSendResult> {
+  const result = await sendZaloReaction(params);
   return {
     ok: result.ok,
     error: result.error,
     receipt: createZalouserSendReceipt({ threadId: params.threadId, kind: "unknown" }),
   };
-}
-
-export async function sendDeliveredZalouser(params: {
-  profile?: string;
-  isGroup?: boolean;
-  message: ZaloEventMessage;
-  isSeen?: boolean;
-}): Promise<void> {
-  await sendZaloDeliveredEvent(params);
-}
-
-export async function sendSeenZalouser(params: {
-  profile?: string;
-  isGroup?: boolean;
-  message: ZaloEventMessage;
-}): Promise<void> {
-  await sendZaloSeenEvent(params);
 }
 
 function splitStyledText(

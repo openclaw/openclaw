@@ -137,6 +137,22 @@ export function pluginModule(revision: string, replacements = true) {
 export async function expectComposerFooterLayout(page: Page, composer: Locator, variant: string) {
   for (const width of [1280, 640]) {
     await page.setViewportSize({ width, height: 900 });
+    // TranscriptLayoutOwner commits the scrollport size in ResizeObserver,
+    // after the browser viewport changes. Measure only that committed layout.
+    await expect
+      .poll(() =>
+        composer.evaluate((element) => {
+          const thread = element.closest(".chat-main__conversation")?.querySelector(".chat-thread");
+          const slot = thread?.parentElement;
+          return (
+            thread instanceof HTMLElement &&
+            Boolean(slot) &&
+            thread.offsetWidth === slot?.offsetWidth &&
+            thread.offsetHeight === slot?.offsetHeight
+          );
+        }),
+      )
+      .toBe(true);
     const geometry = await composer.evaluate((element) => {
       const footer = element.closest(".chat-footer");
       const thread = element.closest(".chat-main__conversation")?.querySelector(".chat-thread");

@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { runTelegramTestScenario } from "./run-mock-sut-user-e2e.mjs";
+import { currentTelegramRun } from "./telegram-run-scope.mjs";
 import { checkTelegramTestCredential } from "./telegram-test-doctor.mjs";
 
 function fixture() {
   let released = 0;
   let healthy = true;
   let revoke;
-  let proxyClosed = false;
   const credential = {
     driverEnv: {},
     groupId: "-1001",
@@ -57,12 +60,6 @@ function fixture() {
               },
       ),
     }),
-    startProxy: async () => ({
-      apiRoot: "http://127.0.0.1:1",
-      close: async () => {
-        proxyClosed = true;
-      },
-    }),
     fetchImpl: async (url) =>
       new URL(url).pathname.endsWith("/getChat")
         ? Response.json(
@@ -80,7 +77,6 @@ function fixture() {
     credential,
     options,
     releaseCount: () => released,
-    proxyClosed: () => proxyClosed,
     revoke() {
       healthy = false;
       revoke(new Error("lease revoked"));
@@ -95,6 +91,98 @@ function fixture() {
         ...options,
       }),
   };
+}
+
+test("failed readiness retains only structural diagnostics after credential cleanup", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-readiness-evidence-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const f = fixture();
+  const privateState = path.join(root, "private-state");
+  f.credential.testerUserId = "87654321098765";
+  fs.mkdirSync(privateState);
+  const raw = `python: realpath: ${privateState}/uv-cache/bin: Operation not permitted ${f.credential.sutToken} ${f.credential.testerUserId} unknown-private-value`;
+  f.options.runCommandImpl = async () => ({
+    status: 1,
+    timedOut: false,
+    stdout: "private stdout",
+    stderr: raw,
+  });
+  const release = f.credential.release.bind(f.credential);
+  f.credential.release = async () => {
+    fs.rmSync(privateState, { recursive: true });
+    await release();
+  };
+  await assert.rejects(
+    runTelegramTestScenario({
+      args: { dm: true, output: path.join(root, "proof", "summary.json") },
+      acquireCredential: async () => f.credential,
+      checkCredential: f.check,
+      driveScenario: async () => assert.fail("readiness failure cannot start Gateway or messages"),
+    }),
+    /TDLib readiness failed/,
+  );
+  assert.equal(f.releaseCount(), 1);
+  assert.equal(fs.existsSync(privateState), false);
+  const file = path.join(root, "proof", "readiness.json");
+  const evidence = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(evidence.phase, "tdlib-status");
+  assert.equal(evidence.exitCode, 1);
+  assert.equal(evidence.timedOut, false);
+  assert.equal(evidence.stderrBytes, Buffer.byteLength(raw));
+  assert.deepEqual(evidence.signals, ["permission-denied", "path-resolution"]);
+  assert.equal(Number.isFinite(evidence.durationMs), true);
+  const publicText = JSON.stringify(evidence);
+  for (const privateValue of [
+    privateState,
+    f.credential.sutToken,
+    f.credential.testerUserId,
+    "unknown-private-value",
+    "private stdout",
+  ]) {
+    assert.equal(publicText.includes(privateValue), false);
+  }
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
+for (const verified of [false, true]) {
+  test(`scenario cleanup honors the Gateway verified=${verified} receipt before deleting recovery state`, async (context) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-cleanup-receipt-"));
+    context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const f = fixture();
+    const recovery = path.join(root, "lease.json");
+    fs.writeFileSync(recovery, "synthetic recovery", { mode: 0o600 });
+    let stops = 0;
+    const release = f.credential.release.bind(f.credential);
+    f.credential.release = async () => {
+      fs.unlinkSync(recovery);
+      await release();
+    };
+    const result = runTelegramTestScenario({
+      acquireCredential: async () => f.credential,
+      checkCredential: async () => {},
+      driveScenario: async () => {
+        const scope = currentTelegramRun();
+        const scratch = path.join(root, "gateway");
+        fs.mkdirSync(scratch);
+        scope.ownScratch(scratch, () => fs.rmSync(scratch, { recursive: true }));
+        const gateway = scope.ownProxy({
+          async close() {
+            stops++;
+            return { verified };
+          },
+        });
+        await scope.closeProxy(gateway);
+      },
+    });
+    if (verified) {
+      await result;
+    } else {
+      await assert.rejects(result, /cleanup|unconfirmed/);
+    }
+    assert.equal(stops, 1);
+    assert.equal(f.releaseCount(), verified ? 1 : 0);
+    assert.equal(fs.existsSync(recovery), !verified);
+  });
 }
 
 test("scenario provisions a fresh group when the stored group is unusable and removes it before release", async () => {
@@ -139,7 +227,6 @@ test("scenario provisions a fresh group when the stored group is unusable and re
     driveScenario: async (_args, _root, credential) => {
       assert.equal(credential, f.credential);
       credential.assertLeaseHealthy();
-      assert.equal(f.proxyClosed(), true);
       assert.equal(credential.groupId, "-2042");
       assert.equal(credential.driverEnv.TELEGRAM_USER_DRIVER_CHAT_ID, "-2042");
       assert.equal(groupExists, true);
@@ -461,7 +548,6 @@ test("strict membership prevents product delivery and cleans up the created grou
     /not an active member/u,
   );
   assert.equal(delivered, false);
-  assert.equal(f.proxyClosed(), true);
   assert.equal(f.releaseCount(), 1);
   assert.equal(f.credential.testGroup.cleanup.status, "deleted");
 });
@@ -543,16 +629,12 @@ test("cancellation interrupts pending readiness HTTP and closes before release",
   controller.abort(new Error("cancelled HTTP"));
   await assert.rejects(run, /cancelled HTTP/u);
   assert.equal(delivered, false);
-  assert.equal(f.proxyClosed(), true);
   assert.equal(f.releaseCount(), 1);
 });
 
-test("SIGTERM during CLI readiness closes its proxy before the sole lease release", async (context) => {
+test("SIGTERM during CLI readiness settles its check before the sole lease release", async (context) => {
   const { spawn } = await import("node:child_process");
   const { once } = await import("node:events");
-  const fs = await import("node:fs");
-  const os = await import("node:os");
-  const path = await import("node:path");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-signal-owner-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, "scripts/e2e"), { recursive: true });
@@ -574,7 +656,7 @@ test("SIGTERM during CLI readiness closes its proxy before the sole lease releas
       } finally {
         await new Promise(resolve=>setImmediate(resolve));
         clearInterval(keepAlive);
-        fs.appendFileSync(${JSON.stringify(trace)}, 'proxy closed\\n');
+        fs.appendFileSync(${JSON.stringify(trace)}, 'readiness settled\\n');
       }
     }`;
   fs.writeFileSync(
@@ -614,13 +696,10 @@ test("SIGTERM during CLI readiness closes its proxy before the sole lease releas
   const [code, signal] = await completion;
   assert.equal(code, 143);
   assert.equal(signal, null);
-  assert.equal(fs.readFileSync(trace, "utf8"), "proxy closed\nrelease\n");
+  assert.equal(fs.readFileSync(trace, "utf8"), "readiness settled\nrelease\n");
 });
 
 test("scenario cancellation aborts a pending request in the real drive path", async (context) => {
-  const fs = await import("node:fs");
-  const os = await import("node:os");
-  const path = await import("node:path");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-drive-cancel-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(
@@ -668,49 +747,42 @@ test("scenario cancellation aborts a pending request in the real drive path", as
 });
 
 for (const event of ["caller cancellation", "lease loss"]) {
-  test(`${event} during readiness proxy cleanup rejects the completed doctor result`, async () => {
+  test(`${event} during readiness response consumption stops and releases`, async () => {
     const { runTelegramTestDoctor } = await import("./telegram-test-doctor.mjs");
     const f = fixture();
     const closing = Promise.withResolvers();
     const finish = Promise.withResolvers();
     const controller = new AbortController();
-    const start = f.options.startProxy;
-    f.options.startProxy = async () => {
-      const proxy = await start();
+    f.options.fetchImpl = async (url) => {
+      assert.equal(url, "https://api.telegram.org/botsynthetic-token/test/getMe");
       return {
-        ...proxy,
-        close: async () => {
+        ok: true,
+        json: async () => {
           closing.resolve();
           await finish.promise;
-          await proxy.close();
+          return { ok: true, result: { id: 42, username: "sut_bot" } };
         },
       };
     };
     const run = runTelegramTestDoctor({
       acquireCredential: async () => f.credential,
-      dm: false,
+      dm: true,
       signal: controller.signal,
       ...f.options,
     });
     await closing.promise;
     if (event === "caller cancellation") {
-      controller.abort(new Error("cancelled during proxy close"));
+      controller.abort(new Error("cancelled during response"));
     } else {
       f.revoke();
     }
     finish.resolve();
     await assert.rejects(
       run,
-      event === "lease loss"
-        ? (error) => error instanceof AggregateError && error.errors[0].message === "lease revoked"
-        : /cancelled during proxy close/u,
+      event === "lease loss" ? /lease revoked/u : /cancelled during response/u,
     );
-    assert.equal(f.proxyClosed(), true);
-    assert.equal(f.releaseCount(), event === "lease loss" ? 0 : 1);
-    assert.equal(
-      f.credential.testGroup.cleanup.status,
-      event === "lease loss" ? "failed" : "deleted",
-    );
+    assert.equal(f.releaseCount(), 1);
+    assert.equal(f.credential.testGroup, undefined);
   });
 
   test(`${event} during final release cannot become a successful scenario`, async () => {

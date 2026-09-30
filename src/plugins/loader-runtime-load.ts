@@ -76,15 +76,7 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
   },
 });
 
-type NativePluginBindings = {
-  providerRegistry: ReturnType<typeof createProviderRegistryResolver>;
-  providerHooks: ReturnType<typeof createProviderHookRuntime>;
-  externalProfiles: ReturnType<typeof createProviderExternalAuthResolver>;
-  externalAuth: ReturnType<typeof createExternalAuthRuntime>;
-  authStore: ReturnType<typeof createAuthProfileStoreRuntime>;
-  authAvailability: ReturnType<typeof createProviderAuthAvailability>;
-};
-export const nativePluginBindings: Readonly<NativePluginBindings> = Object.freeze({
+export const nativePluginBindings = Object.freeze({
   providerRegistry,
   providerHooks,
   externalProfiles,
@@ -122,7 +114,8 @@ async function acquireRegistryResources(
     const instances = new Set(cache.instances);
     for (const record of registry?.plugins ?? []) {
       const instance = getPluginInstance(record);
-      if (instance) {
+      // Borrowed records stay in the lending registry's custody.
+      if (instance && instance.owner?.registry === registry) {
         instances.add(instance);
       }
     }

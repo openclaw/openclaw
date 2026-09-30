@@ -5,10 +5,13 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionHistoryUnavailableMessage } from "../gateway/session-history-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
+import * as nativeSections from "./worker-task-native-sections.js";
+import { createOwnedWorkerTaskPool, WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
+
+type PostedTask = { taskId: number; responseId?: number; nativeSections?: SharedArrayBuffer };
 
 type FakeWorker = EventEmitter & {
-  postMessage: ReturnType<typeof vi.fn<(message: { taskId: number; responseId?: number }) => void>>;
+  postMessage: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
   terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
 };
 const workers = vi.hoisted(() => [] as FakeWorker[]);
@@ -24,7 +27,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         super();
         workers.push(this);
       }
-      postMessage = vi.fn<(message: { taskId: number; responseId?: number }) => void>();
+      postMessage = vi.fn<(message: PostedTask) => void>();
       ref() {}
       unref() {}
       terminate = vi.fn(async () => {
@@ -67,6 +70,55 @@ afterEach(async () => {
 });
 
 describe("worker task retirement failures", () => {
+  it("settles cancellation when native work finishes before its settlement wait is registered", async () => {
+    const pool = createOwnedWorkerTaskPool<string, string>({
+      workerUrl: new URL("data:text/javascript,"),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+    });
+    const controller = new AbortController();
+    const reason = new Error("cancel native work");
+    const executionSettled = vi.fn();
+    const result = pool
+      .run("input", { signal: controller.signal, onExecutionSettled: executionSettled })
+      .catch((error: unknown) => error);
+    const worker = expectDefined(workers[0], "task worker");
+    const state = new Int32Array(
+      expectDefined(worker.postMessage.mock.calls[0]?.[0].nativeSections, "native section state"),
+    );
+    const release = nativeSections.withWorkerTaskNativeSectionScope(
+      state,
+      () => true,
+      nativeSections.retainCurrentWorkerNativeSection,
+    );
+    const isSettled = nativeSections.areWorkerNativeSectionsSettled;
+    const observed = vi
+      .spyOn(nativeSections, "areWorkerNativeSectionsSettled")
+      .mockImplementationOnce((sections) => {
+        const settled = isSettled(sections);
+        // The worker can release its last section after the parent's atomic read.
+        release();
+        return settled;
+      });
+    try {
+      controller.abort(reason);
+      await yieldToEventLoop();
+      expect(worker.terminate).toHaveBeenCalledOnce();
+      expect(await result).toBe(reason);
+      expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
+      expect(pool.getSnapshot().pendingTasks).toBe(0);
+    } finally {
+      observed.mockRestore();
+      release();
+      // Explicit servicing also cleans up the deliberately stalled pre-fix owner.
+      const rotation = pool.startRotate();
+      rotation.service();
+      await rotation.result;
+      await pool.close();
+      await result;
+    }
+  });
+
   it.each([false, true])(
     "joins every retirement retry and its artifacts before rejecting (second retry fails: %s)",
     async (secondRetryFails) => {

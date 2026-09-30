@@ -5,7 +5,7 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
-  isCodexAppServerUnsafeSubscriptionError,
+  CodexAppServerUnsafeSubscriptionError,
   retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./app-server/attempt-client-cleanup.js";
@@ -56,7 +56,6 @@ import {
 import type { CodexAppServerConversationBindingData } from "./conversation-binding-data.js";
 import {
   assertNativeConversationApprovalPolicySupported,
-  buildCodexConversationAgentLookup,
   buildConversationThreadRequestForClient,
   CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
   prepareCodexConversationBinding,
@@ -64,7 +63,10 @@ import {
   resolveModelBackedReviewerPolicyProvider,
   type CodexConversationConfig,
 } from "./conversation-binding-preparation.js";
-import { trackCodexConversationActiveTurn } from "./conversation-control.js";
+import {
+  buildCodexConversationAgentLookup,
+  trackCodexConversationActiveTurn,
+} from "./conversation-control.js";
 import {
   CodexConversationTurnTimeoutError,
   createCodexConversationTurnCollector,
@@ -526,7 +528,10 @@ export async function runBoundTurnWithMissingThreadRecovery(
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
-  if (isCodexAppServerOverloadError(error) || isCodexAppServerUnsafeSubscriptionError(error)) {
+  if (
+    isCodexAppServerOverloadError(error) ||
+    error instanceof CodexAppServerUnsafeSubscriptionError
+  ) {
     return false;
   }
   const message = formatErrorMessage(error);

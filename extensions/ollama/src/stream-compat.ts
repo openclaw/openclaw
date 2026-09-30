@@ -116,15 +116,6 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
   });
 }
 
-function createOllamaThinkingWrapper(
-  baseFn: StreamFn | undefined,
-  think: OllamaThinkValue,
-): StreamFn {
-  return createLazyPayloadPatchStreamWrapper(baseFn, ({ payload }) => {
-    payload.think = think;
-  });
-}
-
 function normalizeOllamaThinkValue(
   value: unknown,
   nativeMax: boolean,
@@ -236,7 +227,9 @@ export function createConfiguredOllamaCompatStreamWrapper(
       ? undefined
       : runtimeThinkValue;
   if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
-    streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
+    streamFn = createLazyPayloadPatchStreamWrapper(streamFn, ({ payload }) => {
+      payload.think = ollamaThinkValue;
+    });
   }
 
   if (normalizeProviderId(ctx.provider) === "ollama" && isOllamaCloudKimiModelRef(ctx.modelId)) {

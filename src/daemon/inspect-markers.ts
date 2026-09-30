@@ -46,7 +46,7 @@ export function hasGatewaySubcommandArg(programArguments: string[]): boolean {
     args = resolveCarrierCommandArgv(inner, 0, { includeExec: true }) ?? inner;
   }
   args = resolveCarrierCommandArgv(args, 0, { includeExec: true }) ?? args;
-  const position = resolveRuntimeScriptPosition(args);
+  const { position } = resolveRuntimeScriptPosition(args);
   if (typeof position !== "number" && position.kind !== "not-runtime") {
     return false;
   }
@@ -129,15 +129,8 @@ export function isOpenClawGatewaySystemdService(name: string, contents: string):
 }
 
 export function isOpenClawGatewayTaskName(name: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name);
-  if (!normalized) {
-    return false;
-  }
-  // Windows schtasks /Query returns task names prefixed with \ (e.g.
-  // \OpenClaw Gateway for root-folder tasks). Strip the leading
-  // backslash so the configured name matches correctly and the live
-  // gateway task is not misidentified as an extra gateway service.
-  const stripped = normalized.replace(/^\\+/, "");
+  // Task Scheduler prefixes root-folder task names with a backslash.
+  const stripped = normalizeLowercaseStringOrEmpty(name).replace(/^\\+/, "");
   const defaultName = normalizeLowercaseStringOrEmpty(resolveGatewayWindowsTaskName());
   return stripped === defaultName || /^openclaw gateway \(.+\)$/.test(stripped);
 }

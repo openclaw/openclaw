@@ -24,6 +24,22 @@ export function containsAuthoredEscapedEnvTemplate(value: unknown): boolean {
   );
 }
 
+function addEnvRefCounts(
+  countsByName: Map<string, Map<string, number>>,
+  value: string,
+  kind: EnvTemplateToken["kind"],
+  path: string[],
+): void {
+  for (const ref of scanEnvTemplateTokens(value)) {
+    if (ref.kind === kind) {
+      const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
+      const pathKey = JSON.stringify(path);
+      pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
+      countsByName.set(ref.name, pathCounts);
+    }
+  }
+}
+
 /**
  * Keyed by bare variable name: `${VAR}` and `${VAR:-x}` are one identity, so changing
  * an authored `$${VAR}` literal into either active reference is rejected.
@@ -35,14 +51,7 @@ function countAuthoredEnvRefsByPath(
   const countsByName = new Map<string, Map<string, number>>();
   const visit = (item: unknown, path: string[]) => {
     if (typeof item === "string") {
-      for (const ref of scanEnvTemplateTokens(item)) {
-        if (ref.kind === kind) {
-          const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
-          const pathKey = JSON.stringify(path);
-          pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
-          countsByName.set(ref.name, pathCounts);
-        }
-      }
+      addEnvRefCounts(countsByName, item, kind, path);
       return;
     }
     if (Array.isArray(item)) {
@@ -73,14 +82,7 @@ function countResolvedActiveEnvRefsByPath(
       if (!isDeepStrictEqual(incomingItem, resolvedItem)) {
         return;
       }
-      for (const ref of scanEnvTemplateTokens(parsedItem)) {
-        if (ref.kind === "substitution") {
-          const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
-          const pathKey = JSON.stringify(path);
-          pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
-          countsByName.set(ref.name, pathCounts);
-        }
-      }
+      addEnvRefCounts(countsByName, parsedItem, "substitution", path);
       return;
     }
     if (Array.isArray(incomingItem) && Array.isArray(parsedItem) && Array.isArray(resolvedItem)) {

@@ -10,6 +10,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
+import type { GatewayWsClient } from "../ws-types.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
 
@@ -96,12 +97,16 @@ vi.mock("../../../infra/tailscale.js", () => ({
 
 import { sendGatewayHello } from "./connect-hello.js";
 
-function makeContext(role: "operator" | "node", scopes: string[]) {
+function makeContext(
+  role: "operator" | "node",
+  scopes: string[],
+  client?: Pick<GatewayWsClient, "internal" | "preparedSessionProfile">,
+) {
   return {
     handler: {
       socket: new EventEmitter(),
       isClosed: vi.fn(() => false),
-      getClient: () => null,
+      getClient: () => client ?? null,
       connId: `conn-${role}`,
       bootId: "gateway-boot-a",
       gatewayMethods: [],
@@ -175,6 +180,49 @@ describe("sendGatewayHello update detail scope", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  it.each(["write", "suggest", "view", "none", undefined] as const)(
+    "projects the current operator session cap %s only when configured",
+    async (sessionCap) => {
+      const context = makeContext("operator", ["operator.write"], {
+        internal: { operatorRoleActor: { kind: "operator", profileId: "profile-riley" } },
+        preparedSessionProfile: {
+          profileId: "profile-riley",
+          aliases: new Set(["profile-riley"]),
+          role: "collaborator",
+        },
+      });
+      if (sessionCap !== undefined) {
+        context.configSnapshot = {
+          gateway: {
+            roles: {
+              default: "collaborator",
+              definitions: {
+                collaborator: {
+                  sessions: { others: sessionCap },
+                  agents: ["main"],
+                  scopes: ["operator.write"],
+                },
+              },
+            },
+          },
+        } satisfies OpenClawConfig;
+      }
+
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.write"]) as never,
+        {},
+      );
+
+      const auth = helloPayload(context)?.auth;
+      if (sessionCap === undefined) {
+        expect(auth).not.toHaveProperty("sessionCap");
+      } else {
+        expect(auth?.sessionCap).toBe(sessionCap);
+      }
+    },
+  );
 
   it.each([
     { mode: "trusted-proxy", tailscale: "off", expected: true },

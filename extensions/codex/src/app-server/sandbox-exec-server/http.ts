@@ -212,15 +212,13 @@ function readSandboxHttpResponse(params: {
         embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
       });
       if (headerResolved) {
-        if (params.notifications.isOpen()) {
-          params.notifications.send("http/request/bodyDelta", {
-            requestId: params.requestId,
-            seq: lastBodySeq + 1,
-            deltaBase64: "",
-            done: true,
-            error: message,
-          });
-        }
+        params.notifications.send("http/request/bodyDelta", {
+          requestId: params.requestId,
+          seq: lastBodySeq + 1,
+          deltaBase64: "",
+          done: true,
+          error: message,
+        });
         return;
       }
       reject(new Error(message));
@@ -267,15 +265,13 @@ function readSandboxHttpResponse(params: {
             } else if (type === "bodyDelta") {
               const seq = requireNumber(message.seq, "http body sequence");
               lastBodySeq = Math.max(lastBodySeq, seq);
-              if (params.notifications.isOpen()) {
-                params.notifications.send("http/request/bodyDelta", {
-                  requestId: params.requestId,
-                  seq,
-                  deltaBase64: typeof message.deltaBase64 === "string" ? message.deltaBase64 : "",
-                  done: message.done === true,
-                  error: typeof message.error === "string" ? message.error : null,
-                });
-              }
+              params.notifications.send("http/request/bodyDelta", {
+                requestId: params.requestId,
+                seq,
+                deltaBase64: typeof message.deltaBase64 === "string" ? message.deltaBase64 : "",
+                done: message.done === true,
+                error: typeof message.error === "string" ? message.error : null,
+              });
             }
           } catch (error) {
             fail(error instanceof Error ? error.message : String(error));

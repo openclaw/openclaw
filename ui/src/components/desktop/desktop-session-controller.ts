@@ -14,18 +14,6 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { resolveChatPaneDesktopTarget } from "../../pages/chat/chat-pane-placement.ts";
 import { loadDesktopEnvironments } from "./desktop-source.ts";
 
-// Keep the chat placement dependency in this lazily loaded desktop owner, outside the boot chunk.
-async function resolveDesktopDocumentSessionTarget(
-  sessions: Pick<SessionCapability, "describe">,
-  client: Pick<GatewayBrowserClient, "request">,
-  sessionKey: string,
-  refresh: boolean,
-): Promise<string | null> {
-  // The exact-key lookup can find sessions outside a paged roster.
-  const { session } = await sessions.describe({ key: sessionKey }, { client, refresh });
-  return resolveChatPaneDesktopTarget(session ?? undefined);
-}
-
 type DesktopSessionHost = ReactiveControllerHost & {
   isConnected: boolean;
   client: GatewayBrowserClient | null;
@@ -342,7 +330,9 @@ export class DesktopSessionController {
     return {
       target:
         target === undefined && documentMode && sessionKey !== null
-          ? resolveDesktopDocumentSessionTarget(sessions, client, sessionKey, refresh)
+          ? sessions
+              .describe({ key: sessionKey }, { client, refresh })
+              .then(({ session }) => resolveChatPaneDesktopTarget(session ?? undefined))
           : Promise.resolve(target ?? (sessionKey !== null ? null : undefined)),
       // Carry this owner across both target resolution and the selected status request.
       isCurrent,

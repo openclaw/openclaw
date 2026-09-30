@@ -36,6 +36,7 @@ import { workerProjectSeedKey } from "./workspace-git-base.js";
 import type { WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 const workspaceInfo = vi.hoisted(() => vi.fn());
 const workspaceDebug = vi.hoisted(() => vi.fn());
@@ -621,7 +622,9 @@ describe("node worker tunnel manager", () => {
     const transfer = workspaceTransfer({
       prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
       prepareUpload: vi.fn(() => "upload-token"),
-      takeUpload: vi.fn(() => unchangedWorkspaceUpload(snapshot)),
+      takeUpload: vi.fn(() =>
+        unchangedWorkspaceUpload(snapshot, tempDirs.make("node-worker-reconcile-error-staging-")),
+      ),
     });
     const manager = await createManager(record, {
       getTransport: () => nodeTransport,
@@ -639,7 +642,13 @@ describe("node worker tunnel manager", () => {
         source: {
           kind: "local",
           path: localPath,
-          journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
+          journal: {
+            load: async () => undefined,
+            begin: vi.fn(async () => {}),
+            commit: vi.fn(async () => {}),
+            abort: vi.fn(async () => {}),
+          },
+          stagedResult: { ref: workerWorkspaceResultRef("node-error"), record: () => {} },
         },
         remoteWorkspaceDir,
         baseManifestRef,
@@ -736,12 +745,22 @@ describe("node worker tunnel manager", () => {
         generation: 1,
       });
       const quiescence = { assertActive: async () => {}, resume: async () => {} };
-      const journal = { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() };
+      const journal = {
+        load: async () => undefined,
+        begin: vi.fn(async () => {}),
+        commit: vi.fn(async () => {}),
+        abort: vi.fn(async () => {}),
+      };
       workspaceDebug.mockClear();
 
       for (let turn = 0; turn < 2; turn += 1) {
         const reconciliation = await handle.reconcileWorkspace({
-          source: { kind: "local", path: localPath, journal },
+          source: {
+            kind: "local",
+            path: localPath,
+            journal,
+            stagedResult: { ref: workerWorkspaceResultRef(`node-memo-${turn}`), record: () => {} },
+          },
           remoteWorkspaceDir,
           baseManifestRef: manifestRef,
         });
@@ -761,15 +780,15 @@ describe("node worker tunnel manager", () => {
       const uncached = fileCount - retained;
       expect(retained).toBeGreaterThan(0);
       expect(reports[0]).toMatchObject({
-        remoteManifestCalls: 3,
-        remoteContentHashCount: fileCount + 2 * uncached,
+        remoteManifestCalls: 2,
+        remoteContentHashCount: fileCount + uncached,
       });
       expect(reports[1]).toMatchObject({
-        remoteManifestCalls: 3,
-        remoteContentHashCount: 3 * uncached,
-        remoteMemoHitCount: 3 * retained,
+        remoteManifestCalls: 2,
+        remoteContentHashCount: 2 * uncached,
+        remoteMemoHitCount: 2 * retained,
       });
-      expect(memoInputs).toHaveLength(6);
+      expect(memoInputs).toHaveLength(4);
       expect(memoInputs[0]).toEqual([]);
       expect(memoInputs.slice(1).every((entries) => entries.length === retained)).toBe(true);
       expect(memoInputs.flat().every(([identity]) => identity.startsWith("worker:"))).toBe(true);
@@ -792,11 +811,18 @@ describe("node worker tunnel manager", () => {
         new Date(Date.now() + 1_000),
       );
       await expect(
-        handle.reconcileWorkspace({
-          source: { kind: "local", path: localPath, journal },
-          remoteWorkspaceDir,
-          baseManifestRef: manifestRef,
-        }),
+        handle
+          .reconcileWorkspace({
+            source: {
+              kind: "local",
+              path: localPath,
+              journal,
+              stagedResult: { ref: workerWorkspaceResultRef("node-memo-late"), record: () => {} },
+            },
+            remoteWorkspaceDir,
+            baseManifestRef: manifestRef,
+          })
+          .then((reconciliation) => verifyReconciledWorkspaceFinal(reconciliation, quiescence)),
       ).rejects.toThrow("changed during final reconciliation");
       await handle.stop();
     },
@@ -827,7 +853,9 @@ describe("node worker tunnel manager", () => {
     const transfer = workspaceTransfer({
       prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
       prepareUpload: vi.fn(() => "upload-token"),
-      takeUpload: vi.fn(() => unchangedWorkspaceUpload(snapshot)),
+      takeUpload: vi.fn(() =>
+        unchangedWorkspaceUpload(snapshot, tempDirs.make("node-worker-accepted-staging-")),
+      ),
       getSnapshot: vi.fn(() => snapshot),
       publishSnapshot,
     });
@@ -846,10 +874,20 @@ describe("node worker tunnel manager", () => {
       source: {
         kind: "local",
         path: localPath,
-        journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
+        journal: {
+          load: async () => undefined,
+          begin: vi.fn(async () => {}),
+          commit: vi.fn(async () => {}),
+          abort: vi.fn(async () => {}),
+        },
+        stagedResult: { ref: workerWorkspaceResultRef("node-current"), record: () => {} },
       },
       remoteWorkspaceDir,
       baseManifestRef,
+    });
+    await verifyReconciledWorkspaceFinal(reconciliation, {
+      assertActive: async () => {},
+      resume: async () => {},
     });
 
     expect(reconciliation.manifestRef).toBe(baseManifestRef);

@@ -13,6 +13,8 @@ import {
   parseUpdateAdmissionVerdict,
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { runCli } from "../run-main.js";
 import { registerUpdateCli } from "../update-cli.js";
@@ -165,28 +167,91 @@ describe("candidate update admission", () => {
     expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
   });
 
-  it("admits a missing custom plugin path with the candidate warning and preserves its bytes", async () => {
-    writeConfig({ plugins: { load: { paths: [path.join(home, "missing-custom-plugin")] } } });
-    const before = snapshotFiles();
-    await runCli([
-      "node",
-      "openclaw",
-      "--profile",
-      "admission-fixture",
-      "update",
-      "admit",
-      "--context",
-      contextPath,
-    ]);
-    expect(readVerdict()).toMatchObject({
-      verdict: "admit",
-      warnings: expect.arrayContaining([
-        expect.objectContaining({ code: "configured-plugin-path-unavailable" }),
-      ]),
-      facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
+  it("admits a missing custom plugin path without changing profile artifacts with an idle WAL", async () => {
+    const customAgentPath = path.join(home, "custom-agent.sqlite");
+    writeConfig({
+      session: { store: customAgentPath },
+      plugins: { load: { paths: [path.join(home, "missing-custom-plugin")] } },
     });
-    expect(process.exitCode).toBe(0);
-    expect(snapshotFiles()).toEqual(before);
+    const databasePath = resolveOpenClawStateSqlitePath();
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    const agentDatabases: DatabaseSync[] = [];
+    try {
+      database.exec(
+        fs.readFileSync(new URL("../../state/openclaw-state-schema.sql", import.meta.url), "utf8"),
+      );
+      database.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION}`);
+      database
+        .prepare("INSERT INTO schema_meta VALUES ('primary','global',?,NULL,?,1,1)")
+        .run(OPENCLAW_STATE_SCHEMA_VERSION, context.supervisor.version);
+      const registeredAgentPath = path.join(path.dirname(configPath), "registered-agent.sqlite");
+      database
+        .prepare("INSERT INTO agent_databases VALUES ('registered',?,?,1,NULL)")
+        .run(registeredAgentPath, OPENCLAW_AGENT_SCHEMA_VERSION);
+      // Cover on-disk discovery, configured stores, and registry-only stores together.
+      for (const [agentPath, keepWal] of [
+        [path.join(path.dirname(configPath), "agents/main/agent/openclaw-agent.sqlite"), true],
+        [path.join(path.dirname(configPath), "agents/offline/agent/openclaw-agent.sqlite"), false],
+        [customAgentPath, true],
+        [registeredAgentPath, true],
+      ] as const) {
+        fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+        const agent = new DatabaseSync(agentPath);
+        agentDatabases.push(agent);
+        agent.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+        agent.exec(`PRAGMA journal_mode=WAL; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+        if (!keepWal) {
+          agent.close();
+        }
+        for (const suffix of ["-wal", "-shm"]) {
+          expect(fs.existsSync(agentPath + suffix)).toBe(keepWal);
+        }
+      }
+      // Keep a committed WAL without a concurrent writer so any byte change belongs to admission.
+      database.exec(
+        "PRAGMA journal_mode=WAL; INSERT INTO config_machine_state VALUES ('admission-fixture','{}',1)",
+      );
+      const before = snapshotFiles();
+      await runCli([
+        "node",
+        "openclaw",
+        "--profile",
+        "admission-fixture",
+        "update",
+        "admit",
+        "--context",
+        contextPath,
+      ]);
+      expect(readVerdict()).toMatchObject({
+        verdict: "admit",
+        warnings: expect.arrayContaining([
+          expect.objectContaining({ code: "configured-plugin-path-unavailable" }),
+        ]),
+        facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
+      });
+      expect(process.exitCode).toBe(0);
+      expect(snapshotFiles()).toEqual(before);
+
+      // A newer header committed only in WAL must still refuse admission.
+      agentDatabases[0]!.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+      const beforeRefusal = snapshotFiles();
+      stdout = "";
+      await runCli(["node", "openclaw", "update", "admit", "--context", contextPath]);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [expect.objectContaining({ code: "database-schema-preflight" })],
+      });
+      expect(process.exitCode).toBe(3);
+      expect(snapshotFiles()).toEqual(beforeRefusal);
+    } finally {
+      for (const agent of agentDatabases) {
+        if (agent.isOpen) {
+          agent.close();
+        }
+      }
+      database.close();
+    }
   });
 
   it("returns invalid-config with exit 3 without repairing or quoting rejected config values", async () => {

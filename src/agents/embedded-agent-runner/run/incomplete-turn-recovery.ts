@@ -8,6 +8,7 @@ import { resolveReplyCompletion, resolveReplyExpectation } from "../../reply-com
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
+import { assessLastAssistantMessage } from "../thinking.js";
 import {
   hasAsyncActivity,
   hasAttemptTerminalState,
@@ -18,8 +19,6 @@ import {
   classifyAssistantTurn,
   hasPositiveOutputTokenUsage,
   isOllamaIncompleteTurnProvider,
-  isReasoningOnlyAssistantTurn,
-  isUnsignedThinkingOnlyAssistantTurn,
   joinAssistantTexts,
   shouldApplyNonVisibleTurnRetryGuard,
   type IncompleteTurnAttempt,
@@ -158,9 +157,15 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   }
 
   const assistant = resolveCurrentAttemptAssistant(params.attempt);
+  // Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
+  // returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
+  // so the content.length > 0 guard is required to distinguish the two cases.
   return joinAssistantTexts(params.attempt.assistantTexts).length === 0 &&
-    assistant?.stopReason !== "error" &&
-    (isReasoningOnlyAssistantTurn(assistant) || isUnsignedThinkingOnlyAssistantTurn(assistant))
+    assistant &&
+    assistant.stopReason !== "error" &&
+    Array.isArray(assistant.content) &&
+    assistant.content.length > 0 &&
+    assessLastAssistantMessage(assistant) !== "valid"
     ? REASONING_ONLY_RETRY_INSTRUCTION
     : null;
 }
@@ -312,6 +317,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     terminal.phase === "prompt" &&
     terminal.source === "idle" &&
     attempt.currentAttemptReplayMetadata?.hadPotentialSideEffects === true;
+  const assistantState = classifyAssistantTurn(params);
   const emptyStopAfterSettledTools = Boolean(
     params.allowEmptyStopContinuation &&
     attempt.currentAttemptAssistant?.stopReason === "stop" &&
@@ -321,10 +327,14 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
     attempt.itemLifecycle.activeCount === 0 &&
     !hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) &&
-    classifyAssistantTurn(params).emptyResponse,
+    assistantState.emptyResponse,
   );
   if (
     params.payloadCount !== 0 ||
+    // Optional authored silence skips generation without clearing tool failure evidence.
+    (!params.allowEmptyStopContinuation &&
+      assistantState.silent &&
+      assistantState.nonVisibleEligibleForSilentReply) ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
     ((params.timedOut || terminal.kind === "timeout") && !idlePromptTimeout) ||

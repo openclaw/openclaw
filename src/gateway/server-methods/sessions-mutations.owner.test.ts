@@ -755,16 +755,20 @@ describe("sessions.assignOwner", () => {
     });
   });
 
-  it("records the trusted in-process agent tool caller as the assigning agent", async () => {
+  it("assigns an agent-created session to a human without changing its provenance", async () => {
     await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:handoff";
+      const ownerProfile = ensureProfileForEmail("requester@example.test");
       await upsertSessionEntryCore(
         { agentId: "main", env: state.env, sessionKey },
         {
           sessionId: "session-handoff",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "profile-creator" },
+          createdVia: "spawn",
+          createdActor: { type: "agent", id: "main" },
+          createdAt: 1,
+          parentSessionKey: "agent:main:main",
         },
       );
       const cfg = {
@@ -779,7 +783,7 @@ describe("sessions.assignOwner", () => {
       await expect(
         dispatchGatewayMethodInProcess(
           "sessions.assignOwner",
-          { key: sessionKey, owner: { type: "agent", id: "research" } },
+          { key: sessionKey, owner: { type: "human", id: ownerProfile.id } },
           {
             forceSyntheticClient: true,
             agentToolCaller: {
@@ -794,7 +798,7 @@ describe("sessions.assignOwner", () => {
         ok: true,
         key: sessionKey,
         owner: {
-          actor: { type: "agent", id: "research", label: "Research" },
+          actor: { type: "human", id: ownerProfile.id },
           assignedBy: { type: "agent", id: "main" },
         },
       });
@@ -802,8 +806,15 @@ describe("sessions.assignOwner", () => {
       expect(
         loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
       ).toMatchObject({
-        actor: { type: "agent", id: "research" },
+        actor: { type: "human", id: ownerProfile.id },
         assignedBy: { type: "agent", id: "main" },
+      });
+      expect(loadSessionEntry({ agentId: "main", env: state.env, sessionKey })).toMatchObject({
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "main" },
+        createdAt: 1,
+        parentSessionKey: "agent:main:main",
+        visibility: "shared",
       });
     });
   });

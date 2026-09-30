@@ -19,18 +19,16 @@ import type {
   WorkerEnvironmentService,
 } from "./worker-environments/service.js";
 
-type WorkerSessionToolExecutor = ReturnType<
-  typeof import("./worker-environments/worker-session-tool-executor.js").createWorkerSessionToolExecutor
+type GatewayToolFactory = NonNullable<
+  Parameters<typeof createWorkerEnvironmentService>[0]["createGatewayTools"]
 >;
+type WorkerGatewayTools =
+  typeof import("./worker-environments/worker-session-tool-executor.js").createWorkerGatewayTools;
 
 const mocks = vi.hoisted(() => {
-  const execute: WorkerSessionToolExecutor = vi.fn(async () => ({
-    resultJson: '{"ok":true}',
-  }));
   return {
-    createExecutor: vi.fn(() => execute),
-    execute,
-    executeSessionTool: undefined as WorkerSessionToolExecutor | undefined,
+    createTools: vi.fn<WorkerGatewayTools>(() => []),
+    createGatewayTools: undefined as GatewayToolFactory | undefined,
     prepareNodeArtifacts: undefined as Parameters<
       typeof createWorkerEnvironmentService
     >[0]["prepareNodeArtifacts"],
@@ -45,7 +43,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("./worker-environments/service.js", () => ({
   createWorkerEnvironmentService: vi.fn(
     (options: Parameters<typeof createWorkerEnvironmentService>[0]) => {
-      mocks.executeSessionTool = options.executeSessionTool;
+      mocks.createGatewayTools = options.createGatewayTools;
       mocks.prepareNodeArtifacts = options.prepareNodeArtifacts;
       return mocks.service;
     },
@@ -53,7 +51,7 @@ vi.mock("./worker-environments/service.js", () => ({
 }));
 
 vi.mock("./worker-environments/worker-session-tool-executor.js", () => ({
-  createWorkerSessionToolExecutor: mocks.createExecutor,
+  createWorkerGatewayTools: mocks.createTools,
 }));
 
 import {
@@ -66,7 +64,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    mocks.executeSessionTool = undefined;
+    mocks.createGatewayTools = undefined;
     mocks.prepareNodeArtifacts = undefined;
     vi.restoreAllMocks();
     vi.clearAllMocks();
@@ -86,21 +84,21 @@ async function withWorkerRuntime(run: () => Promise<void>) {
       resolveGatewayContext: () => undefined,
       desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
       startup,
-      log: { child: () => ({ warn: () => {} }) },
+      log: { child: () => ({ info: () => {}, warn: () => {} }) },
     });
 
     await run();
   });
 }
 
-describe("gateway worker session-tool startup", () => {
-  it("creates one executor on concurrent first use", async () => {
+describe("gateway worker tool-surface startup", () => {
+  it("loads Gateway tools lazily and binds each requested surface", async () => {
     await withWorkerRuntime(async () => {
       expect(mocks.service.ready).toHaveBeenCalledOnce();
-      expect(mocks.createExecutor).not.toHaveBeenCalled();
-      const executeSessionTool = mocks.executeSessionTool;
-      if (!executeSessionTool) {
-        throw new Error("worker session-tool callback was not composed");
+      expect(mocks.createTools).not.toHaveBeenCalled();
+      const createGatewayTools = mocks.createGatewayTools;
+      if (!createGatewayTools) {
+        throw new Error("worker tool-surface callback was not composed");
       }
       const identity: WorkerConnectionIdentity = {
         environmentId: "environment",
@@ -114,17 +112,16 @@ describe("gateway worker session-tool startup", () => {
         protocolFeatures: [],
         credentialExpiresAtMs: Date.now() + 60_000,
       };
-      const request: Parameters<WorkerSessionToolExecutor>[0] = {
-        identity,
-        toolName: "sessions_send",
-        request: { toolCallId: "first", sessionKey: "agent:main:target", message: "hello" },
-      };
-
-      await expect(
-        Promise.all([executeSessionTool(request), executeSessionTool(request)]),
-      ).resolves.toEqual([{ resultJson: '{"ok":true}' }, { resultJson: '{"ok":true}' }]);
-      expect(mocks.createExecutor).toHaveBeenCalledOnce();
-      expect(mocks.execute).toHaveBeenCalledTimes(2);
+      const results = await Promise.all([
+        createGatewayTools({ identity }),
+        createGatewayTools({ identity }),
+      ]);
+      expect(results).toEqual([[], []]);
+      expect(results[0]).not.toBe(results[1]);
+      expect(mocks.createTools).toHaveBeenCalledTimes(2);
+      expect(mocks.createTools).toHaveBeenCalledWith(
+        expect.objectContaining({ identity, environments: mocks.service }),
+      );
     });
   });
 });

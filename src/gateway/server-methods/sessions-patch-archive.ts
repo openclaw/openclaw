@@ -102,21 +102,14 @@ function archiveTargetChanged(params: {
   patch: SessionsPatchParams;
 }): boolean {
   const { baselineEntry, currentEntry, patch } = params;
-  const expectedSessionChanged =
+  return (
     (patch.expectedSessionId !== undefined &&
       currentEntry?.sessionId !== patch.expectedSessionId) ||
     (patch.expectedLifecycleRevision !== undefined &&
-      currentEntry?.lifecycleRevision !== patch.expectedLifecycleRevision);
-  const generationChanged =
-    baselineEntry !== undefined &&
-    currentEntry !== undefined &&
-    (currentEntry.sessionId !== baselineEntry.sessionId ||
-      currentEntry.lifecycleRevision !== baselineEntry.lifecycleRevision);
-  return (
-    expectedSessionChanged ||
-    (baselineEntry !== undefined && currentEntry === undefined) ||
-    (baselineEntry === undefined && currentEntry !== undefined) ||
-    generationChanged
+      currentEntry?.lifecycleRevision !== patch.expectedLifecycleRevision) ||
+    (baselineEntry === undefined) !== (currentEntry === undefined) ||
+    currentEntry?.sessionId !== baselineEntry?.sessionId ||
+    currentEntry?.lifecycleRevision !== baselineEntry?.lifecycleRevision
   );
 }
 

@@ -59,25 +59,17 @@ export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolea
   if (extractEmbeddedAssistantText(message).trim() || !Array.isArray(message.content)) {
     return false;
   }
-  let checkedBlocks = 0;
-  for (const block of message.content) {
-    checkedBlocks += 1;
-    if (checkedBlocks > MAX_IMAGE_REASONING_FALLBACK_BLOCKS) {
-      break;
-    }
+  return message.content.slice(0, MAX_IMAGE_REASONING_FALLBACK_BLOCKS).some((block) => {
     if (!block || typeof block !== "object") {
-      continue;
+      return false;
     }
     const record = block as { type?: unknown; thinking?: unknown; thinkingSignature?: unknown };
-    if (
+    return (
       record.type === "thinking" &&
       typeof record.thinking === "string" &&
       isImageReasoningFallbackSignature(record.thinkingSignature)
-    ) {
-      return true;
-    }
-  }
-  return false;
+    );
+  });
 }
 
 /** Decodes a base64 image data URL with optional decoded-size protection. */
@@ -151,18 +143,15 @@ function modelIdMatchesProviderlessRef(params: {
   modelId: string;
   ref: string;
 }): boolean {
-  const candidates = new Set([params.modelId]);
+  const candidates = [params.modelId];
   const slash = params.modelId.indexOf("/");
   if (slash > 0 && normalizeProviderId(params.modelId.slice(0, slash)) === params.provider) {
-    candidates.add(params.modelId.slice(slash + 1));
+    candidates.push(params.modelId.slice(slash + 1));
   }
   const normalizedRef = normalizeLowercaseStringOrEmpty(params.ref);
-  for (const candidate of candidates) {
-    if (candidate === params.ref || normalizeLowercaseStringOrEmpty(candidate) === normalizedRef) {
-      return true;
-    }
-  }
-  return false;
+  return candidates.some(
+    (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedRef,
+  );
 }
 
 function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: string }): string[] {

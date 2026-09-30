@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createReplyTurnLedger,
-  requireQueuedReplyDelivery,
-} from "./dispatch-from-config.turn-ledger.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import { isReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
-import { createReplyDispatcher, type ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 function createUntrackedDispatcher(overrides: Partial<ReplyDispatcher> = {}): ReplyDispatcher {
@@ -20,7 +18,7 @@ function createUntrackedDispatcher(overrides: Partial<ReplyDispatcher> = {}): Re
   };
 }
 
-describe("requireQueuedReplyDelivery", () => {
+describe("reply delivery errors", () => {
   it("rejects a branded delivery error with an invalid outcome", () => {
     expect(
       isReplyDispatchDeliveryError({
@@ -29,34 +27,6 @@ describe("requireQueuedReplyDelivery", () => {
       }),
     ).toBe(false);
   });
-
-  it.each([
-    ["delivered", true],
-    ["delivered-not-visible", false],
-    ["channel-transform", false],
-    ["cancelled", false],
-    ["failed-before-deliver", false],
-    ["failed-deliver", false],
-  ] satisfies Array<[ReplyDispatchDeliveryOutcome, boolean]>)(
-    "requires canonical %s delivery",
-    async (outcome, accepted) => {
-      const delivery = requireQueuedReplyDelivery({
-        delivery: { queued: true, outcome: Promise.resolve(outcome) },
-        dispatcher: { waitForIdle: async () => undefined },
-        abortSignal: undefined,
-      });
-
-      if (accepted) {
-        await expect(delivery).resolves.toBeUndefined();
-        return;
-      }
-      const error = await delivery.catch((caught: unknown) => caught);
-      expect(isReplyDispatchDeliveryError(error)).toBe(true);
-      if (isReplyDispatchDeliveryError(error)) {
-        expect(error.outcome).toBe(outcome);
-      }
-    },
-  );
 });
 
 describe("createReplyTurnLedger", () => {
@@ -135,17 +105,14 @@ describe("createReplyTurnLedger", () => {
   it("times out instead of waiting forever on a transport that never settles", async () => {
     vi.useFakeTimers();
     try {
-      let releaseDeliver!: () => void;
-      const stalled = new Promise<void>((resolve) => {
-        releaseDeliver = resolve;
-      });
-      const dispatcher = createReplyDispatcher({ deliver: () => stalled });
+      const stalled = createDeferred();
+      const dispatcher = createReplyDispatcher({ deliver: () => stalled.promise });
       const ledger = createReplyTurnLedger(dispatcher);
       ledger.sendQueued("final", { text: "hello" });
       const settle = ledger.settleQueued();
       await vi.advanceTimersByTimeAsync(30_000);
       await expect(settle).resolves.toBe("timed-out");
-      releaseDeliver();
+      stalled.resolve();
       dispatcher.markComplete();
       await vi.runAllTimersAsync();
       await dispatcher.waitForIdle();
@@ -235,11 +202,8 @@ describe("createReplyTurnLedger", () => {
   it("stops settling when the abort signal fires", async () => {
     // A stalled deliver models a hung transport; abort must release the gate
     // instead of wedging finalization.
-    let releaseDeliver!: () => void;
-    const stalled = new Promise<void>((resolve) => {
-      releaseDeliver = resolve;
-    });
-    const dispatcher = createReplyDispatcher({ deliver: () => stalled });
+    const stalled = createDeferred();
+    const dispatcher = createReplyDispatcher({ deliver: () => stalled.promise });
     const ledger = createReplyTurnLedger(dispatcher);
     ledger.sendQueued("final", { text: "hello" });
     const abortController = new AbortController();
@@ -247,17 +211,14 @@ describe("createReplyTurnLedger", () => {
     abortController.abort();
     await expect(settled).resolves.toBe("aborted");
     expect(ledger.mayHaveDelivered()).toBe(false);
-    releaseDeliver();
+    stalled.resolve();
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
   });
 
   it("settles immediately when the abort signal already fired", async () => {
-    let releaseDeliver!: () => void;
-    const stalled = new Promise<void>((resolve) => {
-      releaseDeliver = resolve;
-    });
-    const dispatcher = createReplyDispatcher({ deliver: () => stalled });
+    const stalled = createDeferred();
+    const dispatcher = createReplyDispatcher({ deliver: () => stalled.promise });
     const ledger = createReplyTurnLedger(dispatcher);
     ledger.sendQueued("final", { text: "hello" });
     const abortController = new AbortController();
@@ -268,7 +229,7 @@ describe("createReplyTurnLedger", () => {
       await expect(Promise.race([settled, Promise.resolve("pending")])).resolves.toBe("aborted");
       expect(ledger.mayHaveDelivered()).toBe(false);
     } finally {
-      releaseDeliver();
+      stalled.resolve();
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
       await settled;

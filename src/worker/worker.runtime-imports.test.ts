@@ -14,9 +14,12 @@ const runtimeUrl = resolveRuntimeWorkerUrl(workerImportRuntimeEntrypoints.runtim
 
 describe("worker runtime imports during admission", () => {
   it.each([
-    ["rejected", "preserves rejected hello and joins both imports after one rejects"],
-    ["cancelled", "preserves cancellation and joins both imports after one rejects"],
-    ["import-error", "surfaces import failure after accepted hello and joins the pending import"],
+    [
+      "rejected",
+      "preserves rejected hello and joins imports and workspace reads after one rejects",
+    ],
+    ["cancelled", "preserves cancellation and joins imports and workspace reads after one rejects"],
+    ["import-error", "surfaces import failure after accepted hello and joins pending preparation"],
     ["accepted", "waits for accepted hello before constructing the stream or running the turn"],
   ])("%s: %s", async (mode) => {
     const root = tempDirs.make("worker-runtime-imports-");

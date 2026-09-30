@@ -144,9 +144,7 @@ export function localWorkspaceArchiveOperations(params: {
         accepted: accepted.manifest,
         acceptedRef: accepted.manifestRef,
         signal,
-        assertCurrent: () => {
-          current();
-        },
+        assertCurrent: current,
         reserve: (base, baseRef, resultRef) => {
           update({
             baseline_json: base,
@@ -201,9 +199,7 @@ export function localWorkspaceArchiveOperations(params: {
       current();
       // Once expiry starts, an older restore must not find a usable Git snapshot
       // after its accepted overlay has been retired.
-      await retireSnapshot?.(() => {
-        current();
-      });
+      await retireSnapshot?.(current);
       current();
       if (selected.pending_ref && accepted) {
         update({ baseline_json: accepted.raw, baseline_ref: accepted.ref, pending_target: null });

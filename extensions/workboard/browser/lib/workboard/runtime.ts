@@ -11,6 +11,8 @@ export type WorkboardLoadToken = {
 type WorkboardLiveRefreshEntry = {
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;
+  refresh?: () => Promise<boolean>;
+  shouldDefer?: () => boolean;
 };
 
 type WorkboardRuntime = {
@@ -24,6 +26,7 @@ type WorkboardRuntime = {
   liveHighestSeenRevision?: number;
   liveAppliedRevision?: number;
   liveRefreshPending?: boolean;
+  liveInvalidationRevision?: number;
   liveRefreshPromise?: Promise<void>;
   liveRefreshRetryTimer?: ReturnType<typeof setTimeout>;
   liveRefreshEntry?: WorkboardLiveRefreshEntry;
@@ -73,6 +76,7 @@ export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   delete runtime.liveHighestSeenRevision;
   delete runtime.liveAppliedRevision;
   delete runtime.liveRefreshPending;
+  delete runtime.liveInvalidationRevision;
   if (loadInFlight) {
     invalidateWorkboardLoads(host);
   }
@@ -125,9 +129,7 @@ function createDefaultState(): WorkboardUiState {
     collapsedStatuses: new Set(),
     expandedEmptyStatuses: new Set(),
     lastRefreshAt: null,
-    lastRefreshStartedAt: null,
     lastRefreshError: null,
-    lastRefreshSource: null,
     draftOpen: false,
     draftDiscardOpen: false,
     draftSaving: false,
@@ -154,7 +156,6 @@ function createDefaultState(): WorkboardUiState {
     draggedCardId: null,
     dragOverStatus: null,
     dragBeforeCardId: null,
-    capturingSessionKeys: new Set(),
   };
 }
 
@@ -178,10 +179,5 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 }
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
-  return Boolean(
-    state.bulkSaving ||
-    state.draftSaving ||
-    state.busyCardIds.size ||
-    state.capturingSessionKeys.size,
-  );
+  return Boolean(state.bulkSaving || state.draftSaving || state.busyCardIds.size);
 }

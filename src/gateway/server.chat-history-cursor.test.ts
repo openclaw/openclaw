@@ -31,11 +31,18 @@ import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
+import * as workspaceIcons from "./workspace-icon-http.js";
+
+// Icon I/O has its own suite; its detached import must not outlive this cursor fixture.
+vi.mock("./workspace-icon-http.js", () => ({
+  prepareSessionWorkspaceIcon: vi.fn(async () => undefined),
+}));
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = createTempDirTracker();
 
 type ChatMethod = "chat.history" | "chat.startup";
+type History = { deltaCursor: string; messages: unknown[] };
 type RpcResult<T = Record<string, unknown>> = {
   error?: unknown;
   ok: boolean;
@@ -132,7 +139,6 @@ afterEach(async () => {
 describe("chat.history cursor catch-up", () => {
   test("keeps live and cursor sequences identical after compaction and a same-session reset", async () => {
     type Envelope = { message: unknown; messageId: string; messageSeq: number };
-    type History = { deltaCursor: string; messages: unknown[] };
     const oldEvents: Array<Record<string, unknown>> = [];
     for (let turn = 1; turn <= 3; turn += 1) {
       oldEvents.push({
@@ -289,10 +295,7 @@ describe("chat.history cursor catch-up", () => {
 
   test("composes nested completions identically after cursor catch-up and fresh history", async () => {
     const { context, storePath } = await createCursorSession();
-    const cached = await callChat<{ deltaCursor?: string; messages?: unknown[] }>(
-      context,
-      "chat.history",
-    );
+    const cached = await callChat<History>(context, "chat.history");
     let parentId = "cached";
     for (const [id, afterEntryId, startOrder] of [
       ["exec", undefined, 0],
@@ -380,9 +383,7 @@ describe("chat.history cursor catch-up", () => {
         const delta = await callChat<{ kind: string; messages: unknown[] }>(
           context,
           "chat.history",
-          {
-            cursor: cached.payload?.deltaCursor,
-          },
+          { cursor: cached.payload?.deltaCursor },
         );
         expect(delta.ok).toBe(true);
         expect(delta.payload?.kind).toBe("delta");
@@ -411,11 +412,7 @@ describe("chat.history cursor catch-up", () => {
       entries: { main: { default: true }, ops: {} },
     };
     const { context } = await createCursorSession();
-    const page = await callChat<{ deltaCursor?: string; messages?: unknown[] }>(
-      context,
-      "chat.history",
-      { sessionKey },
-    );
+    const page = await callChat<History>(context, "chat.history", { sessionKey });
     expect(page.ok).toBe(true);
     expect(page.payload?.deltaCursor).toEqual(expect.any(String));
     const explicitFirstPage = await callChat<{ deltaCursor?: string }>(context, "chat.history", {
@@ -424,12 +421,10 @@ describe("chat.history cursor catch-up", () => {
     });
     expect(explicitFirstPage.payload?.deltaCursor).toEqual(expect.any(String));
 
-    const delta = await callChat<{
-      deltaCursor?: string;
-      kind?: string;
-      messages?: unknown[];
-      sessionInfo?: { activeLeafEntryId?: string | null };
-    }>(context, "chat.history", { sessionKey, cursor: page.payload?.deltaCursor });
+    const delta = await callChat(context, "chat.history", {
+      sessionKey,
+      cursor: page.payload?.deltaCursor,
+    });
     expect(delta).toMatchObject({
       ok: true,
       payload: {
@@ -568,33 +563,38 @@ describe("chat.history cursor catch-up", () => {
   });
 
   test("chat.startup returns startup projections with a delta", async () => {
-    const { context, storePath } = await createCursorSession();
-    context.readChatStartupProjection = async () => ({
-      metadata: { swarmEnabled: false },
-      sessionModelCatalog: [],
-      defaultModelCatalog: [],
-    });
-    const page = await callChat<{ deltaCursor?: string }>(context, "chat.startup");
-    await appendTranscriptMessage(currentScope(storePath), {
-      eventId: "startup-append",
-      parentId: "cached",
-      message: { role: "assistant", content: "startup delta", timestamp: 2 },
-    });
-    const delta = await callChat<{
-      kind?: string;
-      messages?: unknown[];
-      metadata?: unknown;
-      sessionInfo?: unknown;
-    }>(context, "chat.startup", { cursor: page.payload?.deltaCursor });
-    expect(delta).toMatchObject({
-      ok: true,
-      payload: {
-        kind: "delta",
-        messages: [expect.any(Object)],
-        sessionInfo: expect.any(Object),
-        metadata: expect.any(Object),
-      },
-    });
-    expect(delta.payload).not.toHaveProperty("agentsList");
+    const prepareIcon = vi.spyOn(workspaceIcons, "prepareSessionWorkspaceIcon");
+    try {
+      const { context, storePath } = await createCursorSession();
+      context.readChatStartupProjection = async () => ({
+        metadata: { swarmEnabled: false },
+        sessionModelCatalog: [],
+        defaultModelCatalog: [],
+      });
+      const page = await callChat<{ deltaCursor?: string }>(context, "chat.startup");
+      await appendTranscriptMessage(currentScope(storePath), {
+        eventId: "startup-append",
+        parentId: "cached",
+        message: { role: "assistant", content: "startup delta", timestamp: 2 },
+      });
+      const delta = await callChat(context, "chat.startup", { cursor: page.payload?.deltaCursor });
+      expect(delta).toMatchObject({
+        ok: true,
+        payload: {
+          kind: "delta",
+          messages: [expect.any(Object)],
+          sessionInfo: expect.any(Object),
+          metadata: expect.any(Object),
+        },
+      });
+      expect(delta.payload).not.toHaveProperty("agentsList");
+    } finally {
+      await Promise.allSettled(
+        prepareIcon.mock.results
+          .filter((result) => result.type === "return")
+          .map((result) => result.value),
+      );
+      prepareIcon.mockRestore();
+    }
   });
 });

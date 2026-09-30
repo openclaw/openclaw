@@ -2,6 +2,7 @@ import { lstatSync, symlinkSync, unlinkSync, type Stats } from "node:fs";
 // Links plugin peer packages for local development installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { hasErrnoCode } from "../infra/errors.js";
 import { resolveUserPath } from "../infra/home-dir.js";
@@ -57,11 +58,7 @@ export function resolveOpenClawHostDependency(manifest: {
   peerDependencies?: unknown;
 }): OpenClawHostDependency | null {
   for (const declaration of ["peerDependencies", "optionalDependencies", "dependencies"] as const) {
-    const dependencies = manifest[declaration];
-    const spec =
-      typeof dependencies === "object" && dependencies !== null && !Array.isArray(dependencies)
-        ? (dependencies as Record<string, unknown>).openclaw
-        : undefined;
+    const spec = asOptionalRecord(manifest[declaration])?.openclaw;
     if (typeof spec === "string" && spec) {
       return { declaration, spec };
     }
@@ -101,10 +98,19 @@ async function readSafePackageManifest(
 
 async function readPackageOpenClawLinkDependencies(
   packageDir: string,
-): Promise<Record<string, string>> {
-  const manifest = await readSafePackageManifest(packageDir);
-  const dependency = manifest ? resolveOpenClawHostDependency(manifest) : null;
-  return dependency ? { openclaw: dependency.spec } : {};
+  onPackageReadError?: (error: unknown, packageDir: string) => void,
+): Promise<Record<string, string> | undefined> {
+  try {
+    const manifest = await readSafePackageManifest(packageDir);
+    const dependency = manifest ? resolveOpenClawHostDependency(manifest) : null;
+    return dependency ? { openclaw: dependency.spec } : {};
+  } catch (error) {
+    if (!onPackageReadError) {
+      throw error;
+    }
+    onPackageReadError(error, packageDir);
+    return undefined;
+  }
 }
 
 async function listManagedNpmRootPackageDirs(npmRoot: string): Promise<string[]> {
@@ -220,7 +226,7 @@ export async function auditDeclaredOpenClawHostDependency(params: {
   packageName?: string;
 }): Promise<OpenClawPeerLinkAuditIssue | null> {
   const dependencies = await readPackageOpenClawLinkDependencies(params.packageDir);
-  if (!Object.hasOwn(dependencies, "openclaw")) {
+  if (!dependencies || !Object.hasOwn(dependencies, "openclaw")) {
     return null;
   }
   return await auditOpenClawPeerDependencyLink(params);
@@ -428,14 +434,11 @@ export async function reconcileRegisteredOpenClawHostLinks(params: {
       continue;
     }
 
-    let dependencies: Record<string, string>;
-    try {
-      dependencies = await readPackageOpenClawLinkDependencies(packageDir);
-    } catch (error) {
-      if (!params.onPackageReadError) {
-        throw error;
-      }
-      params.onPackageReadError(error, packageDir);
+    const dependencies = await readPackageOpenClawLinkDependencies(
+      packageDir,
+      params.onPackageReadError,
+    );
+    if (!dependencies) {
       skipped += 1;
       continue;
     }
@@ -481,14 +484,11 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
   let repaired = 0;
   let skipped = 0;
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
-    let openClawLinkDependencies: Record<string, string>;
-    try {
-      openClawLinkDependencies = await readPackageOpenClawLinkDependencies(packageDir);
-    } catch (error) {
-      if (!params.onPackageReadError) {
-        throw error;
-      }
-      params.onPackageReadError(error, packageDir);
+    const openClawLinkDependencies = await readPackageOpenClawLinkDependencies(
+      packageDir,
+      params.onPackageReadError,
+    );
+    if (!openClawLinkDependencies) {
       skipped += 1;
       continue;
     }
@@ -526,17 +526,11 @@ export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
   let checked = 0;
   const issues: OpenClawPeerLinkAuditIssue[] = [];
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
-    let openClawLinkDependencies: Record<string, string>;
-    try {
-      openClawLinkDependencies = await readPackageOpenClawLinkDependencies(packageDir);
-    } catch (error) {
-      if (!params.onPackageReadError) {
-        throw error;
-      }
-      params.onPackageReadError(error, packageDir);
-      continue;
-    }
-    if (!Object.hasOwn(openClawLinkDependencies, "openclaw")) {
+    const openClawLinkDependencies = await readPackageOpenClawLinkDependencies(
+      packageDir,
+      params.onPackageReadError,
+    );
+    if (!openClawLinkDependencies || !Object.hasOwn(openClawLinkDependencies, "openclaw")) {
       continue;
     }
     checked += 1;

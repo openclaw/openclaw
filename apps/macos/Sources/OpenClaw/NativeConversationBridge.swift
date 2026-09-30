@@ -60,6 +60,14 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
     init(document: ControlUIDocumentHost) {
         self.document = document
         super.init()
+        document.isNativeAuthAvailable = { [weak self] in
+            guard let self else { return false }
+            guard !self.isClosing else { return false }
+            switch self.availability {
+            case .loading, .ready: return true
+            case .unsupported, .failed: return false
+            }
+        }
         document.webView.navigationDelegate = self
         document.webView.uiDelegate = self
         document.onAuthenticationFailure = { [weak self] error in
@@ -137,12 +145,9 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
         let requests = self.pending
         self.pending.removeAll()
         for request in requests.values {
-            request.timeout.cancel()
-            let result = Self.failure(
+            self.complete(request, with: Self.failure(
                 for: request.command,
-                error: "stale-document")
-            NativeConversationTrace.result(request.command, result: result)
-            request.continuation.resume(returning: result)
+                error: "stale-document"))
         }
         self.onDocumentRetired?()
     }
@@ -216,9 +221,7 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
             self.onState?(state)
         case let .commandResult(result):
             if let request = self.pending.removeValue(forKey: result.requestId) {
-                request.timeout.cancel()
-                NativeConversationTrace.result(request.command, result: result)
-                request.continuation.resume(returning: result)
+                self.complete(request, with: result)
             }
         case let .routeChanged(change): self.onRouteChanged?(change)
         case let .openDashboard(route):
@@ -298,10 +301,11 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
         error: String)
     {
         guard let request = self.pending.removeValue(forKey: requestId) else { return }
+        self.complete(request, with: Self.failure(for: request.command, error: error))
+    }
+
+    private func complete(_ request: Pending, with result: NativeConversationResult) {
         request.timeout.cancel()
-        let result = Self.failure(
-            for: request.command,
-            error: error)
         NativeConversationTrace.result(request.command, result: result)
         request.continuation.resume(returning: result)
     }
@@ -417,7 +421,7 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
         initiatedByFrame _: WKFrameInfo,
         completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void)
     {
-        self.document.openPanel(
+        ControlUIDocumentHost.openPanel(
             parameters: parameters,
             parent: webView.window,
             completionHandler: completionHandler)

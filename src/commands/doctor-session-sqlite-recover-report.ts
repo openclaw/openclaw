@@ -1,4 +1,3 @@
-/** Builds doctor reports for session SQLite migration recovery mode. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

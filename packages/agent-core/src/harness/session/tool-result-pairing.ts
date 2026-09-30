@@ -1,5 +1,6 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 
@@ -120,24 +121,14 @@ export function extractToolResultIds(message: ToolResultMessage): string[] {
     callId?: unknown;
     call_id?: unknown;
   };
-  const ids: string[] = [];
-  for (const value of [
+  return normalizeUniqueTrimmedStringList([
     record.toolCallId,
     record.toolUseId,
     record.tool_call_id,
     record.tool_use_id,
     record.callId,
     record.call_id,
-  ]) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const id = value.trim();
-    if (id && !ids.includes(id)) {
-      ids.push(id);
-    }
-  }
-  return ids;
+  ]);
 }
 
 export function extractToolResultId(message: ToolResultMessage): string | null {
@@ -234,7 +225,7 @@ export function classifyToolUseResultPairing(
       const toolCalls: ToolCallLike[] = [];
       const occurrences: ToolCallOccurrence[] = [];
       const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
-      const syntheticById = new Map<string, ToolCallOccurrence[]>();
+      const syntheticById = createToolCallOccurrenceQueue<ToolCallOccurrence>();
       for (const [contentIndex, block] of assistant.content.entries()) {
         const toolCall = readToolCall(block);
         if (!toolCall) {
@@ -265,12 +256,7 @@ export function classifyToolUseResultPairing(
           occurrence.sourceResult = message;
           occurrence.sourceResultIndex = index;
           if (isSyntheticMissingToolResult(occurrence.result)) {
-            const synthetic = syntheticById.get(occurrence.id);
-            if (synthetic) {
-              synthetic.push(occurrence);
-            } else {
-              syntheticById.set(occurrence.id, [occurrence]);
-            }
+            syntheticById.add(occurrence.id, occurrence);
           }
           continue;
         }
@@ -287,22 +273,20 @@ export function classifyToolUseResultPairing(
           continue;
         }
         droppedDuplicateCount += 1;
-        if (!isSyntheticMissingToolResult(normalized)) {
-          const replaceable = syntheticById.get(id)?.shift();
-          if (replaceable) {
-            const discardedSource = replaceable.sourceResult;
-            if (discardedSource) {
-              droppedResults.push({
-                message: discardedSource,
-                index: replaceable.sourceResultIndex ?? index,
-              });
-            }
-            replaceable.result = normalizeToolResultName(normalized, replaceable.name);
-            replaceable.sourceResult = message;
-            replaceable.sourceResultIndex = index;
-          } else {
-            droppedResults.push({ message, index });
+        const replaceable = isSyntheticMissingToolResult(normalized)
+          ? undefined
+          : syntheticById.claim(id);
+        if (replaceable) {
+          const discardedSource = replaceable.sourceResult;
+          if (discardedSource) {
+            droppedResults.push({
+              message: discardedSource,
+              index: replaceable.sourceResultIndex ?? index,
+            });
           }
+          replaceable.result = normalizeToolResultName(normalized, replaceable.name);
+          replaceable.sourceResult = message;
+          replaceable.sourceResultIndex = index;
         } else {
           droppedResults.push({ message, index });
         }

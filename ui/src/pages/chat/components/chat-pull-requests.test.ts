@@ -3,41 +3,20 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  ControlUiSessionBranch,
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestCheckDetails,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
-import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
 import type { ChatCiDetailsElement } from "./chat-ci-details.ts";
+import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import {
   chatPullRequestId,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
   renderChatPullRequests,
 } from "./chat-pull-requests.ts";
-
-function publication(overrides: Partial<GitHubPublicationView> = {}): GitHubPublicationView {
-  return {
-    activity: null,
-    canWrite: true,
-    locked: false,
-    options: null,
-    selection: {
-      source: "shared",
-      expected: { source: "system-configured", accountId: 1, login: "system-bot" },
-    },
-    result: null,
-    confirmation: null,
-    error: null,
-    personalReady: true,
-    onPublish: () => {},
-    onRefresh: () => {},
-    ...overrides,
-  };
-}
 
 function pullRequest(
   overrides: Partial<ControlUiSessionPullRequest> = {},
@@ -54,18 +33,6 @@ function pullRequest(
     deletions: 3,
     checks: { state: "passing", passed: 5, failed: 0, skipped: 1, running: 0 },
     checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
-    ...overrides,
-  };
-}
-
-function sessionBranch(overrides: Partial<ControlUiSessionBranch> = {}): ControlUiSessionBranch {
-  return {
-    owner: "openclaw",
-    repo: "openclaw",
-    branch: "claude/cloud-workers-live-events",
-    additions: 2819,
-    deletions: 205,
-    createUrl: "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
     ...overrides,
   };
 }
@@ -237,7 +204,9 @@ describe("renderChatPullRequests", () => {
       expect(chip?.getAttribute("data-state")).toBe("merged");
       expect(chip?.querySelector(".chat-pr__state")?.textContent?.trim()).toBe("Merged");
       expect(chip?.querySelector(".chat-pr__diff")).toBeNull();
-      expect(chip?.querySelector(".chat-pr__checks")).toBeNull();
+      expect(chip?.querySelector(".chat-pr__checks")?.getAttribute("data-checks")).toBe("none");
+      expect(chip?.querySelector("openclaw-chat-ci-automation")).not.toBeNull();
+      expect(chip?.querySelector("openclaw-chat-ci-details")).toBeNull();
       // Merged is terminal, so the stale-data warning stays off merged chips.
       expect(chip?.querySelector(".chat-pr__warning")).toBeNull();
       expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);
@@ -481,43 +450,6 @@ describe("renderChatPullRequests", () => {
     expect(container.querySelector("a.chat-pr__create")).toBeNull();
   });
 
-  it.each(["system-configured", "agent-override"] as const)(
-    "shows a sole %s publisher as information behind the publication arrow",
-    (source) => {
-      const shared = { source, accountId: 1, login: "system-bot" };
-      const onSelect = vi.fn();
-      paint({
-        pullRequests: [],
-        branch: sessionBranch(),
-        publication: publication({
-          options: { shared, personal: null, pendingPersonal: null, latestShared: null },
-          selection: { source: "shared", expected: shared },
-          onSelect,
-        }),
-      });
-      expect(container.querySelector("select")).toBeNull();
-      expect(container.querySelector('button[aria-label="Publication account"]')).not.toBeNull();
-      const popover = container.querySelector("wa-popover");
-      expect(popover?.textContent).toContain("Publish as @system-bot");
-      expect(container.querySelector(".chat-pr__publication-outcome")).toBeNull();
-      expect(onSelect).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps the shared cloud flow available and explains the personal workspace boundary", () => {
-    paint({
-      pullRequests: [],
-      branch: sessionBranch(),
-      publication: publication({ personalReady: false }),
-    });
-    expect(container.querySelector<HTMLButtonElement>("button.chat-pr__create")?.disabled).toBe(
-      false,
-    );
-    expect(container.textContent).toContain(
-      "My GitHub requires an idle, reconciled local workspace",
-    );
-  });
-
   it("marks the branch row stale when GitHub is rate limited", () => {
     paint({
       pullRequests: [],
@@ -661,6 +593,7 @@ describe("CI job details", () => {
       connectionRevision: 0,
       eventLog: [],
       eventLogRevision: 0,
+      loadSelfProfile: async () => null,
       connect() {},
       setSessionKey() {},
       start() {},

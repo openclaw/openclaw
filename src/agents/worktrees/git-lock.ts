@@ -40,13 +40,9 @@ export function createWorktreeGcPrefilter() {
     const root = path.resolve(record.repoRoot);
     let reasons = repositories.get(root);
     if (!reasons) {
-      reasons = listGitWorktrees(root).then((entries) => {
-        const paths = new Map<string, Entry>();
-        for (const entry of entries) {
-          paths.set(path.resolve(entry.path), entry);
-        }
-        return paths;
-      });
+      reasons = listGitWorktrees(root).then(
+        (entries) => new Map(entries.map((entry) => [path.resolve(entry.path), entry])),
+      );
       repositories.set(root, reasons);
     }
     const entry = (await reasons).get(path.resolve(record.path));

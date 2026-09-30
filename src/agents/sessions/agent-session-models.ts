@@ -24,10 +24,6 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 type ThinkingSelection = { event: ThinkingLevelSelectEvent; saveDefault: boolean };
 
 export abstract class AgentSessionModels extends AgentSessionPrompting {
-  // =========================================================================
-  // Model Management
-  // =========================================================================
-
   private async emitModelSelect(
     nextModel: Model,
     previousModel: Model | undefined,
@@ -115,10 +111,6 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
       this.failAfterMetadataCommit(cause, committedMetadata);
     }
   }
-
-  // =========================================================================
-  // Thinking Level Management
-  // =========================================================================
 
   /**
    * Set thinking level.
@@ -252,20 +244,6 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
     };
   }
 
-  /**
-   * Get available thinking levels for current model.
-   * The provider will clamp to what the specific model supports internally.
-   */
-  getAvailableThinkingLevels(): ThinkingLevel[] {
-    if (!this.model) {
-      return THINKING_LEVELS;
-    }
-    return getSupportedThinkingLevels(this.model) as ThinkingLevel[];
-  }
-
-  /**
-   * Check if current model supports thinking/reasoning.
-   */
   supportsThinking(): boolean {
     return Boolean(this.model?.reasoning);
   }
@@ -277,23 +255,13 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
     return this.thinkingLevel;
   }
 
-  // =========================================================================
-  // Queue Mode Management
-  // =========================================================================
-
-  /**
-   * Set steering message mode.
-   * Saves to settings.
-   */
+  /** Update steering mode and persist it to settings. */
   setSteeringMode(mode: "all" | "one-at-a-time"): void {
     this.agent.steeringMode = mode;
     this.settingsManager.setSteeringMode(mode);
   }
 
-  /**
-   * Set follow-up message mode.
-   * Saves to settings.
-   */
+  /** Update follow-up mode and persist it to settings. */
   setFollowUpMode(mode: "all" | "one-at-a-time"): void {
     this.agent.followUpMode = mode;
     this.settingsManager.setFollowUpMode(mode);

@@ -481,14 +481,12 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                                               card,
                                               "codex",
                                               "autonomous",
-                                              { engineLabelOnly: true },
                                             )}
                                             ${renderStartExecutionButton(
                                               actionProps,
                                               card,
                                               "claude",
                                               "autonomous",
-                                              { engineLabelOnly: true },
                                             )}
                                           </div>
                                         </div>
@@ -503,18 +501,12 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                                       card,
                                       "codex",
                                       "manual",
-                                      {
-                                        engineLabelOnly: true,
-                                      },
                                     )}
                                     ${renderStartExecutionButton(
                                       actionProps,
                                       card,
                                       "claude",
                                       "manual",
-                                      {
-                                        engineLabelOnly: true,
-                                      },
                                     )}
                                   </div>
                                 </div>

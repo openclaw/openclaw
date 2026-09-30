@@ -1,4 +1,3 @@
-/** Doctor repairs for installed gateway service config and duplicate legacy services. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -39,8 +38,10 @@ import {
   resolveManagedGatewayServiceCommand,
 } from "../daemon/service-types.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { isSystemdUnitActive, uninstallLegacySystemdUnits } from "../daemon/systemd.js";
+import { isSystemdUnitActive } from "../daemon/systemd.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -55,7 +56,10 @@ import {
   resolveSystemdUnitNameFromServicePath,
   type DoctorGatewayInstallationMaintenance,
 } from "./doctor-gateway-installation.js";
-import { classifyLegacyServices } from "./doctor-gateway-legacy-services.js";
+import {
+  classifyLegacyServices,
+  cleanupLegacyLinuxUserServices,
+} from "./doctor-gateway-legacy-services.js";
 import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
@@ -217,39 +221,6 @@ async function cleanupLegacyDarwinServices(
   return { removed, failed };
 }
 
-async function cleanupLegacyLinuxUserServices(
-  services: ExtraGatewayService[],
-  runtime: RuntimeEnv,
-): Promise<{ removed: string[]; failed: string[] }> {
-  const removed: string[] = [];
-  const failed: string[] = [];
-
-  try {
-    const removedUnits = await uninstallLegacySystemdUnits({
-      env: process.env,
-      stdout: process.stdout,
-    });
-    const removedByLabel: Map<string, (typeof removedUnits)[number]> = new Map(
-      removedUnits.map((unit) => [`${unit.name}.service`, unit] as const),
-    );
-    for (const svc of services) {
-      const removedUnit = removedByLabel.get(svc.label);
-      if (!removedUnit) {
-        failed.push(`${svc.label} (legacy unit name not recognized)`);
-        continue;
-      }
-      removed.push(`${svc.label} -> ${removedUnit.unitPath}`);
-    }
-  } catch (err) {
-    runtime.error(`Legacy Linux gateway cleanup failed: ${String(err)}`);
-    for (const svc of services) {
-      failed.push(`${svc.label} (linux cleanup failed)`);
-    }
-  }
-
-  return { removed, failed };
-}
-
 /**
  * Audits and optionally rewrites the installed local gateway service configuration.
  *
@@ -277,16 +248,21 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
 
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+  });
+  const installOwner = await readInstallOwner(root);
+  if (installOwner) {
+    note(formatInstallOwnerMessage(installOwner), "Gateway runtime");
+    return cfg;
+  }
+
   const serviceRepairPolicy = resolveServiceRepairPolicy();
   const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
 
   const service = resolveGatewayService();
-  let command: Awaited<ReturnType<typeof service.readCommand>> | null;
-  try {
-    command = await service.readCommand(process.env);
-  } catch {
-    command = null;
-  }
+  const command = await service.readCommand(process.env).catch(() => null);
   if (!command) {
     const audit = await auditGatewayServiceConfig({
       env: process.env,
@@ -321,6 +297,13 @@ export async function maybeRepairGatewayServiceConfig(
     note(`Gateway service invokes ${OPENCLAW_WRAPPER_ENV_KEY}: ${serviceWrapperPath}`, "Gateway");
   }
   const serviceLayout = await summarizeGatewayServiceLayout(command);
+  const serviceOwner = await readInstallOwner(
+    serviceLayout?.packageRootReal ?? serviceLayout?.packageRoot ?? null,
+  );
+  if (serviceOwner) {
+    note(formatInstallOwnerMessage(serviceOwner), "Gateway runtime");
+    return cfg;
+  }
   const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
     ? [
         `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
@@ -659,9 +642,6 @@ export async function maybeRepairGatewayServiceConfig(
   return cfgForServiceInstall;
 }
 
-/**
- * Reports duplicate gateway-like services and removes legacy user services after confirmation.
- */
 export async function maybeScanExtraGatewayServices(
   options: DoctorOptions,
   runtime: RuntimeEnv,

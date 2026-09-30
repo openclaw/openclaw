@@ -1,10 +1,10 @@
 // APNs test-push command for iOS nodes.
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import type { PushTestResult } from "../../../packages/gateway-protocol/src/index.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callNodesGatewayCli, nodesCallOpts, resolveCliNodeId } from "./rpc.js";
@@ -34,28 +34,17 @@ export function registerNodesPushCommand(nodes: Command) {
           const title = normalizeOptionalString(opts.title) || "OpenClaw";
           const body = normalizeOptionalString(opts.body) || `Push test for node ${nodeId}`;
 
-          const params: Record<string, unknown> = {
+          const result = await callNodesGatewayCli("push.test", opts, {
             nodeId,
             title,
             body,
-          };
-          if (environment) {
-            params.environment = environment;
-          }
-
-          const result = await callNodesGatewayCli("push.test", opts, params);
-          const parsed =
-            typeof result === "object" && result !== null
-              ? (result as Partial<PushTestResult>)
-              : {};
+            ...(environment ? { environment } : {}),
+          });
+          const parsed = asRecord(result);
           const ok = parsed.ok === true;
           const status = typeof parsed.status === "number" ? parsed.status : 0;
-          const reason =
-            typeof parsed.reason === "string" ? normalizeOptionalString(parsed.reason) : undefined;
-          const env =
-            typeof parsed.environment === "string"
-              ? (normalizeOptionalString(parsed.environment) ?? "unknown")
-              : "unknown";
+          const reason = normalizeOptionalString(parsed.reason);
+          const env = normalizeOptionalString(parsed.environment) ?? "unknown";
           if (opts.json) {
             defaultRuntime.writeJson(result);
           } else {

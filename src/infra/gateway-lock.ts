@@ -47,11 +47,11 @@ import {
 export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
 const log = createSubsystemLogger("gateway");
 
-type GatewayLockHandle = {
+export type GatewayLockHandle = {
   lockPath: string;
   stateLockPath: string;
   stateDir: string;
-  assertCurrent(this: void): void;
+  assertCurrent(this: void, assertPolicy?: () => void, access?: "read"): void;
   assertDatabaseAccess(this: void, databasePath: string): void;
   retainProjection: () => GatewayStateProjection;
   releaseInTree: () => Promise<void>;
@@ -534,13 +534,18 @@ export async function acquireGatewayLock(
   if (waited && role === "gateway") {
     log.info(`Gateway state ownership acquired after ${((now() - startedAt) / 1000).toFixed(1)} s`);
   }
-  const assertStateOwnerCurrent = () => {
+  const assertStateOwnerCurrent = (assertPolicy?: () => void, access?: "read") => {
     if (borrowedOwner) {
-      parentMaintenance?.assertOwnerCurrent();
+      parentMaintenance?.assertOwnerCurrent(access);
     }
     stateOwner.assertCurrent();
     if (projection && !projection.verifyStillHeld()) {
       throw new Error("OpenClaw Gateway ownership projection is no longer current");
+    }
+    if (assertPolicy) {
+      // Synchronous policy reads borrow storage custody without transferring resource ownership.
+      stateOwner.run(assertPolicy);
+      assertStateOwnerCurrent(undefined, access);
     }
   };
   const assertDatabaseAccess = (requestedPath: string) => {
@@ -551,7 +556,7 @@ export async function acquireGatewayLock(
     role === "sqlite-maintenance"
       ? createOpenClawDatabaseMaintenanceScope({
           schemaMaintenance: true,
-          assertOwnerCurrent: assertStateOwnerCurrent,
+          assertOwnerCurrent: (access) => assertStateOwnerCurrent(undefined, access),
           assertDatabaseAccess,
         })
       : undefined;
@@ -622,8 +627,12 @@ export async function acquireGatewayLock(
     assertCurrent: assertStateOwnerCurrent,
     assertDatabaseAccess,
     run: (operation) => {
+      if (resources) {
+        // Reenter held custody before policy reads inspect this scope's database handles.
+        return resources.run(operation);
+      }
       assertStateOwnerCurrent();
-      return resources ? resources.run(operation) : operation();
+      return operation();
     },
     retainProjection: () => {
       assertStateOwnerCurrent();

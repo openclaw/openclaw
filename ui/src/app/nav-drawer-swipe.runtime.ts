@@ -54,7 +54,7 @@ export class NavDrawerSwipeOwner {
     this.host.removeEventListener("touchmove", this.handleMove);
     this.host.removeEventListener("touchend", this.handleEnd);
     this.host.removeEventListener("touchcancel", this.handleCancel);
-    this.closed();
+    this.reset();
   }
 
   reset(): void {
@@ -80,10 +80,6 @@ export class NavDrawerSwipeOwner {
         (navDrawerFocusableElements(drawer)[0] ?? drawer).focus({ preventScroll: true });
       }
     });
-  }
-
-  closed(): void {
-    this.reset();
   }
 
   private paint(swipe: Swipe, deltaX: number): void {

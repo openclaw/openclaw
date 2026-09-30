@@ -2,7 +2,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import type { SkillEntry } from "../types.js";
 
 export function extractErrorMessage(err: unknown): string | undefined {
@@ -61,27 +64,14 @@ export function isRemoteSkillEligibilityNode(
   );
 }
 
-export function supportsSystemWhich(commands?: string[]): boolean {
-  return Array.isArray(commands) && commands.includes("system.which");
-}
-
 export function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
-  const bins = new Set<string>();
-  for (const entry of entries) {
-    const os = entry.metadata?.os ?? [];
-    if (os.length > 0 && !os.includes(targetPlatform)) {
-      continue;
-    }
-    for (const bin of [
-      ...(entry.metadata?.requires?.bins ?? []),
-      ...(entry.metadata?.requires?.anyBins ?? []),
-    ]) {
-      if (bin.trim()) {
-        bins.add(bin.trim());
-      }
-    }
-  }
-  return [...bins];
+  return normalizeUniqueStringEntries(
+    entries.flatMap(({ metadata }) =>
+      metadata?.os?.length && !metadata.os.includes(targetPlatform)
+        ? []
+        : [...(metadata?.requires?.bins ?? []), ...(metadata?.requires?.anyBins ?? [])],
+    ),
+  );
 }
 
 export function buildBinProbeScript(bins: string[]): string {

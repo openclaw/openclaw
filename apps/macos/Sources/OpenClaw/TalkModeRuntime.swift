@@ -1,4 +1,5 @@
 import AVFoundation
+import ConcurrencyExtras
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
@@ -31,24 +32,6 @@ actor TalkModeRuntime {
     static let systemTalkProvider = "system"
     static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
 
-    private final class RMSMeter: @unchecked Sendable {
-        private let lock = NSLock()
-        private var latestRMS: Double = 0
-
-        func set(_ rms: Double) {
-            self.lock.lock()
-            self.latestRMS = rms
-            self.lock.unlock()
-        }
-
-        func get() -> Double {
-            self.lock.lock()
-            let value = self.latestRMS
-            self.lock.unlock()
-            return value
-        }
-    }
-
     private var recognizerCache = SpeechRecognizerCache()
     private var audioEngine: AVAudioEngine?
     private var audioInputObserver: AudioInputDeviceObserver?
@@ -57,7 +40,7 @@ actor TalkModeRuntime {
     private var recognitionTask: SFSpeechRecognitionTask?
     var recognitionGeneration: Int = 0
     private var rmsTask: Task<Void, Never>?
-    private let rmsMeter = RMSMeter()
+    private let rmsMeter = LockIsolated<Double>(0)
 
     private var silenceTask: Task<Void, Never>?
     var phase: TalkModePhase = .idle
@@ -415,7 +398,7 @@ actor TalkModeRuntime {
         self.rmsTask = nil
     }
 
-    private func startRMSTicker(meter: RMSMeter) {
+    private func startRMSTicker(meter: LockIsolated<Double>) {
         self.rmsTask?.cancel()
         self.rmsTask = Task { [weak self, meter] in
             while let self {
@@ -423,7 +406,7 @@ actor TalkModeRuntime {
                 if Task.isCancelled {
                     return
                 }
-                await self.noteAudioLevel(rms: meter.get())
+                await self.noteAudioLevel(rms: meter.value)
             }
         }
     }
@@ -506,7 +489,6 @@ actor TalkModeRuntime {
             TalkModeController.shared.commitTranscript(text)
             TalkModeController.shared.updatePhase(.thinking)
         }
-        // Play "send" chime when the user's speech is finalized and about to be sent
         let sendChime = await MainActor.run { AppStateStore.shared.voiceWakeSendChime }
         if sendChime != .none {
             await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "talk.send") }
@@ -548,7 +530,8 @@ actor TalkModeRuntime {
                 format: format)
             { [weak request, meter] buffer, _ in
                 request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-                meter.set(TalkAudioLevel.rms(buffer: buffer))
+                let rms = TalkAudioLevel.rms(buffer: buffer)
+                meter.withValue { $0 = rms }
             }
             tapInstalled = true
             audioEngine.prepare()
@@ -721,11 +704,10 @@ extension TalkModeRuntime {
                 try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
                 return nil
             }
+            defer { group.cancelAll() }
             guard let result = await group.next() else {
-                group.cancelAll()
                 return nil
             }
-            group.cancelAll()
             return result
         }
     }
@@ -758,10 +740,8 @@ extension TalkModeRuntime {
     private func latestAssistantText(sessionKey: String, since: Double? = nil) async -> String? {
         do {
             let history = try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
-            let messages = history.messages ?? []
-            let decoded: [OpenClawChatMessage] = messages.compactMap { item in
-                guard let data = try? JSONEncoder().encode(item) else { return nil }
-                return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+            let decoded = (history.messages ?? []).compactMap { item in
+                try? GatewayPayloadDecoding.decode(item, as: OpenClawChatMessage.self)
             }
             let assistant = decoded.last { message in
                 guard message.role == "assistant" else { return false }
@@ -994,12 +974,7 @@ extension TalkModeRuntime {
         let stream = client.streamSynthesize(voiceId: voiceId, request: request)
         guard self.isCurrent(input.generation) else { return }
 
-        if self.interruptOnSpeech {
-            guard await self.prepareForPlayback(generation: input.generation) else { return }
-        }
-
-        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
-        self.phase = .speaking
+        guard await self.beginSpeaking(generation: input.generation) else { return }
 
         let result = await playRemoteStream(
             client: client,
@@ -1067,11 +1042,7 @@ extension TalkModeRuntime {
         }
         _ = await PCMStreamingAudioPlayer.shared.stop()
         _ = await StreamingAudioPlayer.shared.stop()
-        if self.interruptOnSpeech {
-            guard await self.prepareForPlayback(generation: input.generation) else { return }
-        }
-        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
-        self.phase = .speaking
+        guard await self.beginSpeaking(generation: input.generation) else { return }
         let playback = await playTalkAudio(data: audioData)
         self.ttsLogger
             .info(
@@ -1087,11 +1058,7 @@ extension TalkModeRuntime {
 
     private func playSystemVoice(input: TalkPlaybackInput) async {
         self.ttsLogger.info("talk system voice start chars=\(input.cleanedText.count, privacy: .public)")
-        if self.interruptOnSpeech {
-            guard await self.prepareForPlayback(generation: input.generation) else { return }
-        }
-        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
-        self.phase = .speaking
+        guard await self.beginSpeaking(generation: input.generation) else { return }
         await TalkSystemSpeechSynthesizer.shared.stop()
         // Use app locale as fallback when no explicit language is set (e.g. system voice without ElevenLabs directive).
         let appLocale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
@@ -1108,11 +1075,7 @@ extension TalkModeRuntime {
 
     private func playMLX(input: TalkPlaybackInput) async throws {
         self.ttsLogger.info("talk mlx start chars=\(input.cleanedText.count, privacy: .public)")
-        if self.interruptOnSpeech {
-            guard await self.prepareForPlayback(generation: input.generation) else { return }
-        }
-        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
-        self.phase = .speaking
+        guard await self.beginSpeaking(generation: input.generation) else { return }
         let modelRepo = input.directive?.modelId ?? self.currentModelId
         self.lastPlaybackWasPCM = true
         let playbackStream: MLXTTSPlaybackStream
@@ -1147,9 +1110,14 @@ extension TalkModeRuntime {
         self.ttsLogger.info("talk mlx done")
     }
 
-    private func prepareForPlayback(generation: Int) async -> Bool {
-        guard await self.startRecognition(lifecycleGeneration: generation) else { return false }
-        return self.isCurrent(generation) && !self.isPaused
+    private func beginSpeaking(generation: Int) async -> Bool {
+        if self.interruptOnSpeech {
+            guard await self.startRecognition(lifecycleGeneration: generation),
+                  self.isCurrent(generation), !self.isPaused else { return false }
+        }
+        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
+        self.phase = .speaking
+        return true
     }
 
     private func resolveVoiceId(preferred: String?, apiKey: String) async -> String? {

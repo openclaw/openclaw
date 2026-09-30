@@ -70,17 +70,20 @@ const schemaMapKeywords = new Set([
 const schemaValueKeywords = new Set([
   "additionalItems",
   "additionalProperties",
+  "allOf",
+  "anyOf",
   "contains",
   "else",
   "if",
   "items",
   "not",
+  "oneOf",
+  "prefixItems",
   "propertyNames",
   "then",
   "unevaluatedItems",
   "unevaluatedProperties",
 ]);
-const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
 const schemaResourceKeywords = new Set([
   "$anchor",
   "$defs",
@@ -231,7 +234,7 @@ function normalizeJsonSchemaNode(schema: unknown, options: NormalizationOptions)
         if (schemaMapKeywords.has(key)) {
           return [key, normalizeSchemaMap(value, options, key === "dependencies")];
         }
-        if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
+        if (schemaValueKeywords.has(key)) {
           return [key, normalizeJsonSchemaNode(value, options)];
         }
         return [key, value];

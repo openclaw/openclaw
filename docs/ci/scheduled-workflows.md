@@ -542,6 +542,8 @@ For local reproduction, run
 selects a shorter 30-second diagnostic budget but preserves exit codes: 0 means
 no matching findings, 1 means findings or an error, and 2 means incomplete coverage.
 Ordinary CI, scheduled audits, and local hooks propagate every non-zero exit.
+CI dispatched by Full Release Validation or release publication reports a
+non-zero exit as a warning, because advisories never block a release.
 
 ### Docs Sync Publish Repo
 

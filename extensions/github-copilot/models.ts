@@ -69,9 +69,6 @@ export function resolveCopilotForwardCompatModel(
   } as ProviderRuntimeModel);
 }
 
-// Subset of the Copilot /models response shape that we depend on. We only read
-// fields we need; everything else is preserved as `unknown` so upstream changes
-// don't break parsing.
 type CopilotApiModelEntry = {
   id?: string;
   name?: string;
@@ -85,7 +82,6 @@ type CopilotApiModelEntry = {
   };
   capabilities?: {
     type?: string;
-    family?: string;
     limits?: {
       max_context_window_tokens?: number;
       max_output_tokens?: number;
@@ -95,7 +91,6 @@ type CopilotApiModelEntry = {
       vision?: boolean;
       tool_calls?: boolean;
       streaming?: boolean;
-      structured_outputs?: boolean;
       reasoning_effort?: string[] | null;
     };
   };
@@ -196,21 +191,18 @@ function mergeCopilotCompat(
   base: ModelDefinitionConfig["compat"] | undefined,
   reasoningEfforts: string[] | null | undefined,
 ): ModelDefinitionConfig["compat"] | undefined {
-  const supportedReasoningEfforts = Array.isArray(reasoningEfforts)
-    ? [
-        ...new Set(
-          reasoningEfforts
-            .map((effort) => normalizeOptionalLowercaseString(effort))
-            .filter((effort): effort is string => Boolean(effort)),
-        ),
-      ]
-    : [];
   if (!Array.isArray(reasoningEfforts)) {
     return base;
   }
   return {
     ...base,
-    supportedReasoningEfforts,
+    supportedReasoningEfforts: [
+      ...new Set(
+        reasoningEfforts
+          .map((effort) => normalizeOptionalLowercaseString(effort))
+          .filter((effort): effort is string => Boolean(effort)),
+      ),
+    ],
   };
 }
 
@@ -337,10 +329,7 @@ export async function fetchCopilotModelCatalog(
     for (const rawEntry of data) {
       const entry = asCopilotApiModelEntry(rawEntry);
       const def = mapCopilotApiModelToDefinition(entry);
-      if (!def) {
-        continue;
-      }
-      if (seen.has(def.id)) {
+      if (!def || seen.has(def.id)) {
         continue;
       }
       seen.add(def.id);

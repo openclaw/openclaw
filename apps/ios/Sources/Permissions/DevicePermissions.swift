@@ -1,53 +1,46 @@
 import Contacts
 import EventKit
+import OpenClawKit
 import Photos
 
-/// Native permission state published by the device-settings bridge.
-enum DevicePermissionGrant: Equatable {
-    case granted
-    case limited
-    case notRequested
-    case denied
-}
-
-/// Native authorization states share one grant vocabulary across snapshots.
+/// Native authorization states map directly to the shared snapshot vocabulary.
 enum DevicePermissionStatusMap {
-    static func contacts(_ status: CNAuthorizationStatus) -> DevicePermissionGrant {
+    static func contacts(_ status: CNAuthorizationStatus) -> DeviceSettingsPermissionStatus {
         switch status {
         case .authorized: .granted
         case .limited: .limited
-        case .notDetermined: .notRequested
+        case .notDetermined: .notDetermined
         case .denied, .restricted: .denied
         @unknown default: .denied
         }
     }
 
-    static func photos(_ status: PHAuthorizationStatus) -> DevicePermissionGrant {
+    static func photos(_ status: PHAuthorizationStatus) -> DeviceSettingsPermissionStatus {
         switch status {
         case .authorized: .granted
         case .limited: .limited
-        case .notDetermined: .notRequested
+        case .notDetermined: .notDetermined
         case .denied, .restricted: .denied
         @unknown default: .denied
         }
     }
 
     /// Full read access; `.writeOnly` surfaces as `.limited` ("Add-Only").
-    static func eventKitRead(_ status: EKAuthorizationStatus) -> DevicePermissionGrant {
+    static func eventKitRead(_ status: EKAuthorizationStatus) -> DeviceSettingsPermissionStatus {
         switch status {
         case .authorized, .fullAccess: .granted
         case .writeOnly: .limited
-        case .notDetermined: .notRequested
+        case .notDetermined: .notDetermined
         case .denied, .restricted: .denied
         @unknown default: .denied
         }
     }
 
     /// Add-events access; `.writeOnly` already satisfies it.
-    static func eventKitWrite(_ status: EKAuthorizationStatus) -> DevicePermissionGrant {
+    static func eventKitWrite(_ status: EKAuthorizationStatus) -> DeviceSettingsPermissionStatus {
         switch status {
         case .authorized, .fullAccess, .writeOnly: .granted
-        case .notDetermined: .notRequested
+        case .notDetermined: .notDetermined
         case .denied, .restricted: .denied
         @unknown default: .denied
         }

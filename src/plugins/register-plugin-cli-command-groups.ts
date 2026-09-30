@@ -1,4 +1,3 @@
-// Registers plugin-provided CLI command groups.
 import type { Command } from "commander";
 import { setCommandJsonMode } from "../cli/program/json-mode.js";
 import {
@@ -15,8 +14,6 @@ type PluginCliCommandGroupEntry = CommandGroupEntry & {
   parentPath?: readonly string[];
   placeholders: readonly OpenClawPluginCliRootCommandDescriptor[];
 };
-
-type PluginCliCommandGroupMode = "eager" | "lazy";
 
 function canRegisterPluginCliLazily(entry: PluginCliCommandGroupEntry): boolean {
   if (entry.placeholders.length === 0) {
@@ -66,7 +63,7 @@ export async function registerPluginCliCommandGroups(
   program: Command,
   entries: readonly PluginCliCommandGroupEntry[],
   params: {
-    mode: PluginCliCommandGroupMode;
+    mode: "eager" | "lazy";
     primary?: string;
     existingCommands: Set<string>;
     logger: PluginLogger;

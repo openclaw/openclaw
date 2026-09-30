@@ -1,6 +1,31 @@
-import { resolveGlobalSet } from "../shared/global-singleton.js";
+import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type SignalExitBarrier = () => Promise<void>;
+
+type SignalExitOwner = (code: number | string) => void;
+// Process custody outlives the Gateway generations that reset ordinary barriers.
+const processExitOwner = resolveGlobalSingleton<{ current?: SignalExitOwner }>(
+  Symbol.for("openclaw.signalExitOwner"),
+  () => ({}),
+);
+
+/** An exclusive process owner handles output failure through its normal shutdown. */
+export function registerSignalExitOwner(owner: SignalExitOwner): () => void {
+  if (processExitOwner.current) {
+    throw new Error("A process signal exit owner is already registered");
+  }
+  processExitOwner.current = owner;
+  let active = true;
+  return () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    if (processExitOwner.current === owner) {
+      processExitOwner.current = undefined;
+    }
+  };
+}
 
 // Gates let bounded mutations finish before signal cleanup begins; barriers
 // then prevent one cleanup from exiting while another still owns state.
@@ -42,6 +67,10 @@ let pendingProcessExit: Promise<void> | undefined;
 
 /** Broken output must not bypass a maintenance owner's asynchronous recovery. */
 export function exitAfterSignalExitBarriers(code: number | string): void {
+  if (processExitOwner.current) {
+    processExitOwner.current(code);
+    return;
+  }
   if (pendingProcessExit) {
     return;
   }
@@ -56,9 +85,13 @@ export function exitAfterSignalExitBarriers(code: number | string): void {
     .then((exitCode) => {
       pendingProcessExit = undefined;
       const outcome = process.exitCode;
-      process.exit(
-        (exitCode === 0 || exitCode === "0") && outcome !== undefined ? outcome : exitCode,
-      );
+      const finalCode =
+        (exitCode === 0 || exitCode === "0") && outcome != null ? outcome : exitCode;
+      if (processExitOwner.current) {
+        processExitOwner.current(finalCode);
+      } else {
+        process.exit(finalCode);
+      }
     });
 }
 

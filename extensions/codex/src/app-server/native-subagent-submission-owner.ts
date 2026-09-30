@@ -56,9 +56,6 @@ type SubmissionDependencies = NativeSubmissionCallDependencies & {
   assertPersistenceCurrent: (state: ParentState) => void;
   client: NativeSubagentMonitorClient;
   recovery: CodexNativeSubagentRecoveryCoordinator;
-  knownChildren: ReadonlyMap<string, KnownChild>;
-  currentChild: (threadId: string) => ChildState | undefined;
-  prepareReceiver: (state: ParentState, threadId: string) => boolean;
   restoreKnownChild: (state: ParentState, assignment: NativeSubagentAssignment) => void;
   registerChild: (
     state: ParentState,

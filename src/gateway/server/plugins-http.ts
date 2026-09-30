@@ -1,4 +1,3 @@
-// Plugin HTTP routing dispatches registered plugin routes, upgrades, auth policy, and runtime request scope.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import {
@@ -48,10 +47,7 @@ export {
   resolvePluginRoutePathContext,
   type PluginRoutePathContext,
 } from "./plugins-http/path-context.js";
-export {
-  findRegisteredPluginHttpRoute,
-  isRegisteredPluginHttpRoutePath,
-} from "./plugins-http/route-match.js";
+export { findRegisteredPluginHttpRoute } from "./plugins-http/route-match.js";
 export {
   isPluginAuthenticatedRoutePath,
   shouldEnforceGatewayAuthForPluginPath,
@@ -125,15 +121,9 @@ async function withPluginRouteRuntimeScope<T>(
   }
 }
 
-type PluginRouteRuntimeDispatchContext = {
-  gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
-  gatewayRequestOperatorScopes?: readonly string[];
-  gatewayRequestClientIp?: string;
-};
-
 function getMissingPluginRouteRuntimeContext(
   route: PluginHttpRouteRegistration,
-  context: PluginRouteRuntimeDispatchContext,
+  context: PluginRouteDispatchContext,
 ): "caller auth context" | "caller scope context" | undefined {
   if (route.auth !== "gateway") {
     return undefined;

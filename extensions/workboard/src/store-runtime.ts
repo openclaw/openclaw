@@ -116,7 +116,7 @@ export class WorkboardStoreRuntime {
     };
   }
 
-  private trackMutation<T>(
+  protected trackMutation<T>(
     run: () => Promise<T>,
     changed: (result: T) => boolean = Boolean,
   ): Promise<T> {

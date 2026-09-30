@@ -12,6 +12,13 @@ export type TransferArtifact = {
   tarballBytes: number;
 };
 
+type ArtifactTransferRevocationReason =
+  | "expired"
+  | "owner cancelled"
+  | "authorization lost"
+  | "released"
+  | "shutdown";
+
 export type ArtifactTransferCapability = {
   token: string;
   artifactKey: string;
@@ -22,6 +29,9 @@ export type ArtifactTransferCapability = {
   abortController: AbortController;
   stopWatching?: () => void;
   isAuthorized: () => boolean;
+  onProgress?: (servedBytes: number) => void;
+  onInterrupted?: (servedBytes: number, reason: string) => void;
+  revocationReason?: ArtifactTransferRevocationReason;
 };
 
 type ArtifactTransferAuthorization = {
@@ -46,7 +56,11 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
   const generateToken = options.generateToken ?? generateSecureToken;
   const capabilities = new Map<string, ArtifactTransferCapability>();
 
-  const revokeCapability = (capability: ArtifactTransferCapability): void => {
+  const revokeCapability = (
+    capability: ArtifactTransferCapability,
+    reason: ArtifactTransferRevocationReason,
+  ): void => {
+    capability.revocationReason ??= reason;
     if (capabilities.get(capability.token) === capability) {
       capabilities.delete(capability.token);
     }
@@ -67,7 +81,10 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
     } catch {
       // A lost or throwing owner closes the capability; bearer possession cannot revive it.
     }
-    revokeCapability(capability);
+    revokeCapability(
+      capability,
+      capability.expiresAtMs <= now() ? "expired" : "authorization lost",
+    );
     return false;
   };
 
@@ -82,6 +99,8 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       maxServes: 1 | 3;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
+      onProgress?: (servedBytes: number) => void;
+      onInterrupted?: (servedBytes: number, reason: string) => void;
     }): { token: string; expiresAtMs: number } {
       if (
         !Number.isSafeInteger(params.artifact.tarballBytes) ||
@@ -105,18 +124,20 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
         remainingServes: params.maxServes,
         abortController: new AbortController(),
         isAuthorized: params.isAuthorized,
+        onProgress: params.onProgress,
+        onInterrupted: params.onInterrupted,
       };
       capabilities.set(token, capability);
-      const revoke = () => revokeCapability(capability);
-      const timeout = setTimeout(revoke, params.ttlMs);
+      const revokeOwner = () => revokeCapability(capability, "owner cancelled");
+      const timeout = setTimeout(() => revokeCapability(capability, "expired"), params.ttlMs);
       timeout.unref();
-      params.signal?.addEventListener("abort", revoke, { once: true });
+      params.signal?.addEventListener("abort", revokeOwner, { once: true });
       capability.stopWatching = () => {
         clearTimeout(timeout);
-        params.signal?.removeEventListener("abort", revoke);
+        params.signal?.removeEventListener("abort", revokeOwner);
       };
       if (params.signal?.aborted) {
-        revoke();
+        revokeOwner();
       }
       if (!hasAuthority(capability)) {
         throw new Error("Worker artifact transfer authority is unavailable");
@@ -184,7 +205,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       }
       const { capability } = authorization;
       if (capability.remainingServes === 0) {
-        revokeCapability(capability);
+        revokeCapability(capability, "released");
       } else {
         capability.active = undefined;
         authorization.abortController.abort(new Error("Worker artifact transfer attempt closed"));
@@ -199,13 +220,13 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
             ? authorizationOrToken.capability
             : undefined;
       if (capability) {
-        revokeCapability(capability);
+        revokeCapability(capability, "released");
       }
     },
 
     closeAll(): void {
       for (const capability of capabilities.values()) {
-        revokeCapability(capability);
+        revokeCapability(capability, "shutdown");
       }
     },
   };

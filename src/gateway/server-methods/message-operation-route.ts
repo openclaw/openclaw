@@ -238,10 +238,11 @@ function prepareMessageOperationRouteBinding(params: {
   };
 }
 
-function refreshMessageOperationRouteBinding(params: {
+function updateMessageOperationRouteBinding(params: {
   context: GatewayRequestContext;
   binding: MessageOperationRouteBinding | undefined;
   requestScope: string;
+  retainUntilSettled: boolean;
 }): void {
   if (!params.binding) {
     return;
@@ -249,60 +250,16 @@ function refreshMessageOperationRouteBinding(params: {
   const bindings = getMessageOperationRouteBindings(params.context);
   const existing = bindings.get(params.binding.key);
   if (existing?.requestScope === params.requestScope) {
+    // Active work retains its alias past TTL/capacity pressure; settlement restarts expiry.
     bindings.set(params.binding.key, {
       ...existing,
-      ts: Date.now(),
-      retainUntilSettled: false,
+      ...(!params.retainUntilSettled ? { ts: Date.now() } : {}),
+      retainUntilSettled: params.retainUntilSettled,
     });
-    pruneMessageOperationRouteBindings(bindings, Date.now());
+    if (!params.retainUntilSettled) {
+      pruneMessageOperationRouteBindings(bindings, Date.now());
+    }
   }
-}
-
-function retainMessageOperationRouteBinding(params: {
-  context: GatewayRequestContext;
-  binding: MessageOperationRouteBinding | undefined;
-  requestScope: string;
-}): void {
-  if (!params.binding) {
-    return;
-  }
-  const bindings = getMessageOperationRouteBindings(params.context);
-  const existing = bindings.get(params.binding.key);
-  if (existing?.requestScope === params.requestScope) {
-    // Active provider work owns this alias even past TTL or capacity pressure;
-    // settlement below restarts ordinary expiry.
-    bindings.set(params.binding.key, {
-      ...existing,
-      retainUntilSettled: true,
-    });
-  }
-}
-
-function replayReservedMessageOperationRoute(params: {
-  context: GatewayRequestContext;
-  binding: MessageOperationRouteBinding | undefined;
-  prefix: MessageOperationPrefix;
-  idempotencyKey: string;
-  respond: RespondFn;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  operation?: string;
-}): Promise<void> | undefined {
-  if (!params.binding?.reservedRoute) {
-    return undefined;
-  }
-  const inflight = resolveGatewayInflightRequest({
-    context: params.context,
-    prefix: params.prefix,
-    idempotencyKey: params.idempotencyKey,
-    respond: params.respond,
-    conversationReadOrigin: params.conversationReadOrigin,
-    operation: params.operation,
-    requestScope: params.binding.reservedRoute.requestScope,
-  });
-  if (inflight.kind === "ready") {
-    return undefined;
-  }
-  return inflight.done;
 }
 
 export async function withMessageOperationRoute<
@@ -392,18 +349,20 @@ export async function withMessageOperationRoute<
     // Re-resolve under the lock so route aliases bind against current state; replay
     // releases first because awaiting while locked would deadlock concurrent retries.
     binding = resolveMessageOperationRouteBinding(bindingParams);
-    const reservedReplay = replayReservedMessageOperationRoute({
-      context: params.context,
-      binding,
-      prefix: params.prefix,
-      idempotencyKey: params.idempotencyKey,
-      respond: params.respond,
-      conversationReadOrigin: params.conversationReadOrigin,
-      operation: params.operation,
-    });
-    if (reservedReplay) {
+    const reservedReplay = binding?.reservedRoute
+      ? resolveGatewayInflightRequest({
+          context: params.context,
+          prefix: params.prefix,
+          idempotencyKey: params.idempotencyKey,
+          respond: params.respond,
+          conversationReadOrigin: params.conversationReadOrigin,
+          operation: params.operation,
+          requestScope: binding.reservedRoute.requestScope,
+        })
+      : undefined;
+    if (reservedReplay?.kind === "handled") {
       releaseLock();
-      await reservedReplay;
+      await reservedReplay.done;
       return;
     }
     const resolved = await params.resolveChannel(
@@ -476,10 +435,11 @@ export async function withMessageOperationRoute<
       return;
     }
     publishBinding();
-    retainMessageOperationRouteBinding({
+    updateMessageOperationRouteBinding({
       context: params.context,
       binding,
       requestScope: accountRoute.requestScope,
+      retainUntilSettled: true,
     });
     const work = params
       .work({
@@ -490,10 +450,11 @@ export async function withMessageOperationRoute<
         authorize: params.authorize ?? (() => true),
       })
       .finally(() => {
-        refreshMessageOperationRouteBinding({
+        updateMessageOperationRouteBinding({
           context: params.context,
           binding,
           requestScope: accountRoute.requestScope,
+          retainUntilSettled: false,
         });
       });
     const inflightWork = runGatewayInflightWork({ ...inflight, work, respond: params.respond });

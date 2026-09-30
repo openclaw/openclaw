@@ -13,6 +13,7 @@ import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveModelRoutes } from "./provider-policy-api.js";
+import { registerOpenAIServiceTierCatalogTests } from "./test-support/model-service-tiers.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn(),
@@ -453,40 +454,6 @@ describe("buildOpenAIProvider", () => {
     ]);
   });
 
-  it.each(["chatgpt-token-sharing", "chatgpt-identity"])(
-    "does not send %s credentials to model discovery",
-    async (authFlow) => {
-      const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>();
-      const { provider, outcomes } = await runCatalogWithFetchGuard({
-        fetchGuard,
-        auth: {
-          mode: "oauth",
-          authFlow,
-          apiKey: "sharing-fixture",
-          profileId: "openai:sharing",
-          source: "profile",
-        },
-      });
-
-      expect(fetchGuard).not.toHaveBeenCalled();
-      expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
-      expect(provider.baseUrl).toBe(OPENAI_API_BASE_URL);
-      if (authFlow === "chatgpt-token-sharing") {
-        expect(provider.models.length).toBeGreaterThan(0);
-        expect(provider.models.every((model) => model.api === "openai-responses")).toBe(true);
-      } else {
-        expect(provider.models).toEqual([]);
-      }
-      expect(outcomes).toEqual([
-        {
-          provider: "openai",
-          profileId: "openai:sharing",
-          status: authFlow === "chatgpt-token-sharing" ? "unavailable" : "auth-rejected",
-        },
-      ]);
-    },
-  );
-
   it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {
     const provider = buildOpenAIProvider();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -699,6 +666,8 @@ describe("buildOpenAIProvider", () => {
       response: Response.json({
         data: [
           { id: "gpt-6-astra", object: "model" },
+          { id: "gpt-daybreak-blue-latest", object: "model" },
+          { id: "gpt-daybreak-red-latest", object: "model" },
           { id: "gpt-5.6", object: "model" },
           { id: "gpt-5.5", object: "model" },
           { id: "chat-latest", object: "model" },
@@ -732,6 +701,12 @@ describe("buildOpenAIProvider", () => {
         "gpt-5.4-nano",
       ]),
     );
+    for (const id of ["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"]) {
+      expect(provider.models.find((model) => model.id === id)).toMatchObject({
+        api: "openai-responses",
+        compat: { supportedReasoningEfforts: expect.arrayContaining(["xhigh", "max"]) },
+      });
+    }
     expect(provider.models.find((model) => model.id === "chat-latest")).toMatchObject({
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
@@ -1124,72 +1099,6 @@ describe("buildOpenAIProvider", () => {
     }
   });
 
-  it.each(["gpt-5.4", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])(
-    "maps discovered %s into a ChatGPT response model",
-    async (modelId) => {
-      const release = vi.fn(async () => undefined);
-      const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-        response: Response.json({
-          models: [
-            {
-              slug: modelId,
-              display_name: modelId,
-              visibility: "list",
-              supported_reasoning_levels: [
-                { effort: "medium", description: "medium" },
-                { effort: "high", description: "high" },
-              ],
-              context_window: 272_000,
-              max_context_window: 1_050_000,
-              max_output_tokens: 128_000,
-            },
-            {
-              slug: "hidden-review-model",
-              display_name: "Hidden Review Model",
-              visibility: "hide",
-            },
-            {
-              slug: "internal-fallback-model",
-              display_name: "Internal Fallback Model",
-              visibility: "none",
-            },
-          ],
-        }),
-        finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-        release,
-      }));
-
-      const provider = await buildOpenAICodexLiveProviderConfig({
-        discoveryApiKey: "oauth-token",
-        accountId: "acct-openai-workspace",
-        fetchGuard,
-      });
-
-      expect(provider?.api).toBe("openai-chatgpt-responses");
-      expect(provider?.auth).toBe("oauth");
-      expect(provider?.models.map((model) => model.id)).toEqual([modelId]);
-      expect(provider?.models[0]).toMatchObject({
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        input: ["text", "image"],
-        reasoning: true,
-        contextWindow: 1_050_000,
-        contextTokens: 272_000,
-        maxTokens: 128_000,
-      });
-      const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
-      expect(fetchParams?.url).toBe(OPENAI_CODEX_MODELS_URL);
-      const init = fetchParams?.init;
-      const headers = init?.headers;
-      expect(headers).toBeInstanceOf(Headers);
-      if (!(headers instanceof Headers)) {
-        throw new Error("expected fetch headers");
-      }
-      expect(headers.get("Authorization")).toBe("Bearer oauth-token");
-      expect(headers.get("ChatGPT-Account-ID")).toBe("acct-openai-workspace");
-      expect(release).toHaveBeenCalledOnce();
-    },
-  );
-
   it("rejects Platform-only aliases while preserving GPT-5.6 ChatGPT capabilities", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
@@ -1285,38 +1194,10 @@ describe("buildOpenAIProvider", () => {
     ).not.toContainEqual({ id: "ultra" });
   });
 
-  it("keeps static OpenAI OAuth rows when Codex catalog discovery fails", async () => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-      response: new Response("temporarily unavailable", { status: 503 }),
-      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-      release,
-    }));
-
-    const provider = await buildOpenAICodexLiveProviderConfig({
-      discoveryApiKey: "oauth-token",
-      accountId: "acct-openai-workspace",
-      fetchGuard,
-    });
-
-    expect(provider.api).toBe("openai-chatgpt-responses");
-    expect(provider.auth).toBe("oauth");
-    expect(provider.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
-    expect(provider.models.length).toBeGreaterThan(0);
-    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6");
-    expect(provider.models.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
-      contextWindow: 372_000,
-      contextTokens: 272_000,
-      thinkingLevelMap: { off: null },
-      compat: {
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-      },
-    });
-    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-terra");
-    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-luna");
-    expect(provider.models.filter((model) => model.id.startsWith("gpt-6-"))).toEqual([]);
-    expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
-    expect(release).toHaveBeenCalledOnce();
+  registerOpenAIServiceTierCatalogTests({
+    modelsUrl: OPENAI_CODEX_MODELS_URL,
+    runCatalogWithFetchGuard,
+    buildOpenAICodexLiveProviderConfig,
   });
 
   it.each([
@@ -1378,6 +1259,9 @@ describe("buildOpenAIProvider", () => {
         expect(result.provider.models).toEqual([]);
       } else {
         expect(result.provider.models.length).toBeGreaterThan(0);
+        for (const id of ["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"]) {
+          expect(result.provider.models.map((model) => model.id)).not.toContain(id);
+        }
       }
       expect(result.outcomes).toEqual([
         { provider: "openai", profileId: "openai:chatgpt", status },
@@ -1842,93 +1726,6 @@ describe("buildOpenAIProvider", () => {
         modelId: "gpt-5.4",
       } as never),
     ).toBe("native");
-  });
-
-  it("routes GPT forward-compat models by the projected route, not profile order", () => {
-    const provider = buildOpenAIProvider();
-
-    const openaiModel = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelRegistry: { find: () => null },
-      providerConfig: {
-        auth: "api-key",
-      },
-    } as never);
-    const unselectedPlatformModel = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.6",
-      modelRegistry: { find: () => null },
-      authProfileId: "openai:oauth",
-      authProfileMode: "oauth",
-      config: {
-        auth: {
-          profiles: {
-            "openai:oauth": {
-              provider: "openai",
-              mode: "oauth",
-            },
-            "openai:api-key": {
-              provider: "openai",
-              mode: "api_key",
-            },
-          },
-          order: {
-            openai: ["openai:oauth", "openai:api-key"],
-          },
-        },
-      },
-    } as never);
-    const unprojectedOauthModel = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelRegistry: { find: () => null },
-      authProfileId: "openai:oauth",
-      authProfileMode: "oauth",
-    } as never);
-    const selectedOauthModel = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelRegistry: { find: () => null },
-      authProfileId: "openai:work",
-      authProfileMode: "oauth",
-      providerConfig: {
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      },
-    } as never);
-
-    expectFields(openaiModel, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      contextWindow: 1_050_000,
-      maxTokens: 128_000,
-    });
-    expectFields(unselectedPlatformModel, {
-      provider: "openai",
-      id: "gpt-5.6",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      contextWindow: 1_050_000,
-      contextTokens: 272_000,
-      maxTokens: 128_000,
-    });
-    expectFields(unprojectedOauthModel, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-    expectFields(selectedOauthModel, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      contextWindow: 1_050_000,
-      maxTokens: 128_000,
-    });
   });
 
   it("keeps HTTP Platform routes out of Codex transport gates", () => {

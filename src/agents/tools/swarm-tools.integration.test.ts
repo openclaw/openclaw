@@ -185,9 +185,9 @@ describe("swarm tools integration", () => {
     vi.mocked(persistSubagentRunsToDisk).mockImplementation(() => {});
     vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
     vi.mocked(resolveAgentTimeoutMs).mockReturnValue(1_000);
-    vi.mocked(restoreSubagentRunsFromDisk).mockReturnValue(0);
+    vi.mocked(restoreSubagentRunsFromDisk).mockResolvedValue(0);
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("delivered");
-    vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
+    vi.mocked(ensureContextEnginesInitialized).mockResolvedValue(undefined);
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(createTestRegistry([]));
     vi.mocked(resolveContextEngine).mockImplementation(async () => ({
       info: { id: "test", name: "Test", version: "0.0.1" },
