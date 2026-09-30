@@ -230,10 +230,11 @@ describe("channel reload with a retained wizard waiting for the lifecycle lease"
       let saved: Promise<RuntimeConfigWriteApplicationStatus> | undefined;
       let wizard: WizardSession | undefined;
       let firstWrite: Promise<RuntimeConfigWriteApplicationStatus> | undefined;
+      let firstReload: Promise<void> | undefined;
       try {
         if (mixed) {
           firstWrite = fixture.submit(nextConfig, "mixed-plugin-channel", 1);
-          void fixture.wakeReload();
+          firstReload = fixture.wakeReload();
           await fixture.leaseClock.waitFor(pluginCommitted.promise);
           expect(fixture.reloader.getCommittedRuntimeConfig?.()).toMatchObject(nextConfig);
         }
@@ -262,7 +263,7 @@ describe("channel reload with a retained wizard waiting for the lifecycle lease"
           releasePlugin.resolve();
         } else {
           firstWrite = fixture.submit(nextConfig, "channel-only", 1);
-          void fixture.wakeReload();
+          firstReload = fixture.wakeReload();
         }
         await fixture.leaseClock.waitFor(deferred);
         expect(fixture.channels.stop).not.toHaveBeenCalled();
@@ -285,10 +286,12 @@ describe("channel reload with a retained wizard waiting for the lifecycle lease"
             /channel reload proceeding .*waiting for the plugin lifecycle lease/,
           ),
         );
+        // Settle the holder's worker cleanup before advancing the waiter's fake retry clock.
+        await firstReload;
         const result = await fixture.leaseClock.waitFor(next);
         await whenAdmittedWizardSessionSettled(wizard);
-        expect(result).toMatchObject({ done: true, status: "done" });
         expect(result.error).toBeUndefined();
+        expect(result).toMatchObject({ done: true, status: "done" });
         expect(Date.now() - saveStartedAt).toBeLessThan(10_000);
         expect(saved).toBeDefined();
         await expect(firstWrite).resolves.toBe("applied");
