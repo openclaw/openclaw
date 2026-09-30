@@ -1,5 +1,6 @@
 /** Delivers notifications, new turns, and active-run steering for sessions_send. */
 import crypto from "node:crypto";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithInProcessGatewaySessionMutation } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
@@ -256,6 +257,9 @@ export async function startSessionsSendAgentRun(
   params: SessionsSendDeliveryParams & { fallbackSessionKey?: string },
 ): Promise<SessionsSendStart> {
   const { fallbackSessionKey } = params;
+  let dispatchedSessionKey = params.sessionKey;
+  let dispatchedRunId = params.runId;
+  let gatewayDispatchStarted = false;
   try {
     // Self-sends retain the captured conversation; a distinct Cron parent uses its own route.
     const sourceOrigin = fallbackSessionKey ? undefined : params.sourceOrigin;
@@ -268,19 +272,26 @@ export async function startSessionsSendAgentRun(
           threadId: stringifyRouteThreadId(sourceOrigin.threadId),
         }
       : params.sendParams;
+    const requestParams = fallbackSessionKey
+      ? {
+          ...sendParams,
+          sessionKey: fallbackSessionKey,
+          idempotencyKey: crypto.randomUUID(),
+        }
+      : sendParams;
+    dispatchedSessionKey = fallbackSessionKey ?? params.sessionKey;
+    dispatchedRunId =
+      typeof requestParams.idempotencyKey === "string"
+        ? requestParams.idempotencyKey
+        : params.runId;
+    gatewayDispatchStarted = true;
     const response = await params.callGateway<{ runId: string; admissionPending?: boolean }>({
       method: "agent",
-      params: fallbackSessionKey
-        ? {
-            ...sendParams,
-            sessionKey: fallbackSessionKey,
-            idempotencyKey: crypto.randomUUID(),
-          }
-        : sendParams,
+      params: requestParams,
       timeoutMs: 10_000,
     });
     const responseRunId =
-      typeof response?.runId === "string" && response.runId ? response.runId : params.runId;
+      typeof response?.runId === "string" && response.runId ? response.runId : dispatchedRunId;
     if (response?.admissionPending === true) {
       return {
         ok: false,
@@ -300,18 +311,46 @@ export async function startSessionsSendAgentRun(
       ...(fallbackSessionKey ? { a2aSessionKey: fallbackSessionKey } : {}),
     };
   } catch (err) {
-    return deliveryFailure(params, err);
+    return deliveryFailure(
+      { sessionKey: dispatchedSessionKey, runId: dispatchedRunId },
+      err,
+      gatewayDispatchStarted,
+    );
   }
 }
 
-function deliveryFailure(params: SessionsSendDeliveryParams, error: unknown) {
+function deliveryFailure(
+  params: Pick<SessionsSendDeliveryParams, "sessionKey" | "runId">,
+  error: unknown,
+  gatewayDispatchStarted = false,
+) {
+  const messageText =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "error";
+  const dispatchTimeout =
+    gatewayDispatchStarted && error instanceof GatewayProtocolRequestTimeoutError
+      ? error
+      : undefined;
   return {
     ok: false as const,
     result: jsonResult({
       runId: params.runId,
       status: "error",
-      error: error instanceof Error ? error.message : typeof error === "string" ? error : "error",
+      error: dispatchTimeout?.requestSent
+        ? `${messageText}. Session send is unconfirmed: the request may still be accepted. Inspect the original run and target session before retrying; a new send can duplicate the message.`
+        : messageText,
       sessionKey: params.sessionKey,
+      ...(dispatchTimeout
+        ? {
+            dispatch: {
+              outcome: dispatchTimeout.requestSent ? "unknown" : "not_sent",
+              code: dispatchTimeout.code,
+              method: dispatchTimeout.method,
+              requestSent: dispatchTimeout.requestSent,
+              timeoutMs: dispatchTimeout.timeoutMs,
+              idempotencyKey: params.runId,
+            },
+          }
+        : {}),
     }),
   };
 }

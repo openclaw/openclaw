@@ -223,6 +223,17 @@ budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 
 When that wait expires, pending announcements continue observing the accepted
 run until it finishes; a wait interval does not discard a late reply. Nested
 agent-to-agent replies use the same completion observation.
+A typed Gateway client timeout during dispatch is different from that reply wait:
+acceptance is unconfirmed, and the request may still take effect after the tool
+returns. Its error result retains `dispatch.outcome: "unknown"`, the timeout facts,
+and the original idempotency key and target session. This is not an acceptance
+receipt: a timeout alone does not set `sentBeforeError`. A retained followup
+receipt may independently prove acceptance. Inspect that original run and the
+authorized target history before another send; an absent reply alone does not
+prove rejection, and a new tool call can duplicate the input. The tool does not
+automatically retry or cancel an uncertain dispatch. A deadline before transport
+dispatch instead records `dispatch.outcome: "not_sent"` in that typed result.
+
 The low-level Gateway `sessions.send` RPC has a different contract: its JSON
 `timeoutMs` limits **receiver execution**, just like `chat.send`. Omit that field
 to keep the receiver's configured budget; bound the CLI wait separately with
