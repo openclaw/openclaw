@@ -1774,6 +1774,21 @@ describe("FRV watch completion", () => {
     const parentJobs = client.getParentJobs;
     client.getParentJobs = async () => [];
     await expect(poll()).resolves.toMatchObject({ complete: false });
+    // A newer parent attempt needs its own jobs in the snapshot.
+    const getRun = client.getRun;
+    client.getRun = async (runId: string) =>
+      runId === "77" ? rootRun(2, "failure") : getRun(runId);
+    client.getParentJobs = async () => [
+      {
+        conclusion: "success",
+        id: 4,
+        name: "Resolve target ref",
+        run_attempt: 1,
+        status: "completed",
+      },
+    ];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getRun = getRun;
     client.getParentJobs = parentJobs;
 
     await expect(poll()).resolves.toMatchObject({ complete: false });
