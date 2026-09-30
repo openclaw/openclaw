@@ -413,7 +413,15 @@ export function describeGithubCopilotProviderAuthContract(
       });
 
       try {
-        const result = await provider.auth[0]?.run(buildAuthContext() as never);
+        const result = await provider.auth[0]?.run({
+          ...buildAuthContext(),
+          existingProfiles: [
+            {
+              profileId: "github-copilot:github",
+              credential: state.authStore.profiles["github-copilot:github"],
+            },
+          ],
+        } as never);
         expect(result).toEqual({
           profiles: [
             {
