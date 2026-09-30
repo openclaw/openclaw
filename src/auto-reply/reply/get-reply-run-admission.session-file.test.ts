@@ -150,6 +150,38 @@ describe("prepared reply transcript identity", () => {
     }
   });
 
+  it("interrupt clears a keyless run's own sessionId lane", async () => {
+    const { context, sessionId } = createAdmissionFixture();
+    const lane = resolveEmbeddedSessionLane(sessionId);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const blocker = enqueueCommandInLane(lane, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const queued = enqueueCommandInLane(lane, async () => "queued");
+    const result = Promise.allSettled([queued]);
+    try {
+      const prepared = await prepareReplyRunAdmission({
+        ...context,
+        effectiveQueueMode: "interrupt",
+        params: { ...context.params, sessionKey: undefined },
+      });
+      expect(prepared.kind).toBe("ready");
+      expect(await result).toEqual([
+        {
+          status: "rejected",
+          reason: expect.objectContaining({ name: "CommandLaneClearedError" }),
+        },
+      ]);
+    } finally {
+      release.resolve();
+      clearCommandLane(lane);
+      await Promise.allSettled([blocker, result]);
+    }
+  });
+
   it.each(["steer", "followup"] as const)(
     "keeps %s admission independent of an older queued followup",
     async (mode) => {
