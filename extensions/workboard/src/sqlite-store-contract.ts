@@ -21,7 +21,7 @@ type WorkboardSqliteStoreMethods = StoreMethods<"cards", WorkboardCardStore> &
   StoreMethods<"subscriptions", WorkboardSubscriptionStore> &
   StoreMethods<"attachments", WorkboardKeyedStore<PersistedWorkboardAttachment>>;
 
-export type WorkboardSqliteStoreOperations = {
+type WorkboardSqliteStoreOperations = {
   [Key in keyof WorkboardSqliteStoreMethods]: Operation<WorkboardSqliteStoreMethods[Key]>;
 };
 
