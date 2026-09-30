@@ -107,6 +107,8 @@ it.each(["payload", "webhook"] as const)(
   "rejects the main-session %s effect when removal commits after its native receipt snapshot",
   async (phase) => {
     await withOpenClawTestState({ label: `cron-main-removal-${phase}` }, async (state) => {
+      // The gate intercepts worker creation; path-scoped fixture cleanup retains the read pool.
+      await closeOpenClawStateDatabaseAsync();
       const preload = state.path("receipt-reply-gate.mjs");
       await fs.writeFile(
         preload,
