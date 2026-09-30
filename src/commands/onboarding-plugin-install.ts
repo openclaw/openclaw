@@ -1091,11 +1091,11 @@ export async function ensureOnboardingPluginInstalled(params: {
   assertConfigWriteAllowedInCurrentMode();
 
   return await withPluginLifecycleLease({}, async () => {
-    const installLocal = (localPath: string) =>
+    const installLocal = (selectedPath: string) =>
       installLocalOnboardingPlugin({
         cfg: next,
         entry,
-        localPath,
+        localPath: selectedPath,
         bundledLocalPath,
         npmSpec,
         workspaceDir,

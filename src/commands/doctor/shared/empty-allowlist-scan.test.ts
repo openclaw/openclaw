@@ -212,7 +212,7 @@ describe("doctor empty allowlist policy scan", () => {
     const warnings = await scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
-          signal: {
+          "legacy-channel": {
             allowFrom: [],
             accounts: {
               work: { dm: { policy: "allowlist", allowFrom: ["nested-sender"] } },
@@ -230,12 +230,12 @@ describe("doctor empty allowlist policy scan", () => {
     );
 
     expect(warnings).toEqual([
-      '- channels.signal.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
+      '- channels.legacy-channel.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.legacy-channel.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
     ]);
     expect(accountContexts).toContainEqual({
       dmPolicy: "allowlist",
       effectiveAllowFrom: [],
-      prefix: "channels.signal.accounts.work",
+      prefix: "channels.legacy-channel.accounts.work",
     });
   });
 
