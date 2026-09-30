@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { format as formatUrl } from "node:url";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -165,7 +164,8 @@ import {
   extractToolOutputStructuredError,
   extractToolOutputCallId,
   extractAllToolOutputText,
-  extractUserTextAfterLatestToolOutput,
+  extractFollowthroughEvidenceText,
+  normalizeResponsesInput,
   buildSlackMpimHistoryReply,
   extractUserTurnTexts,
   extractInstructionsText,
@@ -338,16 +338,6 @@ const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
 const QA_STALLED_TURN_RESPONSE_PAUSE_MS = 8_000;
 const QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS = 90_000;
 
-function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
-  if (Array.isArray(value)) {
-    return value.map(asOptionalRecord).filter((item) => item !== undefined);
-  }
-  if (typeof value === "string") {
-    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
-  }
-  return [];
-}
-
 function resolveCompactionSummaryFaultMode(params: {
   allInputText: string;
   requestKind: MockOpenAiRequestKind;
@@ -386,12 +376,6 @@ function buildMemoryGetArgs(result: Record<string, unknown>) {
         ? Math.max(1, result.endLine)
         : 1;
   return { path: result.path, from, lines: 4 };
-}
-
-function extractFollowthroughEvidenceText(input: ResponsesInputItem[]): string {
-  return [extractAllToolOutputText(input), extractUserTextAfterLatestToolOutput(input)]
-    .filter(Boolean)
-    .join("\n");
 }
 
 const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
@@ -548,11 +532,7 @@ async function buildResponsesPayload(
   }
   const compactionRetryScenarioActive =
     scenarioState.compactionRetryActive || hasCompactionRetryMarker;
-  const cronFailureRepairTurn = planCronFailureRepairTurn({
-    prompt,
-    input,
-    buildToolCall: buildToolCallEventsWithArgs,
-  });
+  const cronFailureRepairTurn = planCronFailureRepairTurn(prompt, input);
   if (cronFailureRepairTurn) {
     return cronFailureRepairTurn;
   }

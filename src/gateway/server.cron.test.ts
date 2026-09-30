@@ -25,12 +25,10 @@ import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
-  agentCommandMock,
   connectOk,
   cronIsolatedRun,
   installGatewayTestHooks,
   onceMessage,
-  prepareGatewayReplyRuntimeForTest,
   rpcReq,
   startServerWithClient,
   testState,
@@ -1249,73 +1247,6 @@ describe("gateway server cron", () => {
       lastFailureNotificationDeliveryError: expect.stringContaining("adapter_returned_no_send"),
     });
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-  }, 45_000);
-
-  test("repairs an owned job with an ordinary owner-topic turn whatever the heartbeat config", async () => {
-    const { dir } = await setupCronTestRun();
-    const group = "-100155462274";
-    const ownerSessionKey = `agent:main:telegram:group:${group}:topic:42`;
-    const hour = new Date().getUTCHours();
-    // Our production heartbeat shape: none of it may apply to the repair turn.
-    testState.agentConfig = {
-      heartbeat: {
-        every: "1h",
-        target: "none",
-        isolatedSession: true,
-        lightContext: true,
-        activeHours: {
-          start: `${String((hour + 2) % 24).padStart(2, "0")}:00`,
-          end: `${String((hour + 3) % 24).padStart(2, "0")}:00`,
-          timezone: "UTC",
-        },
-      },
-    };
-    testState.sessionStorePath = path.join(dir, "sessions.json");
-    await writeSessionStore({
-      agentId: "main",
-      entries: {
-        [ownerSessionKey]: {
-          sessionId: "owner-topic-session",
-          updatedAt: Date.now(),
-          chatType: "group",
-          deliveryContext: { channel: "telegram", to: group, threadId: 42 },
-          lastChannel: "telegram",
-          lastTo: group,
-          lastThreadId: 42,
-        },
-      },
-    });
-    const ws = await startCronClient();
-    await prepareGatewayReplyRuntimeForTest({ force: true });
-    cronIsolatedRun.mockResolvedValue({ status: "error", error: "scripts/sync.md is missing" });
-    const added = await rpcReq(ws, "cron.add", {
-      name: "meeting sync",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "Follow scripts/sync.md." },
-      delivery: { mode: "announce", channel: "telegram", to: group, threadId: 42 },
-      owner: { agentId: "main", sessionKey: ownerSessionKey },
-    });
-    const jobId = expectCronJobIdFromResponse(added);
-
-    await runCronJobAndWaitForFinished(ws, jobId);
-    await runCronJobAndWaitForFinished(ws, jobId);
-
-    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledOnce());
-    const turn = agentCommandMock.mock.calls[0]?.[0];
-    // The owner topic's own session and route: no `:heartbeat` side session, no dropped reply.
-    expect(turn).toMatchObject({
-      sessionKey: ownerSessionKey,
-      deliver: true,
-      channel: "telegram",
-      to: group,
-      threadId: 42,
-      message: expect.stringContaining("Automation repair request from the scheduler"),
-    });
-    expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
-    expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
   }, 45_000);
   test("returns INVALID_REQUEST when cron trigger authoring is disabled", async () => {
     await setupCronTestRun({

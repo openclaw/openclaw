@@ -1,5 +1,6 @@
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { buildAssistantEvents, buildFailedResponseEvents } from "./mock-openai-events.js";
+import { buildToolCallEventsWithArgs } from "./mock-openai-tooling.js";
 
 const QA_CRON_REPAIR_PROMPT_RE = /Cron failure repair QA check/i;
 const QA_CRON_REPAIR_BROKEN_RE = /Cron failure repair QA check: broken step/i;
@@ -12,15 +13,13 @@ const QA_CRON_REPAIR_FIXED_STEP = "Sync step fixed by the owner conversation.\n"
 
 /**
  * Scripts the cron failure-repair QA flow: the job's broken step fails its turn, and the
- * owner conversation, woken with the scheduler's repair request, fixes the workspace step
- * file the job follows with its ordinary tools and reports the fix.
+ * owner conversation, which receives the scheduler's repair request as an ordinary turn, fixes
+ * the workspace step file the job follows with its ordinary tools and reports the fix.
  */
-export function planCronFailureRepairTurn(params: {
-  prompt: string;
-  input: ResponsesInputItem[];
-  buildToolCall: (name: string, args: Record<string, unknown>) => StreamEvent[];
-}): StreamEvent[] | null {
-  const { prompt } = params;
+export function planCronFailureRepairTurn(
+  prompt: string,
+  input: ResponsesInputItem[],
+): StreamEvent[] | null {
   if (!QA_CRON_REPAIR_PROMPT_RE.test(prompt)) {
     return null;
   }
@@ -30,10 +29,10 @@ export function planCronFailureRepairTurn(params: {
     }
     return buildAssistantEvents(QA_CRON_REPAIR_OWNER_MARKER);
   }
-  const wrote = params.input.some((item) => item.type === "function_call_output");
+  const wrote = input.some((item) => item.type === "function_call_output");
   return wrote
     ? buildAssistantEvents(`Fixed the sync step file. ${QA_CRON_REPAIR_FIXED_MARKER}`)
-    : params.buildToolCall("write", {
+    : buildToolCallEventsWithArgs("write", {
         path: QA_CRON_REPAIR_STEP_FILE,
         content: QA_CRON_REPAIR_FIXED_STEP,
       });
