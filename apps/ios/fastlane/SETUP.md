@@ -158,19 +158,31 @@ runtime supporting iPhone 17 Pro and arm64, and the repository's pinned native t
 
 ```bash
 node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
-  --mode stock --target-sha "$(git rev-parse HEAD)" --output /tmp/ios-e2e-stock.json
+  --mode stock --target-sha "$(git rev-parse HEAD)" --output /tmp/ios-e2e-stock.json \
+  --gateway-selection /tmp/ios-e2e-gateway-selection
 
 ./scripts/install-simslim.sh /tmp/ios-e2e-tools
 OPENCLAW_CI_SIMSLIM_BINARY=/tmp/ios-e2e-tools/simslim \
   node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
-  --mode compare --target-sha "$(git rev-parse HEAD)" --output /tmp/ios-e2e-compare.json
+  --mode compare --target-sha "$(git rev-parse HEAD)" --output /tmp/ios-e2e-compare.json \
+  --gateway-selection /tmp/ios-e2e-gateway-selection
 ```
 
 The gate requires a clean tracked and untracked source tree at the exact SHA;
 gitignored build outputs are allowed. It selects the newest available iOS runtime
 that supports the test device and architecture, and records that runtime in its proof.
-It builds the Gateway runtime and ad-hoc-signed
-Debug `OpenClawUITests` simulator products once. Ad-hoc signing preserves Keychain
+It qualifies the candidate iOS app against the published stable Gateway selected
+from npm's `latest` tag. The first invocation saves the exact Gateway version,
+package integrity, dependency lock, source SHA, and Node/npm versions in the
+selection directory. Later invocations using that directory validate and reuse
+the saved selection without resolving `latest` again. Without `--gateway-selection`,
+the directory defaults to the output path with `.gateway` appended. Keep it for
+replay; use a new directory to select a newer stable Gateway. Selection replay
+requires the same source SHA and Node/npm versions.
+
+The harness installs the selected package in an isolated directory using the saved
+dependency lock and builds ad-hoc-signed Debug `OpenClawUITests` simulator products
+once. Ad-hoc signing preserves Keychain
 entitlements without certificates or provisioning profiles; this is not a signed
 Release build. Each arm starts an isolated real Gateway, then prepares its setup
 handler and state worker with `device.pair.setupStatus` before booting one new
@@ -207,12 +219,13 @@ node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
 # Exercise Gateway startup, setup-status preparation, and code issuance without native resources.
 node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
   --mode stock --target-sha "$(git rev-parse HEAD)" \
-  --gateway-only --output /tmp/ios-e2e-gateway.json
+  --gateway-only --output /tmp/ios-e2e-gateway.json \
+  --gateway-selection /tmp/ios-e2e-gateway-selection
 ```
 
 These diagnostics produce `native-build`/`built` or `gateway-probe`/`probe-passed`
-proofs, respectively. Neither is release qualification. Gateway runtime preparation
-continues to use the existing build owner's cache in every mode.
+proofs, respectively. Neither is release qualification. The Gateway probe uses the
+same published-package selection and installation path as full qualification.
 
 The stock gate runs for both upload destinations in **iOS Store Release** after
 native tool setup and before signing assets are accessed. It qualifies the checked-out `main` commit used for release
@@ -227,6 +240,16 @@ Local direct upload behavior is unchanged.
 Manual dispatch of `iOS Release E2E` qualifies the selected workflow revision;
 it does not accept an alternate target SHA. CI callers must also use their own
 revision.
+
+Each fresh workflow run resolves the stable Gateway once and saves
+`selection.json`, `package.json`, and `package-lock.json` in the
+`ios-release-gateway-selection-RUN_ID` artifact before native tool installation
+and qualification. The artifact is retained for 30 days. All qualification arms
+and reruns, including **Re-run all jobs**, reuse that run's selection. A missing,
+expired, invalid, or source-mismatched selection stops a rerun; start a new
+workflow run to make a fresh selection. No workflow input is needed. To replay
+locally, download and extract that artifact and pass its directory with
+`--gateway-selection` at the same source SHA and Node/npm versions.
 
 Compare runs four serial matched pairs in stock/slim, slim/stock, stock/slim,
 slim/stock order, for eight independently prepared arms. SimSlim keeps the existing
@@ -247,8 +270,10 @@ peak, or reboot-preparation memory. Missing/invalid samples or gaps over three
 seconds fail measurement. A stock gate without the meter requires no measurements.
 Raw XCTest bundles and fixture logs stay private and are cleaned with owned
 resources. If owned cleanup cannot be confirmed, the working root is retained.
-Only sanitized JSON proof is uploaded, including on failure, with fixed operation
-labels, phase durations, setup RPC progress, and bounded exit/error diagnostics.
+Alongside the Gateway selection artifact, sanitized JSON proof is uploaded,
+including on failure, as `ios-release-e2e-MODE-RUN_ID-RUN_ATTEMPT`. It records
+the candidate source and selected Gateway identities, fixed operation labels,
+phase durations, setup RPC progress, and bounded exit/error diagnostics.
 Raw logs and setup codes are excluded. Setup-code timeouts are preparation failures
 and prevent native test execution.
 

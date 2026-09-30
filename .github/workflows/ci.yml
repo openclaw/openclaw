@@ -5364,6 +5364,7 @@ jobs:
 
   ios-release-e2e:
     permissions:
+      actions: read
       contents: read
     needs: [preflight]
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_ios_build == 'true' }}
