@@ -96,13 +96,7 @@ describe("Codex remote WebSocket connection health", () => {
     sharedClientMocks.getLeasedSharedCodexAppServerClient
       .mockResolvedValueOnce(first.client)
       .mockResolvedValueOnce(next.client);
-    const ctx = createServiceContext();
-    const service = createCodexAppServerConnectionHealthService({
-      getPluginConfig: () => ({
-        appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
-      }),
-      getRuntimeConfig: () => ctx.config,
-    });
+    const { ctx, service } = createService();
 
     await startService(service, ctx);
     await vi.advanceTimersByTimeAsync(1_250);

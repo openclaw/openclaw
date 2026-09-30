@@ -134,7 +134,7 @@ export async function expectOversizedPromptRejected(params: { sessionId: string;
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
-function requireAcpObject(value: unknown, label: string): Record<string, unknown> {
+export function requireAcpObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
   }
