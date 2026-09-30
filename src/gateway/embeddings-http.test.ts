@@ -15,7 +15,6 @@ import type {
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { startGenericEmbeddingServer } from "./embeddings-http.test-helpers.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
 import {
@@ -110,14 +109,12 @@ beforeAll(async () => {
     },
   };
   ({ startGatewayServer } = await import("./server.js"));
-  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-  enabledPort = portClaim.port;
   enabledServer = await startOpenAiCompatGatewayServer({
     startGatewayServer,
-    port: portClaim,
     auth: { mode: "token", token: "secret" },
     openAiChatCompletionsEnabled: true,
   });
+  enabledPort = enabledServer.port;
 });
 
 beforeEach(() => {
@@ -552,14 +549,12 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it("rejects x-openclaw-model for trusted write-only callers", async () => {
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const port = portClaim.port;
     const server = await startOpenAiCompatGatewayServer({
       startGatewayServer,
-      port: portClaim,
       auth: { mode: "none" },
       openAiChatCompletionsEnabled: true,
     });
+    const port = server.port;
     try {
       createEmbeddingProviderMock.mockClear();
       const res = await fetch(`http://127.0.0.1:${port}/v1/embeddings`, {

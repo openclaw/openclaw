@@ -1,7 +1,8 @@
 // Models HTTP tests cover OpenAI-compatible /v1/models behavior, read-scope
 // authorization, ordering, and disabled-surface responses.
+import { createServer } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
 import { installGatewayTestHooks } from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
@@ -16,14 +17,12 @@ let enabledPort: number;
 
 beforeAll(async () => {
   ({ startGatewayServer } = await import("./server.js"));
-  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-  enabledPort = portClaim.port;
   enabledServer = await startOpenAiCompatGatewayServer({
     startGatewayServer,
-    port: portClaim,
     auth: { mode: "none" },
     openAiChatCompletionsEnabled: true,
   });
+  enabledPort = enabledServer.port;
 });
 
 afterAll(async () => {
@@ -152,33 +151,63 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
   });
 
   it("rejects when disabled", async () => {
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const port = portClaim.port;
-    const server = await startOpenAiCompatGatewayServer({
-      startGatewayServer,
-      port: portClaim,
-      auth: { mode: "none" },
-      openAiChatCompletionsEnabled: false,
-    });
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
-        headers: {},
+    const competitor = createServer((socket) => socket.destroy());
+    const listen = (port: number) =>
+      new Promise<void>((resolve, reject) => {
+        competitor.once("error", reject);
+        competitor.listen(port, "127.0.0.1", () => {
+          competitor.off("error", reject);
+          resolve();
+        });
       });
-      expect(res.status).toBe(404);
-    } finally {
-      await server.close({ reason: "models disabled test done" });
-    }
+    const closeCompetitor = async () => {
+      if (competitor.listening) {
+        await new Promise<void>((resolve, reject) => {
+          competitor.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    };
+    let port = 0;
+    let bindError: unknown;
+    let server: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>> | undefined;
+    await runQaGatewayFixture(
+      async () => {
+        server = await startOpenAiCompatGatewayServer({
+          startGatewayServer: async (candidatePort, options) => {
+            port = candidatePort;
+            // A non-cooperating listener must not steal the endpoint during startup.
+            try {
+              await listen(port);
+            } catch (error) {
+              bindError = error;
+            }
+            return await startGatewayServer(port, options);
+          },
+          auth: { mode: "none" },
+          openAiChatCompletionsEnabled: false,
+        });
+        expect(bindError).toMatchObject({ code: "EADDRINUSE" });
+        const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+          headers: {},
+        });
+        expect(res.status).toBe(404);
+      },
+      () => server?.close({ reason: "models disabled test done" }),
+      closeCompetitor,
+    );
+    await runQaGatewayFixture(async () => {
+      await listen(port);
+      expect(competitor.listening).toBe(true);
+    }, closeCompetitor);
   });
 
   it("treats shared-secret bearer auth as full compat operator access", async () => {
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const port = portClaim.port;
     const server = await startOpenAiCompatGatewayServer({
       startGatewayServer,
-      port: portClaim,
       auth: { mode: "token", token: "secret" },
       openAiChatCompletionsEnabled: true,
     });
+    const port = server.port;
     try {
       const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: {
