@@ -178,19 +178,7 @@ export * from "../infra/exec-approval-command-display.ts";
 export * from "../infra/exec-approval-channel-runtime.ts";
 export * from "../infra/exec-approval-reply.ts";
 export * from "../infra/exec-approval-session-target.ts";
-/**
- * @deprecated Always returns false; suppression commands use ordinary exec policy.
- * Remove calls to this helper. Retained only until the shipped infra-runtime
- * compatibility surface is retired.
- */
-export function commandRequiresSecurityAuditSuppressionApproval(_params: {
-  command: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  segments: Array<{ argv: string[]; raw?: string }>;
-}): boolean {
-  return false;
-}
+export { commandRequiresSecurityAuditSuppressionApproval } from "../infra/exec-approvals-policy.js";
 
 // Keep this deprecated barrel pinned to its shipped approval surface. Internal
 // store/locking exports must not become plugin contracts accidentally.
