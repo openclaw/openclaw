@@ -83,10 +83,11 @@ export async function summarizeText(
     cfg: OpenClawConfig;
     config: ResolvedTtsConfig;
     timeoutMs: number;
+    agentId?: string;
   },
   deps?: SummarizeTextDeps,
 ): Promise<SummarizeResult> {
-  const { text, targetLength, cfg, config, timeoutMs } = params;
+  const { text, targetLength, cfg, config, timeoutMs, agentId } = params;
   if (targetLength < 100 || targetLength > 10_000) {
     throw new Error(`Invalid targetLength: ${targetLength}`);
   }
@@ -98,6 +99,7 @@ export async function summarizeText(
   // summarization contract. The timeout below bounds only the completion request.
   const prepared = await resolvedDeps.prepareSimpleCompletionModel({
     cfg,
+    ...(agentId ? { agentId } : {}),
     provider: ref.provider,
     modelId: ref.model,
   });

@@ -93,6 +93,7 @@ describe("TTS core", () => {
         timestamp: Date.now(),
       } satisfies AssistantMessage;
 
+      const prepareSimpleCompletionModel = vi.fn(async () => ({ model, auth }));
       const result = await summarizeText(
         {
           text: "Long text that should be summarized for speech.",
@@ -100,15 +101,19 @@ describe("TTS core", () => {
           cfg: {},
           config,
           timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+          agentId: "work",
         },
         {
           completeWithPreparedSimpleCompletionModel: vi.fn(async () => assistant),
-          prepareSimpleCompletionModel: vi.fn(async () => ({ model, auth })),
+          prepareSimpleCompletionModel,
           requireApiKey: vi.fn(() => "key"),
         },
       );
 
       expect(result.summary).toBe("Short summary.");
+      expect(prepareSimpleCompletionModel).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work" }),
+      );
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
       setTimeoutSpy.mockRestore();
