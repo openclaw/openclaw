@@ -76,7 +76,7 @@ export function isReplyOperationForSession(
 export function resolveReplyOperationsForSession(params: ReplyOperationSessionTarget) {
   const candidates = [
     ...params.sessionKeys.map((key) => replyRunRegistry.get(key)),
-    ...(params.sessionId ? [resolveActiveReplyOperationForSessionId(params.sessionId)] : []),
+    ...(params.sessionId ? [resolveReplyRunForCurrentSessionId(params.sessionId)] : []),
   ];
   return [...new Set(candidates)].filter((operation) =>
     isReplyOperationForSession(params, operation),
