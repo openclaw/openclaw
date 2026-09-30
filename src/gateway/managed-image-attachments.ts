@@ -1,5 +1,3 @@
-// Gateway managed media attachment store.
-// Validates, stores, serves, and cleans up outgoing media and document attachments.
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -181,13 +179,6 @@ export type ManagedOutgoingMediaArtifactDownload = {
   expiresAt: string;
 };
 
-function buildSessionManagedOutgoingAttachmentIndexCacheKey(
-  sessionKey: string,
-  agentId?: string,
-): string {
-  return sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
-}
-
 export function resolveManagedImageAttachmentLimits(
   config?: ManagedImageAttachmentLimitsConfig | null,
 ): ManagedImageAttachmentLimits {
@@ -224,19 +215,6 @@ function isManagedImageAttachmentSafeError(error: unknown): error is Error {
   return (
     error.message.startsWith("Managed image attachment ") ||
     error.message.startsWith("Invalid image data URL")
-  );
-}
-
-function getSanitizedManagedImageAttachmentError(
-  error: unknown,
-  label: string,
-  kind: ManagedMediaKind | "media",
-): Error {
-  if (isManagedImageAttachmentSafeError(error)) {
-    return error;
-  }
-  return createManagedImageAttachmentError(
-    `Managed ${kind} attachment ${JSON.stringify(label)} could not be prepared`,
   );
 }
 
@@ -312,30 +290,6 @@ function getManagedImageMetadataLimitError(
     return `Managed image attachment ${JSON.stringify(alt)} exceeds the ${limits.maxPixels.toLocaleString("en-US")} pixel limit`;
   }
   return null;
-}
-
-async function resizeManagedImageBufferToLimits(params: {
-  buffer: Buffer;
-  limits: ManagedImageAttachmentLimits;
-}): Promise<{ buffer: Buffer; contentType: string; width: number; height: number }> {
-  const resized = await createImageProcessor().encode(params.buffer, {
-    format: "auto",
-    limits: {
-      maxWidth: params.limits.maxWidth,
-      maxHeight: params.limits.maxHeight,
-      maxPixels: params.limits.maxPixels,
-    },
-    opaque: { format: "jpeg", quality: 92 },
-    transparent: { format: "png", compressionLevel: 9 },
-    transparency: "auto",
-  });
-
-  return {
-    buffer: resized.data,
-    contentType: resized.mimeType,
-    width: resized.width,
-    height: resized.height,
-  };
 }
 
 function resolveManagedImageOriginalsDir(stateDir: string): string {
@@ -547,13 +501,10 @@ function parseMediaDataUrl(
 }
 
 async function getVariantStats(params: { buffer: Buffer; sizeBytes: number }) {
-  const metadata = (await getImageMetadata(params.buffer).catch(() => null)) ?? {
-    width: null,
-    height: null,
-  };
+  const metadata = await getImageMetadata(params.buffer).catch(() => null);
   return {
-    width: metadata.width ?? null,
-    height: metadata.height ?? null,
+    width: metadata?.width ?? null,
+    height: metadata?.height ?? null,
     sizeBytes: Number.isFinite(params.sizeBytes) ? params.sizeBytes : null,
   };
 }
@@ -751,21 +702,6 @@ function buildManagedOutgoingAttachmentRefKey(messageId: string, attachmentId: s
   return `${messageId}::${attachmentId}`;
 }
 
-function buildManagedImageResizeWarningBlock(params: {
-  alt: string;
-  originalWidth: number;
-  originalHeight: number;
-  resizedWidth: number;
-  resizedHeight: number;
-}): ManagedMediaBlock {
-  return {
-    type: "text",
-    text:
-      `[Image warning] ${params.alt} exceeded gateway dimension/pixel limits and was resized from ` +
-      `${params.originalWidth}×${params.originalHeight} to ${params.resizedWidth}×${params.resizedHeight}.`,
-  };
-}
-
 function toRecordFilename(
   filePath: string,
   attachmentName?: string,
@@ -910,7 +846,7 @@ async function recordMatchesTranscriptMessage(
   }
   const { sessionKey, agentId, messageId: requestedMessageId } = record;
   const refKey = buildManagedOutgoingAttachmentRefKey(requestedMessageId, record.attachmentId);
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
+  const cacheKey = sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
   if (cache?.has(cacheKey)) {
     return cache.get(cacheKey)?.has(refKey) ? "match" : "missing";
   }
@@ -1356,23 +1292,30 @@ export async function createManagedOutgoingMediaBlocks(params: {
             if (!effectiveMetadata || resizeAttempt >= 3) {
               throw createManagedImageAttachmentError(metadataLimitError);
             }
-            const resized = await resizeManagedImageBufferToLimits({
-              buffer: originalBuffer,
-              limits,
+            const resized = await createImageProcessor().encode(originalBuffer, {
+              format: "auto",
+              limits: {
+                maxWidth: limits.maxWidth,
+                maxHeight: limits.maxHeight,
+                maxPixels: limits.maxPixels,
+              },
+              opaque: { format: "jpeg", quality: 92 },
+              transparent: { format: "png", compressionLevel: 9 },
+              transparency: "auto",
             });
-            validateManagedImageBuffer(resized.buffer, label, limits);
+            validateManagedImageBuffer(resized.data, label, limits);
             const replacement = await saveMediaBuffer(
-              resized.buffer,
-              resized.contentType,
+              resized.data,
+              resized.mimeType,
               "outgoing/originals",
               limits.maxBytes,
               toRecordFilename(savedOriginal.path) ?? `generated-image-${index + 1}`,
             );
             await unlinkIfExists(savedOriginal.path);
             savedOriginal = replacement;
-            savedOriginalContentType = replacement.contentType ?? resized.contentType;
+            savedOriginalContentType = replacement.contentType ?? resized.mimeType;
             savedOriginalPath = savedOriginal.path;
-            originalBuffer = resized.buffer;
+            originalBuffer = resized.data;
             originalStats = await getVariantStats({
               buffer: originalBuffer,
               sizeBytes: savedOriginal.size,
@@ -1387,15 +1330,16 @@ export async function createManagedOutgoingMediaBlocks(params: {
               limits,
             );
             if (!metadataLimitError) {
-              resizeWarning = buildManagedImageResizeWarningBlock({
-                alt: label,
-                originalWidth:
-                  originalDisplayMetadata?.width ?? effectiveMetadata?.width ?? resized.width,
-                originalHeight:
-                  originalDisplayMetadata?.height ?? effectiveMetadata?.height ?? resized.height,
-                resizedWidth: effectiveMetadata?.width ?? resized.width,
-                resizedHeight: effectiveMetadata?.height ?? resized.height,
-              });
+              const resizedWidth = effectiveMetadata?.width ?? resized.width;
+              const resizedHeight = effectiveMetadata?.height ?? resized.height;
+              const originalWidth = originalDisplayMetadata?.width ?? resizedWidth;
+              const originalHeight = originalDisplayMetadata?.height ?? resizedHeight;
+              resizeWarning = {
+                type: "text",
+                text:
+                  `[Image warning] ${label} exceeded gateway dimension/pixel limits and was resized from ` +
+                  `${originalWidth}×${originalHeight} to ${resizedWidth}×${resizedHeight}.`,
+              };
             }
           }
         }
@@ -1486,7 +1430,11 @@ export async function createManagedOutgoingMediaBlocks(params: {
           );
           throw authorityError;
         }
-        const sanitizedError = getSanitizedManagedImageAttachmentError(error, label, hintedKind);
+        const sanitizedError = isManagedImageAttachmentSafeError(error)
+          ? error
+          : createManagedImageAttachmentError(
+              `Managed ${hintedKind} attachment ${JSON.stringify(label)} could not be prepared`,
+            );
         if (params.continueOnPrepareError) {
           blocks.push(
             buildManagedMediaFailureBlock({
