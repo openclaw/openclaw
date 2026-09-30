@@ -94,6 +94,70 @@ afterEach(() => {
 });
 
 describe("sessions page lifecycle", () => {
+  it.each([false, true])(
+    "reports owner assignment failure only in its current page (retired: %s)",
+    async (retired) => {
+      const row = {
+        key: "agent:main:assignment",
+        sessionId: "assignment-session",
+        kind: "direct",
+        label: "Assignment fixture",
+        updatedAt: 1,
+      } satisfies GatewaySessionRow;
+      const assignment = createDeferred<unknown>();
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.assignOwner") {
+          return assignment.promise;
+        }
+        if (method === "sessions.list") {
+          return sessionsResult([row], 1);
+        }
+        if (method === "users.list") {
+          return { profiles: [] };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
+      const sessions = createTestSessionCapability(mutableGateway.gateway, "main");
+      onTestFinished(() => sessions.dispose());
+      const assignOwner = vi.spyOn(sessions, "assignOwner");
+      const context = createContext(mutableGateway.gateway, sessions);
+      const page = await createRenderedPage(context, sessionsResult([row], 1));
+      await vi.waitFor(() => expect(page.loading).toBe(false));
+      new ContextProvider(page, { context: applicationContext, initialValue: context });
+      page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+      await page.updateComplete;
+      const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+      await menu?.updateComplete;
+      menu?.querySelector("wa-dropdown")?.dispatchEvent(
+        new CustomEvent("wa-select", {
+          detail: { item: { value: "assign-owner:agent:reviewer" } },
+          bubbles: true,
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("sessions.assignOwner", {
+          key: row.key,
+          owner: { type: "agent", id: "reviewer" },
+        }),
+      );
+      if (retired) {
+        mutableGateway.emit({ phase: "reconnecting", client: null });
+      }
+      assignment.reject(new Error("Assignment unavailable. Try again."));
+      await assignOwner.mock.results[0]!.value;
+      if (retired) {
+        await page.updateComplete;
+        expect(page.textContent).not.toContain("Assignment unavailable. Try again.");
+      } else {
+        await vi.waitFor(() =>
+          expect(page.textContent).toContain("Assignment unavailable. Try again."),
+        );
+        expect(page.textContent).toContain("Assignment fixture");
+      }
+    },
+  );
+
   it("switches between Active and Archived with the route parameter", async () => {
     const { gateway } = createGateway({} as GatewayBrowserClient);
     const context = createContext(gateway, createSessions());

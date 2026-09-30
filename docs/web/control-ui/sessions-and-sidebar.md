@@ -297,6 +297,10 @@ The menu groups routine actions first: **Pin/Unpin**, **Rename**, **Mark as unre
 - The chat header's **Session sharing** control manages authenticated teammate visibility and membership. For a saved, non-incognito session, its creator or a Gateway admin can also enable world-readable, read-only public access.
 - **Open in** offers a new browser tab or window. Desktop chat also offers **Split right** and **Split below**. When the same conversation is open in multiple splits, each pane restores its transcript after a page reload and catches up independently when another pane is further ahead. After an upgrade, older cached transcripts are refreshed from the Gateway before incremental updates resume. Eligible local workspaces expose native editor destinations, and the chat header includes **Continue in terminal** in this submenu.
 
+If an owner assignment fails on the Sessions page, the page keeps the session and
+shows the Gateway's error. Resolve the reported problem, then reopen **Assign to**
+to retry. A late failure from a previous connection does not replace the current page's state.
+
 ### Share a session publicly
 
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.

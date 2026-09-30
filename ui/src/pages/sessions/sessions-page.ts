@@ -1387,9 +1387,29 @@ class SessionsPage extends OpenClawLightDomElement {
               void this.archiveSessionWithUndo(row);
             }
             break;
-          case "assign-owner":
-            void this.context?.sessions.assignOwner(row.key, action.owner);
+          case "assign-owner": {
+            const scope = this.captureRequestScope();
+            if (!scope) {
+              this.error = t("sessionsView.actionRequiresConnection");
+              break;
+            }
+            if (
+              !this.requireMutationAccess(scope, {
+                method: "sessions.assignOwner",
+                params: { key: row.key, owner: action.owner },
+                requiredScope: "operator.write",
+              })
+            ) {
+              break;
+            }
+            void this.runSessionMutation(scope, async () => {
+              const assigned = await scope.sessions.assignOwner(row.key, action.owner);
+              if (!assigned && this.isRequestScopeCurrent(scope)) {
+                return scope.sessions.state.error ?? undefined;
+              }
+            });
             break;
+          }
           case "stop-cloud-worker":
             void this.stopCloudWorker(row);
             break;
