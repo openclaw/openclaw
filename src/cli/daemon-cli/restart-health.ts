@@ -5,6 +5,7 @@ import type { GatewayService } from "../../daemon/service.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import { classifyPortListener } from "../../infra/ports-format.js";
 import {
   hasActiveStartupMigrationLease,
   STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS,
@@ -60,6 +61,50 @@ function shouldEarlyExitStoppedFree(
     snapshot.runtime.status === "stopped" &&
     snapshot.portUsage.status === "free"
   );
+}
+
+/**
+ * Diagnostic callers (status, channels status --probe) already know when the
+ * port is held by a listener that does not identify as a Gateway. Returning
+ * here keeps them from waiting out the full restart-health budget when no
+ * Gateway is coming up on this port.
+ *
+ * restart/update callers do not set detectForeignPort, so this is opt-in.
+ */
+function shouldEarlyExitPortHeldByForeignListener(
+  snapshot: GatewayRestartSnapshot,
+  detectForeignPort: boolean | undefined,
+): boolean {
+  if (!detectForeignPort) {
+    return false;
+  }
+  if (snapshot.portUsage.status !== "busy") {
+    return false;
+  }
+  if (snapshot.runtime.status === "running") {
+    return false;
+  }
+  // A Gateway-classified listener means a Gateway process is present on the
+  // port — the caller should keep waiting for it to become healthy.
+  const hasGatewayListener = snapshot.portUsage.listeners.some(
+    (listener) => classifyPortListener(listener, snapshot.portUsage.port) === "gateway",
+  );
+  if (hasGatewayListener) {
+    return false;
+  }
+  // A listener owned by the runtime PID is part of the Gateway process tree.
+  const runtimePid = snapshot.runtime.pid;
+  if (typeof runtimePid === "number" && Number.isFinite(runtimePid)) {
+    const hasRuntimeOwnedListener = snapshot.portUsage.listeners.some(
+      (listener) =>
+        listener.pid === runtimePid ||
+        (typeof listener.ppid === "number" && listener.ppid === runtimePid),
+    );
+    if (hasRuntimeOwnedListener) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function stoppedFreeEarlyExitGraceMs(): number {
@@ -358,32 +403,21 @@ export async function waitForGatewayHealthyRestart(
       // the port is busy but nothing Gateway-related owns it, report the
       // conflict immediately rather than waiting out the readiness budget.
       if (
-        params.detectForeignPort &&
-        snapshot.portUsage.status === "busy" &&
-        snapshot.runtime.status !== "running" &&
+        shouldEarlyExitPortHeldByForeignListener(snapshot, params.detectForeignPort) &&
         !params.supervisorKeepsAlive
       ) {
-        const runtimePid = snapshot.runtime.pid;
-        const hasRuntimeOwnedListener = snapshot.portUsage.listeners.some(
-          (listener) =>
-            typeof listener.pid === "number" &&
-            Number.isFinite(listener.pid) &&
-            (listener.pid === runtimePid || listener.ppid === runtimePid),
+        const listenerPids = snapshot.portUsage.listeners
+          .map((l) => l.pid)
+          .filter((pid): pid is number => pid !== undefined);
+        const pidHint = listenerPids.length > 0 ? ` (pid ${listenerPids.join(", ")})` : "";
+        return withWaitContext(
+          {
+            ...snapshot,
+            probeError: `Gateway port ${params.port} is held by another process${pidHint}. Stop the process occupying the port and retry.`,
+          },
+          "port-held",
+          elapsedMs,
         );
-        if (!hasRuntimeOwnedListener) {
-          const listenerPids = snapshot.portUsage.listeners
-            .map((l) => l.pid)
-            .filter((pid): pid is number => pid !== undefined);
-          const pidHint = listenerPids.length > 0 ? ` (pid ${listenerPids.join(", ")})` : "";
-          return withWaitContext(
-            {
-              ...snapshot,
-              probeError: `Gateway port ${params.port} is held by another process${pidHint}. Stop the process occupying the port and retry.`,
-            },
-            "port-held",
-            elapsedMs,
-          );
-        }
       }
       if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
         return withWaitContext(snapshot, "stale-pids", elapsedMs);
