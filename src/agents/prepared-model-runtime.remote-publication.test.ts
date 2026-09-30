@@ -1,6 +1,9 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import {
+  getPreparedModelRuntimeTestApi,
+  usePreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -314,5 +317,90 @@ it("retries a scheduled adoption when its pending auth owner settles", async () 
     await check.stop();
     refreshSpy.mockRestore();
     admissionSpy.mockRestore();
+  }
+});
+
+it("does not let a read under a superseded config cancel the current adoption", async () => {
+  await setup();
+  const mirrorUrl = "https://mirror.example.test/catalog.json";
+  const mirrorConfig: OpenClawConfig = {
+    ...config,
+    models: { ...config.models, catalogRefresh: { url: mirrorUrl } },
+  };
+  let currentConfig = config;
+  const staleRead = createDeferred<{ source_url: string; bundle_json: string }>();
+  const preparing = createDeferred();
+  const commit = createDeferred();
+  const preparePricing = pricing.prepareModelPricingContext;
+  const pricingSpy = vi
+    .spyOn(pricing, "prepareModelPricingContext")
+    .mockImplementationOnce(async (...args) => {
+      preparing.resolve();
+      await commit.promise;
+      return await preparePricing(...args);
+    });
+  let current: Promise<string> | undefined;
+  stored.mockImplementationOnce(() => {
+    // The configured source changes while this caller's read is still in flight.
+    currentConfig = mirrorConfig;
+    stored.mockReturnValue({ ...bundle(400), source_url: mirrorUrl });
+    current = applyRemoteModelCatalogUpdate(() => currentConfig);
+    return staleRead.promise;
+  });
+  try {
+    const stale = applyRemoteModelCatalogUpdate(() => currentConfig);
+    await preparing.promise;
+    staleRead.resolve(bundle(300));
+    // The stale caller's config check and pending join settle in microtasks.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    commit.resolve();
+    expect(await Promise.all([stale, current])).toEqual(["published", "published"]);
+    expect(captureRemoteModelCatalogStartupSnapshot()).toMatchObject({
+      sourceUrl: mirrorUrl,
+      generatedAt: 400,
+    });
+  } finally {
+    commit.resolve();
+    staleRead.resolve(bundle(300));
+    pricingSpy.mockRestore();
+  }
+});
+
+it("ends adoption instead of joining a timed-out owner build", async () => {
+  await setup();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
+  const started = createDeferred();
+  const finish = createDeferred();
+  mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
+    started.resolve();
+    await finish.promise;
+    return {};
+  });
+  const failed = createDeferred();
+  const stop = registerPreparedModelRuntimePublicationListener((event) => {
+    if (event.phase === "failed") {
+      failed.resolve();
+    }
+  });
+  try {
+    mocks.mutationListener?.({
+      agentDir: fixture.agentInput("default", config).agentDir,
+      affectsInheritedStores: false,
+    });
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(1);
+    await failed.promise;
+    let result: string | undefined;
+    void applyRemoteModelCatalogUpdate(() => config).then((value) => {
+      result = value;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(result).toBe("superseded");
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
+  } finally {
+    stop();
+    finish.resolve();
+    vi.useRealTimers();
   }
 });
