@@ -21,6 +21,22 @@ function readCommittedRunId(entry: BranchEntry): string | undefined {
   return typeof runId === "string" && runId ? runId : undefined;
 }
 
+// A committed assistant toolCall is replay-unsafe on its own, even before
+// its result lands: a fallback relaunch that built on it would re-execute
+// the call, so any committed tool activity — result or bare call — stops
+// the relaunch.
+function commitsToolActivity(
+  message: Extract<BranchEntry, { type: "message" }>["message"],
+): boolean {
+  if (message.role === "toolResult") {
+    return true;
+  }
+  if (message.role !== "assistant") {
+    return false;
+  }
+  return message.content.some((part) => part.type === "toolCall");
+}
+
 /**
  * Classify the transcript suffix a model-fallback relaunch would otherwise
  * pin its commit base over. The strict commit-side prefix check stays the
@@ -48,7 +64,7 @@ function classifyWorkerRelaunchSuffix(params: {
     if (entry.type !== "message" || readCommittedRunId(entry) !== params.runId) {
       return { kind: "foreign" };
     }
-    if (entry.message.role === "toolResult") {
+    if (commitsToolActivity(entry.message)) {
       sawToolActivity = true;
     }
     lastMessage = entry;
@@ -83,14 +99,17 @@ export async function resolveWorkerRelaunchBase(params: {
     },
     ...(params.signal ? { signal: params.signal } : {}),
   });
-  // A bounded cut can hide the admission under an oversized tail, and an
-  // unattributable window must keep the strict refusal: anything not provably
-  // this run's own output stays fenced at the admission base.
-  if (truncated) {
+  // A bounded cut only hides history older than the retained window, so once
+  // the admission sits inside the window the suffix after it is complete and
+  // classifies normally. Only a cut that hides the admission itself must keep
+  // the strict refusal: an unattributable window stays fenced at the
+  // admission base.
+  const branch = durable.getBranch();
+  if (truncated && !branch.some((entry) => entry.id === params.admissionEntryId)) {
     return { kind: "foreign" };
   }
   return classifyWorkerRelaunchSuffix({
-    branch: durable.getBranch(),
+    branch,
     admissionEntryId: params.admissionEntryId,
     runId: params.runId,
   });

@@ -859,6 +859,69 @@ describe("worker detached model-context branch parity", () => {
     }
   });
 
+  it("stops model fallback when the failed candidate committed a bare assistant tool call", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    await launchProbe({
+      ...request("worker-fallback-bare-tool-call"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    await reclaimActivePlacement();
+    const writer = SessionManager.open(sessionTarget);
+    writer.appendMessage(
+      attachSessionTranscriptRunId(
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+          timestamp: 4,
+          stopReason: "toolUse",
+        }),
+        "worker-fallback-bare-tool-call",
+      ),
+    );
+    const result = await launchProbe({
+      ...request("worker-fallback-bare-tool-call"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expect(result.launch).toBeUndefined();
+    expect(result.credentialCalls).toBe(0);
+    expect(result.tunnelCalls).toBe(0);
+    expect(result.outcome.kind).toBe("rejected");
+    if (result.outcome.kind === "rejected") {
+      expect(hasRecordedModelFallbackStop(result.outcome.error)).toBe(true);
+    }
+  });
+
+  it("relaunches from the durable leaf when older history overflows the bounded window", async () => {
+    seedPrevious();
+    const fillerWriter = SessionManager.open(sessionTarget);
+    for (let index = 0; index < 120; index += 1) {
+      fillerWriter.appendMessage(
+        makeAgentUserMessage({ content: `filler ${index}`, timestamp: 10 + index }),
+      );
+    }
+    const inputRecorder = recorder();
+    await launchProbe({
+      ...request("worker-fallback-long-session"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    await reclaimActivePlacement();
+    const writer = SessionManager.open(sessionTarget);
+    const failedAssistant = makeAgentAssistantMessage({
+      content: [],
+      timestamp: 200,
+      stopReason: "error",
+    });
+    const committedTailId = writer.appendMessage(
+      attachSessionTranscriptRunId(failedAssistant, "worker-fallback-long-session"),
+    );
+    const result = await launchProbe({
+      ...request("worker-fallback-long-session"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expect(result.launch?.baseLeafId).toBe(committedTailId);
+    expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
+  });
+
   it("keeps the admission-pinned base for a foreign tail after the failed candidate", async () => {
     seedPrevious();
     const inputRecorder = recorder();
