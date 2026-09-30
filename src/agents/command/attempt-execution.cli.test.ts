@@ -58,7 +58,7 @@ import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
 import {
   createSubagentAnnounceHandoffOptions,
   createSubagentAnnounceSessionStore,
-  SUBAGENT_ANNOUNCE_DELIVERY_CASES,
+  SUBAGENT_ANNOUNCE_CLI_DELIVERY_CASES,
   SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES,
   type SubagentAnnounceDeliveryCase,
 } from "./attempt-execution.announce.test-support.js";
@@ -2058,17 +2058,14 @@ describe("CLI attempt execution", () => {
     };
   }
 
-  it.each(SUBAGENT_ANNOUNCE_DELIVERY_CASES)(
+  it.each(SUBAGENT_ANNOUNCE_CLI_DELIVERY_CASES)(
     "bounds CLI subagent completion handoff tools for $name",
     async (testCase) => {
-      const {
-        sourceReplyDeliveryMode,
-        requireExplicitMessageTarget,
-        expectedDisableTools,
-        expectedToolsAllow,
-      } = testCase;
-      const sessionKey = "agent:main:direct:claude-announce";
-      const sessionEntry = makeSessionEntry("openclaw-session-cli-announce");
+      const sessionKey = testCase.requesterSessionKey ?? "agent:main:direct:claude-announce";
+      const sessionEntry = makeSessionEntry(
+        "openclaw-session-cli-announce",
+        testCase.requesterSessionEntry,
+      );
       const sessionStore = createSubagentAnnounceSessionStore(sessionKey, sessionEntry, testCase);
       await writeSessionStoreSeed(sessionStore);
       runCliAgentMock.mockResolvedValueOnce(makeCliResult("completion announce"));
@@ -2094,10 +2091,11 @@ describe("CLI attempt execution", () => {
 
       expectMockArgFields(runCliAgentMock, {
         provider: "claude-cli",
-        sourceReplyDeliveryMode,
-        requireExplicitMessageTarget: requireExplicitMessageTarget === true,
-        toolsAllow: expectedToolsAllow,
-        disableTools: expectedDisableTools,
+        sourceReplyDeliveryMode: testCase.sourceReplyDeliveryMode,
+        requireExplicitMessageTarget:
+          testCase.requireExplicitMessageTarget ?? isSubagentSessionKey(sessionKey),
+        toolsAllow: testCase.expectedToolsAllow,
+        disableTools: testCase.expectedDisableTools,
         allowEmptyAssistantReplyAsSilent: true,
       });
       expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
