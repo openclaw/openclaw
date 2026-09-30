@@ -91,7 +91,7 @@ async function setup() {
     const entries = Object.values(captureRemoteModelCatalogSnapshot()?.providers ?? {}).flatMap(
       (provider) =>
         (provider.models ?? []).map((model) => ({
-          ...model,
+          id: model.id,
           provider: "custom",
           name: model.name ?? model.id,
         })),
@@ -175,10 +175,11 @@ it("does not reuse a dynamic build captured before a remote publication", async 
     pricingSpy.mockRestore();
     await adoption;
   }
-  await using _first = await pending.catch((error: unknown) => {
+  const first = await pending.catch((error: unknown) => {
     expect(error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
     return undefined;
   });
+  await first?.[Symbol.asyncDispose]();
   await using next = await acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "live" });
   expect(next.pluginGeneration?.remoteCatalog?.generatedAt).toBe(300);
   expect(next.pluginGeneration?.remoteCatalog?.pricing["custom/remote-300"]?.cost.input).toBe(300);
@@ -352,7 +353,9 @@ it("does not let a read under a superseded config cancel the current adoption", 
     await preparing.promise;
     staleRead.resolve(bundle(300));
     // The stale caller's config check and pending join settle in microtasks.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     commit.resolve();
     expect(await Promise.all([stale, current])).toEqual(["published", "published"]);
     expect(captureRemoteModelCatalogStartupSnapshot()).toMatchObject({

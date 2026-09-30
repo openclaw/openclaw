@@ -515,7 +515,7 @@ it.each([1, 2])(
           pausePublication = false;
           commit.resolve();
           expect(await pending).toBe("published");
-          expect(kimiIds(await list())).toContain(model);
+          expect(kimiIds(await waitForRows(model))).toContain(model);
           expect(currentPrice(model)).toBe(price);
         }
         await list(true);

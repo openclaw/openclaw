@@ -14,12 +14,7 @@ import {
   configuredOwnersAreRequestVisible,
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
-import {
-  advancePreparedModelRuntimeConfigNow,
-  applyRemoteModelCatalogUpdateNow,
-  refreshPreparedModelRuntimeSnapshotsNow,
-  type PreparedModelRuntimeCatalogPublicationHost,
-} from "./prepared-model-runtime.configured-refresh.js";
+import * as configuredRefresh from "./prepared-model-runtime.configured-refresh.js";
 import {
   capturePreparedModelRuntimeLifetime,
   closePreparedModelRuntimeSnapshots,
@@ -124,7 +119,7 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   getPendingReplacement: () => getBlockingReplacement()?.promise,
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
-const remoteCatalogPublication: PreparedModelRuntimeCatalogPublicationHost = {
+const remoteCatalogPublication: configuredRefresh.PreparedModelRuntimeCatalogPublicationHost = {
   owners,
   agentBuildCompletions,
   publicationQueue,
@@ -135,14 +130,10 @@ const remoteCatalogPublication: PreparedModelRuntimeCatalogPublicationHost = {
   getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
   getBuildTimeoutMs: () => modelRuntimeBuildTimeoutMs,
 };
-export const applyRemoteModelCatalogUpdate = applyRemoteModelCatalogUpdateNow.bind(
-  null,
-  remoteCatalogPublication,
-);
-export const advancePreparedModelRuntimeConfig = advancePreparedModelRuntimeConfigNow.bind(
-  null,
-  remoteCatalogPublication,
-);
+export const applyRemoteModelCatalogUpdate =
+  configuredRefresh.applyRemoteModelCatalogUpdateNow.bind(null, remoteCatalogPublication);
+export const advancePreparedModelRuntimeConfig =
+  configuredRefresh.advancePreparedModelRuntimeConfigNow.bind(null, remoteCatalogPublication);
 
 let releaseProcessLifetime: (() => void) | undefined;
 function captureModelRuntimeLifetime(): () => void {
@@ -634,7 +625,7 @@ export function refreshPreparedModelRuntimeSnapshots(
         : resolveSafeRefreshAgentIds(currentConfig, options, owners);
       retainedGatewayRunOwners.clear(owners);
       gatewayLifecycleActive ||= options.gatewayLifecycle === true;
-      await refreshPreparedModelRuntimeSnapshotsNow(
+      await configuredRefresh.refreshPreparedModelRuntimeSnapshotsNow(
         currentConfig,
         { ...options, agentIds: publicationAgentIds },
         {
