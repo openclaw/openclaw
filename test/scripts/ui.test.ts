@@ -594,7 +594,7 @@ require("node:module").syncBuiltinESMExports();
         const expected = buildFiles(expectedOutputId);
         expect(
           fs
-            .readdirSync(output, { recursive: true })
+            .readdirSync(output, { recursive: true, encoding: "utf8" })
             .toSorted((left, right) => left.localeCompare(right)),
         ).toEqual(
           ["assets", ...Object.keys(expected)].map((file) => path.normalize(file)).toSorted(),
@@ -653,7 +653,7 @@ require("node:module").syncBuiltinESMExports();
     for (const [script, ...args] of [
       ["check-control-ui-precompressed-assets.mts", staging],
       ["check-control-ui-performance.mts", "--report-only", "--dist", staging],
-    ]) {
+    ] as const) {
       const result = spawnSync(testNodeExecPath, [path.resolve("scripts", script), ...args], {
         cwd: root,
         encoding: "utf8",

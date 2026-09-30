@@ -57,6 +57,7 @@
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
     "!dist/**/*.app",
+    "!dist/control-ui.build-*",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
     "!dist/plugin-sdk/access-groups.d.ts",
