@@ -1046,6 +1046,35 @@ describe("device pairing tokens", () => {
     expect(await getPairedDevice("device-1", baseDir)).toEqual(paired);
   });
 
+  test("bootstrap repair removes stale privileges from a legacy approval baseline", async () => {
+    const profile = {
+      roles: ["node", "operator"],
+      scopes: ["operator.approvals", "operator.read", "operator.write"],
+    };
+    const first = await requestBootstrap(profile);
+    await approveBootstrapDevicePairing(first.request.requestId, profile, baseDir);
+    await mutatePairedDevice(baseDir, "device-1", (device) => {
+      device.approvedScopes = ["operator.admin"];
+      device.scopes = ["operator.admin"];
+    });
+
+    const repair = await requestBootstrap({ ...profile, publicKey: "rotated-public-key" });
+    await expect(
+      approveBootstrapDevicePairing(repair.request.requestId, profile, baseDir),
+    ).resolves.toMatchObject({ status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.approvedScopes).toEqual(profile.scopes);
+    await expect(
+      ensureDeviceToken({
+        deviceId: "device-1",
+        role: "operator",
+        scopes: ["operator.admin"],
+        baseDir,
+      }),
+    ).resolves.toBeNull();
+  });
+
   test("rejects persisted tokens whose scopes exceed the approved scope baseline", async () => {
     const token = await setupOperatorToken(["operator.read"]);
     await setOperatorScopes(baseDir, ["operator.admin"]);
