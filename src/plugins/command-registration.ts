@@ -84,24 +84,16 @@ function getReservedCommands(): Set<string> {
   return reservedCommands;
 }
 
-function getAgentPromptSurfaces(): Set<string> {
-  agentPromptSurfaces ??= new Set(AGENT_PROMPT_SURFACE_KINDS);
-  return agentPromptSurfaces;
-}
-
-/** Result returned when a plugin command registration succeeds or fails validation. */
 type CommandRegistrationResult = {
   ok: boolean;
   error?: string;
 };
 
-/** Returns true when a command name is owned by built-in OpenClaw command handling. */
 export function isReservedCommandName(name: string): boolean {
   const trimmed = normalizeOptionalLowercaseString(name) ?? "";
   return Boolean(trimmed && getReservedCommands().has(trimmed));
 }
 
-/** Validates user-visible command names before plugin registration accepts them. */
 function validateCommandName(
   name: string,
   opts?: { allowReservedCommandNames?: boolean },
@@ -123,11 +115,6 @@ function validateCommandName(
   return null;
 }
 
-/**
- * Validate a plugin command definition without registering it.
- * Returns an error message if invalid, or null if valid.
- * Shared by both the global registration path and snapshot (non-activating) loads.
- */
 function validatePluginCommandDefinition(
   command: OpenClawPluginCommandDefinition,
   opts?: { allowReservedCommandNames?: boolean },
@@ -141,14 +128,6 @@ function validatePluginCommandDefinition(
   const descriptionError = validateNonemptyString(command.description, "Command description");
   if (descriptionError) {
     return descriptionError;
-  }
-  if (command.ownership === "reserved") {
-    if (!opts?.allowReservedCommandNames) {
-      return "Reserved command ownership is only available to bundled reserved commands";
-    }
-    if (!isReservedCommandName(command.name)) {
-      return `Reserved command ownership requires a reserved command name: ${normalizeOptionalLowercaseString(command.name) ?? ""}`;
-    }
   }
   if (command.agentPromptGuidance !== undefined && !Array.isArray(command.agentPromptGuidance)) {
     return "Agent prompt guidance must be an array of strings or objects";
@@ -267,7 +246,7 @@ function validateAgentPromptGuidance(index: number, guidance: AgentPromptGuidanc
   }
   for (const [surfaceIndex, surface] of guidance.surfaces.entries()) {
     const normalizedSurface = typeof surface === "string" ? surface.trim() : "";
-    if (!getAgentPromptSurfaces().has(normalizedSurface)) {
+    if (!(agentPromptSurfaces ??= new Set(AGENT_PROMPT_SURFACE_KINDS)).has(normalizedSurface)) {
       const surfaces = AGENT_PROMPT_SURFACE_KINDS.join(", ");
       return `${label} surface ${surfaceIndex + 1} must be one of: ${surfaces}`;
     }
@@ -339,7 +318,6 @@ export function registerPluginCommandInRegistry(
   command: OpenClawPluginCommandDefinition,
   opts?: Parameters<typeof registerPluginCommand>[2],
 ): CommandRegistrationResult {
-  // Prevent registration while commands are being processed
   if (getPluginCommandExecutionCount(registry) > 0) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
@@ -385,7 +363,6 @@ export function registerPluginCommandInRegistry(
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
   const key = `/${normalizedName}`;
 
-  // Check for duplicate registration
   for (const invocationKey of invocationKeys) {
     const existing = registry.commands.find((entry) =>
       listPluginInvocationKeys(entry.command).includes(invocationKey),

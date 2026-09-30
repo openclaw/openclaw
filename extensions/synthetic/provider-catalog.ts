@@ -1,4 +1,3 @@
-// Synthetic provider module implements model/runtime integration.
 import type { OpenAICompatibleModelDiscoveryOptions } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
   ModelDefinitionConfig,

@@ -160,7 +160,7 @@ export function createControlUiSessionPullRequestSubscriptions(
       demands: Set<() => boolean>;
     }
   >();
-  const scheduler = deps.scheduler;
+  const scheduler = deps.scheduler.scope();
   const limit = pLimit(CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY);
   const customLoad = deps.load;
   const load = customLoad ?? loadSessionPullRequests;
@@ -733,8 +733,7 @@ export function createControlUiSessionPullRequestSubscriptions(
       return stopPromise;
     }
     scope.beginClose();
-    pollJob?.cancel();
-    pollJob = undefined;
+    scheduler.beginClose();
     subscriptions.clear();
     replacementGenerations.clear();
     replacements.clear();
@@ -743,7 +742,7 @@ export function createControlUiSessionPullRequestSubscriptions(
       state.cacheLifetime.abort(null);
     }
     keyStates.clear();
-    stopPromise = scope.drain().then(() => {
+    stopPromise = Promise.all([scope.drain(), scheduler.stop()]).then(() => {
       inflight.clear();
     });
     return stopPromise;

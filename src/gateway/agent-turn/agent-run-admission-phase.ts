@@ -23,6 +23,7 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import { resolveExactSubagentCompletionEvent } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { FollowupCompletionOwner } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
+import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/subagents/requester-cron-authority.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -62,6 +63,13 @@ import {
 export async function prepareAgentRunDispatch(
   params: PrepareAgentRunDispatchParams,
 ): Promise<PreparedAgentRunDispatch | undefined> {
+  const assertRequesterCurrent = captureRequesterCronAuthorityAdmissionAssertion({
+    runId: params.runId,
+    sessionKey: params.resolvedSessionKey,
+    sessionId: params.getAdmittedSessionId(),
+    inputProvenance: params.inputProvenance,
+  });
+  assertRequesterCurrent?.();
   const coordination = isSubagentCoordinationInputProvenance(params.inputProvenance);
   const controlUiVisible = !params.suppressVisibleSessionEffects && !coordination;
   const parentResume = readInProcessSubagentResume(params.client?.internal);
@@ -417,6 +425,7 @@ export async function prepareAgentRunDispatch(
   let userTurn: PreparedAgentRunUserTurn;
   const assertInputOwnerCurrent = (terminal = false) => {
     assertInputAdmissionCurrent?.();
+    assertRequesterCurrent?.();
     followupCompletion?.assertCurrent();
     if (followupSuccessor) {
       if (!resumedTaskAdopted) {

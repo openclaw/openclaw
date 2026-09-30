@@ -244,11 +244,7 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
     const stagingRoot = await fsRoot(stagingDir);
     await downloadFile(downloadUrl, stagingRoot, assetName);
 
-    if (assetName.endsWith(".tar.gz") || assetName.endsWith(".zip")) {
-      await extractArchiveSafe(archivePath, extractDir, assetName);
-    } else {
-      throw new Error(`Unsupported archive format: ${assetName}`);
-    }
+    await extractArchiveSafe(archivePath, extractDir, assetName);
 
     // Find the binary in extracted files. Some archives contain files directly
     // at root, others nest under a versioned subdirectory.

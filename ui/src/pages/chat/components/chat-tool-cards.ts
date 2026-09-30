@@ -12,12 +12,7 @@ import {
 import { icons, type IconName } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { browserTabCardRevision } from "../../../lib/chat/browser-tab-preview.ts";
-import type {
-  MessageGroup,
-  ToolApprovalReview,
-  ToolCard,
-  ToolCardOutcome,
-} from "../../../lib/chat/chat-types.ts";
+import type { MessageGroup, ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
@@ -30,6 +25,7 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
+import type { WorkGroupRenderItem } from "../chat-thread-grouping.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
@@ -44,17 +40,25 @@ import { renderToolPreview } from "./widget-card.ts";
 export function renderBrowserTabPreviews(
   groups: readonly MessageGroup[],
   options: { sessionKey?: string; latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection> },
+  placePreview?: (groupKey: string, content: unknown) => void,
 ) {
   const cards = groups.flatMap((group) =>
-    group.messages.flatMap((item) => extractToolCardsCached(item.message)),
+    group.messages.flatMap((item) =>
+      extractToolCardsCached(item.message)
+        .filter((card) => card.browserTab)
+        .map((card) => ({ card, groupKey: group.key })),
+    ),
   );
+  if (cards.length === 0) {
+    return [];
+  }
   // Select each tab's final state before collapsing reopened pages. A newer
   // blank/non-web result must still retire that tab's older web preview.
   const seenTabs = new Set<string>();
   const seenPages = new Set<string>();
   return cards
     .toReversed()
-    .flatMap((card) => {
+    .flatMap(({ card, groupKey }) => {
       if (!card.browserTab || resolveToolCardOutcome(card, false) !== "succeeded") {
         return [];
       }
@@ -77,18 +81,38 @@ export function renderBrowserTabPreviews(
         return [];
       }
       seenPages.add(pageKey);
-      const revision = browserTabCardRevision(card);
-      return [
-        renderToolPreview(preview, "chat_tool", {
-          browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
-          browserTabLatest: Boolean(
-            revision &&
-            options.latestBrowserTabs?.get(browserTabKey(preview))?.revision === revision,
-          ),
-        }),
-      ];
+      return [{ card, groupKey, preview }];
     })
-    .toReversed();
+    .toReversed()
+    .map(({ card, groupKey, preview }) => {
+      const revision = browserTabCardRevision(card);
+      const content = renderToolPreview(preview, "chat_tool", {
+        browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
+        browserTabLatest: Boolean(
+          revision && options.latestBrowserTabs?.get(browserTabKey(preview))?.revision === revision,
+        ),
+      });
+      placePreview?.(groupKey, content);
+      return content;
+    });
+}
+
+export function renderWorkGroupBrowserTabPreviews(
+  items: readonly WorkGroupRenderItem[],
+  options: Parameters<typeof renderBrowserTabPreviews>[1],
+) {
+  const byAnchor = new Map<string, unknown[]>();
+  // Deduplicate the whole turn before placing previews, so later blank tabs or
+  // repeated page opens cannot resurrect an earlier preview across an answer.
+  for (const item of items) {
+    renderBrowserTabPreviews(item.groups, options, (groupKey, content) => {
+      const anchor = item.previewAfterGroup?.get(groupKey) ?? item.key;
+      const previews = byAnchor.get(anchor) ?? [];
+      previews.push(content);
+      byAnchor.set(anchor, previews);
+    });
+  }
+  return byAnchor;
 }
 
 export function renderToolIcon(
@@ -118,31 +142,11 @@ const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
 };
 
 const MUTATION_VERB_KEYS = {
-  update: [
-    "chat.toolCards.verbs.editing",
-    "chat.toolCards.verbs.edited",
-    "chat.toolCards.verbs.edit",
-  ],
-  add: [
-    "chat.toolCards.verbs.creating",
-    "chat.toolCards.verbs.created",
-    "chat.toolCards.verbs.create",
-  ],
-  delete: [
-    "chat.toolCards.verbs.deleting",
-    "chat.toolCards.verbs.deleted",
-    "chat.toolCards.verbs.delete",
-  ],
-  mixed: [
-    "chat.toolCards.verbs.changing",
-    "chat.toolCards.verbs.changed",
-    "chat.toolCards.verbs.change",
-  ],
-  write: [
-    "chat.toolCards.verbs.writing",
-    "chat.toolCards.verbs.wrote",
-    "chat.toolCards.verbs.write",
-  ],
+  update: ["editing", "edited", "edit"],
+  add: ["creating", "created", "create"],
+  delete: ["deleting", "deleted", "delete"],
+  mixed: ["changing", "changed", "change"],
+  write: ["writing", "wrote", "write"],
 } as const;
 
 function resolveMutationVerbKind(view: ToolCallView): keyof typeof MUTATION_VERB_KEYS | undefined {
@@ -160,7 +164,9 @@ function resolveToolRowVerb(view: ToolCallView, outcome: ToolCardOutcome): strin
   const mutation = resolveMutationVerbKind(view);
   if (mutation) {
     const [running, succeeded, fallback] = MUTATION_VERB_KEYS[mutation];
-    return t(outcome === "running" ? running : outcome === "succeeded" ? succeeded : fallback);
+    return t(
+      `chat.toolCards.verbs.${outcome === "running" ? running : outcome === "succeeded" ? succeeded : fallback}`,
+    );
   }
   const key = TOOL_ROW_VERB_KEYS[view.kind];
   return key ? t(key) : undefined;
@@ -205,6 +211,7 @@ function renderToolRowContent(
   card: ToolCard,
   view: ToolCallView,
   outcome: ToolCardOutcome,
+  toolLabel: string,
   workspaceFilePath: string | null,
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
 ) {
@@ -257,16 +264,11 @@ function renderToolRowContent(
     `;
   }
 
-  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const summary = resolveCollapsedToolSummaryParts({
-    card,
-    displayLabel: display.label,
-    displayDetail: display.detail,
-  });
+  const summary = resolveCollapsedToolSummaryParts(card);
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
   const displayName = distinctSummaryText(summary.name, displayLabel);
   return html`
-    ${summary.label !== display.label ? html`<span class="chat-tool-msg-summary__label">${displayLabel}</span>` : nothing}
+    ${summary.label !== toolLabel ? html`<span class="chat-tool-msg-summary__label">${displayLabel}</span>` : nothing}
     ${
       displayName ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>` : nothing
     }
@@ -328,40 +330,28 @@ function renderProgressCardReceipt(card: ToolCard, outcome: ToolCardOutcome) {
 }
 
 export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | undefined) {
-  const directDetail = displayDetail?.trim();
-  if (directDetail) {
+  if (displayDetail?.trim()) {
     return displayDetail;
   }
-  if (typeof card.args !== "string") {
-    return undefined;
-  }
-  const inputText = card.inputText?.trim() ? card.inputText : card.args;
-  return formatCollapsedToolPreviewText(inputText);
+  return typeof card.args === "string"
+    ? formatCollapsedToolPreviewText(card.inputText?.trim() ? card.inputText : card.args)
+    : undefined;
 }
 
-function resolveCollapsedToolSummaryParts(params: {
-  card: ToolCard;
-  displayLabel: string;
-  displayDetail: string | undefined;
-}): { label: string; name?: string } {
-  const displayDetail = params.displayDetail?.trim();
+function resolveCollapsedToolSummaryParts(card: ToolCard): { label: string; name?: string } {
+  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
+  const displayDetail = display.detail?.trim();
   // Message captions belong to the canonical publication, not the original tool input.
-  if (params.card.name.trim().toLowerCase() === "message") {
-    return { label: params.displayLabel, name: displayDetail || undefined };
+  if (card.name.trim().toLowerCase() === "message") {
+    return { label: display.label, name: displayDetail || undefined };
   }
-  const argumentPreview = toolArgumentPreview(params.card.args);
-  if (argumentPreview) {
-    return { label: params.displayLabel, name: argumentPreview };
-  }
-  if (displayDetail) {
-    return { label: params.displayLabel, name: displayDetail };
+  const name = toolArgumentPreview(card.args) || displayDetail;
+  if (name) {
+    return { label: display.label, name };
   }
 
   return {
-    label:
-      typeof params.card.args === "string"
-        ? (resolveCollapsedToolDetail(params.card, undefined) ?? params.displayLabel)
-        : params.displayLabel,
+    label: resolveCollapsedToolDetail(card, undefined) ?? display.label,
   };
 }
 
@@ -376,23 +366,8 @@ function resolveToolRowText(card: ToolCard, view: ToolCallView, outcome: ToolCar
   if (verb && view.target) {
     return `${verb} ${view.target}`;
   }
-  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const summary = resolveCollapsedToolSummaryParts({
-    card,
-    displayLabel: display.label,
-    displayDetail: display.detail,
-  });
+  const summary = resolveCollapsedToolSummaryParts(card);
   return [summary.label, summary.name].filter(Boolean).join(" ");
-}
-
-function toolReviewLabel(review: ToolApprovalReview): string {
-  const key =
-    review.status === "in_progress"
-      ? "reviewing"
-      : review.status === "timed_out"
-        ? "timedOut"
-        : review.status;
-  return t(`chat.toolCards.review.${key}`, { reviewer: review.label });
 }
 
 export function renderToolApprovalReviews(card: ToolCard) {
@@ -404,29 +379,31 @@ export function renderToolApprovalReviews(card: ToolCard) {
     <div class="chat-tool-reviews">
       ${reviews.map((review) => {
         const adverse = ["denied", "timed_out", "aborted"].includes(review.status);
+        const key =
+          review.status === "in_progress"
+            ? "reviewing"
+            : review.status === "timed_out"
+              ? "timedOut"
+              : review.status;
         return html`
           <div class="chat-tool-review" data-review-status=${review.status}>
             <div class="chat-tool-review__header">
               <span class="chat-tool-review__icon"
                 >${adverse ? icons.shieldX : icons.shieldCheck}</span
               >
-              <span class="chat-tool-review__label">${toolReviewLabel(review)}</span>
-              ${
-                review.riskLevel
+              <span class="chat-tool-review__label"
+                >${t(`chat.toolCards.review.${key}`, { reviewer: review.label })}</span
+              >
+              ${[
+                { kind: "risk", level: review.riskLevel },
+                { kind: "authorization", level: review.userAuthorization },
+              ].map(({ kind, level }) =>
+                level
                   ? html`<span class="chat-tool-review__chip"
-                      >${t("chat.toolCards.review.risk", { level: review.riskLevel })}</span
+                      >${t(`chat.toolCards.review.${kind}`, { level })}</span
                     >`
-                  : nothing
-              }
-              ${
-                review.userAuthorization
-                  ? html`<span class="chat-tool-review__chip"
-                      >${t("chat.toolCards.review.authorization", {
-                        level: review.userAuthorization,
-                      })}</span
-                    >`
-                  : nothing
-              }
+                  : nothing,
+              )}
             </div>
             ${
               review.status === "in_progress"
@@ -480,6 +457,7 @@ export function renderToolCard(
         card,
         view,
         outcome,
+        display.label,
         workspaceFilePath,
         opts.onOpenWorkspaceFile,
       )}</span

@@ -29,35 +29,29 @@ function getParticipantDisplayName(participant: GoogleMeetParticipant): string |
   );
 }
 
-function getDocsDestinationDocumentId(
-  destination: Record<string, unknown> | undefined,
-): string | undefined {
-  return (
+async function attachDocumentText<T extends { docsDestination?: Record<string, unknown> }>(
+  accessToken: string,
+  resource: T,
+): Promise<T & { documentText?: string; documentTextError?: string }> {
+  const destination = resource.docsDestination;
+  const documentId =
     extractGoogleDriveDocumentId(destination?.document) ??
     extractGoogleDriveDocumentId(destination?.documentId) ??
-    extractGoogleDriveDocumentId(destination?.file)
-  );
-}
-
-async function attachDocumentText<T extends { docsDestination?: Record<string, unknown> }>(params: {
-  accessToken: string;
-  resource: T;
-}): Promise<T & { documentText?: string; documentTextError?: string }> {
-  const documentId = getDocsDestinationDocumentId(params.resource.docsDestination);
+    extractGoogleDriveDocumentId(destination?.file);
   if (!documentId) {
-    return params.resource;
+    return resource;
   }
   try {
     return {
-      ...params.resource,
+      ...resource,
       documentText: await exportGoogleDriveDocumentText({
-        accessToken: params.accessToken,
+        accessToken,
         documentId,
       }),
     };
   } catch (error) {
     return {
-      ...params.resource,
+      ...resource,
       documentTextError: formatErrorMessage(error),
     };
   }
@@ -257,22 +251,14 @@ export async function fetchGoogleMeetArtifacts(params: {
       const transcriptsWithText =
         params.includeDocumentBodies === true
           ? await Promise.all(
-              transcripts.map((transcript) =>
-                attachDocumentText({
-                  accessToken: params.accessToken,
-                  resource: transcript,
-                }),
-              ),
+              transcripts.map((transcript) => attachDocumentText(params.accessToken, transcript)),
             )
           : transcripts;
       const smartNotesWithText =
         params.includeDocumentBodies === true
           ? await Promise.all(
               smartNotesResult.smartNotes.map((smartNote) =>
-                attachDocumentText({
-                  accessToken: params.accessToken,
-                  resource: smartNote,
-                }),
+                attachDocumentText(params.accessToken, smartNote),
               ),
             )
           : smartNotesResult.smartNotes;

@@ -245,10 +245,9 @@ function marketplaceEntrySourceToInput(source: MarketplaceEntrySource): string {
     case "git":
     case "git-subdir":
       return `${source.url}${source.ref ? `#${source.ref}` : ""}`;
-    case "url":
+    default:
       return source.url;
   }
-  throw new Error("Unsupported marketplace entry source");
 }
 
 function marketplaceEntryGitRef(source: MarketplaceEntrySource): string | undefined {
@@ -259,10 +258,9 @@ function marketplaceEntryGitRef(source: MarketplaceEntrySource): string | undefi
       return source.ref;
     case "url":
       return resolveArchiveKind(source.url) ? undefined : normalizeGitCloneSource(source.url)?.ref;
-    case "path":
+    default:
       return undefined;
   }
-  throw new Error("Unsupported marketplace entry source");
 }
 
 function isMutableGitDerivedSource(ref: string | undefined): boolean {

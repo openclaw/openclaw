@@ -1,4 +1,3 @@
-/** ACP prompt submission, Gateway chat streaming, and prompt settlement. */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import type {
@@ -241,8 +240,6 @@ export class AcpTranslatorPromptStream {
     session: AcpPendingPromptAdmission["session"],
   ): Promise<PromptResponse> {
     const meta = parseSessionMeta(params["_meta"]);
-    // Pass MAX_PROMPT_BYTES so extractTextFromPrompt rejects oversized content
-    // block-by-block, before the full string is ever assembled in memory (CWE-400)
     const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
     const attachments = extractAttachmentsFromPrompt(params.prompt);
     const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
@@ -260,7 +257,7 @@ export class AcpTranslatorPromptStream {
           })
         : undefined;
 
-    // Defense-in-depth: also check the final assembled message (includes cwd prefix)
+    // The cwd prefix also counts against the prompt budget.
     if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
       throw new Error(`Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`);
     }

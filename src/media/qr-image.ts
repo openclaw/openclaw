@@ -1,4 +1,3 @@
-// QR image helpers generate QR code image files for media delivery.
 import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { loadQrCodeRuntime } from "./qr-runtime.ts";
@@ -86,7 +85,6 @@ export async function renderQrPngBase64(
   return (await renderQrPngBuffer(input, opts)).toString("base64");
 }
 
-/** Renders QR text as a PNG data URL. */
 export async function renderQrPngDataUrl(
   input: string,
   opts: QrPngRenderOptions = {},

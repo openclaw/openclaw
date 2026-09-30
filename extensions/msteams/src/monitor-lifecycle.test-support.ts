@@ -111,8 +111,8 @@ vi.mock("@microsoft/teams.apps", () => ({
 }));
 
 vi.mock("./monitor-handler.js", () => ({
-  isCardActionInvokeAuthorized,
-  isSigninInvokeAuthorized,
+  isMSTeamsInvokeAuthorized: ({ invokeKind }: { invokeKind: string }) =>
+    invokeKind === "card action" ? isCardActionInvokeAuthorized() : isSigninInvokeAuthorized(),
   createMSTeamsActivityHandler,
 }));
 

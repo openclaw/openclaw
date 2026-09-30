@@ -1,4 +1,3 @@
-// Resolves package entry files for plugin loading and public surfaces.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -315,17 +314,6 @@ function resolveSafePackageEntry(
   return { relativePath: path.relative(params.packageDir, absolutePath).replace(/\\/g, "/") };
 }
 
-function resolveOptionalExistingPackageEntrySource(
-  params: PackageEntrySourceParams,
-): { status: "missing" } | { status: "invalid" } | { status: "resolved"; source: string } {
-  const source = path.resolve(params.packageDir, params.entryPath);
-  if (!pluginCacheExistsSync(source)) {
-    return { status: "missing" };
-  }
-  const resolved = resolvePackageEntrySource(params);
-  return resolved ? { status: "resolved", source: resolved } : { status: "invalid" };
-}
-
 function resolvePackageRuntimeEntrySource(
   params: PackageEntrySourceParams & {
     sourceEntryLabel?: string;
@@ -361,16 +349,13 @@ function resolvePackageRuntimeEntrySource(
   if (params.origin === "config" || params.origin === "global") {
     const builtEntryCandidates = listBuiltRuntimeEntryCandidates(safeEntry.relativePath);
     for (const candidate of builtEntryCandidates) {
-      const runtimeSource = resolveOptionalExistingPackageEntrySource({
+      if (!pluginCacheExistsSync(path.resolve(params.packageDir, candidate))) {
+        continue;
+      }
+      return resolvePackageEntrySource({
         ...params,
         entryPath: candidate,
       });
-      if (runtimeSource.status === "resolved") {
-        return runtimeSource.source;
-      }
-      if (runtimeSource.status === "invalid") {
-        return null;
-      }
     }
     // Installed packages must ship compiled JS for TS entries; only trusted source paths fall back.
     if (

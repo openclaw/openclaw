@@ -472,10 +472,6 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
     await new Promise<void>((resolve) => {
       this.retryIdleResolvers.add(resolve);
-      if (this.activeRetryRuns === 0) {
-        this.retryIdleResolvers.delete(resolve);
-        resolve();
-      }
     });
   }
 

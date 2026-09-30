@@ -8,10 +8,12 @@ export function buildRequesterSettleWakeIdentity(params: {
   rearmGeneration?: number;
   attemptIndex?: number;
   parentOnly?: boolean;
+  pause?: boolean;
 }): { batchKey: string; runId: string } {
   const batchKey = [
     `requester-settle:${params.requesterAgentId ?? "unknown"}:${params.requesterSessionKey}:${params.batchRunIds.toSorted().join(",")}`,
     params.rearmGeneration === undefined ? undefined : `yield-${params.rearmGeneration}`,
+    params.pause ? "pause" : undefined,
   ]
     .filter(Boolean)
     .join(":");
@@ -19,7 +21,9 @@ export function buildRequesterSettleWakeIdentity(params: {
   return {
     batchKey,
     runId: buildAnnounceIdempotencyKey(
-      params.parentOnly || attemptIndex === 0 ? batchKey : `${batchKey}:retry-${attemptIndex}`,
+      (params.parentOnly && !params.pause) || attemptIndex === 0
+        ? batchKey
+        : `${batchKey}:retry-${attemptIndex}`,
     ),
   };
 }
@@ -33,7 +37,8 @@ export function isRequesterSettleWakeForRun(params: {
 }): boolean {
   const { entry, requesterSessionKey, requesterAgentId } = params;
   const wake = entry.requesterSettleWake;
-  const batchRunIds = wake?.batchRunIds;
+  const pauseNotice = entry.pauseReason === "sessions_yield" && wake?.pauseNotice;
+  const batchRunIds = pauseNotice ? [entry.runId] : wake?.batchRunIds;
   if (
     entry.requesterSessionKey !== requesterSessionKey ||
     (entry.requesterAgentId && entry.requesterAgentId !== requesterAgentId) ||
@@ -64,6 +69,7 @@ export function isRequesterSettleWakeForRun(params: {
       rearmGeneration: wake.rearmGeneration,
       attemptIndex: wake.attemptCount - 1,
       parentOnly,
+      pause: Boolean(pauseNotice),
     }).runId
   );
 }

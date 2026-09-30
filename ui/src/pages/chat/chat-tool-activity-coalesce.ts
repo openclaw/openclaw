@@ -9,10 +9,11 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.js";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
+import { normalizeRoleForGrouping, resolveMessageRole } from "../../lib/chat/message-normalizer.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolBlockCardsCached, extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { resolveToolBlockId } from "./chat-thread-items.ts";
-import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import { chatItemStartsDisplayTurn } from "./chat-turn-boundary.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
 type MessageItem = Extract<ChatItem, { kind: "message" }>;
@@ -493,7 +494,10 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   return result;
 }
 
-export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
+export function coalesceToolActivityMessages(
+  items: ChatItem[],
+  hiddenKeys?: ReadonlySet<string>,
+): ChatItem[] {
   const result: ChatItem[] = [];
   const appendTurn = (turn: ChatItem[]) => {
     if (turn.length === 0) {
@@ -531,13 +535,26 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
   };
   let turn: ChatItem[] = [];
   for (const item of items) {
-    if (chatItemStartsUserTurn(item) || item.kind === "divider") {
+    const boundary = chatItemStartsDisplayTurn(item) || item.kind === "divider";
+    if (boundary) {
       appendTurn(turn);
-      result.push(item);
       turn = [];
-    } else {
-      turn.push(item);
     }
+    // Hidden rows still delimit turns: reused call ids must never pair across
+    // a prompt or forwarded input removed by transcript search.
+    if (hiddenKeys?.has(item.key)) {
+      continue;
+    }
+    if (
+      boundary &&
+      (item.kind !== "message" ||
+        normalizeRoleForGrouping(resolveMessageRole(item.message)) === "user")
+    ) {
+      result.push(item);
+      continue;
+    }
+    // A projected output starts the new turn and still owns its tool calls.
+    turn.push(item);
   }
   appendTurn(turn);
   return result;

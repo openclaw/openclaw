@@ -204,15 +204,10 @@ export function resolveLmstudioCanonicalModelKey(params: {
 }
 
 function normalizeUrlPath(pathname: string): string {
-  const trimmed = pathname.replace(/\/+$/, "");
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replace(/\/api\/v1$/i, "").replace(/\/v1$/i, "");
-}
-
-function hasExplicitHttpScheme(value: string): boolean {
-  return /^https?:\/\//i.test(value);
+  return pathname
+    .replace(/\/+$/, "")
+    .replace(/\/api\/v1$/i, "")
+    .replace(/\/v1$/i, "");
 }
 
 function isLikelyHostBaseUrl(value: string): boolean {
@@ -227,15 +222,13 @@ function normalizeConfiguredReasoningEffortMap(value: unknown): Record<string, s
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  const entries: Array<[string, string]> = [];
-  for (const [key, mapped] of Object.entries(value)) {
-    const normalizedKey = key.trim();
-    const normalizedValue = typeof mapped === "string" ? mapped.trim() : "";
-    if (normalizedKey && normalizedValue) {
-      entries.push([normalizedKey, normalizedValue]);
-    }
-  }
-  const normalized = Object.fromEntries(entries);
+  const normalized = Object.fromEntries(
+    Object.entries(value).flatMap(([key, mapped]) => {
+      const normalizedKey = key.trim();
+      const normalizedValue = typeof mapped === "string" ? mapped.trim() : "";
+      return normalizedKey && normalizedValue ? [[normalizedKey, normalizedValue] as const] : [];
+    }),
+  );
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
@@ -247,15 +240,6 @@ function normalizeConfiguredCompatStringList(value: unknown): string[] | undefin
     return undefined;
   }
   return [...value];
-}
-
-function isLmstudioConfiguredThinkingFormat(
-  value: unknown,
-): value is (typeof LMSTUDIO_CONFIGURED_THINKING_FORMATS)[number] {
-  return (
-    typeof value === "string" &&
-    LMSTUDIO_CONFIGURED_THINKING_FORMATS.some((format) => format === value)
-  );
 }
 
 function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfig["compat"] {
@@ -275,29 +259,25 @@ function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfi
   if (record.codeMode === "preferred" || record.codeMode === "capable") {
     compat.codeMode = record.codeMode;
   }
-  const visibleReasoningDetailTypes = normalizeConfiguredCompatStringList(
-    record.visibleReasoningDetailTypes,
-  );
-  if (visibleReasoningDetailTypes) {
-    compat.visibleReasoningDetailTypes = visibleReasoningDetailTypes;
-  }
-  const unsupportedToolSchemaKeywords = normalizeConfiguredCompatStringList(
-    record.unsupportedToolSchemaKeywords,
-  );
-  if (unsupportedToolSchemaKeywords) {
-    compat.unsupportedToolSchemaKeywords = unsupportedToolSchemaKeywords;
+  for (const key of ["visibleReasoningDetailTypes", "unsupportedToolSchemaKeywords"] as const) {
+    const configuredValue = normalizeConfiguredCompatStringList(record[key]);
+    if (configuredValue) {
+      compat[key] = configuredValue;
+    }
   }
   if (record.maxTokensField === "max_completion_tokens" || record.maxTokensField === "max_tokens") {
     compat.maxTokensField = record.maxTokensField;
   }
-  if (isLmstudioConfiguredThinkingFormat(record.thinkingFormat)) {
-    compat.thinkingFormat = record.thinkingFormat;
+  const thinkingFormat = LMSTUDIO_CONFIGURED_THINKING_FORMATS.find(
+    (format) => format === record.thinkingFormat,
+  );
+  if (thinkingFormat) {
+    compat.thinkingFormat = thinkingFormat;
   }
-  if (typeof record.toolSchemaProfile === "string") {
-    compat.toolSchemaProfile = record.toolSchemaProfile;
-  }
-  if (typeof record.toolCallArgumentsEncoding === "string") {
-    compat.toolCallArgumentsEncoding = record.toolCallArgumentsEncoding;
+  for (const key of ["toolSchemaProfile", "toolCallArgumentsEncoding"] as const) {
+    if (typeof record[key] === "string") {
+      compat[key] = record[key];
+    }
   }
   if (supportedReasoningEfforts.length > 0) {
     compat.supportedReasoningEfforts = supportedReasoningEfforts;
@@ -311,7 +291,7 @@ function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfi
 }
 
 export function toFetchableLmstudioBaseUrl(value: string): string {
-  if (hasExplicitHttpScheme(value) || !isLikelyHostBaseUrl(value)) {
+  if (/^https?:\/\//i.test(value) || !isLikelyHostBaseUrl(value)) {
     return value;
   }
   return `http://${value}`;

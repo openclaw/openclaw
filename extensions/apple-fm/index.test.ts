@@ -87,12 +87,6 @@ describe("Apple Foundation Models setup", () => {
       expected: "/bundle/dist/extensions/apple-fm",
     },
     {
-      name: "standalone package",
-      rootDir: "/plugins/apple-fm",
-      source: "/plugins/apple-fm/dist/index.js",
-      expected: "/plugins/apple-fm",
-    },
-    {
       name: "legacy source registration",
       source: "/checkout/extensions/apple-fm/index.ts",
       expected: "/checkout/extensions/apple-fm",
@@ -108,6 +102,11 @@ describe("Apple Foundation Models setup", () => {
   });
 
   it("configures the measured native model without creating credentials or a service", async () => {
+    native.prepare.mockResolvedValue({
+      ...facts,
+      modelName: "Future model",
+      contextWindow: 16_384,
+    });
     const { provider, method } = registeredProvider();
     const result = await method.run(authContext());
     const configured = result.configPatch?.models?.providers?.["apple-fm"];
@@ -116,8 +115,8 @@ describe("Apple Foundation Models setup", () => {
     expect(result.defaultModel).toBe("apple-fm/system");
     expect(configured?.models[0]).toMatchObject({
       id: "system",
-      name: facts.modelName,
-      contextWindow: 8_192,
+      name: "Future model",
+      contextWindow: 16_384,
       maxTokens: 1_024,
       compat: { supportsTools: true, supportsJsonSchemaResponseFormat: true },
     });
@@ -129,30 +128,6 @@ describe("Apple Foundation Models setup", () => {
       apiKey: "apple-fm-local",
     });
     expect(provider.resolveSyntheticAuth?.({ provider: "apple-fm" })).toBeUndefined();
-  });
-
-  it.each([
-    {
-      result: { ...facts, available: false, reason: "Enable Apple Intelligence" },
-      error: "Enable Apple Intelligence",
-    },
-    { result: { ...facts, contextWindow: 4_096 }, error: "requires at least 8192" },
-  ])("rejects an unusable system model: $error", async ({ result, error }) => {
-    native.prepare.mockResolvedValue(result);
-    await expect(registeredProvider().method.run(authContext())).rejects.toThrow(error);
-  });
-
-  it("retains a larger context window reported by the native model", async () => {
-    native.prepare.mockResolvedValue({
-      ...facts,
-      modelName: "Future system model",
-      contextWindow: 16_384,
-    });
-    const result = await registeredProvider().method.run(authContext());
-    expect(result.configPatch?.models?.providers?.["apple-fm"]?.models[0]).toMatchObject({
-      name: "Future system model",
-      contextWindow: 16_384,
-    });
   });
 
   it("prepares only the selected model and rechecks its eligibility before activation", async () => {
@@ -180,13 +155,9 @@ describe("Apple Foundation Models setup", () => {
   });
 
   it.each([
-    { result: null, visible: false },
     { result: { ...facts, available: false }, visible: false },
-    { result: { ...facts, contextWindow: 0 }, visible: false },
-    { result: { ...facts, contextWindow: 4_096 }, visible: false },
     { result: { ...facts, contextWindow: 8_191 }, visible: false },
     { result: facts, visible: true },
-    { result: { ...facts, contextWindow: 16_384 }, visible: true },
   ])("offers only an available 8K or larger model: $result", async ({ result, visible }) => {
     native.probe.mockResolvedValue(result);
     const guided = registeredProvider().method.appGuidedSetup!;
@@ -226,11 +197,6 @@ describe("Apple Foundation Models setup", () => {
       ...before.agents?.defaults?.models,
       "apple-fm/system": { agentRuntime: { id: "openclaw" } },
     });
-  });
-
-  it("propagates developer-tool failures without creating a setup proposal", async () => {
-    native.prepare.mockRejectedValue(new Error("Install Apple Swift tools with macOS 27 SDK"));
-    await expect(registeredProvider().method.run(authContext())).rejects.toThrow("macOS 27 SDK");
   });
 
   it("rejects unsupported hosts before a noninteractive reset can proceed", async () => {

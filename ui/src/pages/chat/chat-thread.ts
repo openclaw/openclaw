@@ -70,6 +70,12 @@ export function resetChatThreadState(paneId?: string): void {
   expandedUserMessagesBySession.clear();
 }
 
+type ReplySource = MessageGroup["replyToMessage"];
+
+function sameReplySource(previous: ReplySource, next: ReplySource): boolean {
+  return previous?.key === next?.key && previous?.message === next?.message;
+}
+
 function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   // Source message identity owns the row timestamp too: normalization supplies
   // Date.now() for missing timestamps, which must not churn stable rows.
@@ -83,6 +89,10 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
       messageClientSourcesKey(next.sourceClients ?? []) &&
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
     JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
+    sameReplySource(previous.replyToMessage, next.replyToMessage) &&
+    previous.replyShared === next.replyShared &&
+    sameReplySource(previous.replyTurnSource, next.replyTurnSource) &&
+    sameReplySource(previous.replyCurrentSource, next.replyCurrentSource) &&
     previous.isStreaming === next.isStreaming &&
     previous.visibleContent === next.visibleContent &&
     previous.runId === next.runId &&
@@ -94,6 +104,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
         entry.key === candidate.key &&
         entry.message === candidate.message &&
         entry.duplicateCount === candidate.duplicateCount &&
+        JSON.stringify(entry.replyTarget) === JSON.stringify(candidate.replyTarget) &&
         entry.hasVisibleContent === candidate.hasVisibleContent
       );
     })
@@ -139,6 +150,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.startedAt === next.startedAt &&
         previous.isStreaming === next.isStreaming &&
         JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
+        sameReplySource(previous.replyToMessage, next.replyToMessage) &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );
@@ -292,6 +304,8 @@ function sameChatItemsStructuralInput(
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
     previous.loading === next.loading &&
+    sameEntries(previous.replyPeople, next.replyPeople) &&
+    previous.replyLocalPerson === next.replyLocalPerson &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
     previous.messageRecovery?.messages === next.messageRecovery?.messages &&

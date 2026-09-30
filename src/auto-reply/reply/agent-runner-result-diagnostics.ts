@@ -1,11 +1,14 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import {
+  resolveSessionPluginStatusLines,
+  resolveSessionPluginTraceLines,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { buildInlinePluginStatusPayload } from "./agent-runner-core.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import {
   accumulateSessionUsageFromTranscript,
@@ -59,11 +62,13 @@ export async function buildReplyDiagnosticsPayload(params: {
   if (!verboseEnabled && !traceEnabled) {
     return undefined;
   }
-  let diagnosticsPayload = buildInlinePluginStatusPayload({
-    entry: activeSessionEntry,
-    includeStatusLines: verboseEnabled,
-    includeTraceLines: traceEnabled,
-  });
+  const lines = [
+    ...(verboseEnabled ? resolveSessionPluginStatusLines(activeSessionEntry) : []),
+    ...(traceEnabled ? resolveSessionPluginTraceLines(activeSessionEntry) : []),
+  ];
+  let diagnosticsPayload: ReplyPayload | undefined = lines.length
+    ? { text: lines.join("\n") }
+    : undefined;
   if (traceAuthorized && traceLevel === "raw") {
     const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
     const rawUserText = isHookBlockedRun
