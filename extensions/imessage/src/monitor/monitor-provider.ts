@@ -542,18 +542,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               await abandon();
               return;
             }
-            if (entries.length === 1) {
-              await handleMessageNow(
-                expectDefined(entries[0], "single iMessage dispatch entry").message,
-                admissionLifecycle,
-              );
-              await settle();
-              return;
-            }
-
-            const messages = entries.map((entry) => entry.message);
-            const combined = combineIMessagePayloads(messages);
-            if (shouldLogVerbose()) {
+            const combined =
+              entries.length === 1
+                ? expectDefined(entries[0], "single iMessage dispatch entry").message
+                : combineIMessagePayloads(entries.map((entry) => entry.message));
+            if (entries.length > 1 && shouldLogVerbose()) {
               const text = combined.text ?? "";
               const preview = sliceUtf16Safe(text, 0, 50);
               const ellipsis = text.length > 50 ? "..." : "";
@@ -1107,6 +1100,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     };
     let directTypingController: IMessageTypingController | undefined;
+    const startDirectToolTyping = async () => {
+      await directTypingController?.startTypingLoop();
+      return false;
+    };
     const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
@@ -1124,18 +1121,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           // Keep the channel-owned progress lane present even when private-API
           // typing is unavailable. Fast-mode notices are then consumed here
           // instead of falling back to a durable iMessage bubble.
-          onToolResult: async () => {
-            await directTypingController?.startTypingLoop();
-            return false;
-          },
-          ...(supportsTyping
-            ? {
-                onToolStart: async () => {
-                  await directTypingController?.startTypingLoop();
-                  return false;
-                },
-              }
-            : {}),
+          onToolResult: startDirectToolTyping,
+          ...(supportsTyping ? { onToolStart: startDirectToolTyping } : {}),
         } as const)
       : {};
     const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);

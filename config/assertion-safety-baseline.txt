@@ -425,7 +425,7 @@ extensions/imessage/src/accounts.ts	4
 extensions/imessage/src/actions-contract.ts	1
 extensions/imessage/src/actions.runtime.ts	2
 extensions/imessage/src/actions.ts	1
-extensions/imessage/src/approval-handler.runtime.ts	2
+extensions/imessage/src/approval-handler.runtime.ts	1
 extensions/imessage/src/approval-polls.ts	6
 extensions/imessage/src/approval-reaction-poller.ts	1
 extensions/imessage/src/approval-reactions.ts	2
