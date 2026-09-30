@@ -284,13 +284,9 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       resolveExtraParams: resolveTransportExtraParams,
     },
     observability: {
+      ...resolvedRef,
       resolvedRef: `${params.provider}/${params.modelId}`,
-      provider: params.provider,
-      modelId: params.modelId,
-      ...(modelApi ? { modelApi } : {}),
-      ...(params.harnessId ? { harnessId: params.harnessId } : {}),
       ...(auth.forwardedAuthProfileId ? { authProfileId: auth.forwardedAuthProfileId } : {}),
-      ...(transport ? { transport } : {}),
     },
   };
 }

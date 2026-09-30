@@ -580,7 +580,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
             ? mediaAccess.readFile
             : undefined;
-          const normalizationPolicy = resolveAttachmentMediaPolicy({
+          const mediaPolicy = resolveAttachmentMediaPolicy({
             sandboxRoot: input.sandboxRoot,
             sandboxContainerWorkdir: input.sandboxContainerWorkdir,
             mediaAccess,
@@ -589,15 +589,9 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
 
           await normalizeSandboxMediaParams({
             args: params,
-            mediaPolicy: normalizationPolicy,
+            mediaPolicy,
             extraParamKeys: extraActionMediaSourceParamKeys,
             structuredAttachments: structuredAttachmentMode,
-          });
-          const mediaPolicy = resolveAttachmentMediaPolicy({
-            sandboxRoot: input.sandboxRoot,
-            sandboxContainerWorkdir: input.sandboxContainerWorkdir,
-            mediaAccess,
-            mediaReadFile: sandboxMediaReadFile,
           });
           const gateway = input.gateway;
           const preserveSendBuffer =

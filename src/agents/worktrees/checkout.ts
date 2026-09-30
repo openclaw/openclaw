@@ -13,6 +13,7 @@ import {
   listGitWorktrees,
   worktreePathExists,
   requireGit,
+  resolveGitMetadataPath,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
@@ -81,15 +82,6 @@ function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitC
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-async function indexPath(worktree: string, options: WorktreeFilesystemOptions): Promise<string> {
-  return path.resolve(
-    worktree,
-    normalizeGitPathForFilesystem(
-      await requireGit(worktree, ["rev-parse", "--git-path", "index"], gitOptions(options)),
-    ),
-  );
 }
 
 async function estimateTemplateCloneBytes(
@@ -284,7 +276,11 @@ async function prepareTemplate(options: CheckoutOptions) {
     ) {
       assertOwned(options);
       touchTemplate(options.env, existing.id, options.now(), options.commitGuard);
-      return { record: existing, backend, sourceIndex: await indexPath(existing.path, options) };
+      return {
+        record: existing,
+        backend,
+        sourceIndex: await resolveGitMetadataPath(existing.path, "index", gitOptions(options)),
+      };
     }
   }
   // Restore must not build an obsolete parent tree just to overwrite it with its snapshot.
@@ -325,7 +321,11 @@ async function prepareTemplate(options: CheckoutOptions) {
   );
   assertOwned(options);
   markTemplateReady(options.env, id, options.now(), options.commitGuard);
-  return { record, backend, sourceIndex: await indexPath(record.path, options) };
+  return {
+    record,
+    backend,
+    sourceIndex: await resolveGitMetadataPath(record.path, "index", gitOptions(options)),
+  };
 }
 
 /** Git owns registration, branches and indexes; the backend only materializes files. */

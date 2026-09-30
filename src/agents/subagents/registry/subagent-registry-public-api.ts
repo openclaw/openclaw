@@ -1,20 +1,25 @@
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
   ackLeasedAgentSteeringItemsFromSubagentRuns,
   leasePendingAgentSteeringItemsFromSubagentRuns,
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "../../agent-steering-queue.js";
+import { captureGatewayToolCallerAssertion } from "../../tools/gateway-caller-context.js";
+import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
+import {
+  assertSubagentRegistryWriteSourceCurrent,
+  SubagentRegistryWriteError,
+} from "./subagent-registry-persistence.js";
 import {
   countActiveRunsForSessionFromRuns,
   listSwarmRunsForGroupFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
-import {
-  listUnsettledRequesterChildrenInRuns,
-  markRequesterTurnYieldedInRuns,
-} from "./subagent-registry-requester-yield.js";
+import { listUnsettledRequesterChildrenInRuns } from "./subagent-registry-requester-yield.js";
 import { markSubagentMessageWaitInRuns } from "./subagent-registry-run-pause.js";
 import {
   getSubagentRunsSnapshotForRead,
@@ -26,9 +31,11 @@ export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
   persist: (...runIds: string[]) => void;
   persistOrThrow: (...runIds: string[]) => void;
-  restoreOnce: () => void;
+  persistAsyncOrThrow: Parameters<typeof markSubagentMessageWaitInRuns>[0]["persist"];
+  restoreOnce: (context?: OpenClawStateWorkerContext) => Promise<void>;
   startAnnounceCleanup: (runId: string, entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
+  markRequesterYielded: SubagentLifecycleController["markRequesterTurnYielded"];
 }) {
   const { runs, persist, persistOrThrow, restoreOnce, startAnnounceCleanup, settleRequesterTurn } =
     config;
@@ -41,7 +48,7 @@ export function createSubagentRegistryPublicApi(config: {
     leaseId: string;
     now?: number;
   }) {
-    restoreOnce();
+    await restoreOnce();
     const leased = await leasePendingAgentSteeringItemsFromSubagentRuns({
       ...params,
       runs,
@@ -201,39 +208,90 @@ export function createSubagentRegistryPublicApi(config: {
   }
 
   /** Records sessions_yield before the active requester run is aborted. */
-  function markRequesterTurnYielded(params: {
-    requesterSessionKey: string;
-    requesterAgentId?: string;
-    requesterTurnRunId: string;
-  }): number {
-    restoreOnce();
-    return markRequesterTurnYieldedInRuns({
-      ...params,
-      runs,
-      persistOrThrow,
-    });
+  async function markRequesterTurnYielded(
+    params: Parameters<SubagentLifecycleController["markRequesterTurnYielded"]>[0],
+  ): Promise<number> {
+    const stateContext = params.stateContext ?? captureOpenClawStateWorkerContext();
+    const assertCallerCurrent = captureGatewayToolCallerAssertion();
+    const assertCurrent = () => {
+      assertSubagentRegistryWriteSourceCurrent(stateContext);
+      assertCallerCurrent?.();
+      params.assertCurrent?.();
+    };
+    assertCurrent();
+    const preparedAuthority = prepareRequesterCronAuthority(params) ?? null;
+    let result: number;
+    try {
+      await restoreOnce(stateContext);
+      result = await config.markRequesterYielded({
+        ...params,
+        stateContext,
+        assertCurrent,
+        preparedAuthority,
+      });
+      try {
+        assertCurrent();
+        if (result > 0) {
+          preparedAuthority?.assertCurrent();
+        }
+      } catch (error) {
+        throw new SubagentRegistryWriteError(
+          result > 0 ? "committed" : "not-committed",
+          error,
+          result > 0 ? "published" : undefined,
+        );
+      }
+    } finally {
+      const release = preparedAuthority?.release();
+      if (release) {
+        await release;
+      }
+    }
+    try {
+      assertCurrent();
+    } catch (error) {
+      throw new SubagentRegistryWriteError(
+        result > 0 ? "committed" : "not-committed",
+        error,
+        result > 0 ? "published" : undefined,
+      );
+    }
+    return result;
   }
 
   /** Lists announcing children whose completion this requester session still awaits. */
-  function listUnsettledRequesterChildren(params: {
+  async function listUnsettledRequesterChildren(params: {
     requesterSessionKey: string;
     requesterAgentId?: string;
     excludeRequesterTurnRunId?: string;
   }) {
-    restoreOnce();
+    await restoreOnce();
     // Same live-map view as the yield claim: rows this turn just registered
     // count, and rows the registry already retired do not.
     return listUnsettledRequesterChildrenInRuns({ ...params, runs });
   }
 
   return {
-    markSubagentMessageWait: (params: {
+    markSubagentMessageWait: async (params: {
       runId: string;
       sessionKey: string;
       acknowledgment?: string;
     }) => {
-      restoreOnce();
-      markSubagentMessageWaitInRuns({ ...params, runs, persistOrThrow });
+      const stateContext = captureOpenClawStateWorkerContext();
+      const assertCallerCurrent = captureGatewayToolCallerAssertion();
+      const assertCurrent = () => {
+        assertSubagentRegistryWriteSourceCurrent(stateContext);
+        assertCallerCurrent?.();
+      };
+      assertCurrent();
+      await restoreOnce(stateContext);
+      await markSubagentMessageWaitInRuns({
+        ...params,
+        runs,
+        context: stateContext,
+        assertCurrent,
+        persist: config.persistAsyncOrThrow,
+      });
     },
     leasePendingAgentSteeringItems,
     ackPendingAgentSteeringItems,

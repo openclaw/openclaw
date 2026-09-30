@@ -1,13 +1,13 @@
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 // Public media-understanding runtime API types for file-based image/audio/video
 // helpers and direct structured extraction.
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
-  StructuredExtractionInput,
+  ImagesDescriptionInput,
+  StructuredExtractionRequest,
 } from "./types.js";
 
 export type RunMediaUnderstandingFileParams = {
@@ -56,11 +56,7 @@ export type DescribeImageFileWithModelParams = {
   timeoutMs?: number;
 };
 
-export type PreparedImageDescriptionInput = {
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
-};
+export type PreparedImageDescriptionInput = ImagesDescriptionInput;
 
 export type PrepareImageDescriptionInputParams = Pick<
   DescribeImageFileWithModelParams,
@@ -78,20 +74,13 @@ type DescribeImageFileWithModelResult = Awaited<
   ReturnType<NonNullable<MediaUnderstandingProvider["describeImage"]>>
 >;
 
-export type ExtractStructuredWithModelParams = {
+export type ExtractStructuredWithModelParams = Omit<
+  StructuredExtractionRequest,
+  "input" | "agentDir" | "signal" | "timeoutMs"
+> & {
   /** At least one image input is required; text inputs provide supplemental context. */
-  input: StructuredExtractionInput[];
-  instructions: string;
-  schemaName?: string;
-  jsonSchema?: unknown;
-  jsonMode?: boolean;
-  cfg: OpenClawConfig;
+  input: StructuredExtractionRequest["input"];
   agentDir?: string;
-  provider: string;
-  model: string;
-  profile?: string;
-  preferredProfile?: string;
-  authStore?: AuthProfileStore;
   timeoutMs?: number;
 };
 

@@ -4,10 +4,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createTempDirTracker,
-  useAutoCleanupTempDirTracker,
-} from "../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
 import type { GatewayServer, GatewayStartupOperation } from "../../gateway/server-public.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
@@ -22,7 +19,10 @@ import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
 import { registerHostedUpdateStopTests } from "./run-loop-hosted-stop.test-support.js";
 import { registerGatewayRequestTests } from "./run-loop-request.test-support.js";
 import { registerShutdownBudgetTests } from "./run-loop-shutdown-budget.test-support.js";
-import { registerShutdownCompletionTests } from "./run-loop-shutdown-completion.test-support.js";
+import {
+  registerGracefulGatewayShutdownTest,
+  registerShutdownCompletionTests,
+} from "./run-loop-shutdown-completion.test-support.js";
 import { registerGatewayStartupFailureTests } from "./run-loop-startup.test-support.js";
 import { registerUpdateRespawnTests } from "./run-loop-update-respawn.test-support.js";
 import {
@@ -920,108 +920,6 @@ describe("runGatewayLoop", () => {
     },
   );
 
-  it.each(["clean", "failed", "maintenance"] as const)(
-    "fences replacement after deferred startup with %s cleanup",
-    async (cleanup) => {
-      vi.clearAllMocks();
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { runGatewayLoop } = await import("./run-loop.js");
-        const firstStartup = createDeferredCore();
-        const thirdStarted = createDeferredCore();
-        const { SessionStoreMigrationRequiredError } =
-          await import("../../config/sessions/migration-required.js");
-        const startupError =
-          cleanup === "maintenance"
-            ? new SessionStoreMigrationRequiredError("legacy session store requires migration")
-            : new Error("replacement deferred startup failed");
-        const cleanupError = new Error("replacement cleanup failed");
-        const closeFirst = createCloseMock();
-        const closeSecond = createCloseMock();
-        if (cleanup === "failed") {
-          closeSecond.mockRejectedValueOnce(cleanupError);
-        }
-        const closeThird = createCloseMock();
-        const start = vi
-          .fn<Parameters<typeof runGatewayLoop>[0]["start"]>()
-          .mockResolvedValueOnce(createGatewayServer(closeFirst, firstStartup.promise))
-          .mockImplementationOnce(async () =>
-            createGatewayServer(closeSecond, Promise.reject(startupError)),
-          )
-          .mockImplementationOnce(async () => {
-            thirdStarted.resolve();
-            return createGatewayServer(closeThird);
-          });
-        const { runtime, exited } = createRuntimeWithExitSignal();
-        const onRestartStartupFailure = vi.fn(async (error: unknown) => {
-          expect(error).toBe(startupError);
-          expect(closeSecond).toHaveBeenCalledExactlyOnceWith({ reason: "gateway startup failed" });
-        });
-        const loop = runGatewayLoop({ start, runtime, onRestartStartupFailure });
-        const loopRejected = vi.fn<(error: unknown) => void>();
-        const loopSettled = loop.catch(loopRejected);
-        let stop: (() => void) | undefined;
-        try {
-          await waitForLoopCondition(
-            () => start.mock.calls.length === 1,
-            "expected initial deferred startup",
-          );
-          const restart = captureSignal("SIGUSR2");
-          stop = captureSignal("SIGTERM");
-          restart();
-          // Observe either outcome, so incorrect recovery fails an assertion immediately.
-          await waitForLoopCondition(
-            () =>
-              loopRejected.mock.calls.length > 0 ||
-              gatewayLog.error.mock.calls.some(([message]) =>
-                String(message).startsWith("gateway startup failed:"),
-              ),
-            "expected replacement startup to reject or enter recovery",
-          );
-          expect(closeSecond).toHaveBeenCalledExactlyOnceWith({
-            reason: "gateway startup failed",
-          });
-          if (cleanup === "clean") {
-            expect(onRestartStartupFailure).toHaveBeenCalledOnce();
-            expect(loopRejected).not.toHaveBeenCalled();
-            restart();
-            await thirdStarted.promise;
-            expect(start).toHaveBeenCalledTimes(3);
-            stop();
-            await expect(exited).resolves.toBe(0);
-          } else if (cleanup === "maintenance") {
-            expect(onRestartStartupFailure).not.toHaveBeenCalled();
-            expect(loopRejected).toHaveBeenCalledExactlyOnceWith(startupError);
-            expect(start).toHaveBeenCalledTimes(2);
-          } else {
-            expect(onRestartStartupFailure).not.toHaveBeenCalled();
-            expect(loopRejected).toHaveBeenCalledOnce();
-            await expect(loop).rejects.toBeInstanceOf(AggregateError);
-            await expect(loop).rejects.toMatchObject({
-              cause: startupError,
-              errors: expect.arrayContaining([startupError, cleanupError]),
-            });
-            expect(start).toHaveBeenCalledTimes(2);
-            expect(runtime.exit).not.toHaveBeenCalled();
-          }
-        } finally {
-          firstStartup.resolve();
-          await firstStartup.promise;
-          if (
-            loopRejected.mock.calls.length === 0 &&
-            runtime.exit.mock.calls.length === 0 &&
-            stop
-          ) {
-            stop();
-            await exited;
-          }
-          if (loopRejected.mock.calls.length > 0) {
-            await loopSettled;
-          }
-        }
-      });
-    },
-  );
-
   it("rejects an unclean replacement acquisition before admitting another lifecycle", async () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
@@ -1121,81 +1019,16 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  registerGatewayStartupFailureTests();
+  registerGatewayStartupFailureTests(gatewayLog);
 
-  it("exits 0 on SIGTERM after graceful close", async () => {
-    vi.clearAllMocks();
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, runtime, exited } = await createSignaledLoopHarness();
-      let finishLocalServiceStop: (() => void) | undefined;
-      const localServiceStopStarted = new Promise<void>((resolveStarted) => {
-        stopManagedProviderLocalServices.mockImplementationOnce(
-          () =>
-            new Promise<void>((resolveStop) => {
-              finishLocalServiceStop = resolveStop;
-              resolveStarted();
-            }),
-        );
-      });
-      hasManagedProviderLocalServices.mockReturnValueOnce(true);
-      const sigterm = captureSignal("SIGTERM");
-      const { emitDiagnosticsTimelineEvent, flushDiagnosticsTimeline } =
-        await import("../../infra/diagnostics-timeline.js");
-      const tempDirs = createTempDirTracker();
-      const timelinePath = join(tempDirs.make("openclaw-gateway-stop-"), "timeline.jsonl");
-      let timelineAtLogFlush: string | undefined;
-      close.mockImplementationOnce(async () => {
-        emitDiagnosticsTimelineEvent(
-          { type: "mark", name: "gateway.stop" },
-          {
-            env: {
-              OPENCLAW_DIAGNOSTICS: "timeline",
-              OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
-            },
-          },
-        );
-      });
-      flushLogger.mockImplementationOnce(async () => {
-        expect(runtime.exit).not.toHaveBeenCalled();
-        timelineAtLogFlush = existsSync(timelinePath)
-          ? readFileSync(timelinePath, "utf8")
-          : undefined;
-      });
-
-      try {
-        sigterm();
-        await localServiceStopStarted;
-
-        expect(close).toHaveBeenCalledWith({
-          reason: "gateway stopping",
-          restartExpectedMs: null,
-        });
-        expect(runtime.exit).not.toHaveBeenCalled();
-        expect(flushLogger).not.toHaveBeenCalled();
-        if (!finishLocalServiceStop) {
-          throw new Error("managed local service stop did not start");
-        }
-        finishLocalServiceStop();
-
-        await expect(exited).resolves.toBe(0);
-        expect(start).toHaveBeenCalledWith({
-          processStartedAt: expect.any(Number),
-          startupStartedAt: expect.any(Number),
-          requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
-          hostLifecycle: expect.objectContaining({ request: expect.any(Function) }),
-          startupOperation: expect.any(Function),
-        });
-        expect(runtime.exit).toHaveBeenCalledWith(0);
-        expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
-        expect(flushLogger).toHaveBeenCalledOnce();
-        expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
-        expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
-      } finally {
-        flushDiagnosticsTimeline();
-        tempDirs.cleanup();
-      }
-    });
+  registerGracefulGatewayShutdownTest({
+    acquireGatewayLock,
+    createSignaledLoopHarness,
+    hasManagedProviderLocalServices,
+    stopManagedProviderLocalServices,
+    flushLogger,
+    requestGatewayRestartWithSignalAdmission,
+    armShutdownHardExitWatchdog,
   });
 
   it("passes the process origin to the initial startup only", async () => {

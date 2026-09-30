@@ -785,111 +785,75 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
     const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
 
+    const expectedSources = [
+      "oc://openclaw.config/models/providers/openai/request/auth/token",
+      "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
+      'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
+      "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/GITHUB_TOKEN",
+      "oc://openclaw.config/tools/media/models/#0/request/auth/token",
+      "oc://openclaw.config/tools/media/models/#0/request/tls/key",
+      "oc://openclaw.config/tools/media/audio/request/auth/token",
+      "oc://openclaw.config/tools/media/models/#1/request/auth/token",
+    ];
     expect(evidence.secrets).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/models/providers/openai/request/auth/token",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: 'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source:
-            "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/GITHUB_TOKEN",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/tools/media/models/#0/request/auth/token",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/tools/media/models/#0/request/tls/key",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/tools/media/audio/request/auth/token",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/tools/media/models/#1/request/auth/token",
-        }),
-      ]),
+      expect.arrayContaining(
+        expectedSources.map((source) =>
+          expect.objectContaining({
+            kind: "input",
+            provenance: "secretRef",
+            refSource: "exec",
+            refProvider: "rogue",
+            source,
+          }),
+        ),
+      ),
     );
+    const expectedFindings: Array<[string, string]> = [
+      [
+        "policy/secrets-unmanaged-provider",
+        "oc://openclaw.config/models/providers/openai/request/auth/token",
+      ],
+      [
+        "policy/secrets-denied-provider-source",
+        "oc://openclaw.config/models/providers/openai/request/auth/token",
+      ],
+      [
+        "policy/secrets-unmanaged-provider",
+        "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
+      ],
+      [
+        "policy/secrets-denied-provider-source",
+        "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
+      ],
+      [
+        "policy/secrets-unmanaged-provider",
+        'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
+      ],
+      [
+        "policy/secrets-denied-provider-source",
+        "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/GITHUB_TOKEN",
+      ],
+      [
+        "policy/secrets-unmanaged-provider",
+        "oc://openclaw.config/tools/media/models/#0/request/auth/token",
+      ],
+      [
+        "policy/secrets-denied-provider-source",
+        "oc://openclaw.config/tools/media/audio/request/auth/token",
+      ],
+      [
+        "policy/secrets-unmanaged-provider",
+        "oc://openclaw.config/tools/media/models/#1/request/auth/token",
+      ],
+      [
+        "policy/secrets-unmanaged-provider",
+        "oc://openclaw.config/tools/media/models/#0/request/tls/key",
+      ],
+    ];
     expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/models/providers/openai/request/auth/token",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-denied-provider-source",
-          ocPath: "oc://openclaw.config/models/providers/openai/request/auth/token",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-denied-provider-source",
-          ocPath: "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: 'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-denied-provider-source",
-          ocPath:
-            "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/GITHUB_TOKEN",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/tools/media/models/#0/request/auth/token",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-denied-provider-source",
-          ocPath: "oc://openclaw.config/tools/media/audio/request/auth/token",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/tools/media/models/#1/request/auth/token",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/tools/media/models/#0/request/tls/key",
-        }),
-      ]),
+      expect.arrayContaining(
+        expectedFindings.map(([checkId, ocPath]) => expect.objectContaining({ checkId, ocPath })),
+      ),
     );
   });
 

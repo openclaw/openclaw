@@ -450,10 +450,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sender.reply(toApplicationShouldTerminate: true)
     }
 
-    static func shouldPresentScheduledFirstRunOnboarding(onboardingSeen: Bool) -> Bool {
-        !onboardingSeen
-    }
-
     private func scheduleFirstRunOnboardingIfNeeded() async {
         let connectionMode = AppStateStore.shared.connectionMode
         let onboardingSeen = AppStateStore.shared.onboardingSeen
@@ -469,9 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            guard Self.shouldPresentScheduledFirstRunOnboarding(
-                onboardingSeen: AppStateStore.shared.onboardingSeen)
-            else { return }
+            guard !AppStateStore.shared.onboardingSeen else { return }
             OnboardingController.shared.show()
         }
     }

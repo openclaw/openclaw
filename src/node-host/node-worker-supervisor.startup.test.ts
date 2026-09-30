@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -44,6 +45,7 @@ function launchInput(workspaceDir: string, launchId: string, prompt = "success")
 describe("node worker startup", () => {
   it.runIf(process.platform === "linux" || process.platform === "darwin").each([
     { build: "current", lineage: true },
+    { build: "lineage-only", lineage: true },
     { build: "released", lineage: false },
     { build: "execution-authority-only", lineage: false },
   ])(
@@ -52,6 +54,12 @@ describe("node worker startup", () => {
       const { bundleRoot, supervisor, workspaceDir } = fixture();
       const input = launchInput(workspaceDir, `start-contract-${build}`);
       input.descriptor.admission.handshake.openclawVersion = "2026.9.4";
+      if (build !== "current") {
+        input.descriptor.admission.handshake.protocolFeatures =
+          input.descriptor.admission.handshake.protocolFeatures.filter(
+            (feature) => feature !== WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+          );
+      }
       if (!lineage) {
         input.descriptor.admission.handshake.protocolFeatures =
           input.descriptor.admission.handshake.protocolFeatures.filter(
@@ -60,6 +68,11 @@ describe("node worker startup", () => {
               (build !== "released" || feature !== WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE),
           );
       }
+      const nativeOwner =
+        build === "current" && process.platform === "linux" && !process.versions.bun;
+      const expectedKeys = lineage
+        ? ["lineageFds", ...(nativeOwner ? ["nativeProcessOwner"] : []), "type"]
+        : ["type"];
       const reportPath = path.join(workspaceDir, "start-contract.json");
       fs.writeFileSync(
         path.join(
@@ -74,7 +87,7 @@ import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 const started = new Promise(resolve => process.once("message", message => {
   const keys = Object.keys(message).sort();
-  const expected = ${JSON.stringify(lineage ? ["lineageFds", "type"] : ["type"])};
+  const expected = ${JSON.stringify(expectedKeys)};
   if (message.type !== "openclaw-worker-start-v1" || JSON.stringify(keys) !== JSON.stringify(expected)) {
     process.stderr.write("unsupported start envelope");
     process.exit(24);
@@ -108,7 +121,7 @@ lines.once("line", line => {
           pgid: number;
           keys: string[];
         };
-        expect(report.keys).toEqual(lineage ? ["lineageFds", "type"] : ["type"]);
+        expect(report.keys).toEqual(expectedKeys);
         expect(report.pgid).toBe(adapterPid);
         if (lineage) {
           expect(report.pid).not.toBe(adapterPid);

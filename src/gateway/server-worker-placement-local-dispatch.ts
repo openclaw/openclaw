@@ -60,7 +60,8 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
           target: currentTarget,
           entry: currentEntry,
           workspace,
-        } = resolveWorkerPlacementSessionTarget({
+          assertCurrent,
+        } = await resolveWorkerPlacementSessionTarget({
           sessionRuntime,
           config: getRuntimeConfig(),
           sessionId,
@@ -69,6 +70,7 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
           expectedTarget: target,
           errorMessage: `Session ${sessionKey} changed before cloud worker dispatch. Retry.`,
         });
+        assertCurrent(getRuntimeConfig());
         if (currentEntry.archivedAt !== undefined) {
           throw new WorkerDispatchTargetChangedError(
             `Session ${sessionKey} was archived before cloud worker dispatch. Retry.`,
@@ -89,6 +91,7 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
           const preflightWorkerWorkspace = await loadWorkerWorkspacePreflight();
           await preflightWorkerWorkspace({ localPath: workspace.path, signal });
         }
+        assertCurrent(getRuntimeConfig());
         authorize?.();
         placement = await startDispatch();
         clearSessionQueues(lifecycleIdentities);

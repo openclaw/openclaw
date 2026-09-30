@@ -6,6 +6,52 @@ Linux environment. Select it through `agents.defaults.agentRuntime.id` or an age
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
+Configure HTTP MCP servers through the shared `mcp.servers` configuration or an
+enabled plugin's MCP bundle. For example:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "documentation": {
+        "transport": "streamable-http",
+        "url": "https://developers.openai.com/mcp"
+      }
+    }
+  }
+}
+```
+
+The harness forwards these definitions as native Agents API MCP tools. Connections
+originate from the session's execution environment, so a self-hosted executor can
+reach private HTTP services. The Gateway does not open a second MCP connection.
+Server initialization is optional: the turn can continue if a server is unavailable.
+HTTP `headers` support explicit values and environment-variable references such as
+`Bearer ${MCP_ACCESS_TOKEN}`. The API receives these credentials to authenticate the
+MCP connection. Gateway OAuth profiles and requester-scoped connections are not
+forwarded. Configure headers for services requiring authentication.
+
+Exact `toolFilter.include` names become the native tool allowlist. Configured
+exclusions and session tool denials are subtracted from that list; exclusions
+without an explicit include list and wildcard filters are unsupported. The harness
+logs an error and omits unsupported servers, including stdio, Gateway OAuth,
+requester-scoped connections, legacy SSE, custom TLS, unsupported filters, and
+headers it cannot resolve. Other supported servers remain available. Set an
+explicit Streamable HTTP transport; URL-only definitions retain OpenClaw's legacy
+SSE interpretation and are omitted. Connection/request timeouts and parallel-call
+settings remain controlled by the native API.
+
+Updating MCP definitions in an existing native session is an MVP implementation
+gap. Changing the effective HTTP MCP configuration or credentials requires a fresh
+session through `/new` or `/reset`; the harness does not update or automatically
+replace the existing native session. Sessions without HTTP MCP configuration
+retain their existing bindings.
+
+Stdio MCP forwarding is a deferred implementation gap. Command-based servers are
+not forwarded, and OpenClaw does not start them on the Gateway for this harness.
+The Agents API already supports executor-managed stdio MCP processes; forwarding
+their command, arguments, working directory and environment is future adapter work.
+
 Ordinary conversation attempts run OpenClaw's shared `before_prompt_build` hook,
 including tool-authorized recall and heartbeat prompt contributions. Per-turn
 `prependContext` and `appendContext` are applied on both new and resumed sessions.
@@ -57,7 +103,45 @@ Set `plugins.entries.agentsapi.config.environment` to `openai_hosted` or
 }
 ```
 
-Omitting the setting keeps `openai_hosted`. Self-hosted session creation sends
+Omitting the setting keeps `openai_hosted`. Configure its network policy with
+`plugins.entries.agentsapi.config.openai_host.network`, using the Agents API
+field names:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "agentsapi": {
+        "config": {
+          "environment": "openai_hosted",
+          "openai_host": {
+            "network": {
+              "access": "restricted",
+              "allowed_domains": ["api.github.com", "pypi.org", "files.pythonhosted.org"]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+The plugin forwards `network` unchanged to the hosted session environment.
+`access` accepts `enabled`, `disabled`, or `restricted`. Restricted mode accepts
+1–100 exact hostnames without wildcards, protocols, paths, or ports. Include
+subdomains and redirect destinations separately. The API validates domain rules
+and returns errors through the normal attempt failure path. Hosted stdio MCPs
+currently require `enabled` access. Service-origin remote MCP connections do not
+use the VM's network policy. See the
+[official hosted network guide](https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted#control-network-access).
+
+Omitting `openai_host.network` or setting it to `null` preserves the API default and existing hosted
+bindings. Adding, changing, or removing a configured network policy requires an
+explicit session reset before further native session writes. These settings are
+unused for self-hosted sessions.
+
+Self-hosted session creation sends
 the absolute host-prepared OpenClaw workspace as `workspace_directory`. That
 directory must already exist at the same path inside the executor. See the
 [official self-hosted guide](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted).
@@ -147,3 +231,32 @@ upstream accounting arrives. See the
 Native turn billing can sum multiple model calls. It does not establish the
 current context-window usage. Cost estimates use the configured model prices;
 they are not provider billing receipts.
+
+## Installed plugin settings
+
+Agents API has its own installed Codex plugin selection schema at
+`plugins.entries.agentsapi.config.plugins`:
+
+```json
+{
+  "enabled": true,
+  "allow_all_plugins": false,
+  "plugins": {
+    "slack": {
+      "enabled": true,
+      "marketplaceName": "openai-curated",
+      "pluginName": "slack"
+    }
+  }
+}
+```
+
+The supported fields are `enabled`, `allow_all_plugins`, and per-plugin
+`enabled`, `marketplaceName`, and `pluginName`. Codex policy fields such as
+`allow_destructive_actions` are not part of this schema. Editing this selection
+block does not restart the Gateway.
+
+This schema does not yet enable native apps or connectors in this build. Codex
+settings remain independent. Configuration is not migrated automatically; copy
+supported selection fields from `plugins.entries.codex.config.codexPlugins`
+manually when adopting the Agents API settings.

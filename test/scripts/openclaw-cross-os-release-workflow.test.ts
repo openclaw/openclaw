@@ -5,7 +5,10 @@ import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/config.ts";
+import {
+  resolvePackagedUpgradeTimeouts,
+  resolveRunnerMatrix,
+} from "../../scripts/lib/cross-os-release-checks/config.ts";
 import { createReleaseCheckSelection } from "../../scripts/plan-release-workflow-matrix.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
@@ -31,6 +34,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  "timeout-minutes"?: number | string;
   "continue-on-error"?: boolean | string;
   if?: string;
   needs?: string | string[];
@@ -64,6 +68,26 @@ function step(workflowJob: WorkflowJob, name: string): WorkflowStep {
 }
 
 describe("cross-OS release checks workflow", () => {
+  it("lets Windows packaged-upgrade finish its bounded timeout recovery within the job", () => {
+    const consumer = job(readWorkflow(WORKFLOW_PATH), "cross_os_release_checks");
+    const expression = String(consumer["timeout-minutes"]).replace(/^\$\{\{(.*)\}\}$/u, "$1");
+    for (const osId of ["ubuntu", "windows", "macos"]) {
+      for (const suite of ["packaged-fresh", "packaged-upgrade", "dev-update", "installer-fresh"]) {
+        const minutes = runInNewContext(expression, { matrix: { os_id: osId, suite } });
+        if (osId === "windows" && suite === "packaged-upgrade") {
+          const installCeilingMs = 45 * 60_000;
+          const { wrapperTimeoutMs } = resolvePackagedUpgradeTimeouts(installCeilingMs, "win32");
+          expect(minutes * 60_000).toBeGreaterThanOrEqual(
+            2 * installCeilingMs + wrapperTimeoutMs + 20 * 60_000,
+          );
+          expect(minutes).toBeLessThanOrEqual(180);
+        } else {
+          expect(minutes).toBe(60);
+        }
+      }
+    }
+  });
+
   it("covers both packaged Node lines while preserving platform exceptions and proof identities", () => {
     const matrix = resolveRunnerMatrix({
       mode: "both",

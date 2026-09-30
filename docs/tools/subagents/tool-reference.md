@@ -55,8 +55,17 @@ session to confirm the effective tool list.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** hidden and visible native sub-agents receive their delegated task in a `[Subagent Task]` message appended after any forked history. The message identifies the current child assignment and treats inherited conversation as background context. The hidden sub-agent system prompt carries runtime rules and routing context, not a duplicate of the task.
 
-Native sub-agent continuations after a Gateway restart or descendant completion
-preserve the recorded run timeout, including `0` for no timeout.
+Native sub-agent continuations after a Gateway restart, descendant completion,
+or a `sessions_send` follow-up preserve the recorded run timeout, including `0`
+for no timeout, while the recorded session identity still matches. A replaced
+session or a registration without a captured identity uses the ordinary agent
+timeout instead. Steering an active turn keeps that turn's existing budget.
+This includes rows persisted by v2026.9.6 without a captured identity: their next
+continuation uses `agents.defaults.timeoutSeconds` (default: 48 hours), even if
+their stored `runTimeoutSeconds` is `0`.
+Completion, give-up, and pause wakes use the requester's own timeout: its recorded
+sub-agent budget if registered, otherwise `agents.defaults.timeoutSeconds`
+(default: 48 hours). A child's timeout never becomes its requester's wake budget.
 
 Accepted native sub-agent spawns report their actual initialized `context`
 (`fork` or `isolated`), including `isolated` when a requested fork exceeds the

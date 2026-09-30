@@ -1,9 +1,7 @@
-// Gateway RPC handlers for skill discovery, install/update, and proposal workflows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
-  type SkillsUpdateParams,
   validateSkillsBinsParams,
   validateSkillsDetailParams,
   validateSkillsProposalActionParams,
@@ -73,7 +71,7 @@ import {
   SKILL_PROPOSAL_RESPONSE_HANDLED,
   type ResolvedSkillsWorkspace,
 } from "./skills-workspace-handler.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function proposalWorkspaceOptions(resolved: ResolvedSkillsWorkspace) {
@@ -124,49 +122,6 @@ function buildRevisionAgentInstruction(proposal: SkillProposalReadResult) {
   ].join("\n");
 }
 
-async function forwardSkillWorkshopRevisionToChatSend(
-  opts: GatewayRequestHandlerOptions,
-  params: {
-    agentId: string;
-    idempotencyKey: string;
-    instructions: string;
-    proposal: NonNullable<Awaited<ReturnType<typeof inspectSkillProposal>>>;
-    expectedRevisionHash: string;
-    workspaceDir: string;
-    sessionId?: string;
-    sessionKey: string;
-    targetAgentId?: string;
-  },
-): Promise<void> {
-  const { handleChatSendWithSkillWorkshopProposalRevision } =
-    await import("./chat-send-handler.js");
-  const chatParams = {
-    sessionKey: params.sessionKey,
-    agentId: params.targetAgentId ?? params.agentId,
-    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-    message: params.instructions,
-    deliver: false,
-    queueMode: "followup" as const,
-    systemProvenanceReceipt: buildRevisionAgentInstruction(params.proposal),
-    suppressCommandInterpretation: true,
-    idempotencyKey: params.idempotencyKey,
-  };
-  await handleChatSendWithSkillWorkshopProposalRevision(
-    {
-      ...opts,
-      req: { ...opts.req, method: "chat.send", params: chatParams },
-      params: chatParams,
-    },
-    {
-      agentId: params.agentId,
-      workspaceDir: params.workspaceDir,
-      proposalId: params.proposal.record.id,
-      expectedRevisionHash: params.expectedRevisionHash,
-    },
-  );
-}
-
-/** Gateway request handlers for skill status, catalogs, installs, updates, and workshop proposals. */
 export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsCuratorHandlers,
   ...skillsLibraryHandlers,
@@ -468,19 +423,37 @@ export const skillsHandlers: GatewayRequestHandlers = {
         throw new Error(`Skill proposal is not pending: ${parsedParams.proposalId}`);
       }
       assertExpectedRevisionHash(proposal.revisionHash, expectedRevisionHash);
-      await forwardSkillWorkshopRevisionToChatSend(opts, {
-        agentId: resolved.agentId,
-        expectedRevisionHash,
-        idempotencyKey: parsedParams.idempotencyKey,
-        instructions: parsedParams.instructions,
-        proposal,
-        workspaceDir: resolved.workspaceDir,
-        sessionId: parsedParams.sessionId,
-        sessionKey: parsedParams.sessionKey,
-        targetAgentId: parsedParams.targetAgentId
-          ? normalizeAgentId(parsedParams.targetAgentId)
-          : undefined,
-      });
+      const { sessionKey, sessionId, instructions, idempotencyKey } = parsedParams;
+      const { agentId, workspaceDir } = resolved;
+      const targetAgentId = parsedParams.targetAgentId
+        ? normalizeAgentId(parsedParams.targetAgentId)
+        : agentId;
+      const { handleChatSendWithSkillWorkshopProposalRevision } =
+        await import("./chat-send-handler.js");
+      const chatParams = {
+        sessionKey,
+        agentId: targetAgentId,
+        ...(sessionId ? { sessionId } : {}),
+        message: instructions,
+        deliver: false,
+        queueMode: "followup" as const,
+        systemProvenanceReceipt: buildRevisionAgentInstruction(proposal),
+        suppressCommandInterpretation: true,
+        idempotencyKey,
+      };
+      await handleChatSendWithSkillWorkshopProposalRevision(
+        {
+          ...opts,
+          req: { ...opts.req, method: "chat.send", params: chatParams },
+          params: chatParams,
+        },
+        {
+          agentId,
+          workspaceDir,
+          proposalId: proposal.record.id,
+          expectedRevisionHash,
+        },
+      );
       return SKILL_PROPOSAL_RESPONSE_HANDLED;
     },
   ),
@@ -525,7 +498,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSkillsUpdateParams, "skills.update", respond)) {
       return;
     }
-    const p: SkillsUpdateParams = params;
+    const p = params;
     if ("source" in p) {
       if (!p.slug && !p.all) {
         respond(
@@ -546,7 +519,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const resolved = resolveSkillsAgentWorkspace(params, context);
+      const resolved = resolveSkillsAgentWorkspace(p, context);
       if (!resolved.ok) {
         respond(false, undefined, resolved.error);
         return;

@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 // Verifies host hook cleanup behavior for session-store state.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -11,9 +13,20 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import * as agentDeletionDiscovery from "../state/agent-deletion-discovery.js";
+import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+} from "../state/agent-deletion-journal.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -31,6 +44,60 @@ describe("plugin host cleanup session stores", () => {
     }
     stateDir = undefined;
   });
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  async function createRetainedAndActiveStores() {
+    const fixtureStateDir = tempDirs.make("openclaw-cleanup-deleted-agent-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", fixtureStateDir);
+    const activeStore = path.join(fixtureStateDir, "agents", "main", "sessions", "sessions.json");
+    const retainedStore = path.join(
+      fixtureStateDir,
+      "agents",
+      "retired",
+      "sessions",
+      "sessions.json",
+    );
+    for (const [agentId, storePath] of [
+      ["main", activeStore],
+      ["retired", retainedStore],
+    ] as const) {
+      await replaceSessionEntry(
+        { agentId, storePath, sessionKey: `agent:${agentId}:main` },
+        {
+          sessionId: `${agentId}-session`,
+          updatedAt: 1,
+          pluginExtensions: { fixture: { active: true } },
+        },
+      );
+    }
+    closeOpenClawAgentDatabasesForTest();
+    const retainedDatabase = path.join(
+      fixtureStateDir,
+      "agents",
+      "retired",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const before = await fs.readFile(retainedDatabase);
+    const operationId = randomUUID();
+    beginAgentDeletionJournal(
+      {
+        agentId: "retired",
+        operationId,
+        agentDir: path.dirname(retainedDatabase),
+        sessionsDir: path.dirname(retainedStore),
+        workspaceDir: path.join(fixtureStateDir, "workspace-retired"),
+        databasePaths: [retainedDatabase],
+        deleteFiles: false,
+      },
+      { env: process.env },
+    );
+    runOpenClawStateWriteTransaction(
+      (database) => completeAgentDeletionJournalInDatabase(database, "retired", operationId),
+      { env: process.env },
+    );
+    return { activeStore, retainedStore, retainedDatabase, before };
+  }
 
   it("leaves entries unchanged when cleanup finds no plugin-owned state", async () => {
     stateDir = await fs.mkdtemp(
@@ -96,6 +163,178 @@ describe("plugin host cleanup session stores", () => {
     } finally {
       recordAgentDatabaseAdmissions([]);
     }
+  });
+
+  it("skips a retained deleted-agent store while cleaning an active sibling", async () => {
+    const { activeStore, retainedStore, retainedDatabase, before } =
+      await createRetainedAndActiveStores();
+
+    const result = await runPluginHostCleanup({
+      cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
+      registry: createEmptyPluginRegistry(),
+      pluginId: "fixture",
+      reason: "disable",
+      sessionStoreTargets: [
+        { agentId: "retired", storePath: retainedStore },
+        { agentId: "main", storePath: activeStore },
+      ],
+    });
+
+    expect(result).toEqual({ cleanupCount: 1, failures: [] });
+    expect(
+      loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
+        ?.pluginExtensions,
+    ).toBeUndefined();
+    expect(await fs.readFile(retainedDatabase)).toEqual(before);
+  });
+
+  it("still cleans an active store when the retained-deletion snapshot read rejects", async () => {
+    const { activeStore, retainedStore, retainedDatabase, before } =
+      await createRetainedAndActiveStores();
+    const snapshotRead = vi
+      .spyOn(agentDeletionDiscovery, "listRetainedDeletedAgentIdsForCleanup")
+      .mockRejectedValueOnce(new Error("snapshot read rejected"));
+    try {
+      const result = await runPluginHostCleanup({
+        cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
+        registry: createEmptyPluginRegistry(),
+        pluginId: "fixture",
+        reason: "disable",
+        sessionStoreTargets: [
+          { agentId: "retired", storePath: retainedStore },
+          { agentId: "main", storePath: activeStore },
+        ],
+      });
+
+      expect(result.cleanupCount).toBe(1);
+      expect(result.failures).toEqual([
+        expect.objectContaining({ pluginId: "fixture", hookId: "session-store" }),
+      ]);
+      expect(
+        loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
+          ?.pluginExtensions,
+      ).toBeUndefined();
+      expect(await fs.readFile(retainedDatabase)).toEqual(before);
+    } finally {
+      snapshotRead.mockRestore();
+    }
+  });
+
+  it("preserves deleted logical rows in an active-owned shared store", async () => {
+    const fixtureStateDir = tempDirs.make("openclaw-cleanup-deleted-shared-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", fixtureStateDir);
+    const sharedStore = path.join(fixtureStateDir, "shared", "sessions.json");
+    const retiredDatabase = openOpenClawAgentDatabase({ agentId: "retired", env: process.env });
+    const retiredPath = retiredDatabase.path;
+    for (const agentId of ["main", "retired"] as const) {
+      await replaceSessionEntry(
+        { agentId, storePath: sharedStore, sessionKey: `agent:${agentId}:main` },
+        {
+          sessionId: `${agentId}-shared`,
+          updatedAt: 1,
+          pluginExtensions: { fixture: { active: true } },
+        },
+      );
+    }
+    closeOpenClawAgentDatabasesForTest();
+    const retiredBefore = loadSessionEntry({
+      agentId: "retired",
+      storePath: sharedStore,
+      sessionKey: "agent:retired:main",
+    });
+    const operationId = randomUUID();
+    beginAgentDeletionJournal(
+      {
+        agentId: "retired",
+        operationId,
+        agentDir: path.dirname(retiredPath),
+        sessionsDir: path.join(fixtureStateDir, "agents", "retired", "sessions"),
+        workspaceDir: path.join(fixtureStateDir, "workspace-retired"),
+        databasePaths: [retiredPath],
+        deleteFiles: false,
+      },
+      { env: process.env },
+    );
+    runOpenClawStateWriteTransaction(
+      (database) => completeAgentDeletionJournalInDatabase(database, "retired", operationId),
+      { env: process.env },
+    );
+
+    const result = await runPluginHostCleanup({
+      cfg: {
+        agents: { ownership: "explicit", entries: { main: {} } },
+        session: { store: sharedStore },
+      },
+      registry: createEmptyPluginRegistry(),
+      pluginId: "fixture",
+      reason: "disable",
+      sessionStoreTargets: [
+        { agentId: "retired", storePath: sharedStore },
+        { agentId: "main", storePath: sharedStore },
+      ],
+    });
+
+    expect(result).toEqual({ cleanupCount: 1, failures: [] });
+    expect(
+      loadSessionEntry({ agentId: "main", storePath: sharedStore, sessionKey: "agent:main:main" })
+        ?.pluginExtensions,
+    ).toBeUndefined();
+    expect(
+      loadSessionEntry({
+        agentId: "retired",
+        storePath: sharedStore,
+        sessionKey: "agent:retired:main",
+      }),
+    ).toEqual(retiredBefore);
+  });
+
+  it("does not silently skip an unfinished deletion fence", async () => {
+    const fixtureStateDir = tempDirs.make("openclaw-cleanup-deletion-held-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", fixtureStateDir);
+    const storePath = path.join(fixtureStateDir, "agents", "retired", "sessions", "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "retired", storePath, sessionKey: "agent:retired:main" },
+      {
+        sessionId: "retired-session",
+        updatedAt: 1,
+        pluginExtensions: { fixture: { active: true } },
+      },
+    );
+    closeOpenClawAgentDatabasesForTest();
+    const databasePath = path.join(
+      fixtureStateDir,
+      "agents",
+      "retired",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const before = await fs.readFile(databasePath);
+    beginAgentDeletionJournal(
+      {
+        agentId: "retired",
+        operationId: randomUUID(),
+        agentDir: path.dirname(databasePath),
+        sessionsDir: path.dirname(storePath),
+        workspaceDir: path.join(fixtureStateDir, "workspace-retired"),
+        databasePaths: [databasePath],
+        deleteFiles: false,
+      },
+      { env: process.env },
+    );
+
+    const result = await runPluginHostCleanup({
+      cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
+      registry: createEmptyPluginRegistry(),
+      pluginId: "fixture",
+      reason: "disable",
+      sessionStoreTargets: [{ agentId: "retired", storePath }],
+    });
+
+    expect(result.cleanupCount).toBe(0);
+    expect(result.failures).toEqual([
+      expect.objectContaining({ pluginId: "fixture", hookId: "session-store" }),
+    ]);
+    expect(await fs.readFile(databasePath)).toEqual(before);
   });
 
   it.each(["cancelled", "already-cleared", "locked", "revoked", "committed"] as const)(

@@ -404,12 +404,13 @@ async function planStartupCatchup(
 
     return {
       lifecycleGeneration,
-      candidates: reservedStartupCandidates.map(({ job, runReceipt }) => ({
+      candidates: reservedStartupCandidates.map(({ job, runReceipt, runReceiptContext }) => ({
         jobId: job.id,
         job,
         reservedAtMs: now,
         reservationIdentity: reserveQueuedCronRun(state, job.id, now, {
           runReceipt,
+          runReceiptContext,
           lifecycleGeneration,
         }),
       })),

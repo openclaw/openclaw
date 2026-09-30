@@ -5,7 +5,6 @@ import {
   normalizeAccountId,
   normalizeConversationFromTarget,
   pollQaBusEvents,
-  readQaBusMessage,
   requireQaBusMessageForAccount,
   searchQaBusMessages,
 } from "./bus-queries.js";
@@ -272,7 +271,7 @@ export function createQaBusState() {
       return publishMessage("message-deleted", message);
     },
     readMessage(input: QaBusReadMessageInput) {
-      return readQaBusMessage({ messages, input });
+      return cloneMessage(requireQaBusMessageForAccount({ messages, input }));
     },
     searchMessages(input: QaBusSearchMessagesInput) {
       return searchQaBusMessages({ messages, input });

@@ -23,7 +23,6 @@ import { scanPlainTextToolCall, type PlainTextToolCallScan } from "./payload.js"
 import type { PlainTextToolCallMessageProjection } from "./promote.js";
 import {
   advanceProtectionScanState,
-  cloneProtectionScanState,
   createProtectionScanState,
   resolveProtectionFastPath,
 } from "./protection-fast-path.js";
@@ -182,12 +181,8 @@ function scannedCall(scan: PlainTextToolCallScan) {
 }
 
 function scanHasNamedCandidate(scan: PlainTextToolCallScan): boolean {
-  const branches = [scan.json, scan.xmlish] as Array<{
-    candidate?: { name?: TextRange };
-    name?: TextRange;
-  }>;
-  return branches.some((branch) => {
-    const name = branch.candidate?.name ?? branch.name;
+  return [scan.json, scan.xmlish].some((branch) => {
+    const name = (branch.kind === "complete" ? branch : branch.candidate)?.name;
     return name !== undefined && name.end > name.start;
   });
 }
@@ -1048,9 +1043,7 @@ function consumeOpeningSuppressor(
   chunk: string,
 ): { complete: false } | { complete: true; suffix: string } {
   if (suppressor.choice) {
-    return suppressor.choice.kind === "xml"
-      ? consumeXmlSuppressor(suppressor.choice, chunk)
-      : consumeJsonSuppressor(suppressor.choice, chunk);
+    return consumeOverCapSuppressor(suppressor.choice, chunk);
   }
   const text = suppressor.carry + chunk;
   suppressor.carry = "";
@@ -1135,7 +1128,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
     protectionBlockContentIndex = contentIndex;
     protectionBlockStart = protectionContextLength;
-    protectionScanAtBlockStart = cloneProtectionScanState(protectionScan);
+    protectionScanAtBlockStart = { ...protectionScan };
     protectionBlockPrefixVerdict = undefined;
   };
   const truncateProtectionContext = (length: number) => {
@@ -1161,7 +1154,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
     if (resetActiveBlock) {
       truncateProtectionContext(protectionBlockStart);
-      protectionScan = cloneProtectionScanState(protectionScanAtBlockStart);
+      protectionScan = { ...protectionScanAtBlockStart };
     }
     if (protectionContextLength + text.length > MAX_PROTECTION_CONTEXT_CHARS) {
       protectionChunks.length = 0;
@@ -1714,21 +1707,13 @@ export async function* normalizePlainTextToolCallStreamEvents(
           yield { ...record, message: normalized.message };
         } else {
           let message = record.message;
-          if (pending?.kind === "candidate") {
-            const classification = classifyPending(
-              pending,
-              options.matcher,
-              options.resolveProtectedRanges,
-              true,
-            );
-            if (classification.kind === "false-positive") {
-              yield* replayFalsePositiveCandidate(pending);
-            } else {
-              const projection = scrubSnapshot(record.message, true, true);
-              yield* forceProjectPendingAux(pending, projection);
-              message = projection?.message ?? message;
-            }
-          } else if (pending?.kind === "suppressing") {
+          if (
+            pending?.kind === "candidate" &&
+            classifyPending(pending, options.matcher, options.resolveProtectedRanges, true).kind ===
+              "false-positive"
+          ) {
+            yield* replayFalsePositiveCandidate(pending);
+          } else if (pending) {
             const projection = scrubSnapshot(record.message, true, true);
             yield* forceProjectPendingAux(pending, projection);
             message = projection?.message ?? message;
@@ -1831,19 +1816,13 @@ export async function* normalizePlainTextToolCallStreamEvents(
       }
     }
 
-    if (pending?.kind === "candidate") {
-      const classification = classifyPending(
-        pending,
-        options.matcher,
-        options.resolveProtectedRanges,
-        true,
-      );
-      if (classification.kind === "false-positive") {
-        yield* replayFalsePositiveCandidate(pending);
-      } else {
-        yield* forceProjectPendingAux(pending);
-      }
-    } else if (pending?.kind === "suppressing") {
+    if (
+      pending?.kind === "candidate" &&
+      classifyPending(pending, options.matcher, options.resolveProtectedRanges, true).kind ===
+        "false-positive"
+    ) {
+      yield* replayFalsePositiveCandidate(pending);
+    } else if (pending) {
       yield* forceProjectPendingAux(pending);
     }
     for (const held of heldTextStarts.values()) {

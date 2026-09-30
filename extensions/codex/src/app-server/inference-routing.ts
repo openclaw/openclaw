@@ -25,7 +25,6 @@ import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 export type CodexInferenceProviderRoutes = ReadonlyMap<string, CodexInferenceProxy>;
-export type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 type ThreadRoutes = {
   route: CodexInferenceProxy;
   providers: CodexInferenceProviderRoutes;

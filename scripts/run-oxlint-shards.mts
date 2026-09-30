@@ -60,7 +60,11 @@ type RunnerOptions = {
   extraArgs: string[];
   runner: string;
 };
-type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard; onCompleted?: () => void };
+type ShardRunnerOptions = RunnerOptions & {
+  shard: OxlintShard;
+  onCompleted?: () => void;
+  ownsArtifacts?: boolean;
+};
 type ShardBatchOptions = RunnerOptions & {
   concurrency: number;
   entries: OxlintShard[];
@@ -385,7 +389,9 @@ export async function main(
     completed = results.completed;
     return results.statuses.find((status) => status !== 0) ?? 0;
   };
-  const status = needsArtifacts ? await withDistArtifactOwnership(process.cwd(), run) : await run();
+  // One batch owner lets lint children overlap without exposing their transient
+  // configuration files to a concurrent compiler's input snapshot.
+  const status = await withDistArtifactOwnership(process.cwd(), run);
   if (evidenceId && completed === selectedShards.length && !isParentTerminationRequested()) {
     console.log(
       `[ci-static:oxlint:completion] ${JSON.stringify({
@@ -673,6 +679,7 @@ async function runShards({
         extraArgs,
         runner,
         shard,
+        ownsArtifacts: true,
         onCompleted: () => {
           completed++;
         },
@@ -683,7 +690,14 @@ async function runShards({
   return { statuses: results.filter((status) => status !== undefined), completed };
 }
 
-export async function runShard({ env, extraArgs, runner, shard, onCompleted }: ShardRunnerOptions) {
+export async function runShard({
+  env,
+  extraArgs,
+  runner,
+  shard,
+  onCompleted,
+  ownsArtifacts,
+}: ShardRunnerOptions) {
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
   const heartbeatMs = resolveShardHeartbeatMs(env);
@@ -693,7 +707,7 @@ export async function runShard({ env, extraArgs, runner, shard, onCompleted }: S
   // errors to the private artifact entry without catching or reporting them here.
   const args =
     runner === path.resolve("scripts", "run-oxlint.mts")
-      ? shouldPrepareExtensionPackageBoundaryArtifactsForShards([shard], extraArgs)
+      ? ownsArtifacts || shouldPrepareExtensionPackageBoundaryArtifactsForShards([shard], extraArgs)
         ? distArtifactEntryArgs(runner, [...shard.args, ...extraArgs])
         : [
             "--import",

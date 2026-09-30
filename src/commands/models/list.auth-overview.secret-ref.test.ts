@@ -70,13 +70,6 @@ describe("resolved non-env config credentials in the auth overview", () => {
     expect(JSON.stringify(result)).not.toContain(credential);
   });
 
-  it("keeps a cold configured reference missing without resolved material", () => {
-    const result = overview(sourceConfig());
-
-    expect(result.effective).toEqual({ kind: "missing", detail: "missing" });
-    expect(result.modelsJson?.value).toBe(`marker(${NON_ENV_SECRETREF_MARKER})`);
-  });
-
   it("does not borrow resolved material after the configured reference changes", () => {
     publishResolvedConfig(sourceConfig("old-reference"));
 

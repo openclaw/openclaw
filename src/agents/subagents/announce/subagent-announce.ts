@@ -7,6 +7,7 @@ import {
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../../../auto-reply/tokens.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { logWarn } from "../../../logger.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -183,7 +184,7 @@ type SubagentAnnounceFlowParams = {
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
-  onBeforeDeleteChildSession?: () => boolean;
+  onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 };
 
@@ -304,7 +305,14 @@ async function runSubagentAnnounceFlowBound(
       const pendingChildDescendantRuns =
         !childSessionCurrent || !childSessionEffectsAllowed()
           ? 0
-          : Math.max(0, countPendingDescendantRuns(params.childSessionKey));
+          : Math.max(
+              0,
+              await countPendingDescendantRuns(params.childSessionKey, () => {
+                if (!childSessionEffectsAllowed()) {
+                  throw new Error("Subagent child-session effects are no longer current.");
+                }
+              }),
+            );
       if (pendingChildDescendantRuns > 0 && announceType !== "cron job") {
         shouldDeleteChildSession = false;
         return "retryable";
@@ -690,6 +698,9 @@ async function runSubagentAnnounceFlowBound(
         : (delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable"));
   } catch (err) {
     shouldDeleteChildSession = false;
+    if (hasSqliteWorkerOutcomeUnknown(err)) {
+      throw err;
+    }
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
@@ -697,7 +708,8 @@ async function runSubagentAnnounceFlowBound(
       shouldDeleteChildSession &&
       (await prepareChildSessionEffects()) &&
       childSessionEffectsAllowed() &&
-      (params.onBeforeDeleteChildSession?.() ?? true)
+      ((await params.onBeforeDeleteChildSession?.()) ?? true) &&
+      childSessionEffectsAllowed()
     ) {
       await deleteSubagentSessionForCleanup({
         callGateway: callSubagentLifecycleGateway,

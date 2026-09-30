@@ -50,18 +50,11 @@ type InputSourceLimits = {
 export type InputFileLimits = InputSourceLimits & { maxChars: number; pdf: InputPdfLimits };
 
 /** Optional config shape accepted by input_file limit resolution. */
-export type InputFileLimitsConfig = {
-  allowUrl?: boolean;
+export type InputFileLimitsConfig = Partial<
+  Omit<InputFileLimits, "allowedMimes" | "pdf" | "urlAllowlist">
+> & {
   allowedMimes?: string[];
-  maxBytes?: number;
-  maxChars?: number;
-  maxRedirects?: number;
-  timeoutMs?: number;
-  pdf?: {
-    maxPages?: number;
-    maxPixels?: number;
-    minTextChars?: number;
-  };
+  pdf?: Partial<InputPdfLimits>;
 };
 
 /** Resolved input_image limits with normalized MIME allowlist and URL fetch controls. */

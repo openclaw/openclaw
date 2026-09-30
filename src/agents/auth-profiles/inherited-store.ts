@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Result } from "@openclaw/normalization-core/result";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
@@ -40,19 +41,30 @@ export function loadInheritedAuthProfileStore(
   }
 }
 
-/** Compose existing snapshots with fresh persisted reads only for their missing counterpart. */
-export function resolveRuntimeAuthProfileStoreFromSnapshots(params: {
+type RuntimeAuthSnapshotReadScope = {
   agentDir?: string;
   inheritedAuthDir?: string;
   env?: NodeJS.ProcessEnv;
-  loadStore: (agentDir?: string) => AuthProfileStore;
-}): AuthProfileStore | null {
+  sharedPath?: string;
+};
+
+function readResult(result: Result<AuthProfileStore, unknown>): AuthProfileStore {
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+/** One lazy snapshot policy; adapters supply only the demanded persisted reads. */
+export function* readRuntimeAuthProfileStoreFromSnapshots(
+  params: RuntimeAuthSnapshotReadScope,
+): Generator<{ agentDir?: string }, AuthProfileStore | null, Result<AuthProfileStore, unknown>> {
   const mainKey = params.inheritedAuthDir
     ? resolveAuthProfileDatabasePath(params.inheritedAuthDir)
-    : resolveSharedAuthStorePath(params.env);
+    : (params.sharedPath ?? resolveSharedAuthStorePath(params.env));
   const requestedKey = params.agentDir
     ? resolveAuthProfileDatabasePath(params.agentDir)
-    : resolveSharedAuthStorePath(params.env);
+    : (params.sharedPath ?? resolveSharedAuthStorePath(params.env));
   const mainStore = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(mainKey);
   if (!params.agentDir || requestedKey === mainKey) {
     return mainStore ?? null;
@@ -64,8 +76,9 @@ export function resolveRuntimeAuthProfileStoreFromSnapshots(params: {
     });
   }
   if (requestedStore) {
+    const result = yield { agentDir: params.inheritedAuthDir };
     const persistedMainStore = loadInheritedAuthProfileStore(
-      () => params.loadStore(params.inheritedAuthDir),
+      () => readResult(result),
       params.inheritedAuthDir,
       params.env,
     );
@@ -75,9 +88,11 @@ export function resolveRuntimeAuthProfileStoreFromSnapshots(params: {
         })
       : requestedStore;
   }
-  return mainStore
-    ? mergeAuthProfileStores(mainStore, params.loadStore(params.agentDir), {
-        preserveBaseRuntimeExternalProfiles: true,
-      })
-    : null;
+  if (!mainStore) {
+    return null;
+  }
+  const result = yield { agentDir: params.agentDir };
+  return mergeAuthProfileStores(mainStore, readResult(result), {
+    preserveBaseRuntimeExternalProfiles: true,
+  });
 }

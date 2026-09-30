@@ -253,11 +253,16 @@ describe("ModelSetupPage first-run activation ownership", () => {
       );
       publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
       await page.updateComplete;
+      if (entry === "provider sign-in") {
+        expect(page.textContent).toContain("Waiting for it to reconnect");
+      }
       publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
       if (entry === "provider sign-in") {
+        // A restarted Gateway lost the wizard: recovery replaces the reconnect notice.
         await waitForFast(() =>
           expect(page.textContent).toContain("Gateway no longer has this setup session"),
         );
+        expect(page.textContent).not.toContain("Waiting for it to reconnect");
         [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
           .find((button) => button.textContent?.trim() === "Close")!
           .click();

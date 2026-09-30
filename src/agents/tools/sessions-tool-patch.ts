@@ -43,11 +43,10 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
     patch.attention = attention === "clear" ? null : attention;
   }
   if (params.ttlMinutes !== undefined) {
-    if (!Number.isInteger(params.ttlMinutes)) {
+    if (typeof params.ttlMinutes !== "number" || !Number.isInteger(params.ttlMinutes)) {
       throw new ToolInputError("ttlMinutes must be an integer");
     }
-    // SAFETY: Number.isInteger accepts only integer numbers.
-    patch.ttlMinutes = params.ttlMinutes as number;
+    patch.ttlMinutes = params.ttlMinutes;
   }
   for (const field of ["pinned", "archived"] as const) {
     const value = params[field];

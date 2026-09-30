@@ -8,11 +8,7 @@ import {
 } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import {
-  buildMcpHttpFetch,
-  withoutMcpAuthorizationHeader,
-  withSameOriginMcpHttpHeaders,
-} from "./mcp-http-fetch.js";
+import { buildMcpOAuthAuthorizationFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
 import { requesterMcpOAuthStoreKeyPrefix, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import {
   createMcpOAuthClientProvider,
@@ -38,15 +34,10 @@ import {
   writeMcpOAuthPendingAuthorization,
   type McpOAuthStore,
 } from "./mcp-oauth-store.js";
-import type { resolveMcpTransportConfig } from "./mcp-transport-config.js";
+import type { ResolvedHttpMcpTransportConfig } from "./mcp-transport-config.js";
 
 export type { McpOAuthPrincipalStatus } from "./mcp-oauth-status.js";
 export type { McpOAuthConfig } from "./mcp-oauth-provider.js";
-
-type ResolvedHttpMcpTransportConfig = Extract<
-  NonNullable<ReturnType<typeof resolveMcpTransportConfig>>,
-  { kind: "http" }
->;
 
 type McpOAuthAuthorizationStartResult =
   | { status: "authorized" }
@@ -181,19 +172,42 @@ export async function resolveMcpOAuthAccessToken(
         lease,
         storeContext: context,
       });
-      const result = await auth(provider, {
-        serverUrl: params.identity.serverUrl,
-        resourceMetadataUrl:
-          params.resourceMetadataUrl ??
-          (pendingChallenge?.resourceMetadataUrl
-            ? new URL(pendingChallenge.resourceMetadataUrl)
-            : undefined),
-        scope:
-          params.scope ??
-          normalizeOptionalString(pendingChallenge?.scope) ??
-          normalizeOptionalString(params.config?.scope),
-        fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal),
-      });
+      const fetchFn =
+        params.fetchFn ?? buildMcpOAuthHttpFetch({ resourceUrl: params.identity.serverUrl });
+      const leasedFetchFn = withMcpOAuthLeaseSignal(fetchFn, lease.signal);
+      let latestFetchFailure: { error: unknown } | undefined;
+      let result: Awaited<ReturnType<typeof auth>>;
+      try {
+        result = await auth(provider, {
+          serverUrl: params.identity.serverUrl,
+          resourceMetadataUrl:
+            params.resourceMetadataUrl ??
+            (pendingChallenge?.resourceMetadataUrl
+              ? new URL(pendingChallenge.resourceMetadataUrl)
+              : undefined),
+          scope:
+            params.scope ??
+            normalizeOptionalString(pendingChallenge?.scope) ??
+            normalizeOptionalString(params.config?.scope),
+          fetchFn: async (url, init) => {
+            try {
+              const response = await leasedFetchFn(url, init);
+              latestFetchFailure = undefined;
+              return response;
+            } catch (error) {
+              latestFetchFailure = { error };
+              throw error;
+            }
+          },
+        });
+      } catch (error) {
+        // SDK 1.30.0 converts refresh transport failures into an authorization fallback.
+        // Preserve the actionable failure when no later request recovered from it.
+        throw latestFetchFailure ? latestFetchFailure.error : error;
+      }
+      if (latestFetchFailure) {
+        throw latestFetchFailure.error;
+      }
       await lease.assertOwned();
       const refreshedTokens = await provider.tokens();
       if (result !== "AUTHORIZED" || !refreshedTokens?.access_token) {
@@ -300,25 +314,6 @@ export async function readMcpOAuthCredentialsStatus(
 ): Promise<McpOAuthPrincipalStatus> {
   const store = preparedStore ?? (await readMcpOAuthStoreReadOnly(identity.storeKey));
   return projectMcpOAuthCredentialsStatus(store);
-}
-
-function buildMcpOAuthAuthorizationFetch(
-  config: ResolvedHttpMcpTransportConfig,
-  beforeRequest?: () => void,
-): FetchLike {
-  const fetchFn = buildMcpHttpFetch({
-    sslVerify: config.sslVerify,
-    clientCert: config.clientCert,
-    clientKey: config.clientKey,
-    resourceUrl: config.url,
-    timeoutMs: config.requestTimeoutMs,
-    beforeRequest,
-  });
-  return withSameOriginMcpHttpHeaders({
-    fetchFn,
-    headers: withoutMcpAuthorizationHeader(config.headers),
-    resourceUrl: config.url,
-  });
 }
 
 async function runMcpOAuthAuthorizationAttempt(

@@ -16,10 +16,8 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
-import {
-  createLifecycleArtifactReclamationPlan,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import { createLifecycleArtifactReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
 
 const nativePreload = vi.hoisted(() => ({
   moduleUrl: "",

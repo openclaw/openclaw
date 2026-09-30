@@ -97,10 +97,6 @@ function describeNodeToolLocation(params: {
   return `${params.description} (node: ${label})`;
 }
 
-function isProviderSafeToolName(value: string): boolean {
-  return NODE_PLUGIN_TOOL_NAME_RE.test(value);
-}
-
 function prependToolNameFragment(baseName: string, fragment: string, suffix: string): string {
   const prefix = `${fragment}_`;
   const maxBaseLength = Math.max(
@@ -126,7 +122,7 @@ function resolveUniqueToolName(params: {
     const candidate = prependToolNameFragment(params.baseName, nodeFragment, suffix);
     const normalized = normalizeToolPolicyName(candidate);
     if (
-      isProviderSafeToolName(candidate) &&
+      NODE_PLUGIN_TOOL_NAME_RE.test(candidate) &&
       normalized &&
       !params.existingNormalized.has(normalized)
     ) {

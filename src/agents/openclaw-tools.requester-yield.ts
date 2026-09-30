@@ -59,7 +59,7 @@ export function createRequesterYieldCallback(params: {
       if (canWaitForMessage && intent?.waitFor === "message" && params.requesterTurnRunId) {
         const { markSubagentMessageWait } =
           await import("./subagents/registry/subagent-registry.js");
-        markSubagentMessageWait({
+        await markSubagentMessageWait({
           runId: params.requesterTurnRunId,
           sessionKey: requesterSessionKey!,
           acknowledgment: intent.acknowledgment,
@@ -80,7 +80,8 @@ export function createRequesterYieldCallback(params: {
           requesterAgentId: params.requesterAgentId,
           requesterTurnRunId: params.requesterTurnRunId as string,
         });
-      registryClaimed = (withCronAuthority ? withCronAuthority(markYielded) : markYielded()) > 0;
+      registryClaimed =
+        (await (withCronAuthority ? withCronAuthority(markYielded) : markYielded())) > 0;
     }
     if (runtimeClaimed || registryClaimed) {
       return acceptYield();
@@ -110,7 +111,7 @@ export function createRequesterYieldCallback(params: {
     if (requesterSessionKey) {
       const { listUnsettledRequesterChildren } =
         await import("./subagents/registry/subagent-registry.js");
-      const pendingChildren = listUnsettledRequesterChildren({
+      const pendingChildren = await listUnsettledRequesterChildren({
         requesterSessionKey,
         requesterAgentId: params.requesterAgentId,
         excludeRequesterTurnRunId: params.requesterTurnRunId,

@@ -3,6 +3,7 @@ import http from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -33,7 +34,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
@@ -105,25 +106,6 @@ function findTextOverlap(base: string, next: string): number {
   return 0;
 }
 
-function shouldInsertTranscriptSpace(base: string, next: string): boolean {
-  if (!base || !next) {
-    return false;
-  }
-  const last = base.at(-1);
-  if (
-    /\s$/.test(base) ||
-    last === "(" ||
-    last === "[" ||
-    last === "{" ||
-    last === '"' ||
-    last === "'" ||
-    /^[\s,.;:!?)]/.test(next)
-  ) {
-    return false;
-  }
-  return true;
-}
-
 function appendTranscriptText(base: string | undefined, fragment: string): string {
   const next = normalizeTranscriptText(fragment);
   if (!next) {
@@ -145,7 +127,7 @@ function appendTranscriptText(base: string | undefined, fragment: string): strin
   if (overlap >= 6 || (overlap >= 3 && next.length <= 12)) {
     return `${current}${next.slice(overlap)}`.trim();
   }
-  const separator = shouldInsertTranscriptSpace(current, next) ? " " : "";
+  const separator = /[([{"']$/.test(current) || /^[,.;:!?)]/.test(next) ? "" : " ";
   return `${current}${separator}${next}`.trim();
 }
 
@@ -198,37 +180,29 @@ function withFallbackConsultQuestion(args: unknown, fallback: string | undefined
       providerQuestion.length <= 40 &&
       question.length >= providerQuestion.length + 8
     ) {
-      const context = normalizeOptionalString(asOptionalRecord(args)?.context);
+      const record = asOptionalRecord(args);
+      const context = normalizeOptionalString(record?.context);
       const fallbackContext = `Realtime provider supplied a shorter consult question: ${providerQuestion}`;
-      return args && typeof args === "object" && !Array.isArray(args)
-        ? {
-            ...args,
-            question,
-            context: context ? `${context}\n\n${fallbackContext}` : fallbackContext,
-          }
-        : { question, context: fallbackContext };
+      return {
+        ...record,
+        question,
+        context: context ? `${context}\n\n${fallbackContext}` : fallbackContext,
+      };
     }
     return args;
   }
   if (!question) {
     return args;
   }
-  return args && typeof args === "object" && !Array.isArray(args)
-    ? { ...args, question }
-    : { question };
+  return { ...asOptionalRecord(args), question };
 }
 
 function buildForcedConsultSpeechPrompt(result: string): string {
-  const trimmed = result.trim();
-  const bounded =
-    trimmed.length <= FORCED_CONSULT_RESULT_MAX_CHARS
-      ? trimmed
-      : `${truncateUtf16Safe(trimmed, FORCED_CONSULT_RESULT_MAX_CHARS - 16).trimEnd()} [truncated]`;
   return [
     "Internal OpenClaw consult result is ready.",
     "Do not call tools for this internal result.",
     "Speak the following answer to the caller now, briefly and naturally:",
-    bounded,
+    result,
   ].join("\n");
 }
 
@@ -675,19 +649,13 @@ export class RealtimeCallHandler {
   }
 
   issueStreamSession(request: StreamSessionRequest = {}): StreamSession {
-    const token = this.issueStreamToken({
+    const meta: StreamSessionRequest = {
       providerName: request.providerName ?? "twilio",
       callId: request.callId,
       from: request.from,
       to: request.to,
       direction: request.direction,
-    });
-    const host = this.publicOrigin || DEFAULT_HOST;
-    const streamUrl = `wss://${host}${this.getStreamPathPattern()}/${token}`;
-    return { token, streamUrl };
-  }
-
-  private issueStreamToken(meta: Omit<PendingStreamToken, "expiry"> = {}): string {
+    };
     const token = randomUUID();
     const now = Date.now();
     const expiry = resolveExpiresAtMsFromDurationMs(STREAM_TOKEN_TTL_MS, { nowMs: now });
@@ -714,7 +682,9 @@ export class RealtimeCallHandler {
       }, STREAM_TOKEN_TTL_MS);
       timer.unref?.();
     }
-    return token;
+    const host = this.publicOrigin || DEFAULT_HOST;
+    const streamUrl = `wss://${host}${this.getStreamPathPattern()}/${token}`;
+    return { token, streamUrl };
   }
 
   private consumeStreamToken(token: string): Omit<PendingStreamToken, "expiry"> | null {
@@ -950,11 +920,7 @@ export class RealtimeCallHandler {
       // acknowledgements can never fire and must be retired with them.
       onPlaybackReset: () => pendingMarkAcks.clear(),
       send: sendString,
-      serializer: {
-        media: (payload) => adapter.serializeMedia(payload),
-        clear: () => adapter.serializeClear(),
-        mark: (name) => adapter.serializeMark(name),
-      },
+      serializer: adapter,
       onBackpressure: () => {
         console.warn(
           `[voice-call] realtime paced audio backpressure callId=${callId} providerCallId=${callSid}`,
@@ -1683,9 +1649,7 @@ export class RealtimeCallHandler {
     if (state.recentFinalTimer) {
       clearTimeout(state.recentFinalTimer);
     }
-    if (this.userTranscriptStatesByCallId.get(callId) === state) {
-      this.userTranscriptStatesByCallId.delete(callId);
-    }
+    this.userTranscriptStatesByCallId.delete(callId);
   }
 
   private cancelNativeConsult(callId: string, owner: ActiveRealtimeVoiceBridge): void {
@@ -1708,36 +1672,25 @@ export class RealtimeCallHandler {
     this.forcedConsultsByCallId.delete(callId);
   }
 
-  private resetConsultSession(callId: string, owner: ActiveRealtimeVoiceBridge): boolean {
+  private resetConsultSessionForContinuity(callId: string, owner: ActiveRealtimeVoiceBridge): void {
     const session = this.consultSessionsByCallId.get(callId);
     if (!session || session.owner !== owner) {
-      return false;
-    }
-    session.coordinator.clearPending();
-    this.cancelForcedConsult(callId, owner);
-    this.cancelNativeConsult(callId, owner);
-    return true;
-  }
-
-  private resetConsultSessionForContinuity(
-    callId: string,
-    owner: ActiveRealtimeVoiceBridge,
-  ): boolean {
-    const session = this.consultSessionsByCallId.get(callId);
-    if (!session || session.owner !== owner) {
-      return false;
+      return;
     }
     this.cancelForcedConsult(callId, owner);
     this.cancelNativeConsult(callId, owner);
     // A fresh provider session must not inherit cancelled/recent consult dedupe.
     session.coordinator.clear();
-    return true;
   }
 
-  private cancelConsultSession(callId: string, owner: ActiveRealtimeVoiceBridge | undefined): void {
-    if (!owner || !this.resetConsultSession(callId, owner)) {
+  private cancelConsultSession(callId: string, owner: ActiveRealtimeVoiceBridge): void {
+    const session = this.consultSessionsByCallId.get(callId);
+    if (!session || session.owner !== owner) {
       return;
     }
+    session.coordinator.clearPending();
+    this.cancelForcedConsult(callId, owner);
+    this.cancelNativeConsult(callId, owner);
     this.consultSessionsByCallId.delete(callId);
   }
 
@@ -2181,14 +2134,8 @@ export class RealtimeCallHandler {
       }
 
       const abortController = new AbortController();
-      let releaseCancellation = () => {};
-      const cancellation = new Promise<void>((resolve) => {
-        releaseCancellation = resolve;
-      });
-      let completeConsult = (_result: unknown) => {};
-      const consult = new Promise<unknown>((resolve) => {
-        completeConsult = resolve;
-      });
+      const { promise: cancellation, resolve: releaseCancellation } = createDeferred<void>();
+      const { promise: consult, resolve: completeConsult } = createDeferred<unknown>();
       const state: NativeConsultState = {
         owner: bridge,
         startedAt,

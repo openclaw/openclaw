@@ -565,12 +565,10 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     channelConfig: null,
     replyTarget: `channel:${CHANNEL_ID}`,
     ctxPayload: { SessionKey: "slack:channel:c0trace", ChatType: "channel" },
-    turn: { storePath: "/unused/slack-trace-sessions.json", record: {} },
+    turn: { record: {} },
     replyToMode: "all",
-    requireMention: true,
     isDirectMessage: false,
     isRoomish: true,
-    preview: "",
     ackReactionValue: "eyes",
     ackReactionPromise: null,
   };

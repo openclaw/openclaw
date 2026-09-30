@@ -128,10 +128,7 @@ export class TerminalIntentQueue {
     if (this.fenceHost !== host) {
       return;
     }
-    this.clearRefreshTimer();
-    this.refreshPending = false;
-    this.fenceHost = null;
-    this.clearRefreshFailure();
+    this.resetLifecycle(host);
     void this.drain();
   }
 

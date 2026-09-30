@@ -9,6 +9,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -345,27 +346,36 @@ suite.define(() => {
                 await expect.poll(() => provider.speech.length).toBe(index + 1);
                 if (index === 1) {
                   // The first turn covers live delivery; this turn covers speech after hydration.
+                  // Persist before reload so startup must reconcile the warm snapshot.
+                  await page.evaluate(async () => {
+                    const pane = document.querySelector<
+                      HTMLElement & { sessionSnapshotStore?: SessionSnapshotStore }
+                    >(".chat-pane-cache__pane--active");
+                    if (!pane?.sessionSnapshotStore) {
+                      throw new Error("Expected the active pane's snapshot store");
+                    }
+                    await pane.sessionSnapshotStore.flush();
+                  });
                   const previousConnection = historyConnection;
                   await page.reload();
                   await waitForControlUiGatewayReady(page);
                   await expect
                     .poll(async () => {
-                      const answerResponses = history.filter(
-                        ({ connection, frame }) =>
-                          connection > previousConnection &&
-                          JSON.stringify(frame.payload?.messages ?? []).includes(text),
+                      // A hydrated answer can be validated by an empty history delta.
+                      const hydrationResponses = history.filter(
+                        ({ connection }) => connection > previousConnection,
                       );
-                      if (answerResponses.length === 0) {
+                      if (hydrationResponses.length === 0) {
                         return false;
                       }
-                      const cursors = answerResponses.flatMap(({ frame }) =>
+                      const cursors = hydrationResponses.flatMap(({ frame }) =>
                         frame.payload?.deltaCursor ? [frame.payload.deltaCursor] : [],
                       );
                       return page.evaluate(
                         ({
                           sessionKey: expectedSessionKey,
                           text: expectedText,
-                          cursors: answerCursors,
+                          cursors: hydrationCursors,
                           consumedAfterResponse,
                         }) => {
                           const state = document.querySelector<
@@ -376,7 +386,7 @@ suite.define(() => {
                           return (
                             state?.sessionKey === expectedSessionKey &&
                             !state.chatLoading &&
-                            (answerCursors.includes(snapshot?.deltaCursor ?? "") ||
+                            (hydrationCursors.includes(snapshot?.deltaCursor ?? "") ||
                               consumedAfterResponse) &&
                             JSON.stringify(snapshot?.messages ?? []).includes(expectedText)
                           );
@@ -385,7 +395,7 @@ suite.define(() => {
                           sessionKey,
                           text,
                           cursors,
-                          consumedAfterResponse: answerResponses.some(
+                          consumedAfterResponse: hydrationResponses.some(
                             (response) => response.consumedAfterResponse,
                           ),
                         },

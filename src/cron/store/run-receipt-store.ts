@@ -17,10 +17,6 @@ import {
 } from "../../infra/kysely-sync.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/openclaw-state-db-readonly.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { describeUnavailableCronAgent, type CronAgentAvailability } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -35,10 +31,7 @@ import {
   type CronRunReceiptRow,
 } from "./run-receipt-read.js";
 import { createCronRunReceiptSettlementOwner } from "./run-receipt-settlement.js";
-import {
-  prepareCronRunReceiptWriteSchema,
-  type CronRunReceiptWriteSchema,
-} from "./run-receipt-write-admission.js";
+import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import type {
   CronRunReceipt,
   CronRunReceiptHandle,
@@ -76,7 +69,6 @@ const CRON_RUN_RECEIPT_TERMINAL_RETENTION = 64;
 const CRON_RUN_RECEIPT_DELETE_BATCH_SIZE = 500;
 /** Recovery horizon for abandoned markers and unverifiable foreign receipts. */
 export const CRON_STUCK_RUN_MS = 2 * 60 * 60_000;
-const initializedDatabases = new WeakSet<DatabaseSync>();
 export class CronRunReceiptConflictError extends Error {
   readonly candidate: CronRunReceiptRecoveryCandidate;
 
@@ -99,22 +91,12 @@ export class CronRunReceiptRevisionError extends Error {
 }
 
 const settlement = createCronRunReceiptSettlementOwner({
-  finishNative: (params) =>
-    withReceiptWrite("cron.run-receipt.finish", params.env ? { env: params.env } : {}, (database) =>
-      finishCronRunReceiptInDatabase({
-        database,
-        receiptSchema: prepareCronRunReceiptWriteSchema(database),
-        ...params,
-      }),
-    ),
   revisionError: (receiptId, message) => new CronRunReceiptRevisionError(receiptId, message),
 });
 export const {
   claimLocalCronRunReceiptOwnership,
   trackCronRunReceiptSettlement,
   retainCronRunReceiptSettlement,
-  isCronRunReceiptSettlementPending,
-  finishCronRunReceipt,
   finishCronRunReceiptAsync,
   releaseLocalCronRunReceiptOwnership,
 } = settlement;
@@ -157,29 +139,6 @@ function activeRow(db: DatabaseSync, key: string, jobId?: string) {
     ensureCronRunReceiptSchema(db);
     return find();
   }
-}
-
-function withReceiptWrite<T>(
-  operationLabel: string,
-  options: OpenClawStateDatabaseOptions,
-  operation: (database: DatabaseSync) => T,
-): T {
-  let initializedDatabase: DatabaseSync | undefined;
-  const result = runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      if (!initializedDatabases.has(db)) {
-        ensureCronRunReceiptSchema(db);
-        initializedDatabase = db;
-      }
-      return operation(db);
-    },
-    options,
-    { operationLabel },
-  );
-  if (initializedDatabase) {
-    initializedDatabases.add(initializedDatabase);
-  }
-  return result;
 }
 
 /** Binds the exact admitted execution to its authoritative receipt without changing lifecycle. */

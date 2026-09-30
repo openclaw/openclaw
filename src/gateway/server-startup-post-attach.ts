@@ -597,7 +597,7 @@ type GatewayPostAttachRuntimeDeps = {
   startGatewaySidecars: typeof startGatewaySidecars;
   warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
   loadSubagentRegistryActivation: () => Awaitable<
-    (resolveGatewayContext: GatewayContextResolver) => void
+    (resolveGatewayContext: GatewayContextResolver) => Awaitable<void>
   >;
 };
 
@@ -1026,7 +1026,7 @@ export async function startGatewayPostAttachRuntime(
           try {
             const activateSubagentRegistry = await runtimeDeps.loadSubagentRegistryActivation();
             if (params.isClosing?.() !== true) {
-              activateSubagentRegistry(params.resolveGatewayContext);
+              await activateSubagentRegistry(params.resolveGatewayContext);
             }
           } catch (err) {
             params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);

@@ -208,14 +208,14 @@ export async function startOAuthLoopbackCallbackServer(params: {
   let settled = false;
   let pendingResponse: ServerResponse | undefined;
   let binding = true;
-  const timeoutRef: { current?: NodeJS.Timeout } = {};
+  let timeout: NodeJS.Timeout | undefined;
   let closePromise: Promise<void> | undefined;
   const callback = createDeferredCore<OAuthLoopbackCallbackResult>();
   void callback.promise.catch(() => undefined);
   const close = () => (binding ? Promise.resolve() : (closePromise ??= closeServers(servers)));
   const cleanup = () => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
+    if (timeout) {
+      clearTimeout(timeout);
     }
     params.signal?.removeEventListener("abort", onAbort);
   };
@@ -389,10 +389,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
   }
   binding = false;
   if (params.timeoutMs !== undefined) {
-    timeoutRef.current = setTimeout(
-      () => settleError(new Error("OAuth callback timeout")),
-      params.timeoutMs,
-    );
+    timeout = setTimeout(() => settleError(new Error("OAuth callback timeout")), params.timeoutMs);
   }
   return {
     waitForCallback: () => callback.promise,

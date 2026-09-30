@@ -22,6 +22,9 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveExactSubagentCompletionEvent } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { FollowupCompletionOwner } from "../../agents/subagents/completion/session-followup-completion.types.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
+import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/subagents/requester-cron-authority.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
@@ -60,6 +63,13 @@ import {
 export async function prepareAgentRunDispatch(
   params: PrepareAgentRunDispatchParams,
 ): Promise<PreparedAgentRunDispatch | undefined> {
+  const assertRequesterCurrent = captureRequesterCronAuthorityAdmissionAssertion({
+    runId: params.runId,
+    sessionKey: params.resolvedSessionKey,
+    sessionId: params.getAdmittedSessionId(),
+    inputProvenance: params.inputProvenance,
+  });
+  assertRequesterCurrent?.();
   const coordination = isSubagentCoordinationInputProvenance(params.inputProvenance);
   const controlUiVisible = !params.suppressVisibleSessionEffects && !coordination;
   const parentResume = readInProcessSubagentResume(params.client?.internal);
@@ -101,24 +111,43 @@ export async function prepareAgentRunDispatch(
   }
 
   const {
-    timeoutMs,
     effectiveProviderOverride,
     effectiveModelOverride,
     effectiveThinking,
     effectiveAllowModelOverride,
-    activeModel,
     resolvedRuntime,
-    activeModelProvider,
     lifecycleStorePath,
   } = resolveAgentRunAdmissionModel(params);
+  let timeoutSeconds: number | undefined;
   let operationalRunInstance: OperationalRunInstanceRef | undefined;
   try {
     await params.acquireGatewayWorkAdmission(lifecycleStorePath);
-    params.assertGatewayWorkAdmissionAllowed();
+    const admittedSessionEntry = params.assertGatewayWorkAdmissionAllowed();
     if (!params.hasGatewayAdmissionOutcome()) {
       // Close may finish its cancellation sweep while session acquisition waits.
       // Reject before publishing a controller that the closing Gateway cannot cancel.
       params.context.requestEntryLifetime?.signal.throwIfAborted();
+      const registeredRun =
+        params.request.timeout === undefined &&
+        !params.isOneShotModelRun &&
+        params.resolvedSessionKey
+          ? getLatestLiveSubagentRunByChildSessionKey(params.resolvedSessionKey)
+          : undefined;
+      const registeredSession = registeredRun?.childSessionIdentity;
+      // Admission may adopt a replacement; retained rows must match its final identity.
+      const inheritsRegisteredTimeout =
+        registeredRun &&
+        !registeredRun.execution.suppressSessionEffects &&
+        registeredSession?.sessionId === params.getAdmittedSessionId() &&
+        registeredSession.sessionId === admittedSessionEntry?.sessionId &&
+        registeredSession.lifecycleRevision === admittedSessionEntry.lifecycleRevision;
+      timeoutSeconds =
+        params.request.timeout ??
+        (inheritsRegisteredTimeout ? (registeredRun.runTimeoutSeconds ?? 0) : undefined);
+      const timeoutMs = resolveAgentTimeoutMs({
+        cfg: params.cfgForAgent ?? params.cfg,
+        overrideSeconds: timeoutSeconds,
+      });
       operationalRunInstance = createOperationalRunInstanceRef(params.runId);
       const now = Date.now();
       params.setAdmittedRunAbort(
@@ -134,8 +163,8 @@ export async function prepareAgentRunDispatch(
           expiresAtMs: resolveAgentRunExpiresAtMs({ now, timeoutMs }),
           ownerConnId: params.ownerConnId,
           ownerDeviceId: params.ownerDeviceId,
-          providerId: activeModelProvider,
-          authProviderId: resolveProviderIdForAuth(activeModelProvider, {
+          providerId: resolvedRuntime.provider,
+          authProviderId: resolveProviderIdForAuth(resolvedRuntime.provider, {
             config: params.cfgForAgent ?? params.cfg,
           }),
           isAbortable: () => isEmbeddedAgentRunAbortableForRunId(params.runId),
@@ -360,9 +389,10 @@ export async function prepareAgentRunDispatch(
       ...params,
       assertResumeAdmissionCurrent: () => {
         params.assertAdmissionCurrent?.();
-        params.assertGatewayWorkAdmissionAllowed();
+        const sessionEntry = params.assertGatewayWorkAdmissionAllowed();
         activeRunAbort.controller.signal.throwIfAborted();
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        return sessionEntry;
       },
     });
     followupCompletion = subagentAdmission.followupCompletion;
@@ -403,6 +433,7 @@ export async function prepareAgentRunDispatch(
   let userTurn: PreparedAgentRunUserTurn;
   const assertInputOwnerCurrent = (terminal = false) => {
     assertInputAdmissionCurrent?.();
+    assertRequesterCurrent?.();
     followupCompletion?.assertCurrent();
     if (followupSuccessor) {
       if (!resumedTaskAdopted) {
@@ -532,8 +563,8 @@ export async function prepareAgentRunDispatch(
             targetSessionKey: params.resolvedSessionKey,
             targetSessionId: params.getAdmittedSessionId(),
             idempotencyKey: params.request.idempotencyKey,
-            provider: activeModel.provider,
-            model: activeModel.model,
+            provider: resolvedRuntime.provider,
+            model: resolvedRuntime.model,
           })
         : undefined;
     if (followupCompletion) {
@@ -611,6 +642,7 @@ export async function prepareAgentRunDispatch(
       },
       ...(capturedOperator.authority ? { operatorAuthority: capturedOperator.authority } : {}),
       operationalRunInstance,
+      timeoutSeconds,
       effectiveProviderOverride,
       effectiveModelOverride,
       effectiveThinking,

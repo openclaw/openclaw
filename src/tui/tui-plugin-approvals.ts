@@ -230,6 +230,8 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
   };
 
   const closeActiveOverlay = () => {
+    clearExpiryTimer();
+    activeId = null;
     const handle = activeOverlay;
     activeOverlay = null;
     if (handle) {
@@ -312,8 +314,6 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
       if (activeId !== approval.id) {
         return;
       }
-      clearExpiryTimer();
-      activeId = null;
       resolvingIds.add(approval.id);
       closeActiveOverlay();
       deps.requestRender();
@@ -371,9 +371,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
         void resolve(deny);
         return;
       }
-      clearExpiryTimer();
       dismissedIds.add(approval.id);
-      activeId = null;
       closeActiveOverlay();
       deps.chatLog.addSystem(`${surfaceLabel}: dismissed; request remains pending`);
       presentNext();
@@ -385,7 +383,6 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
           return;
         }
         expiryTimer = null;
-        activeId = null;
         remove(approval.id);
         closeActiveOverlay();
         deps.chatLog.addSystem(`${surfaceLabel}: expired`);
@@ -442,8 +439,6 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
     }
     applySnapshot(approvals, startedAtVersion);
     if (activeId && !queue.some((approval) => approval.id === activeId)) {
-      clearExpiryTimer();
-      activeId = null;
       closeActiveOverlay();
     }
     presentNext();
@@ -480,8 +475,6 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
       remove(id);
       resolvingIds.delete(id);
       if (activeId === id) {
-        clearExpiryTimer();
-        activeId = null;
         closeActiveOverlay();
       }
       presentNext();
@@ -496,8 +489,6 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
         ? queue.find((approval) => approval.id === activeId)
         : undefined;
       if (activeApproval && !matchesActiveSession(activeApproval)) {
-        clearExpiryTimer();
-        activeId = null;
         closeActiveOverlay();
         deps.requestRender();
       }
@@ -514,7 +505,6 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
       mutations.clear();
       resolvingIds.clear();
       if (activeId) {
-        activeId = null;
         closeActiveOverlay();
         deps.requestRender();
       }

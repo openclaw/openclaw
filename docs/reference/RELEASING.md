@@ -61,8 +61,20 @@ Stable publication requires stable or full validation, longer-running soak tests
 and blocking performance checks. These requirements also apply to a final version
 first published on the beta channel. Beta-profile evidence cannot qualify stable.
 
-Every selected validation lane must pass; publication waivers cannot bypass
-failures or required coverage. Validation covers source CI, packages, plugins,
+Windows Node unit-test CI shards (`checks-windows-node-*`) in Full Release
+Validation's normal CI child (`normalCi`) are advisory for Release Decision and
+publication. The `windows-node-ci` class is defined by
+`scripts/full-release-validation-policy.mjs`; its failures remain visible in the
+decision, GitHub step summary, and release evidence manifest. This policy is not
+an operator-selectable input or waiver. Ordinary PR, push, scheduled, and main CI
+still require Windows shards to pass.
+
+Every other selected validation lane remains blocking: macOS Node and other
+normal CI jobs, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
+qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
+including Windows packaged install/upgrade checks in Release Checks. A cancelled
+run still blocks. Publication waivers cannot bypass failures or required
+coverage. Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
 live-provider checks. All-group qualification includes all nine Gateway
 install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise

@@ -28,10 +28,8 @@ import {
   selectConnectedSettledSubagentWave,
 } from "../registry/subagent-registry-queries.js";
 import {
-  countActiveDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
-  hasDescendantRunAwaitingSettle,
   listSubagentRunsForRequester,
 } from "../registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -57,10 +55,12 @@ import {
   readChildCompletionFindings,
 } from "./subagent-announce-output.js";
 import { hasUsableSessionEntry } from "./subagent-announce.js";
+import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
 import {
   readSharedBatchState,
   isRequesterWakeStateCurrent,
+  captureRequesterRunOwner,
   retainedYieldIdentity,
   type RequesterSettleWakeBatchState,
   type RequesterSettleWakeBatchCallbacks,
@@ -83,9 +83,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     requesterOrigin?: DeliveryContext;
     settledEntry: SubagentRunRecord;
     signal?: AbortSignal;
+    isSourceCurrent: () => boolean;
   },
 ): Promise<boolean> {
-  if (params.signal?.aborted) {
+  if (params.signal?.aborted || !params.isSourceCurrent()) {
     return false;
   }
   const requesterSessionKey = params.requesterSessionKey.trim();
@@ -219,17 +220,21 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const batchCreatedAt = Math.min(...settledBatch.map((entry) => entry.createdAt));
   // Keep the batch members themselves in the settle check, including paused work.
   const rootRunIds = frozenBatchRunIds?.length ? new Set(frozenBatchRunIds) : undefined;
-  const requesterHasUnsettledDescendants = () =>
-    !pauseNotice &&
-    hasDescendantRunAwaitingSettle(
-      requesterSessionKey,
-      currentSettledEntry.runId,
-      requesterAgentId,
-      requesterStorePath,
-      batchCreatedAt,
-      rootRunIds,
-    );
-  const hasUnsettledDescendants = requesterHasUnsettledDescendants();
+  const readRequesterDescendants = createRequesterDescendantReader({
+    requesterSessionKey,
+    requesterAgentId,
+    requesterStorePath,
+    settledEntry: currentSettledEntry,
+    settledBefore: batchCreatedAt,
+    rootRunIds,
+    signal: params.signal,
+    isSourceCurrent: params.isSourceCurrent,
+  });
+  const initialDescendants = await readRequesterDescendants();
+  if (!initialDescendants) {
+    return false;
+  }
+  const hasUnsettledDescendants = !pauseNotice && initialDescendants.unsettled;
   if ((!frozenBatchRunIds || frozenBatchRunIds.length === 0) && hasUnsettledDescendants) {
     return false;
   }
@@ -272,9 +277,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
           (entry) => entry.pauseReason === "sessions_yield",
         ) ?? getLatestLiveSubagentRunByChildSessionKey(requesterSessionKey));
   const requesterRun = getRequesterRun();
-  const requesterGeneration = requesterRun?.generation;
-  const requesterCreatedAt = requesterRun?.createdAt;
-  const requesterTaskRunId = requesterRun?.taskRunId ?? requesterRun?.runId;
+  const isRequesterRunCurrent = captureRequesterRunOwner(requesterRun);
   const isBatchDeliveryClosed = () => {
     const currentRequester = getRequesterRun();
     return (
@@ -295,13 +298,16 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   }
   async function deferBatch(
     state: RequesterSettleWakeBatchState,
-    countTowardsLimit = countActiveDescendantRuns(
-      requesterSessionKey,
-      requesterAgentId,
-      requesterStorePath,
-      rootRunIds,
-    ) === 0,
+    countTowardsLimitOverride?: boolean,
   ): Promise<void> {
+    let countTowardsLimit = countTowardsLimitOverride;
+    if (countTowardsLimit === undefined) {
+      const descendants = await readRequesterDescendants();
+      if (!descendants) {
+        return;
+      }
+      countTowardsLimit = descendants.active === 0;
+    }
     const now = Date.now();
     if ((state.nextAttemptAt ?? 0) > now) {
       return;
@@ -463,7 +469,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       return false;
     }
     // Recheck owned descendants after loading findings and before dispatch.
-    if (requesterHasUnsettledDescendants()) {
+    const currentDescendants = await readRequesterDescendants();
+    if (!currentDescendants) {
+      return false;
+    }
+    if (!pauseNotice && currentDescendants.unsettled) {
       await deferBatch(state);
       return false;
     }
@@ -521,23 +531,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
           return false;
         }
       }
-      const currentRequester = getRequesterRun();
-      // Normal admission adopts a paused requester before execution starts.
-      // Only this admitted continuation may replace its captured task owner.
-      if (
-        (currentRequester !== requesterRun ||
-          currentRequester?.generation !== requesterGeneration ||
-          currentRequester?.createdAt !== requesterCreatedAt) &&
-        (!requesterRun ||
-          !currentRequester ||
-          currentRequester.runId !== directIdempotencyKey ||
-          currentRequester.taskRunId !== requesterTaskRunId ||
-          currentRequester.requesterSessionKey !== requesterRun.requesterSessionKey ||
-          currentRequester.requesterAgentId !== requesterRun.requesterAgentId)
-      ) {
-        return false;
-      }
-      return true;
+      return isRequesterRunCurrent(getRequesterRun(), directIdempotencyKey);
     };
     const isBatchCurrent = () => {
       const currentRuns = filterCurrentDirectChildCompletionRows(
@@ -556,6 +550,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     };
     const isSourceSessionEffectsAllowed = () =>
       !params.signal?.aborted &&
+      params.isSourceCurrent() &&
       isStoreCurrent() &&
       preparedFindings.isCurrent() &&
       !isGatewayClosed() &&
@@ -614,10 +609,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
               deliverSubagentAnnouncement({
                 requesterSessionKey,
                 requesterAgentId,
-                requesterRunTimeoutSeconds:
-                  requesterDepth >= 1 && requesterRun
-                    ? (requesterRun.runTimeoutSeconds ?? 0)
-                    : undefined,
                 triggerMessage: wakeMessage,
                 steerMessage: wakeMessage,
                 requesterSessionOrigin,

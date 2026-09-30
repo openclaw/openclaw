@@ -30,13 +30,12 @@ import {
 } from "./event-projector.test-harness.js";
 import type { CodexThread } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { projectBoundedCodexThreadHistory } from "./transcript-history-projection.js";
 import { attachCodexMirrorRunId } from "./transcript-mirror-attestation.js";
 import {
-  buildCodexUserPromptMessage,
   codexTranscriptMirrorRuntime,
   importCodexThreadHistoryToTranscript,
   mirrorPromptAtTurnStartBestEffort,
-  projectBoundedCodexThreadHistory,
 } from "./transcript-mirror.js";
 import {
   createTranscriptMirrorTestHarness,
@@ -44,6 +43,7 @@ import {
   readMirrorRaw,
 } from "./transcript-mirror.test-harness.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
+import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 const mirrorCodexAppServerTranscript = codexTranscriptMirrorRuntime.mirror;
 const mirrorTranscriptBestEffort = codexTranscriptMirrorRuntime.mirrorBestEffort;

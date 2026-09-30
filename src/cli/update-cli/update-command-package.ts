@@ -38,6 +38,7 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { normalizeFallbackFailureReason } from "../../infra/update-runner-command.js";
@@ -97,6 +98,7 @@ type PackageDoctorOptions = {
         inputHash: string;
         changes: UpdateDoctorConfigChange[];
         databaseBackup?: UpdateDatabaseBackup;
+        originalRecoveryCapture?: UpdateRecoveryBaselineRef;
         assertCurrent: () => void;
         assertBoundChildCurrent: () => void;
         onStateHandoff?: () => void;
@@ -112,6 +114,7 @@ export function preparePackageDoctorContext(params: {
   inputHash?: string | null;
   changes: UpdateDoctorConfigChange[];
   databaseBackup?: UpdateDatabaseBackup;
+  originalRecoveryCapture?: UpdateRecoveryBaselineRef;
   assertCurrent: () => void;
   assertBoundChildCurrent: () => void;
   onStateHandoff?: () => void;
@@ -130,6 +133,7 @@ export function preparePackageDoctorContext(params: {
     inputHash: params.inputHash ?? hashConfigRaw(null),
     changes: params.changes,
     databaseBackup: params.databaseBackup,
+    originalRecoveryCapture: params.originalRecoveryCapture,
     assertCurrent: params.assertCurrent,
     assertBoundChildCurrent: params.assertBoundChildCurrent,
     onStateHandoff: params.onStateHandoff,
@@ -377,6 +381,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
                 databaseGenerations: context.databaseBackup?.sourceGenerations,
+                originalRecoveryCapture: context.originalRecoveryCapture,
               },
             },
             runDoctor,
@@ -492,6 +497,7 @@ export async function stagePackageInstallUpdate(
   const staged = createDeferredCore<string>();
   const continuation = createDeferredCore<PackageInstallUpdateParams | undefined>();
   let continued = false;
+  let deliveredFailure: { error: unknown } | undefined;
   let active: PackageInstallUpdateParams | undefined;
   const requireActive = () => {
     if (!active) {
@@ -569,14 +575,30 @@ export async function stagePackageInstallUpdate(
       }
       continued = true;
       continuation.resolve(next);
-      return await completed;
+      try {
+        return await completed;
+      } catch (error) {
+        deliveredFailure = { error };
+        throw error;
+      }
     },
     async close() {
       if (!continued) {
         continued = true;
         continuation.resolve(undefined);
       }
-      await completed;
+      try {
+        await completed;
+      } catch (error) {
+        // Closing joins the same operation; a delivered refusal is not a new cleanup failure.
+        if (
+          !deliveredFailure ||
+          deliveredFailure.error !== error ||
+          hasCommandProcessCleanupError(error)
+        ) {
+          throw error;
+        }
+      }
     },
   };
 }

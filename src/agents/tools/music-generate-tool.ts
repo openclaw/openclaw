@@ -275,12 +275,7 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
                 log.warn(message, meta),
               messages: [timeout.message],
               detailExtras: {
-                ...buildMediaReferenceDetails({
-                  entries: loadedReferenceImages,
-                  singleKey: "image",
-                  pluralKey: "images",
-                  getResolvedInput: (entry) => entry.resolvedInput,
-                }),
+                ...buildMediaReferenceDetails(loadedReferenceImages, "image"),
                 ...(model ? { model } : {}),
                 ...(lyrics ? { requestedLyrics: lyrics } : {}),
                 ...(typeof instrumental === "boolean" ? { instrumental } : {}),

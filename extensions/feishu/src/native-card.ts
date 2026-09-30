@@ -70,6 +70,14 @@ function sanitizeNativeFeishuButtonBehavior(
   return undefined;
 }
 
+export function resolveFeishuButtonType(style: unknown): "primary" | "danger" | "default" {
+  return style === "primary" || style === "success"
+    ? "primary"
+    : style === "danger"
+      ? "danger"
+      : "default";
+}
+
 function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown> | undefined {
   if (!isRecord(button)) {
     return undefined;
@@ -81,12 +89,6 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
   if (!text?.trim()) {
     return undefined;
   }
-  const style =
-    button.type === "danger"
-      ? "danger"
-      : button.type === "primary" || button.type === "success"
-        ? "primary"
-        : undefined;
   const behaviors = Array.isArray(button.behaviors)
     ? button.behaviors
         .map(sanitizeNativeFeishuButtonBehavior)
@@ -105,7 +107,7 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
   return {
     tag: "button",
     text: { tag: "plain_text", content: text },
-    type: style ?? "default",
+    type: resolveFeishuButtonType(button.type),
     behaviors,
   };
 }

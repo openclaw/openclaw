@@ -31,10 +31,6 @@ function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
 }
 
-function bodyTooLargeErrorMessage(url: string, byteLimit: number) {
-  return `HTTP response from ${url} exceeded ${byteLimit} bytes`;
-}
-
 async function readBoundedResponseText(params: {
   response: Response;
   url: string;
@@ -42,7 +38,7 @@ async function readBoundedResponseText(params: {
   signal: AbortSignal;
 }) {
   const tooLargeError = () =>
-    Object.assign(new Error(bodyTooLargeErrorMessage(params.url, params.maxBytes)), {
+    Object.assign(new Error(`HTTP response from ${params.url} exceeded ${params.maxBytes} bytes`), {
       code: "ETOOBIG",
     });
   const contentLength = params.response.headers.get("content-length");

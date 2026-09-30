@@ -158,7 +158,7 @@ function collectGatewayLogSentinels(value: unknown): GatewayLogSentinelFinding[]
 }
 
 function isQaConfidenceVerdict(value: string): value is QaConfidenceVerdict {
-  return QA_CONFIDENCE_VERDICTS.includes(value as QaConfidenceVerdict);
+  return QA_CONFIDENCE_VERDICTS.some((verdict) => verdict === value);
 }
 
 function readRequiredString(record: Record<string, unknown>, key: string): string {
@@ -570,13 +570,8 @@ function evaluateLaneArtifact(
       return evaluateTokenEfficiencySummary(payload, lane.expectedTokenUsageSource);
     case "jsonl-replay-summary":
       return evaluateJsonlReplaySummary(payload);
-    case "self-test-summary":
-      return evaluateSelfTestSummary(payload);
     default:
-      return {
-        passed: false,
-        details: `unknown confidence lane kind: ${(lane as { kind?: string }).kind ?? "missing"}`,
-      };
+      return evaluateSelfTestSummary(payload);
   }
 }
 

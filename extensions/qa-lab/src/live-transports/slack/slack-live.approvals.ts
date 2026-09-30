@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { requestLiveQaApproval } from "../shared/live-approval-request.js";
-import { assertApprovalDecisionResult } from "../shared/live-approval-result.js";
 import {
-  writeSlackApprovalCheckpoint,
-  waitForApprovalDecision,
-} from "./slack-live.approval-checkpoint.js";
+  requestLiveQaApproval,
+  resolveLiveQaApprovalDecision,
+  waitForLiveQaApprovalDecision,
+} from "../shared/live-approval-request.js";
+import { assertApprovalDecisionResult } from "../shared/live-approval-result.js";
+import { writeSlackApprovalCheckpoint } from "./slack-live.approval-checkpoint.js";
 import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
   type SlackQaApprovalDecision,
@@ -136,26 +137,11 @@ export async function waitForSlackApprovalMessage(
   );
 }
 
-export async function resolveApprovalDecision(params: {
-  approvalId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
-  decision: SlackQaApprovalDecision;
-  kind: ChannelApprovalKind;
-}) {
-  const method = params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";
-  return await params.context.gateway.call(
-    method,
-    { decision: params.decision, id: params.approvalId },
-    {
-      expectFinal: false,
-      timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
-}
-
 export async function runSlackApprovalScenario(params: {
   channelId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: Pick<SlackQaScenarioContext, "sutIdentity" | "sutReadClient"> & {
+    gateway: Pick<SlackQaScenarioContext["gateway"], "call">;
+  };
   observedMessages: SlackObservedMessage[];
   run: SlackQaApprovalScenarioRun;
   scenario: SlackQaScenarioMetadata;
@@ -207,18 +193,20 @@ export async function runSlackApprovalScenario(params: {
     observedAt: pending.observedAt,
     state: "pending",
   });
-  await resolveApprovalDecision({
+  await resolveLiveQaApprovalDecision({
     approvalId,
-    context: params.context,
+    gateway: params.context.gateway,
     decision: params.run.decision,
     kind: params.run.approvalKind,
+    timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
   });
   assertApprovalDecisionResult({
     decision: params.run.decision,
-    result: await waitForApprovalDecision({
+    result: await waitForLiveQaApprovalDecision({
       approvalId,
-      context: params.context,
+      gateway: params.context.gateway,
       kind: params.run.approvalKind,
+      timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
     }),
   });
   const resolved = await waitForSlackApprovalMessage({

@@ -279,21 +279,13 @@ export function mergeRecentDistinct(
   nextValue: string,
   limit: number,
 ): string[] {
-  const seen = new Set<string>();
-  const next = existing.filter((value): value is string => {
-    if (typeof value !== "string" || value.length === 0 || seen.has(value)) {
-      return false;
-    }
-    seen.add(value);
-    return true;
-  });
+  const next = [
+    ...new Set(existing.filter((value) => typeof value === "string" && value.length > 0)),
+  ];
   if (nextValue && !next.includes(nextValue)) {
     next.push(nextValue);
   }
-  if (next.length <= limit) {
-    return next;
-  }
-  return next.slice(next.length - limit);
+  return next.length <= limit ? next : next.slice(next.length - limit);
 }
 
 export function normalizeIsoDay(isoLike: string): string | null {

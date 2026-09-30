@@ -7,12 +7,11 @@ struct ChatSessionUnreadPatchGuard {
     private var requested = false
     private var activeExplicitUnread: Bool?
     private var confirmedUnreadByKey: [String: Bool] = [:]
-    private var pendingExplicitUnreadByKey: [String: Bool] = [:]
-    private var pendingExplicitRevisions: [String: Int] = [:]
+    private var pendingExplicitPatches: [String: (revision: Int, unread: Bool)] = [:]
     private var revisions: [String: Int] = [:]
 
     mutating func observe(key: String, unread: Bool?) {
-        guard self.pendingExplicitRevisions[key] == nil,
+        guard self.pendingExplicitPatches[key] == nil,
               !(key == self.activeSessionKey && self.activeExplicitUnread != nil)
         else { return }
         if let unread {
@@ -54,8 +53,7 @@ struct ChatSessionUnreadPatchGuard {
 
     mutating func beginExplicitPatch(key: String, unread: Bool, isActive: Bool) -> Int {
         let revision = self.advanceRevision(key: key)
-        self.pendingExplicitRevisions[key] = revision
-        self.pendingExplicitUnreadByKey[key] = unread
+        self.pendingExplicitPatches[key] = (revision, unread)
         if isActive {
             self.activeSessionKey = key
             // The explicit action owns this activation. Only navigation opens
@@ -68,9 +66,8 @@ struct ChatSessionUnreadPatchGuard {
 
     mutating func patchSucceeded(key: String, unread: Bool, revision: Int) -> Bool {
         guard self.revisions[key] == revision else { return false }
-        if self.pendingExplicitRevisions[key] == revision {
-            self.pendingExplicitRevisions.removeValue(forKey: key)
-            self.pendingExplicitUnreadByKey.removeValue(forKey: key)
+        if self.pendingExplicitPatches[key]?.revision == revision {
+            self.pendingExplicitPatches.removeValue(forKey: key)
         }
         self.confirmedUnreadByKey[key] = unread
         return true
@@ -78,9 +75,8 @@ struct ChatSessionUnreadPatchGuard {
 
     mutating func patchFailed(key: String, revision: Int) -> Bool {
         guard self.revisions[key] == revision else { return false }
-        if self.pendingExplicitRevisions[key] == revision {
-            self.pendingExplicitRevisions.removeValue(forKey: key)
-            self.pendingExplicitUnreadByKey.removeValue(forKey: key)
+        if self.pendingExplicitPatches[key]?.revision == revision {
+            self.pendingExplicitPatches.removeValue(forKey: key)
         }
         if key == self.activeSessionKey {
             self.requested = false
@@ -94,7 +90,7 @@ struct ChatSessionUnreadPatchGuard {
     }
 
     func localUnreadOverride(key: String) -> Bool? {
-        if let unread = self.pendingExplicitUnreadByKey[key] {
+        if let unread = self.pendingExplicitPatches[key]?.unread {
             return unread
         }
         guard key == self.activeSessionKey else { return nil }
