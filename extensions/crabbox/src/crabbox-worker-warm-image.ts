@@ -28,7 +28,7 @@ import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   CrabboxWarmImageRequestError,
-  isCrabboxWarmImageCaptureUnsupported,
+  isCrabboxCaptureRefusalRetained,
   isCrabboxWarmImageHeld as held,
   openCrabboxWarmImageStore,
   projectCrabboxWarmImage,
@@ -108,7 +108,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       key,
       (record) =>
         hasNoProviderObligations(record) &&
-        !isCrabboxWarmImageCaptureUnsupported(record, policy.refreshAfterMs),
+        !isCrabboxCaptureRefusalRetained(record, policy.refreshAfterMs),
     );
 
   const lookupLease = (id: string) => openStore().lookupLease(id);
@@ -242,7 +242,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (
         value.captureUnsupported &&
         hasNoProviderObligations(value) &&
-        !isCrabboxWarmImageCaptureUnsupported(value, policy.refreshAfterMs)
+        !isCrabboxCaptureRefusalRetained(value, policy.refreshAfterMs)
       ) {
         await deleteEmptyProfile(key);
         continue;
@@ -297,7 +297,9 @@ export function createCrabboxWarmImageManager(dependencies: {
         const image = current?.[generation];
         if (current && image && (generation === "previous" || !current.previous)) {
           await deleteImage(context, key, current, remaining, image.checkpointId);
-        } else if (generation === "image") {
+        }
+        if (generation === "image") {
+          // A retained refusal marker is display-only and never holds a capacity slot.
           await openStore().deleteIf(key, hasNoProviderObligations);
         }
       }

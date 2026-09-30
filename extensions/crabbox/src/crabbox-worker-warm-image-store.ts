@@ -63,7 +63,7 @@ export type WarmProfileRecord = {
   projectKey?: string;
   image?: WarmImageRecord;
   previous?: WarmImageRecord;
-  /** Crabbox refused native capture before submission; workers for this key provision cold until retry. */
+  /** Latest native-capture refusal; retained for display without suppressing later attempts. */
   captureUnsupported?: { atMs: number; provider: string; message: string };
   allocations: Record<string, WarmAllocationRecord>;
   operation?:
@@ -172,12 +172,10 @@ function requireCanonicalProfile(record: WarmProfileRecord | undefined) {
   return record;
 }
 
-export const isCrabboxWarmImageCaptureUnsupported = (
+export const isCrabboxCaptureRefusalRetained = (
   record: WarmProfileRecord,
   refreshAfterMs: number,
-): record is WarmProfileRecord & {
-  captureUnsupported: NonNullable<WarmProfileRecord["captureUnsupported"]>;
-} =>
+): boolean =>
   record.captureUnsupported !== undefined &&
   Date.now() < record.captureUnsupported.atMs + refreshAfterMs;
 

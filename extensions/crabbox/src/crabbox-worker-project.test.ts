@@ -45,7 +45,7 @@ function notSubmittedReceipt(leaseId: string) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
-  it("continues cold enrollment after unsupported native capture and skips capture until refresh", async () => {
+  it("continues cold after unsupported native capture and captures again on the next provision", async () => {
     const now = 1_800_000_000_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const events: string[] = [];
@@ -86,23 +86,16 @@ describe("Crabbox project snapshot provisioning", () => {
     });
     expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(
-      `Crabbox warm image capture unsupported: ${unsupportedCaptureReceipt("unused").message}. Workers for this profile provision cold; OpenClaw retries capture after warmImages.refreshAfter; set settings.warmImage: false on the profile to stop capture attempts.`,
+      `Crabbox warm image capture unsupported: ${unsupportedCaptureReceipt("unused").message}. Workers for this profile provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
     );
     await provider.destroy({ ...source, profile });
-    events.length = 0;
+    // The retained refusal must not suppress the next attempt once Crabbox can capture.
+    expect((await listCrabboxWarmImages(crabboxState))[0]?.captureUnsupported?.atMs).toBe(now);
     calls.length = 0;
-    current = projectOptions(events);
-    await provider.provision(profile, "unsupported-next", current.options);
-    expect(events).toEqual(["project-prepared", "enrollment-begun", "enrollment-install"]);
-    expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
-    expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
-    expect(calls.filter(({ argv }) => argv[1] === "run")).toHaveLength(2);
-    expect(warn).toHaveBeenCalledOnce();
-
-    clock.mockReturnValue(now + 86_400_000);
+    clock.mockReturnValue(now + 60_000);
     unsupported = false;
     current = projectOptions([]);
-    await provider.provision(profile, "supported-after-refresh", current.options);
+    await provider.provision(profile, "supported-next", current.options);
     expect(current.options.prepareNodeRuntime).toHaveBeenCalledOnce();
     expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
     expect((await listCrabboxWarmImages(crabboxState))[0]?.checkpointId).toBe(CHECKPOINT_ID);

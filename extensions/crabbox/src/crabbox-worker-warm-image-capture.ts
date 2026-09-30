@@ -24,7 +24,6 @@ import {
   clearCrabboxWarmImageCapture,
   crabboxCaptureUnsupportedSentence,
   crabboxWarmImageRecoveryHint,
-  isCrabboxWarmImageCaptureUnsupported,
   sameCrabboxWarmImageGeneration,
   withoutCrabboxWarmImageOperation,
   type openCrabboxWarmImageStore,
@@ -66,7 +65,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
   const warnUnsupported = (message: string) =>
     warnOnce(
       "capture unsupported",
-      `${crabboxCaptureUnsupportedSentence(message)} Workers for this profile provision cold; OpenClaw retries capture after warmImages.refreshAfter; set settings.warmImage: false on the profile to stop capture attempts.`,
+      `${crabboxCaptureUnsupportedSentence(message)} Workers for this profile provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
       false,
     );
 
@@ -112,10 +111,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
         let existing = (await openStore().lookup(key))!;
         if (existing.operation) {
-          return;
-        }
-        if (isCrabboxWarmImageCaptureUnsupported(existing, dependencies.policy.refreshAfterMs)) {
-          warnUnsupported(existing.captureUnsupported.message);
           return;
         }
         if (existing.image?.pinned && existing.previous?.pinned) {

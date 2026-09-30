@@ -111,26 +111,43 @@ describe("Crabbox idle image maintenance", () => {
     expect(calls).toEqual([]);
   });
 
-  it("evicts active marker-only profiles to admit an allocation at capacity without provider deletion", async () => {
-    const now = 2 * REFRESH_MS;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const { provider, calls } = createWarmProvider();
-    const store = openWarmImageStore();
-    for (let index = 0; index < 128; index += 1) {
-      store.register(`cold-only-${index}`, {
-        version: 3,
-        allocations: {},
-        captureUnsupported: captureUnsupported(now),
-      });
-    }
+  it.each([
+    { fixture: "marker-only", withImage: false },
+    { fixture: "image and marker", withImage: true },
+  ])(
+    "frees a capacity slot held by a retained refusal ($fixture) to admit an allocation",
+    async ({ withImage }) => {
+      const now = 2 * REFRESH_MS;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const { provider, calls } = createWarmProvider();
+      const store = openWarmImageStore();
+      for (let index = 0; index < 128; index += 1) {
+        store.register(`cold-only-${index}`, {
+          version: 3,
+          allocations: {},
+          captureUnsupported: captureUnsupported(now),
+          ...(withImage
+            ? {
+                image: {
+                  ...expiredImage(`chk_refused_${index}`).image!,
+                  createdAtMs: now - 3_600_000,
+                  lastDemandAtMs: now - 3_600_000,
+                },
+              }
+            : {}),
+        });
+      }
 
-    const lease = await provisionWarmProfile(provider);
+      const lease = await provisionWarmProfile(provider);
 
-    expect(store.entries()).toHaveLength(128);
-    expect(store.entries().filter(({ value }) => value.captureUnsupported)).toHaveLength(127);
-    expect(store.entries().some(({ value }) => value.allocations[lease.leaseId])).toBe(true);
-    expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
-  });
+      expect(store.entries()).toHaveLength(128);
+      expect(store.entries().filter(({ value }) => value.captureUnsupported)).toHaveLength(127);
+      expect(store.entries().some(({ value }) => value.allocations[lease.leaseId])).toBe(true);
+      expect(
+        calls.filter(({ argv }) => argv[1] === "checkpoint").map(({ argv }) => argv.slice(1)),
+      ).toEqual(withImage ? [["checkpoint", "delete", "chk_refused_0"]] : []);
+    },
+  );
 
   it("deletes expired images through a healthy binary when another acquisition fails", async () => {
     const { provider, calls, warn } = createWarmProvider();

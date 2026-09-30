@@ -86,7 +86,8 @@ describe("Crabbox warm-image CLI", () => {
 
     expect(output).toContain("Cold only: Native capture is unsupported by this coordinator.");
     expect(output).toContain("Workers provision cold");
-    expect(output).toContain("warmImages.refreshAfter");
+    expect(output).toContain("each eligible worker retries capture");
+    expect(output).toContain("Crabbox configuration changes apply to the next dispatch");
     expect(output).toContain("settings.warmImage: false");
     expect(output).not.toContain("--recover");
     expect(openWarmImageStore().lookup("profile")).toEqual(record);
