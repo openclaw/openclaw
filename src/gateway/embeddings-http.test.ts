@@ -526,9 +526,12 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     });
   });
 
-  it("passes a slash-containing adapter default model through as a model name", async () => {
-    // DeepInfra's default embedding model is `BAAI/bge-m3`; the provider id of
-    // the model name must not be mistaken for a provider selection.
+  it("passes a configured slash-containing model through as a model name", async () => {
+    // DeepInfra's default embedding model is `BAAI/bge-m3`; an explicit
+    // `memory.search.model` with that id must not have its prefix mistaken for
+    // a provider selection. The explicit config matters: without it the empty
+    // override is substituted with `adapter.defaultModel` downstream, which on
+    // the base code never reaches the slash parser this regression covers.
     const slashDefaultAdapter: MemoryEmbeddingProviderAdapter = {
       id: "slash-default-fixture",
       defaultModel: "BAAI/bge-m3",
@@ -545,7 +548,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     registerEmbeddingProvider(slashDefaultAdapter);
     await writeEmbeddingConfig({
       memory: {
-        search: { provider: "slash-default-fixture" },
+        search: { provider: "slash-default-fixture", model: "BAAI/bge-m3" },
       },
     });
 
