@@ -266,7 +266,7 @@ function renderToolRowContent(
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
   const displayName = distinctSummaryText(summary.name, displayLabel);
   return html`
-    <span class="chat-tool-msg-summary__label">${displayLabel}</span>
+    ${summary.label !== display.label ? html`<span class="chat-tool-msg-summary__label">${displayLabel}</span>` : nothing}
     ${
       displayName ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>` : nothing
     }
@@ -468,7 +468,11 @@ export function renderToolCard(
   const workspaceFilePath = toolWorkspacePath(card, view);
   const isFileRow = Boolean(workspaceFilePath);
   const rowContent = html`
-    <span class="chat-tool-msg-summary__icon"
+    <span
+      class="chat-tool-msg-summary__icon"
+      role="img"
+      aria-label=${display.name}
+      title=${display.name}
       >${renderToolIcon(icon, { toolName: display.name, pluginToolIcons: opts.pluginToolIcons })}</span
     >
     <span class="chat-tool-disclosure__content"

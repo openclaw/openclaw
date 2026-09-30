@@ -311,15 +311,13 @@ export function renderActivityGroup(
         @focus=${syncToolDisclosureOverflow}
         @click=${() => opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded)}
       >
-        <span class="chat-activity-group__icon">${icons.listTree}</span>
-        <span class="chat-tool-disclosure__content">
-          ${activityHeadline(
-            JSON.stringify([opts.sessionKey, opts.connectionEpoch, opts.activityRunId]),
-            headline,
-            groupSummaryLabel,
-            currentActivity,
-          )}
-        </span>
+        ${activityHeadline(
+          JSON.stringify([opts.sessionKey, opts.connectionEpoch, opts.activityRunId]),
+          headline,
+          groupSummaryLabel,
+          currentActivity,
+          opts.pluginToolIcons,
+        )}
         ${
           headline
             ? describeToolGroup(visibleActivity)

@@ -12,6 +12,11 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+Tool activity shows a tool-specific icon beside its purpose or details instead of
+repeating the tool name. Hover the icon to see the exact tool name; screen readers
+retain that identity. Expanding an activity group keeps the individual tool details
+and outcomes available. Completed group summaries retain their operation counts.
+
 When your role or session policy blocks messages, the composer is disabled and
 shows the reason before you try to send. This includes sandbox requirements,
 shared-session write restrictions, and read-only operator access. Your existing

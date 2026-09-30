@@ -161,6 +161,97 @@ function prepared(key: string, status: AgentActivityItem["status"] = "running"):
   };
 }
 
+it.each([
+  {
+    name: "exec",
+    args: { title: "Update investigation progress", code: "return null" },
+    purpose: "Update investigation progress",
+  },
+  { name: "web_search", args: { query: "new plugin APIs" }, purpose: 'for "new plugin APIs"' },
+  { name: "lookup_record", args: { query: "release notes" }, purpose: "release notes" },
+])(
+  "replaces the $name prefix with an accessible icon without changing its purpose",
+  ({ name, args, purpose }) => {
+    const activity = projectAgentToolActivity({
+      toolCallId: "purpose",
+      name,
+      args,
+      phase: "start",
+    });
+    render(renderActivityGroup([group("current", [activity])], liveOptions), container);
+    const summary = container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!;
+    expect(label()).toBe(purpose + "…");
+    const icon = summary.querySelector('.chat-activity-group__icon[role="img"]');
+    expect(icon?.getAttribute("aria-label")).toBe(name);
+    expect(icon?.getAttribute("title")).toBe(name);
+    expect(icon?.querySelector("svg")).not.toBeNull();
+    expect(summary.textContent?.trim()).toBe(purpose + "…");
+  },
+);
+
+it("keeps the icon paired with the held purpose and restores the aggregate icon", () => {
+  const exec = projectAgentToolActivity({
+    toolCallId: "exec",
+    name: "exec",
+    args: { title: "Inspect source", code: "return null" },
+    phase: "start",
+  });
+  const search = projectAgentToolActivity({
+    toolCallId: "search",
+    name: "web_search",
+    args: { query: "API docs" },
+    phase: "start",
+  });
+  const draw = (items: AgentActivityItem[], runActive = true) =>
+    render(
+      renderActivityGroup([group("current", items)], { ...liveOptions, runActive }),
+      container,
+    );
+  const icon = () => container.querySelector(".chat-activity-group__icon");
+  draw([exec]);
+  expect(icon()?.getAttribute("aria-label")).toBe("exec");
+  const execSvg = icon()?.innerHTML;
+  vi.advanceTimersByTime(100);
+  draw([exec, search]);
+  expect(label()).toBe("Inspect source…");
+  expect(icon()?.getAttribute("aria-label")).toBe("exec");
+  vi.advanceTimersByTime(2_900);
+  expect(label()).toBe('for "API docs"…');
+  expect(icon()?.getAttribute("aria-label")).toBe("web_search");
+  expect(icon()?.innerHTML).not.toBe(execSvg);
+  draw([exec, search], false);
+  expect(label()).toBe("1 command · 1 search");
+  expect(icon()?.getAttribute("aria-hidden")).toBe("true");
+  expect(icon()?.getAttribute("aria-label")).toBeNull();
+});
+
+it("keeps an unknown outcome visible instead of replacing it with a purpose", () => {
+  const item = projectAgentToolActivity({
+    toolCallId: "unknown",
+    name: "exec",
+    phase: "result",
+    status: "unknown",
+    args: { title: "Inspect source", code: "return null" },
+  });
+  render(renderActivityGroup([group("current", [item])], liveOptions), container);
+  expect(label()).toBe("Outcome unknown");
+  expect(container.querySelector(".chat-activity-group__icon")?.ariaLabel).toBe("exec");
+});
+
+it("keeps tools without a purpose accessible without a visible tool name", () => {
+  const item = projectAgentToolActivity({
+    toolCallId: "bare",
+    name: "session_status",
+    phase: "result",
+    isError: false,
+  });
+  render(renderActivityGroup([group("current", [item])], liveOptions), container);
+  expect(label()).toBe("");
+  expect(container.querySelector(".chat-activity-group__icon")?.getAttribute("aria-label")).toBe(
+    "session_status",
+  );
+});
+
 const liveOptions = {
   showToolCalls: true,
   showReasoning: false,
@@ -332,7 +423,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
   expect(activitySummary.getAttribute("aria-label")).toBeNull();
   expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
   expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-    "Edit in /repo/src/a.ts…",
+    "in /repo/src/a.ts…",
   );
 
   render(renderActivityGroup(groups, { ...opts, runActive: false }), container);
@@ -396,7 +487,7 @@ it("uses the prepared running mutation title in an active group summary", () => 
   );
 
   expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-    "Edit in /repo/src/a.ts…",
+    "in /repo/src/a.ts…",
   );
 });
 
