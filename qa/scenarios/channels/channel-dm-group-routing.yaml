@@ -59,7 +59,7 @@ flow:
             conversation:
               id: { ref: config.groupConversationId }
               kind: group
-            senderId: driver
+            senderId: { ref: config.dmConversationId }
             senderName: QA Driver
             text:
               expr: "`@openclaw reply exactly: ${config.groupMarker}`"
