@@ -51,9 +51,18 @@ const conflictError = () =>
 const rejection = new GatewayRequestError({ code: "INVALID_REQUEST", message: "invalid config" });
 
 describe("server preferences", () => {
-  it("keeps advanced disclosure browser-local", () => {
+  it("keeps presentation preferences browser-local", () => {
     const before = loadSettings();
-    expect(changedServerUiPrefs(before, { ...before, showAdvancedSettings: true })).toBeNull();
+    expect(
+      changedServerUiPrefs(before, {
+        ...before,
+        textScale: 125,
+        sidebarLiveActivity: false,
+        chatMessageMaxWidth: "82%",
+        showAdvancedSettings: true,
+        openLinksExternally: true,
+      }),
+    ).toBeNull();
   });
 
   it("rejects malformed accents in a minimal persisted settings record", () => {
@@ -102,6 +111,12 @@ describe("server preferences", () => {
 
   it("preserves a server custom-theme override when this device lacks its palette", () => {
     const config = configWithPrefs({ theme: "custom" });
+    const onApplied = vi.fn();
+    const onThemeChanged = vi.fn();
+    expect(applyServerUiPrefs(config, { onApplied, onThemeChanged })).toBe(false);
+    expect(loadSettings().theme).toBe("claw");
+    expect(onApplied).not.toHaveBeenCalled();
+    expect(onThemeChanged).toHaveBeenCalledWith("custom");
     const state = resolveServerUiPrefState(config, "theme");
 
     expect(state).toEqual({

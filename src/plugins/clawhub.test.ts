@@ -1091,6 +1091,14 @@ describe("installPluginFromClawHub", () => {
         "ClawHub archive fallback verification rejected the downloaded archive: archive entries collide at output path",
       ),
     },
+    {
+      kind: "Unicode normalization collision",
+      names: ["caf\u00e9.md", "cafe\u0301.md"],
+      mode: undefined,
+      error: expect.stringContaining(
+        "ClawHub archive fallback verification rejected the downloaded archive: archive entries collide at output path",
+      ),
+    },
   ])(
     "explains portable ZIP $kind rejection before install work",
     async ({ names, mode, error }) => {
@@ -1241,6 +1249,25 @@ describe("installPluginFromClawHub", () => {
     expect(onBeforePluginArtifactCommit).not.toHaveBeenCalled();
     await expect(fs.stat(extensionsDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it.each(["../extra.txt", "/extra.txt", "C:\\extra.txt", "a/../extra.txt", "a\0extra.txt"])(
+    "rejects unsafe archive path %s before install work",
+    async (filePath) => {
+      await mockClawHubFallbackArchive({
+        entries: { "openclaw.plugin.json": '{"id":"demo"}', [filePath]: "unsafe" },
+        files: [manifestFile],
+      });
+      const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
+      expectInstallFailureFields(
+        result,
+        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+        expect.stringMatching(
+          /^ClawHub archive fallback verification rejected the downloaded archive: archive entry /,
+        ),
+      );
+      expect(installExtractedArchiveMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects an undeclared file under its canonical extracted name", async () => {
     await mockClawHubFallbackArchive({

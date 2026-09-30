@@ -212,9 +212,13 @@ describe("plugin runtime state proxy", () => {
     });
   });
 
-  it.each(["before", "after"] as const)(
-    "settles ingress recovery when its owner is revoked %s the commit grant",
-    async (revocation) => {
+  it.each(
+    (["enqueue", "recovery"] as const).flatMap((operation) =>
+      (["before", "after"] as const).map((revocation) => ({ operation, revocation })),
+    ),
+  )(
+    "settles ingress $operation when its owner is revoked $revocation the commit grant",
+    async ({ operation, revocation }) => {
       await withOpenClawTestState({ label: "plugin-ingress-commit-authority" }, async (state) => {
         const record = createPluginRecord("ingress-owner");
         const { registry, runtime } = setup(record, true);
@@ -241,11 +245,20 @@ describe("plugin runtime state proxy", () => {
             }, attachment),
           );
         try {
-          const writing = queue.recoverStaleClaims({ now: 20, staleMs: 5 });
+          const writing =
+            operation === "enqueue"
+              ? queue.enqueue("admitted", { text: "new event" })
+              : queue.recoverStaleClaims({ now: 20, staleMs: 5 });
           if (revocation === "before") {
             await expect(writing).rejects.toThrow(
               'Plugin "ingress-owner" runtime is no longer active',
             );
+          } else if (operation === "enqueue") {
+            await expect(writing).resolves.toMatchObject({
+              kind: "accepted",
+              duplicate: false,
+              record: { id: "admitted" },
+            });
           } else {
             await expect(writing).resolves.toBe(1);
           }
@@ -256,9 +269,11 @@ describe("plugin runtime state proxy", () => {
             access: "read-only",
           });
           expect((await inspector.listPending()).map((row) => row.id)).toEqual(
-            revocation === "before" ? [] : ["retained"],
+            revocation === "before" ? [] : [operation === "enqueue" ? "admitted" : "retained"],
           );
-          expect(await inspector.listClaims()).toEqual(revocation === "after" ? [] : [claimed]);
+          expect(await inspector.listClaims()).toEqual(
+            operation === "recovery" && revocation === "after" ? [] : [claimed],
+          );
         } finally {
           admission.mockRestore();
         }
@@ -317,8 +332,8 @@ describe("plugin runtime state proxy", () => {
     });
   });
 
-  it("rejects external plugins in this release", () => {
-    const { runtime } = setup(createPluginRecord("external-plugin", "workspace"));
+  it.each(["workspace", "global"] as const)("rejects untrusted %s plugins", (origin) => {
+    const { runtime } = setup(createPluginRecord("external-plugin", origin));
 
     expect(() => runtime.openKeyedStore(keyedOptions)).toThrow(
       "openKeyedStore is only available for trusted plugins",
