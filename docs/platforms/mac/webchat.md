@@ -64,6 +64,13 @@ The full native chat window is a split view:
 - **Find in Conversation**: press Cmd-F to search user and assistant text in the loaded conversation. Return or Cmd-G moves to the next matching message; Shift-Cmd-G moves backward. The selected message is outlined and revealed without incoming replies pulling you away. Escape closes Find. Search does not fetch older history or search hidden reasoning and tool payloads.
 - **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. While Talk Mode is active, the composer shows its listening/thinking/speaking state, live audio activity, and an expandable rolling transcript. Right-click the Talk button to choose **System Default** or a connected microphone; this is the same microphone selection used by Voice Wake and push-to-talk. If a selected microphone disconnects, the active Talk session falls back to the system default and tries the selection again the next time Talk Mode starts. A separate microphone action records a voice note when Talk Mode does not own audio capture.
 
+Right-click a custom-group header and choose **Group defaults…** to choose where
+new sessions in that group start. Use **Agent workspace** or browse folders on
+the connected Gateway. **Separate working copy** is available after the Gateway
+confirms that the folder supports Git worktrees. Changing folders clears that
+choice; unavailable folders offer **Retry** and keep Save disabled. Failed saves
+retain your choices so you can try again.
+
 The sidebar loads threads in pages; choose **Load more** to reach older threads.
 Typing filters loaded rows immediately, then searches session names, metadata,
 and messages on the Gateway. Results appear in relevance order. Notices explain
