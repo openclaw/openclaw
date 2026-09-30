@@ -1598,7 +1598,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/auto-reply/reply/get-reply.auto-fallback.test.ts",
   "src/auto-reply/reply/get-reply.binding-route-owner.test.ts",
   "src/auto-reply/reply/get-reply.dashboard.test.ts",
-  "src/auto-reply/reply/get-reply.explicit-owner.test.ts",
   "src/auto-reply/reply/get-reply.fast-path.runtime.test.ts",
   "src/auto-reply/reply/get-reply.fast-path.test.ts",
   "src/auto-reply/reply/get-reply.message-hooks.test.ts",
