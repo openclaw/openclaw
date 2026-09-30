@@ -539,7 +539,6 @@ src/gateway/talk/relay/index.test.ts
 src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
-src/gateway/worker-environments/bootstrap.ts
 src/infra/backup-create.test.ts
 src/infra/command-explainer/extract.ts
 src/infra/device-pairing.test.ts

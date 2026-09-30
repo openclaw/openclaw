@@ -276,6 +276,18 @@ describe("server preferences", () => {
     ).toBe(false);
     expect(onThemeChanged).not.toHaveBeenCalled();
 
+    onApplied.mockClear();
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "knot", locale: "de" }), {
+        scope,
+        onApplied,
+        onThemeChanged,
+      }),
+    ).toBe(true);
+    expect(onApplied).toHaveBeenCalledExactlyOnceWith({ locale: "de" });
+    expect(loadSettings().locale).toBe("de");
+    expect(onThemeChanged).not.toHaveBeenCalled();
+
     requestGate.resolve({});
     await waitForFast(() => expect(localStorage.getItem(pendingKey(scope))).toBeNull());
   });

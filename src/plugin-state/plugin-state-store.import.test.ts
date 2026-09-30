@@ -121,4 +121,34 @@ describe("doctor plugin state import", () => {
     importPluginStateEntriesForDoctor(pluginId, options, entries);
     expect(store.entries()).toEqual(entries);
   });
+
+  it.each(["evict-oldest", "reject-new"] as const)(
+    "preserves %s retention with duplicate keys and durable sibling rows",
+    (overflowPolicy) => {
+      seedPluginStateEntriesForTests([
+        { pluginId, namespace: "durable", key: "sibling", value: true },
+      ]);
+      const limited = { ...options, maxEntries: 2, overflowPolicy };
+      const source = [
+        { key: "z", value: 1, createdAt: 20 },
+        { key: "a", value: 2, createdAt: 10 },
+        { key: "z", value: 3, createdAt: 20 },
+        { key: "older", value: 4, createdAt: -10 },
+      ];
+      if (overflowPolicy === "reject-new") {
+        expect(() => importPluginStateEntriesForDoctor(pluginId, limited, source)).toThrow(
+          "reached its 2-row limit",
+        );
+      } else {
+        importPluginStateEntriesForDoctor(pluginId, limited, source);
+      }
+      const store = createPluginStateSyncKeyedStore(pluginId, limited);
+      expect(store.entries()).toEqual([source[overflowPolicy === "reject-new" ? 1 : 3], source[2]]);
+      expect(
+        createPluginStateSyncKeyedStore(pluginId, { namespace: "durable", maxEntries: 1 }).lookup(
+          "sibling",
+        ),
+      ).toBe(true);
+    },
+  );
 });

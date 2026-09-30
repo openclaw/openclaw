@@ -3065,12 +3065,13 @@ describe("startGatewayPostAttachRuntime", () => {
     },
   );
 
-  it.each(["suspension", "backend readiness", "manager import"] as const)(
+  it.each(["suspension", "backend readiness", "manager import", "reconciliation"] as const)(
     "retires unstarted ACP reconciliation when close wins during %s",
     async (boundary) => {
       const managerModule = await import("../acp/control-plane/manager.js");
       const importEntered = createDeferred();
       const releaseImport = createDeferred();
+      const scan = createDeferred<{ checked: number; resolved: number; failed: number }>();
       let closing = false;
       let healthy = boundary !== "backend readiness";
       const suspension =
@@ -3083,6 +3084,9 @@ describe("startGatewayPostAttachRuntime", () => {
         runtime: {},
         healthy: () => healthy,
       }));
+      if (boundary === "reconciliation") {
+        hoisted.reconcilePendingSessionIdentities.mockReturnValueOnce(scan.promise);
+      }
       if (boundary !== "manager import") {
         releaseImport.resolve();
       }
@@ -3117,20 +3121,33 @@ describe("startGatewayPostAttachRuntime", () => {
           );
         } else if (boundary === "manager import") {
           await importEntered.promise;
+        } else if (boundary === "reconciliation") {
+          await waitForGatewayTestState(() =>
+            expect(hoisted.reconcilePendingSessionIdentities).toHaveBeenCalledOnce(),
+          );
         }
         closing = true;
         suspension?.release();
         healthy = true;
         releaseImport.resolve();
+        if (boundary === "reconciliation") {
+          expect(getActiveGatewayRootWorkCount()).toBe(1);
+        }
+        scan.resolve({ checked: 0, resolved: 0, failed: 0 });
         await vi.dynamicImportSettled();
         await waitForGatewayTestState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-        expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
+        if (boundary === "reconciliation") {
+          expect(hoisted.reconcilePendingSessionIdentities).toHaveBeenCalledOnce();
+        } else {
+          expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
+        }
         expect(params.log.warn).not.toHaveBeenCalled();
       } finally {
         closing = true;
         healthy = true;
         suspension?.release();
         releaseImport.resolve();
+        scan.resolve({ checked: 0, resolved: 0, failed: 0 });
         await vi.dynamicImportSettled();
         await waitForGatewayTestState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
         await stopTrackedSidecars(publishedPostReadySidecars);

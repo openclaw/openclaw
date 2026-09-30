@@ -85,9 +85,10 @@ describe("sessions_spawn tool", () => {
     hoisted.runSubagentProgressMock.mockClear();
   });
 
-  function registerAcpBackendForTest() {
+  function registerAcpBackendForTest(healthy = true) {
     acpRuntimeRegistry.registerAcpRuntimeBackend({
       id: "acpx",
+      healthy: () => healthy,
       runtime: {
         ensureSession: vi.fn(async () => ({
           sessionKey: "agent:codex:acp:1",
@@ -747,57 +748,61 @@ describe("sessions_spawn tool", () => {
     await expect(first).resolves.toMatchObject({ details: { status: "accepted" } });
   });
 
-  it.each(["not-started", "registration", "cleanup", "sessionId", "lifecycleRevision"] as const)(
-    "cleans up only the identified child after %s failure",
-    async (failure) => {
-      const started = failure === "registration" || failure === "cleanup";
-      const missingIdentity = failure === "sessionId" || failure === "lifecycleRevision";
-      const callGateway = mockGateway();
-      vi.mocked(callGateway).mockResolvedValueOnce({
+  it.each([
+    "not-started",
+    "missing-run-id",
+    "registration",
+    "cleanup",
+    "sessionId",
+    "lifecycleRevision",
+  ] as const)("cleans up only the identified child after %s failure", async (failure) => {
+    const started = failure === "registration" || failure === "cleanup";
+    const missingIdentity = failure === "sessionId" || failure === "lifecycleRevision";
+    const callGateway = mockGateway();
+    vi.mocked(callGateway).mockResolvedValueOnce({
+      key: visibleCreated.key,
+      ...(failure === "sessionId" ? {} : { sessionId: "created-child" }),
+      entry: failure === "lifecycleRevision" ? {} : { lifecycleRevision: "birth-revision" },
+      runStarted: started || failure === "missing-run-id",
+      ...(started ? { runId: "child-run" } : {}),
+      runError: "startup failed",
+    });
+    if (failure === "cleanup") {
+      vi.mocked(callGateway).mockRejectedValueOnce(new Error("lifecycle drain unavailable"));
+    } else if (!missingIdentity) {
+      vi.mocked(callGateway).mockResolvedValueOnce({ deleted: true });
+    }
+    const registerRun = vi.fn(() => {
+      throw new Error("registry unavailable");
+    });
+    const result = await makeVisibleTool({ callGateway, registerRun }).execute("visible-failure", {
+      task: "inspect",
+      visible: true,
+    });
+    expect(result.details).toMatchObject({
+      status: "error",
+      childSessionKey: visibleCreated.key,
+      error: expect.stringContaining(
+        missingIdentity || failure === "cleanup"
+          ? "Session cleanup unconfirmed. Inspect the child session before retrying."
+          : "Session removed.",
+      ),
+    });
+    expect(registerRun).toHaveBeenCalledTimes(started ? 1 : 0);
+    expect(callGateway).toHaveBeenCalledTimes(missingIdentity ? 1 : 2);
+    if (!missingIdentity) {
+      expect(callGateway).toHaveBeenNthCalledWith(2, "sessions.delete", {
         key: visibleCreated.key,
-        ...(failure === "sessionId" ? {} : { sessionId: "created-child" }),
-        entry: failure === "lifecycleRevision" ? {} : { lifecycleRevision: "birth-revision" },
-        runStarted: started,
-        ...(started ? { runId: "child-run" } : {}),
-        runError: "startup failed",
+        expectedSessionId: "created-child",
+        expectedLifecycleRevision: "birth-revision",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
       });
-      if (failure === "cleanup") {
-        vi.mocked(callGateway).mockRejectedValueOnce(new Error("lifecycle drain unavailable"));
-      } else if (!missingIdentity) {
-        vi.mocked(callGateway).mockResolvedValueOnce({ deleted: true });
-      }
-      const registerRun = vi.fn(() => {
-        throw new Error("registry unavailable");
-      });
-      const result = await makeVisibleTool({ callGateway, registerRun }).execute(
-        "visible-failure",
-        { task: "inspect", visible: true },
-      );
-      expect(result.details).toMatchObject({
-        status: "error",
-        childSessionKey: visibleCreated.key,
-        error: expect.stringContaining(
-          missingIdentity || failure === "cleanup"
-            ? "Session cleanup unconfirmed. Inspect the child session before retrying."
-            : "Session removed.",
-        ),
-      });
-      expect(registerRun).toHaveBeenCalledTimes(started ? 1 : 0);
-      expect(callGateway).toHaveBeenCalledTimes(missingIdentity ? 1 : 2);
-      if (!missingIdentity) {
-        expect(callGateway).toHaveBeenNthCalledWith(2, "sessions.delete", {
-          key: visibleCreated.key,
-          expectedSessionId: "created-child",
-          expectedLifecycleRevision: "birth-revision",
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
-        });
-      }
-      if (failure === "cleanup") {
-        expect(result.details).toMatchObject({ runId: "child-run" });
-      }
-    },
-  );
+    }
+    if (failure === "cleanup") {
+      expect(result.details).toMatchObject({ runId: "child-run" });
+    }
+  });
 
   it("applies spawn depth limits to visible dashboard descendants", async () => {
     await withTestDir({ prefix: "openclaw-visible-depth-" }, async (dir) => {
@@ -1035,23 +1040,43 @@ describe("sessions_spawn tool", () => {
     },
   );
 
-  it("rejects ACP runtime calls from sandboxed requester sessions", async () => {
-    registerAcpBackendForTest();
-    const tool = makeTool({
-      agentSessionKey: "agent:main:subagent:parent",
-      sandboxed: true,
-    });
+  it.each([
+    [
+      "sandboxed requester",
+      true,
+      { agentSessionKey: "agent:main:subagent:parent", sandboxed: true },
+      "sandboxed sessions",
+    ],
+    ["missing backend", undefined, {}, "no ACP runtime backend is loaded"],
+    ["unhealthy backend", false, {}, "no ACP runtime backend is loaded"],
+    ["disabled policy", true, { config: { acp: { enabled: false } } }, "ACP is disabled by policy"],
+  ] satisfies Array<[string, boolean | undefined, SpawnOptions, string]>)(
+    "hides ACP affordances and rejects stale calls for %s",
+    async (_scenario, healthy, options, error) => {
+      if (healthy !== undefined) {
+        registerAcpBackendForTest(healthy);
+      }
+      const tool = makeTool(options);
+      const schema = requireRecord(tool.parameters, "schema");
+      const properties = requireRecord(schema.properties, "properties");
+      expect(properties.runtime).toMatchObject({ enum: ["subagent"] });
+      expect(properties).not.toHaveProperty("resumeSessionId");
+      expect(properties).not.toHaveProperty("streamTo");
 
-    const result = await tool.execute("call-sandboxed-acp", {
-      runtime: "acp",
-      task: "investigate",
-      agentId: "codex",
-    });
-
-    expectDetailFields(result.details, { status: "error", role: "codex" });
-    expect(JSON.stringify(result.details)).toContain("sandboxed sessions");
-    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-  });
+      const result = await tool.execute("call-unavailable-acp", {
+        runtime: "acp",
+        task: "investigate",
+        agentId: "codex",
+      });
+      expect(result.details).toMatchObject({
+        status: "error",
+        role: "codex",
+        error: expect.stringContaining(error),
+      });
+      expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
