@@ -78,6 +78,20 @@ it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINI
   },
 );
 
+it("drops snooze metadata from archived entries so a restore cannot resurface a hidden session", () => {
+  const entry = normalizePersistedSessionEntryShape({
+    sessionId: "capped-session",
+    updatedAt: 42,
+    archivedAt: 43,
+    archiveReason: "active-session-cap",
+    snoozedUntil: Number.MAX_SAFE_INTEGER,
+    snoozedAt: 41,
+  });
+  expect(entry).toMatchObject({ archivedAt: 43, archiveReason: "active-session-cap" });
+  expect(entry).not.toHaveProperty("snoozedUntil");
+  expect(entry).not.toHaveProperty("snoozedAt");
+});
+
 it("retains valid snooze metadata without turning it into a work-admission barrier", () => {
   const entry = normalizePersistedSessionEntryShape({
     sessionId: "snoozed-session",
