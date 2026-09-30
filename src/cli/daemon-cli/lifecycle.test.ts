@@ -1,6 +1,7 @@
 // Daemon lifecycle tests cover CLI service lifecycle orchestration and cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import type { SupervisorDisplayGuidance } from "../../plugins/supervisor-guidance.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
   createHealthyRestartSnapshot,
@@ -13,6 +14,13 @@ import {
   runRestartPostCheck,
   type RestartParams,
 } from "./lifecycle.test-helpers.js";
+
+const resolveSupervisorGuidance = vi.hoisted(() =>
+  vi.fn<() => Promise<SupervisorDisplayGuidance | undefined>>(),
+);
+vi.mock("../../plugins/supervisor-guidance-runtime.js", () => ({
+  resolveExternalSupervisorGuidance: resolveSupervisorGuidance,
+}));
 
 const service = {
   readCommand: vi.fn(),
@@ -244,6 +252,7 @@ describe("runDaemonRestart health checks", () => {
   }
 
   beforeEach(() => {
+    resolveSupervisorGuidance.mockReset().mockResolvedValue(undefined);
     envSnapshot = captureEnv([
       "OPENCLAW_SUPERVISOR_MODE",
       "OPENCLAW_CONTAINER_HINT",
@@ -1030,12 +1039,38 @@ describe("runDaemonRestart health checks", () => {
     });
 
     it.each([
-      ["start", () => runDaemonStart({ json: true })],
-      ["stop", () => runDaemonStop({ json: true })],
-      ["uninstall", () => runDaemonUninstall({ json: true })],
-      ["preserved restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
-    ])("blocks native %s lifecycle access", async (_action, run) => {
-      await expect(run()).rejects.toThrow("gateway lifecycle is managed by an external supervisor");
+      ["start", () => runDaemonStart({ json: true }), undefined],
+      ["stop", () => runDaemonStop({ json: true }), undefined],
+      ["uninstall", () => runDaemonUninstall({ json: true }), undefined],
+      [
+        "preserved restart",
+        () => runDaemonRestart({ json: true, preserveDefinition: true }),
+        undefined,
+      ],
+      [
+        "stop with deployment guidance",
+        () => runDaemonStop({ json: true }),
+        {
+          version: 1 as const,
+          action: "stop" as const,
+          name: "Example host",
+          runFrom: "host shell",
+          command: "examplectl stop",
+        },
+      ],
+    ])("blocks native %s lifecycle access", async (_action, run, guidance) => {
+      resolveSupervisorGuidance.mockResolvedValue(guidance);
+      const failure = await expectRestartError(run());
+      expect(failure.message).toContain(
+        guidance
+          ? "gateway lifecycle is managed by Example host"
+          : "gateway lifecycle is managed by an external supervisor",
+      );
+      if (guidance) {
+        expect(failure.message).toContain("Example host");
+        expect(failure.message).toContain("host shell");
+        expect(failure.message).toContain("examplectl stop");
+      }
 
       expect(runServiceStart).not.toHaveBeenCalled();
       expect(runServiceRestart).not.toHaveBeenCalled();
