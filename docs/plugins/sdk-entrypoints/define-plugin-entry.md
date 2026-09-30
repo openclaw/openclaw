@@ -92,8 +92,8 @@ export default definePluginEntry({
   grant new authority, or permit starting work after the owner retires. Providers
   remain responsible for bounded work that settles after cancellation.
 
-  The Gateway admits at most four foreground catalog lists or fill steps at once,
-  with one active step per provider ID and up to 32 queued steps globally. Queued
+  The Gateway admits at most 16 foreground catalog lists or fill steps at once,
+  with one active step and up to 32 queued steps per provider ID. Queued
   work keeps FIFO order within each provider; the oldest eligible step starts when
   capacity becomes available. A slow provider cannot occupy every slot. Lists for
   the same provider wait their turn, including calls from different clients.
@@ -103,6 +103,13 @@ export default definePluginEntry({
   and `listNodes` hook must be released when `list` settles, or when the optional
   list operation below closes. Prepare the facts needed by late host mapping
   before that boundary.
+
+  `sessionEntries.revision`, when present, is an opaque token for immutable local
+  entry facts, including configuration and selection scope. Providers may weakly
+  cache derived metadata by that token, together with their own query and config
+  inputs. A new token invalidates those facts; an absent token requires reading
+  the entries again. Do not retain the snapshot or entry objects after listing,
+  or use this token as current authorization or as a revision of native host data.
 
   Providers with a multi-step fill can implement the optional
   `SessionCatalogProvider.createListOperation(params)` hook. Its synchronous

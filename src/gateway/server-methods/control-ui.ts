@@ -12,6 +12,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
 import type {
@@ -285,34 +286,74 @@ function parseCheckDetailsParams(
     : null;
 }
 
-function resolveCheckDetailsSession(
+async function prepareCheckDetailsSession(
   sessionKey: string,
   context: GatewayRequestContext,
   client: GatewayClient | null,
-): ControlUiSessionPrTarget | null {
-  const cfg = context.getRuntimeConfig();
-  const requested = resolveRequestedGlobalAgentId(cfg, sessionKey);
-  if (!requested.ok) {
+): Promise<ControlUiSessionPrTarget | null> {
+  const readSelected = () => {
+    const cfg = context.getRuntimeConfig();
+    const requested = resolveRequestedGlobalAgentId(cfg, sessionKey);
+    if (!requested.ok) {
+      return undefined;
+    }
+    const { target, entry, storePath } = loadSessionEntriesForTarget({
+      key: sessionKey,
+      cfg,
+      agentId: requested.agentId,
+    });
+    const entryFilter = createSessionListEntryFilter({ client, cfg });
+    if (!entry?.sessionId || (entryFilter && !entryFilter(target.canonicalKey, entry))) {
+      return undefined;
+    }
+    return {
+      cfg,
+      agentId: target.agentId,
+      canonicalKey: target.canonicalKey,
+      storePath,
+      readSource: target.readSource,
+      entry,
+    };
+  };
+  const initial = readSelected();
+  if (!initial) {
     return null;
   }
-  const { target, entry, storePath } = loadSessionEntriesForTarget({
-    key: sessionKey,
-    cfg,
-    agentId: requested.agentId,
-  });
-  const entryFilter = createSessionListEntryFilter({ client, cfg });
-  if (!entry?.sessionId || (entryFilter && !entryFilter(target.canonicalKey, entry))) {
-    return null;
-  }
-  const selected = resolveControlUiSessionPrTarget({
-    cfg,
-    agentId: target.agentId,
-    canonicalKey: target.canonicalKey,
-    storePath,
-    readSource: target.readSource,
-    entry,
-  });
-  return selected ?? null;
+  const workspaceId = initial.entry.repositoryWorkspaceId;
+  const prepared = workspaceId
+    ? await getSessionRepositoryWorkspaceStore().prepare(workspaceId)
+    : undefined;
+  const current = () => {
+    const selected = readSelected();
+    if (
+      !selected ||
+      selected.entry.sessionId !== initial.entry.sessionId ||
+      selected.entry.lifecycleRevision !== initial.entry.lifecycleRevision ||
+      selected.entry.repositoryWorkspaceId !== workspaceId
+    ) {
+      return undefined;
+    }
+    const repository = prepared?.current();
+    return resolveControlUiSessionPrTarget(
+      selected,
+      repository?.workspaceId === workspaceId &&
+        repository?.agentId === selected.agentId &&
+        repository.sessionKey === selected.canonicalKey
+        ? repository
+        : null,
+    );
+  };
+  const target = current();
+  return target
+    ? {
+        ...target,
+        assertCurrent() {
+          if (current()?.identity !== target.identity) {
+            throw new Error("Session pull-request target changed");
+          }
+        },
+      }
+    : null;
 }
 
 type LoadSessionCheckDetails = (
@@ -423,7 +464,7 @@ export function createControlUiHandlers(
       }
       try {
         const reader = client
-          ? prepareControlUiSessionPrRead({
+          ? await prepareControlUiSessionPrRead({
               client,
               sessionKey: parsed.sessionKey,
               getRuntimeConfig: context.getRuntimeConfig,
@@ -435,19 +476,25 @@ export function createControlUiHandlers(
                   .has(client.connId) === true,
             })
           : undefined;
-        const currentBinding = () => {
+        const currentBinding = async () => {
           if (!client) {
-            return resolveCheckDetailsSession(parsed.sessionKey, context, client);
+            return await prepareCheckDetailsSession(parsed.sessionKey, context, client);
           }
-          return reader?.() ?? null;
+          return (await reader?.()) ?? null;
         };
-        const binding = currentBinding();
+        const binding = await currentBinding();
         if (!binding) {
           throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
         }
         const assertCurrent = () => {
-          const current = currentBinding();
-          if (signal?.aborted || current?.identity !== binding.identity) {
+          let identityCurrent = false;
+          try {
+            binding.assertCurrent?.();
+            identityCurrent = true;
+          } catch {
+            // The read owner reports retired selections and grants as assertion failures.
+          }
+          if (signal?.aborted || !identityCurrent) {
             throw new gitHubPublicApi.ControlUiGitHubError(
               409,
               "Session changed; reopen CI details",
@@ -482,7 +529,7 @@ export function createControlUiHandlers(
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
       }
     },
-    "controlUi.sessionPullRequests.subscribe": ({ params, client, context, respond }) => {
+    "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
       const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
       if (!parsed) {
         respond(
@@ -505,11 +552,16 @@ export function createControlUiHandlers(
         );
         return;
       }
-      if (parsed.refreshSessionKeys.length > 0) {
-        void subscriptions.replace(connId, parsed.sessionKeys, new Set(parsed.refreshSessionKeys));
-      } else {
-        void subscriptions.replace(connId, parsed.sessionKeys);
-      }
+      const admitted = new Promise<void>((resolve) => {
+        const replacement = subscriptions.replace(
+          connId,
+          parsed.sessionKeys,
+          parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
+          resolve,
+        );
+        void replacement.catch(() => {});
+      });
+      await admitted;
       respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
     },
   };

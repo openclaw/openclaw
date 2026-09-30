@@ -1,5 +1,6 @@
 // Generated inbound context is current-turn model input, never historical display text.
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { escapeRegExp } from "../../shared/regexp.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./delivery-hints.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
@@ -233,14 +234,12 @@ export function extractInboundSenderLabel(text: string): string | null {
     return label;
   }
   const conversationSender = parseInboundMetaBlock(text, "Conversation info:")?.sender;
-  return conversationSender &&
-    typeof conversationSender === "object" &&
-    !Array.isArray(conversationSender)
+  return isRecord(conversationSender)
     ? firstNonEmptyString(
-        (conversationSender as Record<string, unknown>).name,
-        (conversationSender as Record<string, unknown>).username,
-        (conversationSender as Record<string, unknown>).e164,
-        (conversationSender as Record<string, unknown>).id,
+        conversationSender.name,
+        conversationSender.username,
+        conversationSender.e164,
+        conversationSender.id,
       )
     : firstNonEmptyString(conversationSender);
 }

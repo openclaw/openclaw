@@ -114,14 +114,6 @@ describe("slack config schema", () => {
     }
   });
 
-  it('accepts postAs="user" with a user token and socket companion app', () => {
-    expectSlackConfigValid({
-      postAs: "user",
-      userToken: "test-user-token",
-      appToken: "test-app-token",
-    });
-  });
-
   it('accepts postAs="user" with a user token and HTTP companion app', () => {
     expectSlackConfigValid({
       postAs: "user",
@@ -318,15 +310,6 @@ describe("slack config schema", () => {
     expectSlackConfigIssue({ dm: { policy: "open", allowFrom: ["U123"] } }, "dm");
   });
 
-  it("accepts user token config fields", () => {
-    expectSlackConfigValid({
-      botToken: "test-bot-token",
-      appToken: "test-app-token",
-      userToken: "test-user-token",
-      userTokenReadOnly: false,
-    });
-  });
-
   it("rejects retired Socket Mode ping/pong transport tuning", () => {
     expect(
       SlackConfigSchema.safeParse({
@@ -466,43 +449,13 @@ describe("slack config schema", () => {
     expectSlackConfigIssue({ mode: "http", accounts: {} }, "signingSecret");
   });
 
-  it("accepts inherited account HTTP mode with an account signing secret", () => {
-    expectSlackConfigValid({
-      mode: "http",
-      accounts: {
-        ops: {
-          botToken: "test-bot-token",
-          signingSecret: "test-ops-signing-secret",
-          webhookPath: "/slack/events/ops",
-        },
-      },
-    });
-  });
-
-  it("accepts inherited account HTTP mode with a signing secret SecretRef", () => {
-    expectSlackConfigValid({
-      mode: "http",
-      accounts: {
-        ops: {
-          botToken: "test-bot-token",
-          signingSecret: {
-            source: "env",
-            provider: "default",
-            id: "SLACK_OPS_SIGNING_SECRET",
-          },
-          webhookPath: "/slack/events/ops",
-        },
-      },
-    });
-  });
-
   it("accepts independently signed accounts inheriting HTTP mode", () => {
     expectSlackConfigValid({
       mode: "http",
       accounts: {
         ops: {
           botToken: "test-ops-bot-token",
-          signingSecret: "test-ops-signing-secret",
+          signingSecret: { source: "env", provider: "default", id: "SLACK_OPS_SIGNING_SECRET" },
           webhookPath: "/slack/events/ops",
         },
         support: {

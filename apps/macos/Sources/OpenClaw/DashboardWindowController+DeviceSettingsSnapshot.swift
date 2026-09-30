@@ -27,7 +27,7 @@ extension DashboardWindowController {
     func canUseDeviceSettings(sourceID: String) -> Bool {
         !Task.isCancelled && self.notificationSourceID == sourceID && self.isWindowOpen &&
             !self.isShowingFailurePage && self.hasCurrentBrowserSession &&
-            Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 
     private func deviceSettingsSnapshot(
@@ -74,7 +74,8 @@ extension DashboardWindowController {
             desktopAvailability: .init(state: MacDesktopAvailabilityCoordinator.shared.refresh()),
             browser: .init(
                 importAvailable: state.connectionMode == .local && BrowserProfileImportModel.shared.importAvailable,
-                cookieSync: Self.deviceCookieSyncSnapshot(state: state)),
+                cookieSync: Self.deviceCookieSyncSnapshot(state: state),
+                chromeSetupActions: ChromeExtensionSetupAction.allCases),
             permissions: .init(
                 entries: permissions,
                 location: .init(

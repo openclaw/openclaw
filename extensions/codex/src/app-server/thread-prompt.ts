@@ -17,6 +17,7 @@ import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
+import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
 
 export type CodexThreadPromptContext = Pick<
   EmbeddedRunAttemptParams,
@@ -32,6 +33,7 @@ export type CodexThreadPromptContext = Pick<
   | "promptMode"
   | "extraSystemPrompt"
   | "gitCoauthorPrompt"
+  | "runtimePlan"
 >;
 
 export function buildDeveloperInstructions(
@@ -94,10 +96,12 @@ export function buildDeveloperInstructions(
   }).join("\n");
   const delegationGuidanceAvailable =
     params.disableTools !== true &&
+    params.toolsAllow?.length !== 0 &&
     params.delegationCapability !== "report_only" &&
     !isMessageOnlyCodexSourceReply(params);
   const nativeDelegationAvailable =
     delegationGuidanceAvailable &&
+    !isCodexResponsesOAuthRun(params) &&
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
     !shouldDisableCodexToolSearchForModel(params.modelId);
   const deferredToolDiscoveryGuidance =

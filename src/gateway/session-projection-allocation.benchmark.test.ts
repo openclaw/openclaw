@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
@@ -64,7 +65,11 @@ it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
         listSessions({ client: clients[index % 50]!, context, request });
       await list(0);
       const projection = getSessionRowProjection(context)!;
-      const connection = createGatewayConnectionState({ bootId: "allocation", cfg });
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "allocation",
+        cfg,
+      });
       const detach = connection.attachSessionRowProjection(projection);
       clients.forEach((client) => connection.clients.add(client));
       const connIds = new Set(clients.map((client) => client.connId));
@@ -105,14 +110,16 @@ it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
           }
         }
         // Captured from the unchanged owner at b6a449c84a9: three viewers, two revisions.
-        expect(golden).toEqual(
-          [
-            "151f22796650c322b4ca3f229031b4fc8135178ac5d021504ddfa1dd8d68c615",
-            "e4b8b9478db07c2fe02fb7360d636f8504f8fdb4fc6f1ee89b5ad13a609f3823",
-            "c00e5ca642060f28731e4dea89aa264e06475a551bfd5f3dec08f4f5a895a1ce",
-            "b92215f9f344e28b4512f4ea9c223b2a4ce0e50f464f0ccf683996a21f5f4290",
-          ].flatMap((hash) => [hash, hash, hash]),
-        );
+        expect
+          .soft(golden)
+          .toEqual(
+            [
+              "151f22796650c322b4ca3f229031b4fc8135178ac5d021504ddfa1dd8d68c615",
+              "e4b8b9478db07c2fe02fb7360d636f8504f8fdb4fc6f1ee89b5ad13a609f3823",
+              "c00e5ca642060f28731e4dea89aa264e06475a551bfd5f3dec08f4f5a895a1ce",
+              "b92215f9f344e28b4512f4ea9c223b2a4ce0e50f464f0ccf683996a21f5f4290",
+            ].flatMap((hash) => [hash, hash, hash]),
+          );
         await inspector.post("HeapProfiler.enable");
         await inspector.post("Profiler.enable");
         for (const phase of ["list", "refresh"] as const) {
@@ -158,8 +165,45 @@ it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
               rows: 5_000,
               elapsedMs,
               bytesPerCall: Math.round(totalBytes / calls),
+              sampledBytesPerSecond: Math.round((totalBytes * 1_000) / elapsedMs),
               gcPercent: (100 * samples.filter((id) => gc.has(id)).length) / samples.length,
               sites: [...sites].toSorted((a, b) => b[1] - a[1]).slice(0, 15),
+            }),
+          );
+          await inspector.post("Profiler.start");
+          const cpuStart = performance.now();
+          let cpuCalls = 0;
+          do {
+            if (phase === "list") {
+              await list(cpuCalls);
+            } else {
+              refresh();
+            }
+            cpuCalls++;
+          } while (performance.now() - cpuStart < 5_000);
+          const { profile } = await inspector.post("Profiler.stop");
+          const nodes = new Map(
+            profile.nodes.map((node) => [node.id, node.callFrame.functionName]),
+          );
+          let busyUs = 0;
+          let gcUs = 0;
+          profile.samples?.forEach((id, index) => {
+            const name = nodes.get(id);
+            const us = profile.timeDeltas?.[index] ?? 0;
+            if (name !== "(idle)") {
+              busyUs += us;
+            }
+            if (name === "(garbage collector)") {
+              gcUs += us;
+            }
+          });
+          console.log(
+            JSON.stringify({
+              phase,
+              cpuCalls,
+              cpuDurationMs: (profile.endTime - profile.startTime) / 1_000,
+              busyMs: busyUs / 1_000,
+              gcBusyPercent: (100 * gcUs) / busyUs,
             }),
           );
         }

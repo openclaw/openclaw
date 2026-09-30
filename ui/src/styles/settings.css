@@ -85,15 +85,15 @@
 /* The page headline adopts the column of the page below it; without this the
    shell caps headers at 1120px while narrow pages use a 760px column, leaving
    the title floating left of the content. */
-.shell--settings .content:has(.settings-page) .content-header,
-.content:has(.settings-page) .content-header--settings {
+.shell--settings .content.content--settings-page .content-header,
+.content.content--settings-page .content-header--settings {
   max-width: 760px;
   margin-inline: auto;
   padding-inline: var(--space-4);
 }
 
-.shell--settings .content:has(.settings-page--wide) .content-header,
-.content:has(.settings-page--wide) .content-header--settings {
+.shell--settings .content.content--settings-wide .content-header,
+.content.content--settings-wide .content-header--settings {
   max-width: 1120px;
 }
 
@@ -546,7 +546,7 @@ wa-switch.settings-toggle {
   width: 340px;
 }
 
-.settings-row__control input.settings-input {
+.settings-row__control input.settings-input:not(.picker-select__search) {
   text-align: right;
 }
 
@@ -956,16 +956,16 @@ textarea.settings-input {
   }
 
   .shell--settings .content:not(.content--custodian),
-  .content:has(.plugins-hub-header) {
+  .content.content--hub-header {
     --content-inline-padding: var(--space-3);
     --settings-header-inline-padding: 0;
     padding: var(--space-3) var(--space-3) var(--space-4);
   }
 
-  .shell--settings .content:has(.settings-workspace) .content-header,
-  .content:has(.plugins-hub-header) .content-header,
+  .shell--settings .content.content--settings-workspace .content-header,
+  .content.content--hub-header .content-header,
   .shell--settings .settings-page,
-  .content:has(.plugins-hub-header) .settings-page,
+  .content.content--hub-header .settings-page,
   .shell--settings .config-content,
   .shell--settings .config-lead,
   .shell--settings .config-content-callout {

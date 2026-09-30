@@ -5,7 +5,6 @@ import { live } from "lit/directives/live.js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import type {
-  NativeChromeExtensionSetupResult,
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
   SettingKey,
@@ -27,6 +26,7 @@ import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../components/native-chrome-setup.ts";
 import "./device.css";
 
 registerAppsEnglish();
@@ -71,42 +71,19 @@ class DevicePage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @state() private newDomain = "";
-  @state() private extensionOperation: "checking" | "installing" | null = null;
-  @state() private extensionSetupResult: NativeChromeExtensionSetupResult | null = null;
-  @state() private extensionError: "status" | "setup" | null = null;
-  private extensionRequest = 0;
   private targetProfileTimer: {
     capability: NativeDeviceSettingsCapability;
     timer: ReturnType<typeof setTimeout>;
   } | null = null;
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.nativeDeviceSettings,
-      (capability, notify) => capability.subscribe(notify),
-      (capability) => {
-        if (this.targetProfileTimer && this.targetProfileTimer.capability !== capability) {
-          this.flushTargetProfile();
-        }
-      },
-    )
-    .effect(
-      () =>
-        this.context?.nativeDeviceSettings?.snapshot?.browser
-          ? this.context.nativeDeviceSettings
-          : undefined,
-      (capability) => {
-        this.extensionSetupResult = null;
-        this.extensionError = null;
-        this.extensionOperation = null;
-        const refresh = () => void this.updateChromeExtension(capability, "checking");
-        window.addEventListener("focus", refresh);
-        refresh();
-        return () => {
-          window.removeEventListener("focus", refresh);
-          this.extensionRequest += 1;
-        };
-      },
-    );
+  private readonly subscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.nativeDeviceSettings,
+    (capability, notify) => capability.subscribe(notify),
+    (capability) => {
+      if (this.targetProfileTimer && this.targetProfileTimer.capability !== capability) {
+        this.flushTargetProfile();
+      }
+    },
+  );
 
   override disconnectedCallback() {
     // A route change must not discard a text edit still inside the debounce window.
@@ -173,7 +150,7 @@ class DevicePage extends OpenClawLightDomElement {
     }
     const domains =
       pendingCookieSyncEdits.get(capability)?.domains ??
-      capability.snapshot?.browser?.cookieSync.domains;
+      capability.snapshot?.browser?.cookieSync?.domains;
     if (!domains) {
       return;
     }
@@ -195,13 +172,7 @@ class DevicePage extends OpenClawLightDomElement {
     const capability = this.context.nativeDeviceSettings;
     const sync = browser.cookieSync;
     const pending = capability ? pendingCookieSyncEdits.get(capability) : undefined;
-    const domains = pending?.domains ?? sync.domains;
-    const result = this.extensionSetupResult;
-    const installed =
-      result !== null && (result.installedProfiles ?? result.discoveredProfiles) > 0;
-    const needsSetup = result
-      ? !installed || !result.nativeHostRegistered
-      : this.extensionError !== null;
+    const domains = pending?.domains ?? sync?.domains ?? [];
     const addDomain = () => {
       this.updateDomains((current) => [...current, this.newDomain]);
       this.newDomain = "";
@@ -210,52 +181,12 @@ class DevicePage extends OpenClawLightDomElement {
       ${renderSettingsSection(
         { title: t("configPage.deviceSettings.chromeExtension") },
         renderSettingsRow({
-          title: t("configPage.deviceSettings.chromeExtensionOnMac"),
-          description: this.chromeExtensionDetail(),
+          title: t("configPage.deviceSettings.chromeExtensionSetup"),
           stacked: true,
           control: html`
             <div class="device-extension-setup">
-              <div role="status">
-                ${renderSettingsStatus({
-                  kind: installed ? "ok" : this.extensionError ? "warn" : "muted",
-                  label: t(
-                    installed
-                      ? "configPage.deviceSettings.chromeExtensionDetected"
-                      : this.extensionOperation === "checking"
-                        ? "configPage.deviceSettings.chromeExtensionChecking"
-                        : this.extensionError || result?.installedProfiles === undefined
-                          ? "configPage.deviceSettings.chromeExtensionUnknown"
-                          : "configPage.deviceSettings.chromeExtensionNotInstalled",
-                  ),
-                })}
-              </div>
+              <openclaw-native-chrome-setup auto-inspect></openclaw-native-chrome-setup>
               <div class="device-extension-setup__actions">
-                ${
-                  needsSetup
-                    ? html` <button
-                        type="button"
-                        class="btn"
-                        ?disabled=${this.extensionOperation !== null}
-                        @click=${() => capability && this.updateChromeExtension(capability, "installing")}
-                      >
-                        ${t(
-                          this.extensionOperation === "installing"
-                            ? "configPage.deviceSettings.chromeExtensionPreparing"
-                            : installed
-                              ? "configPage.deviceSettings.chromeExtensionRepair"
-                              : "configPage.deviceSettings.chromeExtensionSetup",
-                        )}
-                      </button>`
-                    : nothing
-                }
-                <button
-                  type="button"
-                  class="btn"
-                  ?disabled=${this.extensionOperation !== null}
-                  @click=${() => capability && this.updateChromeExtension(capability, "checking")}
-                >
-                  ${t("configPage.deviceSettings.chromeExtensionCheckAgain")}
-                </button>
                 <a
                   href="https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig"
                   target="_blank"
@@ -269,7 +200,7 @@ class DevicePage extends OpenClawLightDomElement {
         }),
       )}
       ${
-        browser.importAvailable || !sync.available
+        browser.importAvailable || (sync && !sync.available)
           ? renderSettingsSection(
               { title: t("configPage.deviceSettings.browser") },
               html`
@@ -289,7 +220,7 @@ class DevicePage extends OpenClawLightDomElement {
                     : nothing
                 }
                 ${
-                  !sync.available
+                  sync && !sync.available
                     ? renderSettingsRow({
                         title: t("configPage.deviceSettings.cookieSync"),
                         description: t("configPage.deviceSettings.cookieSyncUnavailable"),
@@ -301,7 +232,7 @@ class DevicePage extends OpenClawLightDomElement {
           : nothing
       }
       ${
-        sync.available
+        sync?.available
           ? renderSettingsSection(
               {
                 title: t(
@@ -389,71 +320,6 @@ class DevicePage extends OpenClawLightDomElement {
           : nothing
       }
     `;
-  }
-
-  private chromeExtensionDetail(): string {
-    if (this.extensionError) {
-      return t(
-        this.extensionError === "setup"
-          ? "configPage.deviceSettings.chromeExtensionFailed"
-          : "configPage.deviceSettings.chromeExtensionStatusFailed",
-      );
-    }
-    const result = this.extensionSetupResult;
-    if (result && (result.installedProfiles ?? result.discoveredProfiles) > 0) {
-      return t(
-        !result.nativeHostRegistered
-          ? "configPage.deviceSettings.chromeExtensionRepairHint"
-          : result.discoveredProfiles === 0
-            ? "configPage.deviceSettings.chromeExtensionEnableHint"
-            : "configPage.deviceSettings.chromeExtensionInstalled",
-      );
-    }
-    if (result?.nativeHostRegistered) {
-      return t(
-        result.installRequested
-          ? "configPage.deviceSettings.chromeExtensionPending"
-          : result.installedProfiles === undefined
-            ? "configPage.deviceSettings.chromeExtensionStatusUnsupported"
-            : "configPage.deviceSettings.chromeExtensionStoreRequired",
-      );
-    }
-    return t("configPage.deviceSettings.chromeExtensionHint");
-  }
-
-  private async updateChromeExtension(
-    capability: NativeDeviceSettingsCapability,
-    operation: "checking" | "installing",
-  ) {
-    if (this.extensionOperation !== null) {
-      return;
-    }
-    const request = ++this.extensionRequest;
-    const isCurrent = () =>
-      this.isConnected &&
-      request === this.extensionRequest &&
-      this.context.nativeDeviceSettings === capability;
-    this.extensionOperation = operation;
-    this.extensionError = null;
-    if (operation === "checking") {
-      this.extensionSetupResult = null;
-    }
-    try {
-      const result = await (operation === "installing"
-        ? capability.installChromeExtension()
-        : capability.chromeExtensionStatus());
-      if (isCurrent()) {
-        this.extensionSetupResult = result;
-      }
-    } catch {
-      if (isCurrent()) {
-        this.extensionError = operation === "installing" ? "setup" : "status";
-      }
-    } finally {
-      if (isCurrent()) {
-        this.extensionOperation = null;
-      }
-    }
   }
 
   private renderSettings(snapshot: NativeDeviceSettingsSnapshot) {

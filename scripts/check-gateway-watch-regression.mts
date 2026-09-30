@@ -10,6 +10,7 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
 import {
   BUILD_STAMP_FILE,
@@ -35,6 +36,17 @@ const DEFAULTS = {
   keepLogs: true,
   skipBuild: false,
 };
+const NUMERIC_FLAGS = Object.entries({
+  "--window-ms": "windowMs",
+  "--ready-timeout-ms": "readyTimeoutMs",
+  "--ready-settle-ms": "readySettleMs",
+  "--sigkill-grace-ms": "sigkillGraceMs",
+  "--sigkill-exit-grace-ms": "sigkillExitGraceMs",
+  "--cpu-warn-ms": "cpuWarnMs",
+  "--cpu-fail-ms": "cpuFailMs",
+  "--dist-runtime-file-growth-max": "distRuntimeFileGrowthMax",
+  "--dist-runtime-byte-growth-max": "distRuntimeByteGrowthMax",
+} as const);
 
 const WATCH_GATEWAY_SKIP_ENV = {
   OPENCLAW_DISABLE_BONJOUR: "1",
@@ -50,9 +62,6 @@ const WATCH_GATEWAY_SKIP_ENV = {
   NODE_ENV: "test",
 };
 
-/**
- * Maximum retained stdout/stderr text for gateway watch diagnostics.
- */
 export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
 export const WATCH_LOG_FAILURE_TAIL_CHARS = 12_000;
 const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
@@ -125,9 +134,6 @@ function shellQuote(value: unknown): string {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
-/**
- * Appends watch output while preserving only the diagnostic tail.
- */
 export function appendBoundedWatchLog(
   current: string,
   chunk: string | Uint8Array,
@@ -168,9 +174,6 @@ function readTextTail(filePath: string, maxChars = WATCH_LOG_FAILURE_TAIL_CHARS)
   return text.length <= maxChars ? text : text.slice(-maxChars);
 }
 
-/**
- * Updates bounded watch-build detection state from new output.
- */
 export function updateWatchBuildDetection(
   state: WatchBuildDetectionState,
   chunk: unknown,
@@ -186,9 +189,6 @@ export function updateWatchBuildDetection(
   };
 }
 
-/**
- * Parses gateway watch regression CLI arguments.
- */
 export function parseArgs(argv: string[]): WatchOptions {
   const args = stripLeadingPackageManagerSeparator(argv);
   const options = { ...DEFAULTS };
@@ -202,42 +202,14 @@ export function parseArgs(argv: string[]): WatchOptions {
       i += 1;
       return next;
     };
+    const numericKey = NUMERIC_FLAGS.find(([flag]) => flag === arg)?.[1];
+    if (numericKey) {
+      options[numericKey] = readNonNegativeInteger(readValue(), arg);
+      continue;
+    }
     switch (arg) {
       case "--output-dir":
         options.outputDir = path.resolve(readValue());
-        break;
-      case "--window-ms":
-        options.windowMs = readNonNegativeInteger(readValue(), "--window-ms");
-        break;
-      case "--ready-timeout-ms":
-        options.readyTimeoutMs = readNonNegativeInteger(readValue(), "--ready-timeout-ms");
-        break;
-      case "--ready-settle-ms":
-        options.readySettleMs = readNonNegativeInteger(readValue(), "--ready-settle-ms");
-        break;
-      case "--sigkill-grace-ms":
-        options.sigkillGraceMs = readNonNegativeInteger(readValue(), "--sigkill-grace-ms");
-        break;
-      case "--sigkill-exit-grace-ms":
-        options.sigkillExitGraceMs = readNonNegativeInteger(readValue(), "--sigkill-exit-grace-ms");
-        break;
-      case "--cpu-warn-ms":
-        options.cpuWarnMs = readNonNegativeInteger(readValue(), "--cpu-warn-ms");
-        break;
-      case "--cpu-fail-ms":
-        options.cpuFailMs = readNonNegativeInteger(readValue(), "--cpu-fail-ms");
-        break;
-      case "--dist-runtime-file-growth-max":
-        options.distRuntimeFileGrowthMax = readNonNegativeInteger(
-          readValue(),
-          "--dist-runtime-file-growth-max",
-        );
-        break;
-      case "--dist-runtime-byte-growth-max":
-        options.distRuntimeByteGrowthMax = readNonNegativeInteger(
-          readValue(),
-          "--dist-runtime-byte-growth-max",
-        );
         break;
       case "--skip-build":
         options.skipBuild = true;
@@ -395,22 +367,21 @@ function writeSnapshot(snapshotDir: string): {
     [
       `generated_at: ${snapshot.generatedAt}`,
       "",
-      "[dist]",
-      `files: ${dist.files}`,
-      `directories: ${dist.directories}`,
-      `symlinks: ${dist.symlinks}`,
-      `entries: ${dist.entries}`,
-      `apparent_bytes: ${dist.apparentBytes}`,
-      `apparent_human: ${humanBytes(dist.apparentBytes)}`,
-      "",
-      "[dist-runtime]",
-      `files: ${distRuntime.files}`,
-      `directories: ${distRuntime.directories}`,
-      `symlinks: ${distRuntime.symlinks}`,
-      `entries: ${distRuntime.entries}`,
-      `apparent_bytes: ${distRuntime.apparentBytes}`,
-      `apparent_human: ${humanBytes(distRuntime.apparentBytes)}`,
-      "",
+      ...(
+        [
+          ["dist", dist],
+          ["dist-runtime", distRuntime],
+        ] as const
+      ).flatMap(([label, tree]) => [
+        `[${label}]`,
+        `files: ${tree.files}`,
+        `directories: ${tree.directories}`,
+        `symlinks: ${tree.symlinks}`,
+        `entries: ${tree.entries}`,
+        `apparent_bytes: ${tree.apparentBytes}`,
+        `apparent_human: ${humanBytes(tree.apparentBytes)}`,
+        "",
+      ]),
     ].join("\n"),
     "utf8",
   );
@@ -429,9 +400,6 @@ function runCheckedCommand(command: string, args: string[]) {
   throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? "unknown"}`);
 }
 
-/**
- * Reports whether gateway watch output contains a ready marker.
- */
 export function hasGatewayReadyLog(text: string): boolean {
   const normalized = text.replaceAll(ANSI_ESCAPE_PATTERN, "");
   return /\[gateway\] (?:http server listening|ready(?:\b|\s*\())/.test(normalized);
@@ -579,9 +547,6 @@ function parseTimingFile(timeFilePath: string): Timing {
   };
 }
 
-/**
- * Runs a bounded gateway watch process and captures timing/log artifacts.
- */
 export async function runTimedWatch(
   options: TimedWatchOptions,
   outputDir: string,
@@ -691,6 +656,13 @@ export async function runTimedWatch(
       },
     );
     const errors: unknown[] = [];
+    let watchPid: number | null = null;
+    let exit: WatchExit | null = null;
+    let exitedBeforeReady = false;
+    let exitedBeforeStop = false;
+    let readyBeforeWindow = false;
+    let idleCpuStartMs: number | null = null;
+    let idleCpuEndMs: number | null = null;
     const raceChildLifecycle = async <Value,>(
       operation: (signal: AbortSignal) => Value | PromiseLike<Value>,
     ) => {
@@ -742,31 +714,24 @@ export async function runTimedWatch(
       if (outcome.type === "operation-error") {
         throw outcome.error;
       }
+      if (outcome.type !== "value") {
+        exit = outcome.value;
+        if (outcome.type === "child-exit") {
+          exitedBeforeReady = !readyBeforeWindow;
+          exitedBeforeStop = true;
+        }
+      }
       return outcome;
     };
 
-    let watchPid: number | null = null;
-    let exit: WatchExit | null = null;
-    let exitedBeforeReady = false;
-    let exitedBeforeStop = false;
-    let readyBeforeWindow = false;
-    let idleCpuStartMs: number | null = null;
-    let idleCpuEndMs: number | null = null;
     try {
       for (let attempt = 0; attempt < 50; attempt += 1) {
         if (fs.existsSync(pidFilePath)) {
           watchPid = Number(fs.readFileSync(pidFilePath, "utf8").trim());
           break;
         }
-        const waitResult = await raceChildLifecycle((signal) => sleepMs(100, signal));
-        if (waitResult.type === "spawn-error") {
-          exit = waitResult.value;
-          break;
-        }
-        if (waitResult.type === "child-exit") {
-          exit = waitResult.value;
-          exitedBeforeReady = true;
-          exitedBeforeStop = true;
+        await raceChildLifecycle((signal) => sleepMs(100, signal));
+        if (exit) {
           break;
         }
       }
@@ -775,38 +740,19 @@ export async function runTimedWatch(
         const readyResult = await raceChildLifecycle((signal) =>
           waitReady(() => `${stdout}\n${stderr}`, options.readyTimeoutMs, signal),
         );
-        if (readyResult.type === "spawn-error") {
-          exit = readyResult.value;
-        } else if (readyResult.type === "child-exit") {
-          exit = readyResult.value;
-          exitedBeforeReady = true;
-          exitedBeforeStop = true;
-        } else {
+        if (readyResult.type === "value") {
           readyBeforeWindow = readyResult.value;
         }
       }
       if (!exit && readyBeforeWindow && options.readySettleMs > 0) {
-        const settleResult = await raceChildLifecycle((signal) =>
-          sleepMs(options.readySettleMs, signal),
-        );
-        if (settleResult.type === "spawn-error") {
-          exit = settleResult.value;
-        } else if (settleResult.type === "child-exit") {
-          exit = settleResult.value;
-          exitedBeforeStop = true;
-        }
+        await raceChildLifecycle((signal) => sleepMs(options.readySettleMs, signal));
       }
       if (!exit && readyBeforeWindow) {
         idleCpuStartMs = watchPid ? readCpuMs(watchPid) : null;
         const windowResult = await raceChildLifecycle((signal) =>
           sleepMs(options.windowMs, signal),
         );
-        if (windowResult.type === "spawn-error") {
-          exit = windowResult.value;
-        } else if (windowResult.type === "child-exit") {
-          exit = windowResult.value;
-          exitedBeforeStop = true;
-        } else {
+        if (windowResult.type === "value") {
           idleCpuEndMs = watchPid ? readCpuMs(watchPid) : null;
         }
       }
@@ -964,9 +910,6 @@ function buildRunNodeDeps(env: NodeJS.ProcessEnv) {
   };
 }
 
-/**
- * Reports whether restored CI artifacts need fresh build stamps.
- */
 export function shouldRefreshBuildStampForRestoredArtifacts(params: {
   skipBuild?: boolean;
   buildRequirement?: BuildRequirementSummary;
@@ -978,9 +921,6 @@ export function shouldRefreshBuildStampForRestoredArtifacts(params: {
   );
 }
 
-/**
- * Writes build and runtime-postbuild stamps for the current artifact set.
- */
 export function writeBuildAndRuntimePostBuildStamps(params: { cwd?: string } = {}) {
   const cwd = params.cwd ?? process.cwd();
   writeBuildStamp({ cwd });
@@ -990,9 +930,6 @@ export function writeBuildAndRuntimePostBuildStamps(params: { cwd?: string } = {
 export function calculateDistRuntimeByteGrowth(beforeBytes: number, afterBytes: number): number {
   return afterBytes - beforeBytes;
 }
-/**
- * Collects pass/fail findings for the bounded gateway watch regression run.
- */
 export function collectGatewayWatchFindings(params: {
   distRuntimeByteGrowth: number;
   distRuntimeFileGrowth: number;
@@ -1004,7 +941,7 @@ export function collectGatewayWatchFindings(params: {
   watchBuildReason: string | null;
   watchResult: WatchFindingResult;
   watchTriggeredBuild: boolean;
-}): { failures: string[]; warnings: string[] } {
+}): { failures: string[]; warnings: string[]; limitViolations: LimitViolation[] } {
   const {
     distRuntimeByteGrowth,
     distRuntimeFileGrowth,
@@ -1016,6 +953,7 @@ export function collectGatewayWatchFindings(params: {
   } = params;
   const failures: string[] = [];
   const warnings: string[] = [];
+  const limitViolations: LimitViolation[] = [];
   if (watchResult.spawnError) {
     failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
   }
@@ -1067,16 +1005,18 @@ export function collectGatewayWatchFindings(params: {
         failures.push("failed to collect idle CPU timing from the ready gateway:watch window");
       }
     } else if (cpuMs > options.cpuFailMs) {
-      failures.push(
-        `LOUD ALARM: gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above loud-alarm threshold ${options.cpuFailMs}ms`,
-      );
+      limitViolations.push({
+        file: "scripts/check-gateway-watch-regression.mts",
+        title: "Gateway watch CPU budget",
+        message: `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above threshold ${options.cpuFailMs}ms`,
+      });
     } else if (cpuMs > options.cpuWarnMs) {
       warnings.push(
         `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above target ${options.cpuWarnMs}ms`,
       );
     }
   }
-  return { failures, warnings };
+  return { failures, warnings, limitViolations };
 }
 
 export function shouldReportDuplicateDistRuntimeRegression(failures: string[]): boolean {
@@ -1211,7 +1151,7 @@ async function main() {
 
   console.log(JSON.stringify(summary, null, 2));
 
-  const { failures, warnings } = collectGatewayWatchFindings({
+  const { failures, warnings, limitViolations } = collectGatewayWatchFindings({
     distRuntimeByteGrowth,
     distRuntimeFileGrowth,
     removedPaths: summary.removedPaths,
@@ -1225,7 +1165,8 @@ async function main() {
     warn(message);
   }
 
-  if (failures.length > 0) {
+  const limitsFailed = reportLimitViolations(limitViolations);
+  if (failures.length > 0 || limitsFailed) {
     for (const message of failures) {
       fail(message);
     }

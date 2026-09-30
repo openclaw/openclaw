@@ -1,34 +1,41 @@
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import { createGlobalInstallEnv } from "./update-global.js";
 import { createNpmFailureFacts } from "./update-npm-failure.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import type {
   CommandRunner,
   RunStepOptions,
   UpdateRunResult,
   UpdateStepInfo,
-  UpdateStepResult,
 } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export const MAX_LOG_CHARS = 8000;
 
 // A run shares its heartbeat callback across steps; weak keys do not retain completed runs.
 const warnedHeartbeats = new WeakSet<() => void>();
 
-function mergeCommandEnvironments(
-  baseEnv: NodeJS.ProcessEnv | undefined,
-  overrideEnv: NodeJS.ProcessEnv | undefined,
-): NodeJS.ProcessEnv | undefined {
-  if (!baseEnv) {
-    return overrideEnv;
+function selectCommandFailureMessage(stdout: string, stderr: string): string {
+  const lines = stripAnsi(stderr).split(/[\r\n\u2028\u2029]/u);
+  if (
+    !lines
+      .find((line) => line.trim())
+      ?.trimStart()
+      .startsWith("$ ")
+  ) {
+    return stderr;
   }
-  if (!overrideEnv) {
-    return baseEnv;
-  }
-  return { ...baseEnv, ...overrideEnv };
+  // Package-manager banners can hide the child Error from the one-line fact formatter.
+  return (
+    [...lines, ...stripAnsi(stdout).split(/[\r\n\u2028\u2029]/u)].find((line) =>
+      /^\s*\w*Error(?: \[[A-Z][A-Z0-9_]*\])?:\s/u.test(line),
+    ) ?? stderr
+  );
 }
 
 export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
@@ -83,23 +90,27 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   ) {
     failureFacts = createNpmFailureFacts(result.stdout, result.stderr, env);
   }
-  failureFacts ??=
-    result.code !== 0 || result.killed || result.termination === "timeout"
-      ? [
-          createUpdateFailureFact(
-            {
-              check: name,
-              code:
-                result.stderr.match(/\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u)?.[1] ??
-                (result.termination && result.termination !== "exit"
-                  ? result.termination
-                  : "command-failed"),
-              message: result.stderr,
-            },
-            env,
-          ),
-        ]
-      : undefined;
+  failureFacts ??= isFailedUpdateStep({
+    exitCode: result.code,
+    killed: result.killed,
+    outputLimitExceeded: result.outputLimitExceeded,
+    termination: result.termination,
+  })
+    ? [
+        createUpdateFailureFact(
+          {
+            check: name,
+            code:
+              result.stderr.match(/\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u)?.[1] ??
+              (result.termination && result.termination !== "exit"
+                ? result.termination
+                : "command-failed"),
+            message: selectCommandFailureMessage(result.stdout, result.stderr),
+          },
+          env,
+        ),
+      ]
+    : undefined;
 
   const completion: Omit<UpdateStepResult, "cwd"> = {
     name,
@@ -110,6 +121,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     stderrTail,
     signal: result.signal,
     killed: result.killed,
+    outputLimitExceeded: result.outputLimitExceeded,
     termination: result.termination,
     ...(failureFacts ? { failureFacts } : {}),
   };
@@ -151,17 +163,19 @@ export async function buildUpdateCommandRunner(
   runCommand?: CommandRunner,
 ): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
   const defaultCommandEnv = await createGlobalInstallEnv();
-  if (runCommand) {
-    return { defaultCommandEnv, runCommand };
-  }
   return {
     defaultCommandEnv,
-    runCommand: async (argv, options) =>
-      await runCommandWithTimeout(argv, {
-        ...options,
-        env: mergeCommandEnvironments(defaultCommandEnv, options.env),
-        // Package-manager trees must not outlive a timed-out updater.
-        killProcessTree: true,
-      }),
+    runCommand:
+      runCommand ??
+      (async (argv, options) =>
+        await runCommandWithTimeout(argv, {
+          ...options,
+          env:
+            defaultCommandEnv && options.env
+              ? { ...defaultCommandEnv, ...options.env }
+              : (defaultCommandEnv ?? options.env),
+          // Package-manager trees must not outlive a timed-out updater.
+          killProcessTree: true,
+        })),
   };
 }

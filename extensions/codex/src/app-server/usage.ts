@@ -6,21 +6,12 @@ import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerUsageSnapshot } from "./rate-limits.js";
 import { readCodexAppServerUsage } from "./request.js";
 
-type CodexAppServerUsageRead = {
-  rateLimits: unknown;
-  accountEmail?: string;
-};
-
-type CodexAppServerUsageReader = (
-  options: Parameters<typeof readCodexAppServerUsage>[0],
-) => Promise<CodexAppServerUsageRead>;
-
 /** Handles the synthetic usage credential for a Codex-backed OpenAI route. */
 export async function fetchCodexAppServerUsageSnapshot(
   ctx: ProviderFetchUsageSnapshotContext,
   options: {
     pluginConfig?: unknown;
-    readUsage?: CodexAppServerUsageReader;
+    readUsage?: typeof readCodexAppServerUsage;
   } = {},
 ): Promise<ProviderUsageSnapshot | null> {
   if (ctx.token !== CODEX_APP_SERVER_AUTH_MARKER) {

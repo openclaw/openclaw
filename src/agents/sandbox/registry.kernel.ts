@@ -1,13 +1,184 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Selectable } from "kysely";
+import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.types.js";
 
+export type SandboxRegistryInsert = Insertable<DB["sandbox_registry_entries"]>;
+export type SandboxRegistryWrite =
+  | { operation: "update"; entry: SandboxRegistryEntry }
+  | { operation: "complete"; entry: SandboxRegistryEntry; retired: boolean }
+  | { operation: "remove"; containerName: string; preserveRemovalIntent?: boolean };
+
 type SandboxRegistryRow = Selectable<DB["sandbox_registry_entries"]>;
 type SandboxRegistryDatabase = Pick<DB, "sandbox_registry_entries">;
+
+function rowToUpdate(row: SandboxRegistryInsert): Updateable<DB["sandbox_registry_entries"]> {
+  const { registry_kind: _registryKind, container_name: _containerName, ...update } = row;
+  return update;
+}
+
+export function insertSandboxRegistryRowInDatabase(
+  db: DatabaseSync,
+  row: SandboxRegistryInsert,
+): void {
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<SandboxRegistryDatabase>(db)
+      .insertInto("sandbox_registry_entries")
+      .values(row)
+      .onConflict((conflict) =>
+        conflict.columns(["registry_kind", "container_name"]).doUpdateSet(rowToUpdate(row)),
+      ),
+  );
+}
+
+export function assertSandboxRegistryReservationCurrent(
+  current: SandboxRegistryEntry | null,
+  expected: Pick<SandboxRegistryEntry, "backendId" | "sessionKey">,
+): asserts current is SandboxRegistryEntry {
+  if (
+    !current ||
+    current.runtimeState === "removing" ||
+    current.runtimeState === "removing-pending" ||
+    current.backendId !== expected.backendId ||
+    current.sessionKey !== expected.sessionKey
+  ) {
+    throw new Error(
+      "Sandbox runtime was removed or is being removed; retry after sandbox recreate completes.",
+    );
+  }
+}
+
+function removeContainerRegistryRowInDatabase(db: DatabaseSync, containerName: string): void {
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<SandboxRegistryDatabase>(db)
+      .deleteFrom("sandbox_registry_entries")
+      .where("registry_kind", "=", "container")
+      .where("container_name", "=", containerName),
+  );
+}
+
+export function writeSandboxRegistryInDatabase(
+  db: DatabaseSync,
+  write: SandboxRegistryWrite,
+): void {
+  if (write.operation === "remove") {
+    if (write.preserveRemovalIntent) {
+      const row = readSandboxRegistryRowInDatabase(db, "container", write.containerName);
+      const current = row ? rowToContainerEntry(row) : null;
+      if (current?.runtimeState === "removing" || current?.runtimeState === "removing-pending") {
+        return;
+      }
+    }
+    removeContainerRegistryRowInDatabase(db, write.containerName);
+    return;
+  }
+  const { entry } = write;
+  const row = readSandboxRegistryRowInDatabase(db, "container", entry.containerName);
+  const existing = row ? rowToContainerEntry(row) : null;
+  if (write.operation === "update") {
+    if (entry.runtimeState === "pending" && existing?.runtimeState !== undefined) {
+      assertSandboxRegistryReservationCurrent(existing, entry);
+    }
+    insertSandboxRegistryRowInDatabase(db, containerEntryToRow(entry, existing));
+    return;
+  }
+  assertSandboxRegistryReservationCurrent(existing, entry);
+  if (write.retired) {
+    removeContainerRegistryRowInDatabase(db, entry.containerName);
+  } else {
+    insertSandboxRegistryRowInDatabase(
+      db,
+      containerEntryToRow(
+        { ...entry, runtimeState: "ready" },
+        {
+          ...existing,
+          image: existing.runtimeState === "pending" ? entry.image : existing.image,
+        },
+      ),
+    );
+  }
+}
+
+export function containerEntryToRow(
+  entry: SandboxRegistryEntry,
+  existing?: SandboxRegistryEntry | null,
+) {
+  const next: SandboxRegistryEntry = {
+    ...entry,
+    backendId: entry.backendId ?? existing?.backendId,
+    backendTarget: entry.backendTarget ?? existing?.backendTarget,
+    runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
+    createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
+    image: existing?.image ?? entry.image,
+    configLabelKind: entry.configLabelKind ?? existing?.configLabelKind,
+    configHash: entry.configHash ?? existing?.configHash,
+    runtimeState: entry.runtimeState ?? existing?.runtimeState,
+    workspaceDir: existing?.workspaceDir ?? entry.workspaceDir,
+  };
+  return {
+    registry_kind: "container",
+    container_name: next.containerName,
+    session_key: next.sessionKey,
+    backend_id: next.backendId ?? null,
+    runtime_label: next.runtimeLabel ?? null,
+    image: next.image,
+    created_at_ms: next.createdAtMs,
+    last_used_at_ms: next.lastUsedAtMs,
+    config_label_kind: next.configLabelKind ?? null,
+    config_hash: next.configHash ?? null,
+    cdp_port: null,
+    no_vnc_port: null,
+    entry_json: JSON.stringify(next),
+    updated_at: Date.now(),
+  } satisfies SandboxRegistryInsert;
+}
+
+export function browserEntryToRow(
+  entry: SandboxBrowserRegistryEntry,
+  existing?: SandboxBrowserRegistryEntry | null,
+) {
+  const next: SandboxBrowserRegistryEntry = {
+    ...entry,
+    createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
+    image: existing?.image ?? entry.image,
+    configHash: entry.configHash ?? existing?.configHash,
+    workspaceDir: entry.workspaceDir ?? existing?.workspaceDir,
+  };
+  return {
+    registry_kind: "browser",
+    container_name: next.containerName,
+    session_key: next.sessionKey,
+    backend_id: null,
+    runtime_label: null,
+    image: next.image,
+    created_at_ms: next.createdAtMs,
+    last_used_at_ms: next.lastUsedAtMs,
+    config_label_kind: null,
+    config_hash: next.configHash ?? null,
+    cdp_port: next.cdpPort,
+    no_vnc_port: next.noVncPort ?? null,
+    entry_json: JSON.stringify(next),
+    updated_at: Date.now(),
+  } satisfies SandboxRegistryInsert;
+}
+
+export function insertSandboxRegistryRowIfMissingInDatabase(
+  db: DatabaseSync,
+  row: SandboxRegistryInsert,
+): void {
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<SandboxRegistryDatabase>(db)
+      .insertInto("sandbox_registry_entries")
+      .values(row)
+      .onConflict((conflict) => conflict.columns(["registry_kind", "container_name"]).doNothing()),
+  );
+}
 
 function parseRegistryEntryJson(row: SandboxRegistryRow): Record<string, unknown> | null {
   try {

@@ -311,6 +311,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "missing-parent",
     "wrong-tree",
     "unreachable",
+    "missing-landed",
     "recovery-head",
     "recovery-extra",
     "recovery-unretained",
@@ -361,8 +362,13 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       const detached = f.commit(f.git(["rev-parse", previous + "^{tree}"]), []);
       f.git(["update-ref", outcomeRef, detached]);
     }
-    if (fault === "wrong-tree" || fault === "unreachable") {
-      const landed = fault === "wrong-tree" ? f.advance("partial\n") : f.head;
+    if (fault === "wrong-tree" || fault === "unreachable" || fault === "missing-landed") {
+      const landed =
+        fault === "wrong-tree"
+          ? f.advance("partial\n")
+          : fault === "missing-landed"
+            ? "1".repeat(40)
+            : f.head;
       f.save({
         ...f.state(),
         pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
@@ -374,6 +380,12 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(0);
     expect(f.git(["rev-parse", outcomeRef])).toBe(before);
+    if (fault === "unreachable" || fault === "missing-landed") {
+      const landed = fault === "unreachable" ? f.head : "1".repeat(40);
+      expect(retry.output).toContain(
+        `Merge receipt objects: main=${f.base} main_local=true landed=${landed} landed_local=${fault === "unreachable"}`,
+      );
+    }
   });
 
   it("does not overwrite a successor installed at intent CAS", () => {
@@ -401,7 +413,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
 describePosix("merge_outcome_repo_identity", () => {
   // Local historical records contain either scalar. Remote admission separately
   // binds the whole retained object to the authoritative repository pair.
-  const identity = (repo: unknown) =>
+  const identity = (repo: unknown, parentEnv: NodeJS.ProcessEnv = process.env) =>
     spawnSync(
       "bash",
       [
@@ -411,30 +423,33 @@ describePosix("merge_outcome_repo_identity", () => {
         join(scripts, "pr-lib/merge-outcome.sh"),
         JSON.stringify(repo),
       ],
-      { encoding: "utf8" },
+      {
+        encoding: "utf8",
+        env: { ...parentEnv, OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: undefined },
+      },
     );
 
-  it("accepts a historical numeric repository id", () => {
-    const run = identity({
-      id: 1103012935,
-      nameWithOwner: "openclaw/openclaw",
-      url: "https://github.com/openclaw/openclaw",
-    });
-    expect(run.status, run.stderr).toBe(0);
-    expect(JSON.parse(run.stdout).id).toBe(1103012935);
-  });
-
-  it("accepts a GraphQL node string repository id", () => {
-    const run = identity({
-      id: "R_kgDOQb6kRw",
-      nameWithOwner: "openclaw/openclaw",
-      url: "https://github.com/openclaw/openclaw",
-    });
-    expect(run.status, run.stderr).toBe(0);
-  });
+  it.each([1103012935, "R_kgDOQb6kRw"])(
+    "validates identity %s despite an unrelated inherited helper snapshot",
+    (id) => {
+      const repo = {
+        id,
+        nameWithOwner: "openclaw/openclaw",
+        url: "https://github.com/openclaw/openclaw",
+      };
+      const run = identity(repo, {
+        ...process.env,
+        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: join(scripts, "pr-lib"),
+      });
+      expect(run.status, run.stderr).toBe(0);
+      expect(JSON.parse(run.stdout)).toEqual(repo);
+      expect(run.stderr).toBe("");
+    },
+  );
 
   it.each([
-    ["a missing id", { id: null }],
+    ["a missing id", {}],
+    ["a null id", { id: null }],
     ["an empty string id", { id: "" }],
     ["an object id", { id: { node: "x" } }],
   ])("still rejects %s", (_label, overrides) => {
@@ -443,7 +458,8 @@ describePosix("merge_outcome_repo_identity", () => {
       url: "https://github.com/openclaw/openclaw",
       ...overrides,
     });
-    expect(run.status).not.toBe(0);
+    expect(run.status, run.stderr).toBe(4);
+    expect(run.stderr).toBe("");
     expect(run.stdout).toBe("");
   });
 
@@ -453,7 +469,8 @@ describePosix("merge_outcome_repo_identity", () => {
       nameWithOwner: "openclaw/openclaw",
       url: "https://github.com/attacker/openclaw",
     });
-    expect(run.status).not.toBe(0);
+    expect(run.status, run.stderr).toBe(4);
+    expect(run.stderr).toBe("");
     expect(run.stdout).toBe("");
   });
 });

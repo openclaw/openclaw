@@ -1,9 +1,11 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.node.parseJsonParamsObject
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -21,22 +23,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
-/**
- * UI transcript role emitted by microphone capture and assistant streaming.
- */
 enum class VoiceConversationRole {
   User,
   Assistant,
 }
 
-/** UI transcript entry retained for recent voice turns. */
 data class VoiceConversationEntry(
   val id: String,
   val role: VoiceConversationRole,
@@ -82,8 +77,6 @@ internal class MicCaptureManager(
     private const val maxConversationEntries = 40
     private const val pendingRunTimeoutMs = 45_000L
   }
-
-  private val json = Json { ignoreUnknownKeys = true }
 
   private val _micEnabled = MutableStateFlow(false)
   val micEnabled: StateFlow<Boolean> = _micEnabled
@@ -314,7 +307,6 @@ internal class MicCaptureManager(
     sendQueuedIfIdle()
   }
 
-  /** Handles transcription and chat events that update live voice transcript/reply state. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
@@ -324,35 +316,29 @@ internal class MicCaptureManager(
       return
     }
     if (event != "chat") return
-    if (payloadJson.isNullOrBlank()) return
-    val payload =
-      try {
-        json.parseToJsonElement(payloadJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return
+    val payload = parseJsonParamsObject(payloadJson) ?: return
 
     val runId =
       pendingRunId ?: run {
         Log.d("MicCapture", "no pendingRunId — drop")
         return
       }
-    val eventRunId = payload["runId"].asStringOrNull() ?: return
+    val eventRunId = payload["runId"].asJsonStringOrNull() ?: return
     if (eventRunId != runId) {
       Log.d("MicCapture", "runId mismatch: event=$eventRunId pending=$runId")
       return
     }
 
-    when (payload["state"].asStringOrNull()) {
+    when (payload["state"].asJsonStringOrNull()) {
       "delta" -> {
-        val deltaText = parseAssistantText(payload)
-        if (!deltaText.isNullOrBlank()) {
-          upsertPendingAssistant(text = deltaText.trim(), isStreaming = true)
+        val text = ChatEventText.assistantStreamTextFromPayload(payload)
+        if (text != null) {
+          upsertPendingAssistant(text = text, isStreaming = true)
         }
       }
 
       "final" -> {
-        val finalText = parseAssistantText(payload)?.trim().orEmpty()
+        val finalText = ChatEventText.assistantTextFromPayload(payload)?.trim().orEmpty()
         if (finalText.isNotEmpty()) {
           upsertPendingAssistant(text = finalText, isStreaming = false)
           playAssistantReplyAsync(finalText)
@@ -365,7 +351,7 @@ internal class MicCaptureManager(
       "error" -> {
         val gatewayError =
           payload["errorMessage"]
-            .asStringOrNull()
+            .asJsonStringOrNull()
             ?.trim()
             .orEmpty()
         if (gatewayError.isNotEmpty()) {
@@ -812,25 +798,19 @@ internal class MicCaptureManager(
   }
 
   private fun handleTranscriptionEvent(payloadJson: String?) {
-    if (payloadJson.isNullOrBlank()) return
-    val obj =
-      try {
-        json.parseToJsonElement(payloadJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return
-    val sessionId = obj["transcriptionSessionId"].asStringOrNull() ?: obj["sessionId"].asStringOrNull()
+    val obj = parseJsonParamsObject(payloadJson) ?: return
+    val sessionId = obj["transcriptionSessionId"].asJsonStringOrNull() ?: obj["sessionId"].asJsonStringOrNull()
     val currentSession = transcriptionSession
     if (currentSession == null || sessionId != currentSession.id) return
 
-    when (obj["type"].asStringOrNull()) {
+    when (obj["type"].asJsonStringOrNull()) {
       "ready", "inputAudio", "speechStart" -> {
         _isListening.value = true
         _statusText.value = listeningStatus()
       }
 
       "partial" -> {
-        val text = obj["text"].asStringOrNull()?.trim().orEmpty()
+        val text = obj["text"].asJsonStringOrNull()?.trim().orEmpty()
         if (text.isNotEmpty()) {
           _liveTranscript.value = text
           scheduleTranscriptFlush(text)
@@ -840,7 +820,7 @@ internal class MicCaptureManager(
       "transcript" -> {
         transcriptFlushJob?.cancel()
         transcriptFlushJob = null
-        val text = obj["text"].asStringOrNull()?.trim().orEmpty()
+        val text = obj["text"].asJsonStringOrNull()?.trim().orEmpty()
         if (text.isNotEmpty()) {
           if (text != flushedPartialTranscript) {
             submitTranscribedMessage(text)
@@ -854,7 +834,7 @@ internal class MicCaptureManager(
       "error" -> {
         val message =
           obj["message"]
-            .asStringOrNull()
+            .asJsonStringOrNull()
             ?.trim()
             .orEmpty()
             .ifEmpty { "transcription failed" }
@@ -932,12 +912,6 @@ internal class MicCaptureManager(
       ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
     )
-
-  private fun parseAssistantText(payload: JsonObject): String? = ChatEventText.assistantTextFromPayload(payload)
 }
-
-private fun kotlinx.serialization.json.JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
-private fun kotlinx.serialization.json.JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 private fun String.hasTranscriptContent(): Boolean = any { it.isLetterOrDigit() }

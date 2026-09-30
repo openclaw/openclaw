@@ -158,7 +158,7 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 
 ### Code Mode Executors
 
-OpenClaw Code Mode is opt-in. When enabled, its default `node` executor runs JavaScript with Node.js `node:vm` in a worker thread. **`node:vm` is not a security boundary.** The worker keeps guest computation off the Gateway event loop, but it runs with the Gateway process's OS privileges. Enabling Node Code Mode is a trusted-host execution choice.
+When global `tools.codeMode` is absent, OpenClaw uses automatic per-model activation. Explicit `false` disables it, and an authored object without `enabled` remains off. When engaged, its default `node` executor runs JavaScript with Node.js `node:vm` in a worker thread. **`node:vm` is not a security boundary.** The worker keeps guest computation off the Gateway event loop, but it runs with the Gateway process's OS privileges. Node Code Mode is a trusted-host execution choice.
 
 The intended guest API omits filesystem, network, subprocess, environment, and module-loading APIs. Its limited globals and module guards are programming constraints, not containment against hostile JavaScript. Tool policy, approvals, hooks, and session ownership still apply to calls made through the shared tool bridge; they cannot contain code that escapes the Node VM context. Agent sandbox settings for nested tools do not turn this Gateway worker into an OS sandbox.
 

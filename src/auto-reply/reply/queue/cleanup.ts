@@ -1,4 +1,3 @@
-// Clears follow-up queues and their session command lanes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
 import { clearCommandLane } from "../../../process/command-queue.js";
@@ -7,7 +6,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { removeQueuedItemsByRef } from "../../../utils/queue-helpers.js";
 import { clearFollowupDrainCallback } from "./drain.js";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
-import { clearFollowupQueue, FOLLOWUP_QUEUES } from "./state.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES, followupQueueSources } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import type { FollowupRun } from "./types.js";
 
@@ -40,13 +39,7 @@ export function prepareSessionFollowupCleanup(params: {
       !queue.activeSummarySources.has(source);
     // Admission can retarget the next claim before run.sessionId is refreshed.
     // Neither identity may transfer this Stop to another incarnation.
-    const sources = [
-      ...new Set([
-        ...queue.items,
-        ...queue.summarySources,
-        ...queue.summaryElisions.flatMap((entry) => entry.sources),
-      ]),
-    ]
+    const sources = [...new Set(followupQueueSources(queue))]
       .filter(
         (source) =>
           isPending(source) &&
@@ -144,7 +137,6 @@ export function clearSessionQueues(keys: Array<string | undefined>): ClearSessio
   const seen = new Set<string>();
   let followupCleared = 0;
   let laneCleared = 0;
-  const clearedKeys: string[] = [];
 
   for (const key of keys) {
     const cleaned = normalizeOptionalString(key);
@@ -152,11 +144,10 @@ export function clearSessionQueues(keys: Array<string | undefined>): ClearSessio
       continue;
     }
     seen.add(cleaned);
-    clearedKeys.push(cleaned);
     followupCleared += clearFollowupQueue(cleaned);
     clearFollowupDrainCallback(cleaned);
     laneCleared += clearCommandLane(resolveEmbeddedSessionLane(cleaned));
   }
 
-  return { followupCleared, laneCleared, keys: clearedKeys };
+  return { followupCleared, laneCleared, keys: [...seen] };
 }

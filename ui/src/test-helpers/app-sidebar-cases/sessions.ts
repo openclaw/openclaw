@@ -217,15 +217,14 @@ describe("AppSidebar session source lifecycle", () => {
     await menu.updateComplete;
     expect(menu.forkFromLastCompleted).toBe(true);
     menu.onAction({ kind: "fork" });
+    await vi.dynamicImportSettled();
 
-    await vi.waitFor(() =>
-      expect(sessions.create).toHaveBeenCalledWith({
-        parentSessionKey: "agent:main:active",
-        fork: true,
-        forkFrom: "last-completed",
-        agentId: "main",
-      }),
-    );
+    expect(sessions.create).toHaveBeenCalledWith({
+      parentSessionKey: "agent:main:active",
+      fork: true,
+      forkFrom: "last-completed",
+      agentId: "main",
+    });
   });
 
   it("resets per-agent cached results when the sessions source changes", async () => {

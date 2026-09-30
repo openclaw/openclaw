@@ -5,6 +5,7 @@ import { state } from "lit/decorators.js";
 import type {
   WorktreeRecord,
   WorktreesBranchesResult,
+  WorktreesListResult,
   WorktreesRemoveResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -38,7 +39,6 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
-type WorktreesListResult = { worktrees: WorktreeRecord[] };
 class WorktreesPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -335,42 +335,37 @@ class WorktreesPage extends OpenClawLightDomElement {
           />
         `,
       })}
-      ${renderSettingsRow({
-        title: t("worktrees.name"),
-        control: html`
-          <input
-            class="settings-input"
-            type="text"
-            aria-label=${t("worktrees.name")}
-            ?disabled=${this.creating}
-            placeholder=${t("worktrees.namePlaceholder")}
-            .value=${this.createName}
-            @input=${(event: Event) => {
-              this.createName = (event.target as HTMLInputElement).value;
-            }}
-          />
-        `,
-      })}
-      ${renderSettingsRow({
-        title: t("worktrees.baseBranch"),
-        control: html`
-          <input
-            class="settings-input"
-            type="text"
-            aria-label=${t("worktrees.baseBranch")}
-            ?disabled=${this.creating}
-            placeholder=${t("worktrees.baseBranchPlaceholder")}
-            list="worktrees-create-branches"
-            .value=${this.createBaseRef}
-            @input=${(event: Event) => {
-              this.createBaseRef = (event.target as HTMLInputElement).value;
-            }}
-          />
-          <datalist id="worktrees-create-branches">
-            ${this.createBranches.map((name) => html`<option value=${name}></option>`)}
-          </datalist>
-        `,
-      })}
+      ${(
+        [
+          ["createName", "worktrees.name", "worktrees.namePlaceholder"],
+          ["createBaseRef", "worktrees.baseBranch", "worktrees.baseBranchPlaceholder"],
+        ] as const
+      ).map(([field, label, placeholder]) =>
+        renderSettingsRow({
+          title: t(label),
+          control: html`
+            <input
+              class="settings-input"
+              type="text"
+              aria-label=${t(label)}
+              ?disabled=${this.creating}
+              placeholder=${t(placeholder)}
+              list=${field === "createBaseRef" ? "worktrees-create-branches" : nothing}
+              .value=${this[field]}
+              @input=${(event: Event) => {
+                this[field] = (event.target as HTMLInputElement).value;
+              }}
+            />
+            ${
+              field === "createBaseRef"
+                ? html`<datalist id="worktrees-create-branches">
+                    ${this.createBranches.map((name) => html`<option value=${name}></option>`)}
+                  </datalist>`
+                : nothing
+            }
+          `,
+        }),
+      )}
       ${renderSettingsRow({
         title: t("worktrees.newWorktree"),
         control: html`
@@ -417,6 +412,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       <button
         class="btn"
         title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
+        aria-expanded=${String(this.createOpen)}
         ?disabled=${!this.canAdmin || this.creating}
         @click=${() => this.toggleCreate()}
       >

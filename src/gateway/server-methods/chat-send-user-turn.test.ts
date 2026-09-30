@@ -14,6 +14,7 @@ import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
 import { resolveReplyDirectiveRouting } from "../../auto-reply/reply/get-reply-directives-routing.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import { resolveSessionResetCommand } from "../../auto-reply/reply/session-reset-command.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
@@ -30,6 +31,7 @@ import {
   prepareChannelParticipantObservation,
 } from "../../sessions/session-participant-input.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
@@ -40,6 +42,14 @@ import {
   createAttachments,
 } from "./chat-send-user-turn.test-support.js";
 
+function requesterProfile(text: string) {
+  const json = text.match(/```json\n([\s\S]*?)\n```/u)?.[1];
+  return json
+    ? (JSON.parse(json) as { requester_profile?: { id: string; display_name: string } })
+        .requester_profile
+    : undefined;
+}
+
 describe("prepareChatSendUserTurn", () => {
   it.each([
     { profileId: "profile-ada", synthetic: false, verified: true, allowed: true },
@@ -47,7 +57,7 @@ describe("prepareChatSendUserTurn", () => {
     { profileId: "profile-ada", synthetic: true, verified: true, allowed: false },
     { profileId: "profile-ada", synthetic: false, verified: false, allowed: false },
   ])(
-    "checks command allowlists against the admitted profile: %j",
+    "projects the verified requester without changing command allowlists: %j",
     ({ profileId, synthetic, verified, allowed }) => {
       const { controller } = createUserTurnInputController("/status");
       const prepared = prepareChatSendUserTurn({
@@ -94,6 +104,14 @@ describe("prepareChatSendUserTurn", () => {
           commandAuthorized: prepared.ctx.CommandAuthorized === true,
         }),
       ).toMatchObject({ senderIsOwner: allowed, isAuthorizedSender: allowed });
+      const ctx = finalizeInboundContext({ ...prepared.ctx });
+      const prompt = buildInboundUserContextPrefix(ctx);
+      if (verified && !synthetic) {
+        expect(requesterProfile(prompt)).toEqual({ id: profileId, display_name: "Ada" });
+      } else {
+        expect(prompt).not.toContain("requester_profile");
+      }
+      expect(prepared.ctx).not.toHaveProperty("SenderId");
     },
   );
 
@@ -188,6 +206,10 @@ describe("prepareChatSendUserTurn", () => {
         await new Promise<void>((resolve) => {
           queueMicrotask(resolve);
         });
+        await runOpenClawAgentWriteAdmission(
+          { agentId: target.agentId, path: target.storePath, env: state.env },
+          () => undefined,
+        );
         expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toEqual(
           kind === "profile"
             ? [
@@ -325,9 +347,9 @@ describe("prepareChatSendUserTurn", () => {
         },
         attachments: createAttachments({
           parsedMessage,
-          mediaPathOffloadPaths: ["/workspace/voice.mp3"],
-          mediaPathOffloadTypes: ["audio/mpeg"],
-          mediaPathOffloadWorkspaceDir: "/workspace",
+          mediaPathOffloads: [
+            { path: "/workspace/voice.mp3", contentType: "audio/mpeg", workspaceDir: "/workspace" },
+          ],
         }),
         client: null,
         logGateway: { warn: vi.fn() } as never,
@@ -429,9 +451,13 @@ describe("prepareChatSendUserTurn", () => {
         },
       },
       attachments: createAttachments({
-        mediaPathOffloadPaths: ["uploads/report.pdf"],
-        mediaPathOffloadTypes: ["application/pdf"],
-        mediaPathOffloadWorkspaceDir: "/workspace",
+        mediaPathOffloads: [
+          {
+            path: "uploads/report.pdf",
+            contentType: "application/pdf",
+            workspaceDir: "/workspace",
+          },
+        ],
       }),
       client: {
         connId: "conn-1",
@@ -673,6 +699,7 @@ describe("prepareChatSendUserTurn", () => {
             fact: {
               url: "media://inbound/photo.png",
               contentType: "image/png",
+              fileName: "photo café 雪 🦞.png",
               kind: "image",
               sizeBytes: 10,
             },
@@ -717,6 +744,7 @@ describe("prepareChatSendUserTurn", () => {
         {
           path: persistedPath,
           contentType: "image/png",
+          fileName: "photo café 雪 🦞.png",
           hydrationSuppressed: true,
         },
       ]);
@@ -730,6 +758,7 @@ describe("prepareChatSendUserTurn", () => {
         {
           path: persistedPath,
           contentType: "image/png",
+          fileName: "photo café 雪 🦞.png",
           hydrationSuppressed: true,
         },
       ]);

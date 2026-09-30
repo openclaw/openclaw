@@ -9,154 +9,101 @@ vi.mock("node:crypto", async (importOriginal) => {
 });
 
 describe("formatMSTeamsMarkdown", () => {
-  const fixtures = [
-    {
-      name: "falls headings back to bold text",
-      before: "# Deployment status",
-      after: "**Deployment status**",
-    },
-    {
-      name: "falls unordered lists back to mobile-safe bullets",
-      before: "- alpha\n- beta",
-      after: "• alpha\n• beta",
-    },
-    {
-      name: "falls ordered lists back to numbered text",
-      before: "1. alpha\n2. beta",
-      after: "1. alpha\n2. beta",
-    },
-    {
-      name: "falls task lists back to checkbox text",
-      before: "- [x] shipped\n- [ ] pending",
-      after: "[x] shipped\n[ ] pending",
-    },
-    {
-      name: "keeps partially supported strikethrough markers",
-      before: "~~obsolete~~",
-      after: "~~obsolete~~",
-    },
-    {
-      name: "keeps supported blockquote markers",
-      before: "> quoted",
-      after: "> quoted",
-    },
-    {
-      name: "keeps every paragraph inside a blockquote",
-      before: "> one\n>\n> two",
-      after: "> one\n> \n> two",
-    },
-    {
-      name: "stops blockquote prefixes before following text",
-      before: "> quoted\n\noutside",
-      after: "> quoted\n\noutside",
-    },
-    {
-      name: "does not linkify plain filenames",
-      before: "See README.md",
-      after: "See README.md",
-    },
-    {
-      name: "preserves entity-encoded markdown literals",
-      before: "&#42;&#42;literal&#42;&#42;",
-      after: "&#42;&#42;literal&#42;&#42;",
-    },
-    {
-      name: "preserves transport-owned mentions",
-      before: "@[Alice](29:abc)",
-      after: "@[Alice](29:abc)",
-    },
-    {
-      name: "preserves escaped brackets in transport-owned mentions",
-      before: String.raw`@[Alice \[Ops\]](29:abc)`,
-      after: String.raw`@[Alice \[Ops\]](29:abc)`,
-    },
-    {
-      name: "preserves transport-owned markdown images",
-      before: "![chart](https://example.com/chart_(final).png)",
-      after: "![chart](https://example.com/chart_(final).png)",
-    },
-    {
-      name: "preserves images containing nested opener text",
-      before: "![plot](https://example.com/a![b].png)",
-      after: "![plot](https://example.com/a![b].png)",
-    },
-    {
-      name: "includes protected image backticks when choosing code delimiters",
-      before: "``![x`](https://example.com/x.png)``",
-      after: "``![x`](https://example.com/x.png)``",
-    },
-    {
-      name: "keeps every fenced-code line inside a blockquote",
-      before: "> ```\n> one\n> two\n> ```",
-      after: "> ```\n> one\n> two\n> ```",
-    },
-    {
-      name: "keeps surrounding blockquote text around inline code",
-      before: "> Run `status` now.",
-      after: "> Run `status` now.",
-    },
-    {
-      name: "keeps merged nested quotes aligned with Unicode styles and inline code",
-      before: "> > **😀** `one`\n> > `two` **tail**",
-      after: "> **😀** `one`\n> `two` **tail**",
-    },
-    {
-      name: "keeps escaped markdown literal",
-      before: String.raw`\*literal\*`,
-      after: String.raw`\*literal\*`,
-    },
-    {
-      name: "keeps escaped literal backticks",
-      before: String.raw`\`literal\``,
-      after: String.raw`\`literal\``,
-    },
-    {
-      name: "restores escaped markdown nested inside code",
-      before: "`\\*`",
-      after: "`\\*`",
-    },
-    {
-      name: "falls nested lists back without treating indentation as code",
-      before: "- parent\n    - child",
-      after: "• parent\n  • child",
-    },
-    {
-      name: "keeps inline code delimiters that protect embedded backticks",
-      before: "``value `with` ticks``",
-      after: "``value `with` ticks``",
-    },
-    {
-      name: "includes escaped backticks when choosing inline code delimiters",
-      before: "``a \\` b``",
-      after: "``a \\` b``",
-    },
-    {
-      name: "preserves inline code semantics while normalizing boundary spaces",
-      before: "`  foo  `",
-      after: "`  foo  `",
-    },
-    {
-      name: "serializes link destinations with angle brackets",
-      before: "[x](https://host/a)",
-      after: "[x](<https://host/a>)",
-    },
-    {
-      name: "drops code language while keeping a collision-safe fence",
-      before: ["````md", "```", "example", "```", "````"].join("\n"),
-      after: ["````", "```", "example", "```", "````"].join("\n"),
-    },
-    {
-      name: "normalizes indented code to a collision-safe fence",
-      before: "    **literal code**",
-      after: ["```", "**literal code**", "```"].join("\n"),
-    },
-  ];
-
-  for (const fixture of fixtures) {
-    it(fixture.name, () => {
-      expect(formatMSTeamsMarkdown(fixture.before, "off")).toBe(fixture.after);
-    });
-  }
+  it.each([
+    ["falls headings back to bold text", "# Deployment status", "**Deployment status**"],
+    ["falls unordered lists back to mobile-safe bullets", "- alpha\n- beta", "• alpha\n• beta"],
+    ["falls ordered lists back to numbered text", "1. alpha\n2. beta", "1. alpha\n2. beta"],
+    [
+      "falls task lists back to checkbox text",
+      "- [x] shipped\n- [ ] pending",
+      "[x] shipped\n[ ] pending",
+    ],
+    ["keeps partially supported strikethrough markers", "~~obsolete~~", "~~obsolete~~"],
+    ["keeps every paragraph inside a blockquote", "> one\n>\n> two", "> one\n> \n> two"],
+    [
+      "stops blockquote prefixes before following text",
+      "> quoted\n\noutside",
+      "> quoted\n\noutside",
+    ],
+    ["does not linkify plain filenames", "See README.md", "See README.md"],
+    [
+      "preserves entity-encoded markdown literals",
+      "&#42;&#42;literal&#42;&#42;",
+      "&#42;&#42;literal&#42;&#42;",
+    ],
+    ["preserves transport-owned mentions", "@[Alice](29:abc)", "@[Alice](29:abc)"],
+    [
+      "preserves escaped brackets in transport-owned mentions",
+      String.raw`@[Alice \[Ops\]](29:abc)`,
+      String.raw`@[Alice \[Ops\]](29:abc)`,
+    ],
+    [
+      "preserves transport-owned markdown images",
+      "![chart](https://example.com/chart_(final).png)",
+      "![chart](https://example.com/chart_(final).png)",
+    ],
+    [
+      "preserves images containing nested opener text",
+      "![plot](https://example.com/a![b].png)",
+      "![plot](https://example.com/a![b].png)",
+    ],
+    [
+      "includes protected image backticks when choosing code delimiters",
+      "``![x`](https://example.com/x.png)``",
+      "``![x`](https://example.com/x.png)``",
+    ],
+    [
+      "keeps every fenced-code line inside a blockquote",
+      "> ```\n> one\n> two\n> ```",
+      "> ```\n> one\n> two\n> ```",
+    ],
+    [
+      "keeps surrounding blockquote text around inline code",
+      "> Run `status` now.",
+      "> Run `status` now.",
+    ],
+    [
+      "keeps merged nested quotes aligned with Unicode styles and inline code",
+      "> > **😀** `one`\n> > `two` **tail**",
+      "> **😀** `one`\n> `two` **tail**",
+    ],
+    ["keeps escaped markdown literal", String.raw`\*literal\*`, String.raw`\*literal\*`],
+    ["keeps escaped literal backticks", String.raw`\`literal\``, String.raw`\`literal\``],
+    ["restores escaped markdown nested inside code", "`\\*`", "`\\*`"],
+    [
+      "falls nested lists back without treating indentation as code",
+      "- parent\n    - child",
+      "• parent\n  • child",
+    ],
+    [
+      "keeps inline code delimiters that protect embedded backticks",
+      "``value `with` ticks``",
+      "``value `with` ticks``",
+    ],
+    [
+      "includes escaped backticks when choosing inline code delimiters",
+      "``a \\` b``",
+      "``a \\` b``",
+    ],
+    ["preserves inline code semantics while normalizing boundary spaces", "`  foo  `", "`  foo  `"],
+    [
+      "serializes link destinations with angle brackets",
+      "[x](https://host/a)",
+      "[x](<https://host/a>)",
+    ],
+    [
+      "drops code language while keeping a collision-safe fence",
+      ["````md", "```", "example", "```", "````"].join("\n"),
+      ["````", "```", "example", "```", "````"].join("\n"),
+    ],
+    [
+      "normalizes indented code to a collision-safe fence",
+      "    **literal code**",
+      ["```", "**literal code**", "```"].join("\n"),
+    ],
+  ])("%s", (_name, before, after) => {
+    expect(formatMSTeamsMarkdown(before, "off")).toBe(after);
+  });
 
   it.each([
     ["`foo `", "<code>foo </code>"],

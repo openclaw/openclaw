@@ -4,9 +4,13 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
-import { classifyOpenClawAgentDatabaseReadError } from "./openclaw-agent-db-read-error.js";
+import {
+  classifyOpenClawAgentDatabaseReadError,
+  recordOpenClawAgentDatabaseReadOpenFailure,
+} from "./openclaw-agent-db-read-error.js";
 import {
   assertCanonicalAgentPersistenceVersion,
   assertExistingAgentSchemaOwner,
@@ -94,11 +98,17 @@ export function openOpenClawAgentDatabaseReadOnly(
   }
   // Lock policy belongs to the open: node:sqlite has no busy handler until one
   // is set, so a later PRAGMA leaves every earlier statement unprotected.
-  const db = openNodeSqliteDatabase(pathname, {
-    readOnly: true,
-    timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    ...(behavior.allowExtension ? { allowExtension: true } : {}),
-  });
+  let db: DatabaseSync;
+  try {
+    db = openNodeSqliteDatabase(pathname, {
+      readOnly: true,
+      timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      ...(behavior.allowExtension ? { allowExtension: true } : {}),
+    });
+  } catch (error) {
+    recordOpenClawAgentDatabaseReadOpenFailure(error);
+    throw error;
+  }
   let closed = false;
   const close = () => {
     if (closed) {
@@ -117,9 +127,11 @@ export function openOpenClawAgentDatabaseReadOnly(
       close();
       return { found: false, reason: "schema-missing" };
     }
+    admitSqliteSchema(db);
     return { found: true, database };
   } catch (error) {
     close();
+    recordOpenClawAgentDatabaseReadOpenFailure(error);
     throw error;
   }
 }

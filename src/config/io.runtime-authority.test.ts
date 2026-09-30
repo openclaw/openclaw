@@ -115,8 +115,8 @@ describe("runtime finalization retains original authority", () => {
               const realIO = createIO(options);
               return {
                 ...realIO,
-                readConfigFileSnapshot: async () => {
-                  const actual = await realIO.readConfigFileSnapshot();
+                readConfigFileSnapshotForWrite: async (readOptions) => {
+                  const actual = await realIO.readConfigFileSnapshotForWrite(readOptions);
                   atBoundary();
                   return actual;
                 },

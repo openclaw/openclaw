@@ -56,10 +56,6 @@ export function resolveMantleSonnet5Cost(nowMs: number = Date.now()) {
     : SONNET_5_PROMOTIONAL_COST;
 }
 
-// ---------------------------------------------------------------------------
-// Mantle region & endpoint helpers
-// ---------------------------------------------------------------------------
-
 const MANTLE_SUPPORTED_REGIONS = [
   "us-east-1",
   "us-east-2",
@@ -78,14 +74,6 @@ const MANTLE_SUPPORTED_REGIONS = [
 function mantleEndpoint(region: string): string {
   return `https://bedrock-mantle.${region}.api.aws`;
 }
-
-function isSupportedRegion(region: string): boolean {
-  return (MANTLE_SUPPORTED_REGIONS as readonly string[]).includes(region);
-}
-
-// ---------------------------------------------------------------------------
-// Bearer token resolution
-// ---------------------------------------------------------------------------
 
 type MantleBearerTokenProvider = () => Promise<string>;
 type MantleBearerTokenProviderFactory = (opts?: {
@@ -108,11 +96,7 @@ async function loadMantleBearerTokenProviderFactory(): Promise<MantleBearerToken
  * to generate one from IAM credentials via `@aws/bedrock-token-generator`.
  */
 export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const explicitToken = env.AWS_BEARER_TOKEN_BEDROCK?.trim();
-  if (explicitToken) {
-    return explicitToken;
-  }
-  return undefined;
+  return env.AWS_BEARER_TOKEN_BEDROCK?.trim() || undefined;
 }
 
 /** Token cache for IAM-derived bearer tokens, keyed by region. */
@@ -243,25 +227,13 @@ export async function resolveMantleRuntimeBearerToken(params: {
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
-// ---------------------------------------------------------------------------
-// OpenAI-format model list response
-// ---------------------------------------------------------------------------
-
 interface OpenAIModelEntry {
   id: string;
-  object?: string;
-  owned_by?: string;
-  created?: number;
 }
 
 interface OpenAIModelsResponse {
   data: OpenAIModelEntry[];
-  object?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Reasoning heuristic
-// ---------------------------------------------------------------------------
 
 /** Model ID substrings that indicate reasoning/thinking support. */
 const REASONING_PATTERNS = [
@@ -293,10 +265,6 @@ async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIM
   return body as OpenAIModelsResponse;
 }
 
-// ---------------------------------------------------------------------------
-// Discovery cache
-// ---------------------------------------------------------------------------
-
 interface MantleCacheEntry {
   bearerToken: string;
   models: ModelDefinitionConfig[];
@@ -308,10 +276,6 @@ type MantleDiscoveryConfig = {
 };
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
-
-// ---------------------------------------------------------------------------
-// Model discovery
-// ---------------------------------------------------------------------------
 
 /**
  * Discover available models from the Mantle `/v1/models` endpoint.
@@ -385,10 +349,6 @@ export async function discoverMantleModels(params: {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Implicit provider resolution
-// ---------------------------------------------------------------------------
-
 /**
  * Resolve an implicit Bedrock Mantle provider if authentication is available.
  *
@@ -413,12 +373,11 @@ export async function resolveImplicitMantleProvider(params: {
   const region = resolveMantleRegion(env);
   const explicitBearerToken = resolveMantleBearerToken(env);
 
-  if (!isSupportedRegion(region)) {
+  if (!MANTLE_SUPPORTED_REGIONS.some((supported) => supported === region)) {
     log.debug?.("Mantle not available in region", { region });
     return null;
   }
 
-  // Try explicit token first, then generate from IAM credentials
   const bearerToken =
     explicitBearerToken ??
     (await generateBearerTokenFromIam({
@@ -529,24 +488,5 @@ export async function resolveImplicitMantleProvider(params: {
     auth: "api-key",
     apiKey: explicitBearerToken ? "env:AWS_BEARER_TOKEN_BEDROCK" : MANTLE_IAM_TOKEN_MARKER,
     models: models.length === 0 ? [] : allModels,
-  };
-}
-
-/** Merge an implicit Mantle provider catalog with explicit user config. */
-export function mergeImplicitMantleProvider(params: {
-  existing: ModelProviderConfig | undefined;
-  implicit: ModelProviderConfig;
-}): ModelProviderConfig {
-  const { existing, implicit } = params;
-  if (!existing) {
-    return implicit;
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
   };
 }

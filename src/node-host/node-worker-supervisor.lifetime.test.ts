@@ -4,12 +4,10 @@ import { createConnection } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import {
   buildWorkerProcessTurn,
@@ -41,13 +39,7 @@ import { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.
 
 type NodeWorkerSupervisor = ReturnType<typeof createNodeWorkerSupervisor>;
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useStateDatabaseTempDirs();
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -300,6 +292,9 @@ describe("node worker environment lifetime", () => {
       expect(await supervisor.status(first.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
       expect((await supervisor.status(waiting.launchId))?.state).toBe("cancelled");
     } finally {
@@ -330,6 +325,9 @@ describe("node worker environment lifetime", () => {
       expect(await supervisor.status(input.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
       await vi.waitFor(() => expectBackgroundRetired(connection!, running.worker!, server));
     } finally {
@@ -472,6 +470,9 @@ describe("node worker environment lifetime", () => {
       expect(await supervisor.status(first.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
       if (binding === "owner epoch" || binding === "session") {
         await supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(first));
@@ -486,7 +487,9 @@ describe("node worker environment lifetime", () => {
     }
   });
 
-  it("does not observe retirement before teardown, connection close, and definitive identity", async () => {
+  it("does not observe retirement before teardown, connection close, and definitive identity", async ({
+    signal: testSignal,
+  }) => {
     const { supervisor, workspaceDir } = fixture({ capacity: 1 });
     const first = testWorkerLaunchInput(workspaceDir, "held-first", "background-start");
     const next = structuredClone(first);
@@ -503,6 +506,7 @@ describe("node worker environment lifetime", () => {
     let restoreClose: (() => void) | undefined;
     let restoreIdentity: (() => void) | undefined;
     let releaseClose: (() => void) | undefined;
+    const closeCaptured = createDeferred();
     let replacement: ReturnType<NodeWorkerSupervisor["launch"]> | undefined;
     const releaseSignals = () => {
       restoreSignals?.();
@@ -531,6 +535,7 @@ describe("node worker environment lifetime", () => {
       const close = vi.spyOn(socket, "emit").mockImplementation((event, ...args) => {
         if (event === "close") {
           releaseClose = () => emit(event, ...args);
+          closeCaptured.resolve();
           return true;
         }
         return emit(event, ...args);
@@ -551,7 +556,9 @@ describe("node worker environment lifetime", () => {
       expect(assertRetired).toThrow();
 
       releaseSignals();
-      await vi.waitFor(() => expect(releaseClose).toBeDefined());
+      // Join the owned close event; a polling deadline can precede real teardown.
+      await racePromiseWithAbortSignal(closeCaptured.promise, testSignal);
+      expect(releaseClose).toBeDefined();
       await replacement;
       await waitForTerminal(supervisor, next.launchId);
       await vi.waitFor(() => {
@@ -658,11 +665,16 @@ describe("node worker environment lifetime", () => {
         expect((await store.get(first.launchId))?.state).toBe("running");
         expect(inspectNodeWorkerProcessIdentity(owner.worker!)).toBe("live");
 
-        const readOwner = vi.spyOn(NodeWorkerLaunchStore.prototype, "get");
+        const readOwner = vi.spyOn(NodeWorkerJournalWorker.prototype, "execute");
         admission = supervisor.launch(next, TEST_WORKER_ENDPOINT).catch((error: unknown) => {
           admissionError = error;
         });
-        await vi.waitFor(() => expect(readOwner).toHaveBeenCalledWith(first.launchId));
+        await vi.waitFor(() =>
+          expect(readOwner).toHaveBeenCalledWith({
+            type: "nodeWorker.launch.get",
+            input: [first.launchId],
+          }),
+        );
         readOwner.mockRestore();
         if (cleanupError) {
           vi.spyOn(
@@ -702,6 +714,9 @@ describe("node worker environment lifetime", () => {
         expect(await supervisor.status(first.launchId)).toEqual({
           ...completed,
           workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+          ...(completed.workerCleanupMode === "linux-subreaper"
+            ? { workerDescendantsReaped: true }
+            : {}),
         });
         expect(await supervisor.status(next.launchId)).toBeUndefined();
         expect(fs.existsSync(path.join(workspaceDir, `${next.launchId}.started.json`))).toBe(false);

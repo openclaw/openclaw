@@ -55,13 +55,6 @@ type ModelDefaultResetIntent = {
   configRevision: string | null;
 };
 
-type TalkPageProps = {
-  configObject: Record<string, unknown>;
-  mutationDisabled: boolean;
-  /** Builds the embedded schema editor over the full `talk` section. */
-  buildEditor: () => TemplateResult;
-};
-
 function toProviderOption(
   provider: TalkCatalogResult["realtime"]["providers"][number],
 ): TalkRealtimeProviderOption {
@@ -309,7 +302,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
 
   @property({ attribute: false }) configObject: Record<string, unknown> = {};
   @property({ type: Boolean }) mutationDisabled = false;
-  @property({ attribute: false }) buildEditor: TalkPageProps["buildEditor"] = () => html``;
+  @property({ attribute: false }) buildEditor: () => TemplateResult = () => html``;
 
   @state() private catalog: TalkCatalogState = { kind: "unavailable" };
   @state() private modelDefaultResetIntent: ModelDefaultResetIntent | null = null;
@@ -548,9 +541,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
    */
   private liveSelection() {
     const form = this.context.runtimeConfig.state.configForm;
-    const configObject =
-      form && typeof form === "object" ? (form as Record<string, unknown>) : this.configObject;
-    return resolveTalkRealtimeSelection(configObject);
+    return resolveTalkRealtimeSelection(form ?? this.configObject);
   }
 
   /**
@@ -643,14 +634,4 @@ class TalkSettingsPage extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-talk-settings")) {
   customElements.define("openclaw-talk-settings", TalkSettingsPage);
-}
-
-export function renderTalkPage(props: TalkPageProps) {
-  return html`
-    <openclaw-talk-settings
-      .configObject=${props.configObject}
-      .mutationDisabled=${props.mutationDisabled}
-      .buildEditor=${props.buildEditor}
-    ></openclaw-talk-settings>
-  `;
 }

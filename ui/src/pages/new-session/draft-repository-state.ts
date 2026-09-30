@@ -107,7 +107,9 @@ export class DraftRepositoryController {
   adoptPreference(preference: NewSessionPreference | null) {
     if (!this.worktreeSelectedByUser) {
       this.worktreeValue = false;
-      this.preferredWorktreeRestore = preference?.worktree === true;
+      // Remote worktree flags describe placement isolation, not a local checkout choice.
+      this.preferredWorktreeRestore =
+        preference?.worktree === true && (!preference.where || preference.where.kind === "local");
     }
     if (!this.baseRefSelectedByUser) {
       const baseRef = preference?.baseRef || undefined;
@@ -165,30 +167,27 @@ export class DraftRepositoryController {
     }
   }
 
-  forceWorktree(value: boolean) {
-    this.selectionRevision += 1;
-    this.worktreeValue = value;
-  }
-
   rejectPreferredWorktree() {
     this.preferredWorktreeRestore = false;
     this.worktreeValue = false;
     this.clearDetails(true);
   }
 
-  select(value: boolean) {
-    if (this.worktreeValue === value || this.read().remotePlacement) {
-      return;
+  select(value: boolean): boolean {
+    if (
+      this.worktreeValue === value ||
+      this.read().remotePlacement ||
+      (value && !this.available())
+    ) {
+      return false;
     }
     this.selectWorktree(value, false);
     this.callbacks.persistPreference({
       folder: this.read().folder.trim() || this.read().workspace,
       worktree: this.worktreeValue,
     });
-    if (this.worktreeValue && !this.available()) {
-      this.load();
-    }
     this.callbacks.requestUpdate();
+    return true;
   }
 
   setBaseRef(baseRef: string, submitting: boolean) {
@@ -331,14 +330,13 @@ export class DraftRepositoryController {
     // Worktree preferences can arrive while discovery is pending.
     this.repositoryValue = state;
     if (state.kind === "direct") {
-      if (!this.read().remotePlacement) {
-        const rejectedWorktree = this.worktreeValue || this.preferredWorktreeRestore;
-        this.worktreeValue = false;
-        if (rejectedWorktree) {
-          this.callbacks.persistPreference({ worktree: false });
-        }
+      const rejectedWorktree = this.worktreeValue || this.preferredWorktreeRestore;
+      this.worktreeValue = false;
+      if (rejectedWorktree && !this.read().remotePlacement) {
+        this.callbacks.persistPreference({ worktree: false });
       }
-    } else if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser && this.available()) {
+    } else if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser) {
+      // Failed discovery cannot revoke isolation intent; the submit gate checks availability.
       this.worktreeValue = true;
     }
     this.preferredWorktreeRestore = false;

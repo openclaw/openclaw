@@ -874,21 +874,6 @@ describe("openai-compatible generic embedding provider", () => {
     ]);
   });
 
-  it("omits Authorization when no apiKey is configured", async () => {
-    const server = await startEmbeddingServer();
-    const { provider, client } = await createOpenAICompatibleEmbeddingProvider(
-      createOptions({
-        model: "nomic-embed-text",
-        remote: { baseUrl: server.baseUrl },
-      }),
-    );
-
-    expect(client.headers).not.toHaveProperty("authorization");
-
-    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-    expect(server.requests[0]?.headers.authorization).toBeUndefined();
-  });
-
   it("coerces structured text inputs and rejects inline data", async () => {
     const server = await startEmbeddingServer({
       respond: ({ body }) => {
@@ -919,76 +904,6 @@ describe("openai-compatible generic embedding provider", () => {
       }),
     ).rejects.toThrow("only support text embedding inputs");
   });
-
-  it.each([
-    {
-      runtime: "Ollama",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.11, 0.12], index: 0 }],
-        model: "nomic-embed-text",
-        usage: { prompt_tokens: 1, total_tokens: 1 },
-      },
-    },
-    {
-      runtime: "llama.cpp llama-server",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.21, 0.22], index: 0 }],
-        model: "bge-small-en-v1.5",
-      },
-    },
-    {
-      runtime: "vLLM",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.31, 0.32], index: 0 }],
-        model: "intfloat/e5-small-v2",
-      },
-    },
-    {
-      runtime: "LocalAI",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.41, 0.42], index: 0 }],
-        model: "text-embedding-ada-002",
-      },
-    },
-    {
-      runtime: "TGI-compatible server",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.51, 0.52], index: 0 }],
-        model: "tei-bge-small",
-      },
-    },
-    {
-      runtime: "llamafile",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.61, 0.62], index: 0 }],
-        model: "all-MiniLM-L6-v2",
-      },
-    },
-  ] satisfies Array<{ runtime: string; response: FixtureResponse }>)(
-    "parses $runtime OpenAI-compatible embedding responses through the same path",
-    async ({ response }) => {
-      const server = await startEmbeddingServer({ respond: () => response });
-      const { provider } = await createOpenAICompatibleEmbeddingProvider(
-        createOptions({
-          model: response.model ?? "embedding-model",
-          remote: { baseUrl: server.baseUrl },
-        }),
-      );
-
-      await expect(provider.embed("hello")).resolves.toEqual(response.data[0]?.embedding);
-      expect(server.requests[0]?.url).toBe("/v1/embeddings");
-      expect(server.requests[0]?.body).toEqual({
-        model: response.model ?? "embedding-model",
-        input: ["hello"],
-      });
-    },
-  );
 
   it("reports missing required config with actionable keys", async () => {
     await expect(

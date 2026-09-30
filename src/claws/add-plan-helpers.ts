@@ -3,21 +3,6 @@ import type { AgentConfig } from "../config/types.agents.js";
 import type { ClawInstallStatus } from "./provenance.js";
 import type { ClawAddPlan } from "./types.js";
 
-export function hasUnsupportedMutationActions(plan: ClawAddPlan): boolean {
-  return plan.actions.some(
-    (action) =>
-      ![
-        "agent",
-        "workspace",
-        "bootstrap",
-        "workspaceFile",
-        "package",
-        "mcpServer",
-        "cronJob",
-      ].includes(action.kind),
-  );
-}
-
 export function planWithPackageActions(
   plan: ClawAddPlan,
   predicate: (action: ClawAddPlan["actions"][number]) => boolean,

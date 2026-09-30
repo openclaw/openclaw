@@ -121,6 +121,26 @@ describe("Models route admission", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([true, false])("preserves provider deep links when connected=%s", async (connected) => {
+    const harness = createModelsRouter();
+    if (!connected) {
+      await replaceOwner(harness, "disconnect");
+    }
+    await harness.router.navigateLocation(
+      {
+        pathname: "/settings/model-providers",
+        search: "?connect=1&provider=%20openai%20",
+        hash: "",
+      },
+      harness.context,
+    );
+    expect(harness.router.getState().matches[0]?.data).toMatchObject({
+      connect: true,
+      provider: "openai",
+      client: connected ? harness.gateway.snapshot.client : null,
+    });
+  });
+
   it.each(["navigation", "disconnect", "hello", "client", "set"] as const)(
     "does not dispatch after %s during the deferred import; a new load succeeds",
     async (change) => {

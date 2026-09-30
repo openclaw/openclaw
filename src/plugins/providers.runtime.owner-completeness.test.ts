@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as activationPlanner from "./activation-planner.js";
 import * as configState from "./config-state.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -18,6 +20,7 @@ import {
 } from "./provider-hook-runtime.js";
 import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
@@ -113,31 +116,71 @@ afterEach(clearPluginLoaderCache);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("provider selection registration coverage", () => {
-  it("normalizes policy once for provider refs and keeps empty selections lazy", () => {
-    const proof = fixture("setup");
-    const loaded = proof.load("full");
-    withPluginRuntimeGenerationScope(
-      { metadataSnapshot: proof.snapshot, pluginRegistry: loaded },
-      () => {
-        const normalize = vi.spyOn(configState, "normalizePluginsConfig");
-        try {
-          expect(resolvePluginProvidersCore(proof.query).map((provider) => provider.label)).toEqual(
-            ["Helper", "Other"],
-          );
-          expect(normalize).toHaveBeenCalledExactlyOnceWith(proof.query.config.plugins);
-          normalize.mockClear();
-          expect(
-            resolvePluginProvidersCore({ ...proof.query, providerRefs: [] }).map(
-              (provider) => provider.label,
-            ),
-          ).toEqual(["Helper", "Other"]);
-          expect(normalize).not.toHaveBeenCalled();
-        } finally {
-          normalize.mockRestore();
-        }
+  it.each(["setup", "activation"] as const)(
+    "plans only unowned retained refs (%s)",
+    (declaration) => {
+      const proof = fixture(declaration);
+      const loaded = proof.load("full");
+      withPluginRuntimeGenerationScope(
+        { metadataSnapshot: proof.snapshot, pluginRegistry: loaded },
+        () => {
+          const normalize = vi.spyOn(configState, "normalizePluginsConfig");
+          const plan = vi.spyOn(activationPlanner, "resolveManifestActivationPluginIds");
+          try {
+            expect(
+              resolvePluginProvidersCore(proof.query).map((provider) => provider.label),
+            ).toEqual(["Helper", "Other"]);
+            expect(normalize).toHaveBeenCalledTimes(declaration === "activation" ? 1 : 0);
+            expect(plan).toHaveBeenCalledTimes(declaration === "activation" ? 1 : 0);
+            normalize.mockClear();
+            expect(
+              resolvePluginProvidersCore({ ...proof.query, providerRefs: [] }).map(
+                (provider) => provider.label,
+              ),
+            ).toEqual(["Helper", "Other"]);
+            expect(normalize).not.toHaveBeenCalled();
+          } finally {
+            plan.mockRestore();
+            normalize.mockRestore();
+          }
+        },
+      );
+      expect(proof.registrations()).toBe("registered");
+    },
+  );
+
+  it("reselects retained API owners from current config without activating plugins", async () => {
+    const ids = ["ollama", "github-copilot"];
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: ids.map((id) => ({ id, providers: [id] })),
+    });
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers = ids.map((id) => ({
+      pluginId: id,
+      source: `/plugins/${id}/index.js`,
+      provider: { id, label: id, auth: [] },
+    }));
+    const config: OpenClawConfig = {
+      models: {
+        providers: { custom: { api: "ollama", baseUrl: "https://example.test", models: [] } },
       },
-    );
-    expect(proof.registrations()).toBe("registered");
+    };
+    const lookup = () => resolveProviderRuntimePluginHandle({ provider: "custom", config });
+    const plan = vi.spyOn(activationPlanner, "resolveManifestActivationPluginIds");
+    try {
+      await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
+        expect(lookup().plugin?.id).toBe("ollama");
+        await Promise.resolve();
+        config.models!.providers!.custom!.api = "github-copilot";
+        expect(lookup().plugin?.id).toBe("github-copilot");
+        expect(
+          withPluginRuntimeGenerationScope({ metadataSnapshot }, lookup).plugin,
+        ).toBeUndefined();
+        expect(plan).not.toHaveBeenCalled();
+      });
+    } finally {
+      plan.mockRestore();
+    }
   });
 
   it.each(["active", "request", "retained"] as const)(

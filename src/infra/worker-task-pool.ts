@@ -1,8 +1,10 @@
-import { createWorkerTaskPoolCore } from "./worker-task-pool-core.js";
+import { WorkerTaskPoolCore } from "./worker-task-pool-core.js";
 import type {
   WorkerTaskInput,
   WorkerTaskOptions,
   WorkerTaskPoolOptions,
+  WorkerTaskPoolOwnerOptions,
+  OwnedWorkerTaskOptions,
 } from "./worker-task-pool.types.js";
 
 export { WorkerTaskError } from "./worker-task-pool-core.js";
@@ -10,10 +12,10 @@ export type { WorkerTaskResponse } from "./worker-task-pool.types.js";
 
 /** Existing SDK surface; task custody remains an internal capability. */
 export class WorkerTaskPool<Input, Output> {
-  private readonly core: ReturnType<typeof createWorkerTaskPoolCore<Input, Output>>;
+  private readonly core: WorkerTaskPoolCore<Input, Output>;
 
   constructor(options: WorkerTaskPoolOptions<Output>) {
-    this.core = createWorkerTaskPoolCore<Input, Output>(options, {
+    this.core = new WorkerTaskPoolCore<Input, Output>(options, {
       close: (error) => this.close(error),
       getSnapshot: () => this.getSnapshot(),
     });
@@ -44,13 +46,23 @@ export class WorkerTaskPool<Input, Output> {
   }
 }
 
-/** Internal callers retain each result's slot through their native cleanup decision. */
-export function createOwnedWorkerTaskPool<Input, Output>(options: WorkerTaskPoolOptions<Output>) {
-  const core = createWorkerTaskPoolCore<Input, Output>(options);
+/** Internal resource owners can retain task custody or use settled ordinary reads. */
+export function createOwnedWorkerTaskPool<Input, Output>(
+  options: WorkerTaskPoolOptions<Output>,
+  ownerOptions?: WorkerTaskPoolOwnerOptions,
+) {
+  const core = new WorkerTaskPoolCore<Input, Output>(options, undefined, ownerOptions);
   return {
-    runTask: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
+    run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
+      core.run(input, taskOptions),
+    rotate: () => core.rotate(),
+    runTask: (input: WorkerTaskInput<Input>, taskOptions: OwnedWorkerTaskOptions<Input>) =>
       core.runTask(input, taskOptions),
-    closeResources: (key?: string) => core.closeResources(key),
+    startTask: (input: WorkerTaskInput<Input>, taskOptions: OwnedWorkerTaskOptions<Input>) =>
+      core.startTask(input, taskOptions),
+    closeResources: (key?: string) => core.startCloseResources(key).result,
+    startCloseResources: (key?: string) => core.startCloseResources(key),
+    startRotate: () => core.startRotate(),
     getSnapshot: () => core.getSnapshot(),
     close: (error?: Error) => core.close(error),
   };

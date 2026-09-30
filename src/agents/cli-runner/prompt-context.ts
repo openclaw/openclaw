@@ -1,10 +1,15 @@
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
 } from "../../infra/active-node-context.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
+import { buildCliSessionDriftNote } from "../cli-session.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
+import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
+import type { CliReusableSession, RunCliAgentParams } from "./types.js";
 
 /** Current-turn facts stay outside native prompts that are retained across CLI turns. */
 export async function buildCliTurnAppendContext(
@@ -13,6 +18,8 @@ export async function buildCliTurnAppendContext(
     isNewSession: boolean;
     systemPrompt: string;
     context: readonly (string | undefined)[];
+    thinkLevel?: ThinkLevel;
+    requesterProfileId?: string;
   },
 ): Promise<string> {
   const { resolveSystemPromptUsage } = await import("./helpers.js");
@@ -21,12 +28,18 @@ export async function buildCliTurnAppendContext(
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
-  await prepareActiveNodeContext();
+  await prepareActiveNodeContext(params.requesterProfileId);
   return [
     ...params.context,
+    buildProactiveSubagentOrchestrationSection({
+      enabled: params.thinkLevel === "ultra",
+      hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
+    }).join("\n"),
     buildRuntimeContextCustomMessage(mediaTaskContext)?.content,
     // Native-prompt owners and first-only resumes do not receive the current runtime line.
-    resolveSystemPromptUsage(params) ? undefined : buildActiveNodeContextText(),
+    resolveSystemPromptUsage(params)
+      ? undefined
+      : buildActiveNodeContextText(params.requesterProfileId),
   ]
     .filter((value): value is string => Boolean(value?.trim()))
     .join("\n\n");
@@ -41,7 +54,7 @@ export function composeCliPromptContext(prompt: string, context?: CliBackendProm
 export async function prepareCliSystemPrompt(
   params: Omit<
     Parameters<typeof import("./helpers.js").buildCliAgentSystemPrompt>[0],
-    "preparedModelRuntime"
+    "preparedModelRuntime" | "preparedGitCoauthorPrompt"
   >,
 ): Promise<string> {
   const { buildCliAgentSystemPrompt } = await import("./helpers.js");
@@ -68,6 +81,30 @@ export async function prepareCliSystemPrompt(
       });
     }
   }
-  await prepareActiveNodeContext();
-  return buildCliAgentSystemPrompt({ ...params, preparedModelRuntime });
+  await prepareActiveNodeContext(params.requesterProfileId);
+  const preparedGitCoauthorPrompt = await resolveSessionGitCoauthorPrompt({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+  });
+  return buildCliAgentSystemPrompt({ ...params, preparedModelRuntime, preparedGitCoauthorPrompt });
+}
+
+export function prependCliSessionDriftUserContext(
+  context: RunCliAgentParams["currentInboundContext"],
+  reusableCliSession: CliReusableSession,
+): RunCliAgentParams["currentInboundContext"] {
+  if (reusableCliSession.mode !== "reuse-with-drift") {
+    return context;
+  }
+  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
+  if (!context) {
+    return { text: note };
+  }
+  return {
+    ...context,
+    text: [note, context.text].join("\n\n"),
+    ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
+  };
 }

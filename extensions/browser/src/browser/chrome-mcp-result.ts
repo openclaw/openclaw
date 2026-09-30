@@ -1,12 +1,12 @@
 // Parses Chrome MCP tool results and formats redacted tool failures.
 import path from "node:path";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   asNullableRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { toErrorObject } from "../infra/errors.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_CONNECTION_TOOL_ERROR_RE,
@@ -138,11 +138,6 @@ function extractMessageText(result: ChromeMcpToolResult): string {
   return blocks.find((block) => block.trim()) ?? "";
 }
 
-function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
-  const message = extractMessageText(result).trim();
-  return message || `Chrome MCP tool "${name}" failed.`;
-}
-
 export function extractChromeMcpToolError(
   result: ChromeMcpToolResult,
   name: string,
@@ -153,7 +148,7 @@ export function extractChromeMcpToolError(
     (name === "close_page" &&
       extractStructuredPages(result).some((page) => page.id === args.pageId))
   ) {
-    return extractToolErrorMessage(result, name);
+    return extractMessageText(result).trim() || `Chrome MCP tool "${name}" failed.`;
   }
   if (name !== "navigate_page") {
     return undefined;

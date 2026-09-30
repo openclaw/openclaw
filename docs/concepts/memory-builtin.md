@@ -30,6 +30,19 @@ Queries reuse a process for each database, with at most two processes alive.
 Idle processes retire after 30 minutes or when another database needs capacity.
 Each query reopens the database so committed updates and replaced indexes remain visible.
 
+Keyword retrieval, recall metadata, curated trigger and project candidates, and
+source timestamps use the memory search worker. The Gateway awaits projected
+rows and applies the same ranking. Session-only searches retain their final
+metadata and timestamp reads on the caller because an additional worker request
+increased measured latency; other retrieval reads run off the Gateway event loop. Searches retain their index generation until the worker closes its
+reader; recall metadata is read after candidate retrieval so forgotten chunks
+are excluded. This does not change stored data, configuration, or upgrade behavior.
+
+After Gateway readiness, idle warmup loads the active Memory Core retrieval
+worker before the first search. It does not open an index, start an embedding
+provider, or delay readiness. Requests arriving before warmup completes still
+initialize retrieval normally; the worker keeps its existing idle retirement policy.
+
 If semantic retrieval reaches the 30-second tool deadline after keyword matches
 from memory files are ready, `memory_search` returns those matches with a
 partial-result warning. Session transcript hits require fresh visibility checks
@@ -222,9 +235,13 @@ and adds `sessions` to `memory.search.sources` without enabling broader
 cross-conversation recall. Retained session-reset transcripts remain in the
 agent's sessions directory and are indexed from those original artifacts.
 
-When Memory Core finds a retired per-agent QMD workspace under
-`~/.openclaw/agents/<agentId>/qmd/`, Doctor also offers to remove its derived
-indexes, model downloads, collection metadata, and session exports.
+Doctor removes only empty per-agent QMD directories under
+`~/.openclaw/agents/<agentId>/qmd/`. Nonempty directories stay untouched:
+OpenClaw's retired QMD backend used the same layout as standalone QMD, without
+an ownership marker. Retained directories do not block migration or Gateway
+startup. After backing them up, you can remove old indexes, model downloads,
+collection metadata, and session exports manually if you have confirmed that
+no standalone QMD installation uses them.
 
 Canonical memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
 migrated extra paths. Builtin indexes those same Markdown sources on its next

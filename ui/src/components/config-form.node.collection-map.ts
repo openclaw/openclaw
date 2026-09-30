@@ -9,6 +9,7 @@ import {
 } from "./config-form-collection-draft.ts";
 import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
 import {
+  configChildRenderOptions,
   getSensitiveRenderState,
   isAnySchema,
   jsonValue,
@@ -36,9 +37,6 @@ export function renderMapField(
     value,
     path,
     hints,
-    rawAvailable,
-    maskSensitive,
-    unsupported,
     disabled,
     reservedKeys,
     validateKey,
@@ -48,6 +46,8 @@ export function renderMapField(
     isSensitivePathRevealed,
     onToggleSensitivePath,
   } = params;
+  // Mixed objects need a heading to distinguish extra entries from named fields.
+  const showLabel = params.showLabel !== false || reservedKeys.size > 0;
   const anySchema = isAnySchema(schema);
   const entryDefault = anySchema ? {} : defaultValue(schema);
   const draftId = configFieldId(path, "map-draft");
@@ -80,9 +80,13 @@ export function renderMapField(
   return html`
     <div class="cfg-block cfg-map">
       <div class="settings-row">
-        <div class="settings-row__text">
-          <span class="settings-row__title">${t("configForm.customEntries")}</span>
-        </div>
+        ${
+          showLabel
+            ? html`<div class="settings-row__text">
+                <span class="settings-row__title">${t("configForm.customEntries")}</span>
+              </div>`
+            : nothing
+        }
         <div class="settings-row__control">
           <button
             type="button"
@@ -227,24 +231,15 @@ export function renderMapField(
                             }),
                           })
                         : renderNode({
+                            ...configChildRenderOptions(params),
                             schema,
                             value: entryValue,
                             path: valuePath,
-                            hints,
-                            rawAvailable,
-                            maskSensitive,
-                            unsupported,
-                            disabled,
-                            compact: params.compact,
-                            commitOnBlur: params.commitOnBlur,
                             isRequired: true,
                             sourceIdentity: entryValue,
                             controlIdentity: value,
                             searchCriteria,
                             showLabel: false,
-                            revealSensitive,
-                            isSensitivePathRevealed,
-                            onToggleSensitivePath,
                             onPatch,
                           })
                     }

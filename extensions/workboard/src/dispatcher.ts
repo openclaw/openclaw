@@ -1,4 +1,3 @@
-// Workboard plugin module implements dispatcher behavior.
 import path from "node:path";
 import type {
   WorkboardCard,
@@ -33,8 +32,8 @@ import {
 
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
 
-export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
-export type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
+type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
+type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
 
 export type WorkboardDispatchStartOptions = {
   cardId?: string;
@@ -80,10 +79,6 @@ type WorkboardDispatchStartParams = {
 };
 
 const pendingWorkboardDispatches = new WeakMap<WorkboardStore, Promise<void>>();
-
-function cardIsArchived(card: WorkboardCard): boolean {
-  return Boolean(card.metadata?.archivedAt);
-}
 
 function cardHasActiveClaim(card: WorkboardCard, now: number): boolean {
   const claim = card.metadata?.claim;
@@ -239,13 +234,12 @@ function selectStartableCards(
   if (limit <= 0) {
     return { cards: [] };
   }
-  const runningByOwner = new Map<string, number>();
+  const runningOwners = new Set<string>();
   for (const card of cards) {
     if (!workboardCardConsumesOwnerSlot(card, now)) {
       continue;
     }
-    const owner = workboardCardSlotOwner(card);
-    runningByOwner.set(owner, (runningByOwner.get(owner) ?? 0) + 1);
+    runningOwners.add(workboardCardSlotOwner(card));
   }
   const selected: WorkboardCard[] = [];
   const fallback: WorkboardCard[] = [];
@@ -253,7 +247,7 @@ function selectStartableCards(
   const ordered = mode === "scheduled" ? candidates.toSorted(sortReadyCards) : candidates;
   for (const card of ordered) {
     const owner = ownerOverride || workboardCardSlotOwner(card, now);
-    const rejection = cardIsArchived(card)
+    const rejection = card.metadata?.archivedAt
       ? "Card is archived; restore it before starting."
       : cardHasActiveClaim(card, now)
         ? `Card is already claimed by ${card.metadata?.claim?.ownerId ?? "another worker"}.`
@@ -264,7 +258,7 @@ function selectStartableCards(
               card.status !== "todo" &&
               card.status !== "ready"
             ? `Card cannot start from ${card.status}; move it to backlog, todo, or ready first.`
-            : (runningByOwner.get(owner) ?? 0) > 0
+            : runningOwners.has(owner)
               ? `Owner ${owner} already has active Workboard work; complete or stop it before starting another card.`
               : undefined;
     if (rejection !== undefined) {
@@ -359,7 +353,6 @@ async function runWorkboardDispatch(
     }
     const sessionKey = workboardSessionKeyForCard(card);
     let claimValue = "";
-    let materializedWorkspace: WorkboardWorkspace | undefined;
     let implicitWorkspaceCwd: string | undefined;
     let runStarted = false;
     let workspaceMutation: { before: WorkboardCard; after: WorkboardCard } | undefined;
@@ -368,6 +361,18 @@ async function runWorkboardDispatch(
     let workspaceAccess: WorkboardWorkspaceAccess;
     let targetWorkspace: string | undefined;
     let persistWorkspaceAccess: boolean;
+    const assertRestrictedTarget = (root: string) =>
+      assertRestrictedWorkboardTarget({
+        root,
+        agentId: card.agentId,
+        sessionKey,
+        modelProvider: params.options?.provider,
+        modelId: params.options?.model,
+        resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
+        worktrees: params.worktrees,
+      });
+    // Preflight failures leave the card unclaimed; keep them outside the
+    // claim and launch compensation boundary below.
     try {
       ({ workspaceAccess, targetWorkspace, persistWorkspaceAccess } =
         await resolveDispatchWorkspaceAccess({
@@ -375,47 +380,21 @@ async function runWorkboardDispatch(
           currentAccess: params.options?.workspaceAccess,
           resolveAgentWorkspace: params.options?.resolveAgentWorkspace,
         }));
-    } catch (error) {
-      startFailures.push({
-        cardId: card.id,
-        title: card.title,
-        error: formatErrorMessage(error),
-      });
-      continue;
-    }
-    if (!requestedWorkspace || requestedWorkspace.kind === "scratch") {
-      if (!workspaceAccess.unrestricted) {
-        if (!targetWorkspace) {
-          startFailures.push({
-            cardId: card.id,
-            title: card.title,
-            error: "target agent workspace is unavailable for restricted dispatch",
-          });
-          continue;
-        }
-        try {
+      if (!requestedWorkspace || requestedWorkspace.kind === "scratch") {
+        if (!workspaceAccess.unrestricted) {
+          if (!targetWorkspace) {
+            startFailures.push({
+              cardId: card.id,
+              title: card.title,
+              error: "target agent workspace is unavailable for restricted dispatch",
+            });
+            continue;
+          }
           implicitWorkspaceCwd = targetWorkspace;
           await assertCanonicalWorkboardRootAccess(implicitWorkspaceCwd, workspaceAccess);
-          await assertRestrictedWorkboardTarget({
-            root: implicitWorkspaceCwd,
-            agentId: card.agentId,
-            sessionKey,
-            modelProvider: params.options?.provider,
-            modelId: params.options?.model,
-            resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
-            worktrees: params.worktrees,
-          });
-        } catch (error) {
-          startFailures.push({
-            cardId: card.id,
-            title: card.title,
-            error: formatErrorMessage(error),
-          });
-          continue;
+          await assertRestrictedTarget(implicitWorkspaceCwd);
         }
-      }
-    } else {
-      try {
+      } else {
         const canonicalSourcePath = await assertWorkboardWorkspaceSourceAccess(
           requestedWorkspace,
           workspaceAccess,
@@ -429,24 +408,16 @@ async function runWorkboardDispatch(
         }
         if (canonicalSourcePath && !workspaceAccess.unrestricted) {
           await assertCanonicalWorkboardRootAccess(canonicalSourcePath, workspaceAccess);
-          await assertRestrictedWorkboardTarget({
-            root: canonicalSourcePath,
-            agentId: card.agentId,
-            sessionKey,
-            modelProvider: params.options?.provider,
-            modelId: params.options?.model,
-            resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
-            worktrees: params.worktrees,
-          });
+          await assertRestrictedTarget(canonicalSourcePath);
         }
-      } catch (error) {
-        startFailures.push({
-          cardId: card.id,
-          title: card.title,
-          error: formatErrorMessage(error),
-        });
-        continue;
       }
+    } catch (error) {
+      startFailures.push({
+        cardId: card.id,
+        title: card.title,
+        error: formatErrorMessage(error),
+      });
+      continue;
     }
     try {
       const claimed = await params.store.claim(
@@ -478,17 +449,9 @@ async function runWorkboardDispatch(
       });
       const runCwd = materialized.cwd ?? implicitWorkspaceCwd;
       if (runCwd && !workspaceAccess.unrestricted) {
-        await assertRestrictedWorkboardTarget({
-          root: runCwd,
-          agentId: card.agentId,
-          sessionKey,
-          modelProvider: params.options?.provider,
-          modelId: params.options?.model,
-          resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
-          worktrees: params.worktrees,
-        });
+        await assertRestrictedTarget(runCwd);
       }
-      materializedWorkspace = materialized.workspace;
+      const materializedWorkspace = materialized.workspace;
       if (materializedWorkspace) {
         const workspaceBase = await params.store.get(card.id);
         if (!workspaceBase) {

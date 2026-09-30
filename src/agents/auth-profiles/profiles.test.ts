@@ -1644,22 +1644,17 @@ describe("promoteAuthProfileInOrder", () => {
         };
         const replacement = { ...original, token: "synthetic-replacement" };
         const unrelated = createApiKeyCredential("other", "synthetic-other");
-        saveAuthProfileStore(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: { [profileId]: original, "other:default": unrelated },
-          },
-          agentDir,
-        );
+        const store = {
+          version: AUTH_STORE_VERSION,
+          profiles: { [profileId]: original, "other:default": unrelated },
+        };
+        saveAuthProfileStore(store, agentDir);
         expect(reloadSharedAuthStoreOwnership().location).toBe("legacy-main");
         const beforeRemove = vi.fn(async () => {
           expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(original);
           if (replaceDuringCleanup) {
             saveAuthProfileStore(
-              {
-                version: AUTH_STORE_VERSION,
-                profiles: { [profileId]: replacement, "other:default": unrelated },
-              },
+              { ...store, profiles: { ...store.profiles, [profileId]: replacement } },
               agentDir,
             );
           }
@@ -1675,7 +1670,7 @@ describe("promoteAuthProfileInOrder", () => {
         });
 
         expect(removed).toBe(!replaceDuringCleanup);
-        expect(beforeRemove).toHaveBeenCalledExactlyOnceWith([profileId]);
+        expect(beforeRemove).toHaveBeenCalledExactlyOnceWith([profileId], expect.any(Array));
         for (const owner of [agentDir, undefined]) {
           const persisted = loadPersistedAuthProfileStore(owner);
           expect(persisted?.profiles[profileId]).toEqual(
@@ -1684,7 +1679,10 @@ describe("promoteAuthProfileInOrder", () => {
           expect(persisted?.profiles["other:default"]).toEqual(unrelated);
         }
         if (replaceDuringCleanup) {
-          expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(new Map([[profileId, replacement]]));
+          expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(
+            new Map([[profileId, replacement]]),
+            expect.any(Array),
+          );
         } else {
           expect(onIncomplete).not.toHaveBeenCalled();
         }

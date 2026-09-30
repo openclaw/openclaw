@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { stableStringify } from "@openclaw/normalization-core";
 import {
   assertAgentSessionStoreDeletionSafe,
   prepareAgentDeleteDatabases,
@@ -27,7 +25,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { digestClawAgentConfig } from "./agent-config-digest.js";
+import { digestClawValue } from "./digest.js";
 import { deletionEffects, type ClawCleanupTargets } from "./lifecycle-delete-support.js";
 import {
   readClawInstallRecordFromDatabase,
@@ -56,8 +54,6 @@ type ClawAgentConfigRemovalResult = {
   nextConfig: OpenClawConfig;
 };
 
-export { digestClawAgentConfig } from "./agent-config-digest.js";
-
 export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: string): string {
   const normalizedId = normalizeAgentId(agentId);
   const surface = {
@@ -68,7 +64,7 @@ export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: s
       (entry) => entry === normalizedId,
     ),
   };
-  return `sha256:${createHash("sha256").update(stableStringify(surface)).digest("hex")}`;
+  return digestClawValue(surface);
 }
 
 async function commitClawAgentConfigRemoval(
@@ -97,7 +93,7 @@ async function commitClawAgentConfigRemoval(
         if (params.expectedState === "missing") {
           throw params.onModified();
         }
-        if (digestClawAgentConfig(agent) !== params.expectedDigest) {
+        if (digestClawValue(agent) !== params.expectedDigest) {
           throw params.onModified();
         }
       },

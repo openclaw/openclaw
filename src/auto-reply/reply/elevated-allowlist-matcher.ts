@@ -32,7 +32,7 @@ const SENDER_PREFIX_RE = new RegExp(`^(${SENDER_PREFIXES.join("|")}):`, "i");
 export type AllowFromFormatter = (values: string[]) => string[];
 
 /** Removes known channel/user prefixes before identity comparisons. */
-export function stripSenderPrefix(value?: string): string {
+function stripSenderPrefix(value?: string): string {
   if (!value) {
     return "";
   }
@@ -62,10 +62,6 @@ export function parseExplicitElevatedAllowEntry(
   };
 }
 
-function slugAllowToken(value?: string): string {
-  return normalizeAtHashSlug(value);
-}
-
 function addTokenVariants(tokens: Set<string>, value: string): void {
   if (!value) {
     return;
@@ -77,16 +73,20 @@ function addTokenVariants(tokens: Set<string>, value: string): void {
   }
 }
 
-/** Adds formatted identity token variants into a matcher set. */
-export function addFormattedTokens(params: {
+/** Builds the channel-formatted identity variants used on both sides of matching. */
+export function buildFormattedTokens(params: {
   formatAllowFrom: AllowFromFormatter;
-  values: string[];
-  tokens: Set<string>;
-}): void {
-  const formatted = params.formatAllowFrom(params.values);
-  for (const entry of formatted) {
-    addTokenVariants(params.tokens, entry);
+  value: string;
+  includeStripped?: boolean;
+}): Set<string> {
+  const tokens = new Set<string>();
+  const values = params.includeStripped
+    ? [params.value, stripSenderPrefix(params.value)].filter(Boolean)
+    : [params.value];
+  for (const entry of params.formatAllowFrom(values)) {
+    addTokenVariants(tokens, entry);
   }
+  return tokens;
 }
 
 /** Checks a value against formatted identity tokens. */
@@ -96,16 +96,7 @@ export function matchesFormattedTokens(params: {
   includeStripped?: boolean;
   tokens: Set<string>;
 }): boolean {
-  const probeTokens = new Set<string>();
-  const values = params.includeStripped
-    ? [params.value, stripSenderPrefix(params.value)].filter(Boolean)
-    : [params.value];
-  addFormattedTokens({
-    formatAllowFrom: params.formatAllowFrom,
-    values,
-    tokens: probeTokens,
-  });
-  for (const token of probeTokens) {
+  for (const token of buildFormattedTokens(params)) {
     if (params.tokens.has(token)) {
       return true;
     }
@@ -121,7 +112,7 @@ export function buildMutableTokens(value?: string): Set<string> {
     return tokens;
   }
   addTokenVariants(tokens, trimmed);
-  const slugged = slugAllowToken(trimmed);
+  const slugged = normalizeAtHashSlug(trimmed);
   if (slugged) {
     addTokenVariants(tokens, slugged);
   }
@@ -135,7 +126,7 @@ export function matchesMutableTokens(value: string, tokens: Set<string>): boolea
   }
   const probes = new Set<string>();
   addTokenVariants(probes, value);
-  const slugged = slugAllowToken(value);
+  const slugged = normalizeAtHashSlug(value);
   if (slugged) {
     addTokenVariants(probes, slugged);
   }

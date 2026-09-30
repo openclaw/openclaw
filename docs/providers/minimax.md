@@ -31,7 +31,7 @@ Referral link for MiniMax Coding Plan (10% off): [MiniMax Coding Plan](https://p
 
 Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-portal/<model>` for OAuth setups.
 
-MiniMax M3 is a preferred [Code Mode](/tools/code-mode) model on both API-key and OAuth routes. Set `tools.codeMode.enabled` to `"auto"` to use it; Code Mode is off by default.
+MiniMax M3 is a preferred [Code Mode](/tools/code-mode) model on both API-key and OAuth routes. With no global Code Mode setting, the automatic tier can engage it; explicit agent or model settings still take precedence.
 
 ## Getting started
 

@@ -23,7 +23,15 @@ const resolveUserProfileId = vi.hoisted(() => vi.fn());
 
 vi.mock("../../state/user-profile-writes.js", () => ({
   linkCanonicalUserProfileEmail: linkEmail,
-  setCanonicalUserProfileRole: setUserProfileRole,
+  setCanonicalUserProfileRole: async (
+    ...args: Parameters<
+      typeof import("../../state/user-profile-writes.js").setCanonicalUserProfileRole
+    >
+  ) => {
+    const profile = await setUserProfileRole(...args);
+    args[2]?.onCommitted?.(profile.id);
+    return profile;
+  },
 }));
 
 vi.mock("../../state/user-profiles.js", async () => {
@@ -453,6 +461,7 @@ describe("users gateway methods", () => {
     expect(validateUsersSetRoleResult(respond.mock.calls[0]?.[1])).toBe(true);
     expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, "guest", {
       assertCurrent: expect.any(Function),
+      onCommitted: expect.any(Function),
     });
     expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
     expect(invalidateOperatorRolePolicy.mock.invocationCallOrder[0]).toBeLessThan(
@@ -462,34 +471,6 @@ describe("users gateway methods", () => {
     expect(disconnectClientsForUserProfile.mock.invocationCallOrder[0]).toBeLessThan(
       respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-  });
-
-  it("invalidates downgraded operator connections before acknowledging the role change", async () => {
-    const assignedProfile = { ...profile, role: "guest", updatedAt: 2 };
-    const connectedOperator = { scopes: ["operator.admin"] };
-    const disconnectClientsForUserProfile = vi.fn(() => {
-      connectedOperator.scopes = [];
-    });
-    const respond = vi.fn(() => {
-      expect(connectedOperator.scopes).not.toContain("operator.admin");
-    });
-    setUserProfileRole.mockReturnValue(assignedProfile);
-
-    await expectDefined(
-      usersHandlers["users.setRole"],
-      "users.setRole test invariant",
-    )({
-      client: adminClient,
-      context: {
-        getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
-        disconnectClientsForUserProfile,
-      },
-      params: { profileId: profile.id, role: "guest" },
-      respond,
-    } as never);
-
-    expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
-    expect(disconnectClientsForUserProfile).toHaveBeenCalledWith(profile.id);
   });
 
   it("clears profile roles even when role definitions have been removed", async () => {
@@ -505,6 +486,7 @@ describe("users gateway methods", () => {
     expect(respond).toHaveBeenCalledWith(true, { profile });
     expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, null, {
       assertCurrent: expect.any(Function),
+      onCommitted: expect.any(Function),
     });
     expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
   });

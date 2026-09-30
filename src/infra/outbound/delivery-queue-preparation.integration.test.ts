@@ -2,14 +2,13 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import { withStableDeliveryPreparation } from "./delivery-queue-preparation.js";
+import { deliveryQueueProcessEntrypoints } from "./delivery-queue-process-runtime.test-support.js";
 
-const CHILD_SCRIPT = fileURLToPath(
-  new URL("./delivery-queue-preparation.child.test-support.ts", import.meta.url),
-);
+const childUrl = resolveRuntimeWorkerUrl(deliveryQueueProcessEntrypoints.preparation);
 
 describe("stable delivery preparation cross-process ownership", () => {
   let stateDir = "";
@@ -29,7 +28,7 @@ describe("stable delivery preparation cross-process ownership", () => {
 
   it("blocks a second process before it can enter modifying policy", async () => {
     const id = "cross-process-stable-intent";
-    child = spawn(process.execPath, ["--import", "tsx", CHILD_SCRIPT, stateDir, id], {
+    child = spawn(process.execPath, [...resolveRuntimeWorkerArgv(childUrl), stateDir, id], {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });

@@ -9,12 +9,10 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
-import {
-  buildTelegramInboundDebounceConversationKey,
-  buildTelegramInboundDebounceKey,
-} from "./bot-handlers.debounce-key.js";
+import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import {
   createTelegramInboundBuffers,
   type TelegramDebounceEntry,
@@ -25,6 +23,7 @@ import {
   isMediaSizeLimitError,
   TelegramBotApiFileTooLargeError,
 } from "./bot-handlers.media.js";
+import { promptContextBoundaryOptions } from "./bot-handlers.message-context.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type {
   RegisterTelegramHandlerParams,
@@ -42,13 +41,13 @@ import {
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   buildTelegramThreadParams,
+  buildTelegramGroupPeerId,
   getTelegramTextParts,
   type TelegramThreadSpec,
   resolveTelegramPrimaryMedia,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
-import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 import { isTelegramControlLaneText } from "./sequential-key.js";
 
 export interface TelegramInboundProcessing {
@@ -61,7 +60,6 @@ type TelegramInboundMessage = {
   msg: Message;
   chatId: number;
   isGroup: boolean;
-  isForum: boolean;
   threadSpec: TelegramThreadSpec;
   dmPolicy: DmPolicy;
   storeAllowFrom: string[];
@@ -75,13 +73,15 @@ type TelegramInboundMessage = {
   oversizeLogMessage: string;
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
-  dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
+  dispatchDedupeClaims: ChannelReplayClaimHandle[];
 };
 
 export function createTelegramInboundProcessing({
   params: {
     cfg,
     accountId,
+    ownerAgentId,
+    telegramDeps,
     bot,
     opts,
     runtime,
@@ -98,22 +98,17 @@ export function createTelegramInboundProcessing({
   const {
     resolveMediaRuntime,
     recordMessageResolvedMedia,
-    promptContextBoundaryOptions,
     releaseDispatchDedupeClaims,
     createSpooledReplayParticipantForBufferedWork,
   } = message;
-  const {
-    cancelPending,
-    inboundDebouncer,
-    resolveTelegramDebounceEntryMs,
-    shouldDebounceTelegramEntry,
-    resolveTelegramDebounceLane,
-    handleTextFragment,
-  } = createTelegramInboundBuffers({ params: { cfg, accountId, bot, runtime, opts }, message });
+  const { cancelPending, inboundDebouncer, resolveTelegramDebounceLane } =
+    createTelegramInboundBuffers({ params: { cfg, accountId, bot, runtime, opts }, message });
 
   const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } = createTelegramInboundMedia({
     params: {
       accountId,
+      ownerAgentId,
+      telegramDeps,
       bot,
       opts,
       runtime,
@@ -133,7 +128,6 @@ export function createTelegramInboundProcessing({
       msg,
       chatId,
       isGroup,
-      isForum,
       threadSpec,
       dmPolicy,
       storeAllowFrom,
@@ -189,31 +183,12 @@ export function createTelegramInboundProcessing({
     }
 
     if (
-      !bypassTextBuffer &&
-      (await handleTextFragment({
-        ctx,
-        msg,
-        chatId,
-        threadSpec,
-        storeAllowFrom,
-        isAbortControlMessage,
-        promptContextMinTimestampMs,
-        promptContextAmbientWatermark,
-        dispatchDedupeClaims,
-        channelIngressResolver,
-      }))
-    ) {
-      return { kind: "buffered", buffer: "text-fragment" };
-    }
-
-    if (
       handleMediaGroup({
         authorizationCfg,
         ctx,
         msg,
         chatId,
         isGroup,
-        isForum,
         threadSpec,
         storeAllowFrom,
         senderId,
@@ -236,7 +211,6 @@ export function createTelegramInboundProcessing({
       msg,
       chatId,
       isGroup,
-      isForum,
       threadSpec,
       senderId,
       effectiveGroupAllow,
@@ -340,17 +314,14 @@ export function createTelegramInboundProcessing({
             : { kind: nativeMedia.kind, unavailable },
         ]
       : [];
-    const conversationKey = buildTelegramInboundDebounceConversationKey({
-      chatId,
-      threadSpec,
-    });
+    const conversationKey = buildTelegramGroupPeerId(chatId, threadSpec);
     const debounceLane = resolveTelegramDebounceLane(msg);
-    const debounceKey = senderId
+    const debounceSenderId = senderId || (msg.from?.id != null ? String(msg.from.id) : "");
+    const debounceKey = debounceSenderId
       ? buildTelegramInboundDebounceKey({
           accountId,
           conversationKey,
-          senderId,
-          debounceLane,
+          senderId: debounceSenderId,
         })
       : null;
     const debounceEntry: TelegramDebounceEntry = {
@@ -368,11 +339,7 @@ export function createTelegramInboundProcessing({
       dispatchDedupeClaims,
       channelIngressResolvers: [channelIngressResolver],
     };
-    const shouldBufferDebounce = Boolean(
-      debounceEntry.debounceKey &&
-      resolveTelegramDebounceEntryMs(debounceEntry) > 0 &&
-      shouldDebounceTelegramEntry(debounceEntry),
-    );
+    const shouldBufferDebounce = inboundDebouncer.shouldBuffer(debounceEntry);
     if (shouldBufferDebounce) {
       debounceEntry.spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
         `inbound-debounce:${debounceEntry.debounceKey}`,

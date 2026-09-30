@@ -1,35 +1,61 @@
 ---
 name: discord-e2e
-description: "Prove OpenClaw Discord behavior with leased QA bots: native guild messages, files, threads, reactions, Gateway replies, streaming revisions, deletion, and typing. Use for Discord live feature or runtime debugging; user interactions require a manual client."
+description: "Test Discord with Convex-leased QA bots: check credentials without a Gateway, exercise owned messages, or prove OpenClaw replies, files, threads, reactions, streaming, and typing. Distinguish API and Gateway evidence from manual user interactions."
 ---
 
 # Discord E2E
 
-Run the repository's QA Lab against real Discord with a leased driver bot and a
-separate leased SUT bot. QA Lab owns the lease, temporary Gateway, provider,
-cancellation, and cleanup. This skill adds no standalone runner.
+Choose the smallest boundary that proves the requested behavior:
+
+| Goal                                  | Entry point                      | What it proves                                                            |
+| ------------------------------------- | -------------------------------- | ------------------------------------------------------------------------- |
+| Check the shared bot pair and channel | Read-only command below          | Bot identities, pinned SUT, guild text channel, and history access        |
+| Exercise bot-authored mutations       | Existing `channelE2e` lifecycle  | Owned messages, reactions, files, threads, and cleanup                    |
+| Prove OpenClaw behavior               | Existing QA Lab flow             | Real Discord events, an isolated SUT Gateway, and the selected model lane |
+| Prove human interactions or rendering | Authorized manual Discord client | Actual user action or inspected client capture                            |
+
+The API probe starts no Gateway, event recorder, or model. QA Lab remains the
+owner for product E2E: it controls its lease, temporary Gateway, provider,
+cancellation, and cleanup. Neither path changes app permissions or provisions
+credentials.
 
 ## 1. Choose the evidence
 
 Read [feature recipes](features.md) for the changed behavior. Native fixture
 calls prove Discord API operations, **not** that a model invoked a tool. A SUT
-round trip additionally proves Gateway ingress and visible delivery. Model-tool
+round trip additionally proves Gateway ingress and a stored public reply. Model-tool
 claims also require the tool trace and provider request evidence.
 
-Slash commands, user component clicks, modals, ephemeral interactions, and bot
-DMs are **manual-client-only**. A bot posting `/status` sends text, not a slash
-interaction. Use bot tokens from the lease only; never user tokens or self-bots.
+Human slash commands, component clicks, modals, ephemeral interactions, and
+human-to-bot DMs need an authorized manual client. A bot posting `/status` sends
+text, not a slash interaction. Use official bot tokens from the lease only.
+Discord [prohibits user-token/self-bot automation](https://support.discord.com/hc/en-us/articles/115002192352-Automated-User-Accounts-Self-Bots);
+Slack's user OAuth route has no equivalent here.
 
 ## 2. Prepare and check the current lease
 
 Use the dependency-ready OpenClaw checkout under test. The setup prerequisite is
 an existing authenticated Convex CLI with access to the published QA broker.
-QA Lab discovers the repository's broker binding and CI credential in memory;
-you do not need to copy bot tokens, guild IDs, or broker secrets. If authentication
+The existing shared lease helper discovers the repository's broker binding and
+CI credential in memory; you do not need to copy bot tokens, guild IDs, or broker secrets. If authentication
 is absent, have the operator run `convex login` (or the already cached
 `bunx --no-install convex login`) once. Do not install a CLI or log in on the
 operator's behalf. Network/permission errors are not evidence that another
 login is needed.
+
+For a fast check without QA Lab:
+
+```bash
+node .agents/skills/discord-e2e/scripts/bot-readiness.mjs
+```
+
+The check is read-only **in Discord**, but it acquires, renews, and releases a
+Convex lease. It creates no Discord objects and has no mutation mode. Read
+[bot API readiness](bot-api.md) for the payload, permission limits, private
+result, and failure handling.
+
+This probe does not verify Gateway intents, event delivery, model behavior, or
+all native fixture permissions. For an OpenClaw claim, continue with QA Lab:
 
 ```bash
 pnpm openclaw qa discord --list-scenarios
@@ -37,7 +63,7 @@ pnpm openclaw qa discord --doctor \
   --output-dir .artifacts/qa-e2e/discord-doctor
 ```
 
-Require a passing doctor. It sends no fixture messages; it checks the leased
+Require a passing QA Lab doctor for this lane. It sends no fixture messages; it checks the leased
 identities, guild text channel, effective permissions, driver Gateway intents,
 and connected SUT Gateway. Every scenario repeats readiness on its own lease;
 a released doctor's result never qualifies a later run.
@@ -67,7 +93,15 @@ choosing a real provider, diagnosing cancellation, or reconciling failed cleanup
 
 ## 4. Judge and report
 
-Inspect `qa-suite-summary.json`, `qa-suite-report.md`, the Gateway/provider
+For the API probe, require `status: ready` and `leaseReleased: true`.
+An empty history list is `inconclusive` (exit 2): it can mean an empty channel
+or missing Read Message History permission. Use QA Lab doctor to distinguish
+those cases; do not call either one a proven permission failure.
+Report a ready result as bot identity and observed read-access proof, not
+mutation or Gateway E2E. Private `result.json` contains leased identities and
+check statuses, not tokens or history.
+
+For QA Lab, inspect `qa-suite-summary.json`, `qa-suite-report.md`, the Gateway/provider
 artifacts, and each private `discord-e2e-*/events.ndjson` under the output directory.
 Join native receipts to recorder rows by message ID; use `actor: sut`, channel,
 sequence, and trigger correlation for SUT claims. A marker alone does not prove

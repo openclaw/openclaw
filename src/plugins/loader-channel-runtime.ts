@@ -100,7 +100,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
     }
     instance.run(() => setter(api.runtime));
   };
-  let mergedSetupRegistration = setupRegistration;
+  let mergedSetupPlugin = setupRegistration.plugin;
   try {
     applyChannelRuntime(setupRegistration.setChannelRuntime);
   } catch (error) {
@@ -180,20 +180,11 @@ export function loadSetupRuntimeChannelCandidate(params: {
         );
         return true;
       }
-      mergedSetupRegistration = {
-        ...setupRegistration,
-        plugin: mergeSetupRuntimeChannelPlugin(
-          runtimePluginRegistration.plugin,
-          setupRegistration.plugin,
-        ),
-        setChannelRuntime:
-          runtimeRegistration.setChannelRuntime ?? setupRegistration.setChannelRuntime,
-      };
+      mergedSetupPlugin = mergeSetupRuntimeChannelPlugin(
+        runtimePluginRegistration.plugin,
+        setupRegistration.plugin,
+      );
     }
-  }
-  const mergedSetupPlugin = mergedSetupRegistration.plugin;
-  if (!mergedSetupPlugin) {
-    return true;
   }
   if (
     !channelPluginIdBelongsToManifest({
@@ -207,10 +198,10 @@ export function loadSetupRuntimeChannelCandidate(params: {
     );
     return true;
   }
-  if (registrationPlan.mode === "setup-runtime" && mergedSetupRegistration.registerSetupRuntime) {
+  if (registrationPlan.mode === "setup-runtime" && setupRegistration.registerSetupRuntime) {
     try {
       runPluginRegisterSyncInRegistry(
-        (registrationApi) => mergedSetupRegistration.registerSetupRuntime?.(registrationApi),
+        (registrationApi) => setupRegistration.registerSetupRuntime?.(registrationApi),
         api,
         registryBuilder.registry,
         record.id,

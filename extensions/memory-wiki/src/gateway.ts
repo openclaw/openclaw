@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements gateway behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
@@ -7,6 +6,7 @@ import type { OpenClawConfig, OpenClawPluginApi } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import {
+  loadMemoryWikiCompiledDashboards,
   MemoryWikiDashboardUnavailableError,
   setMemoryWikiDashboardState,
 } from "./compiled-cache.js";
@@ -16,22 +16,19 @@ import {
   WIKI_SEARCH_CORPORA,
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
-import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import {
   probeObsidianCli,
-  runObsidianCommand,
-  runObsidianDaily,
-  runObsidianOpen,
-  runObsidianSearch,
+  OBSIDIAN_ACTIONS,
+  assertOfficialObsidianCliSupported,
+  runObsidianAction,
 } from "./obsidian.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { buildMemoryWikiDoctorReport, resolveMemoryWikiStatus } from "./status.js";
 import { initializeMemoryWikiVault } from "./vault.js";
-import { listMemoryWikiOverview } from "./wiki-overview.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
@@ -181,14 +178,6 @@ export function registerMemoryWikiGatewayMethods(params: {
     return { agentId, appConfig, config, signal };
   };
 
-  const assertOfficialObsidianCliSupported = (config: ResolvedMemoryWikiConfig) => {
-    if (config.vault.scope === "agent") {
-      throw new Error(
-        "Official Obsidian CLI actions do not support memory-wiki vault.scope=agent.",
-      );
-    }
-  };
-
   registerResultMethod("wiki.status", READ_SCOPE, async (requestParams) => {
     const { appConfig, config, signal } = resolveRequestContext(requestParams);
     await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
@@ -204,16 +193,13 @@ export function registerMemoryWikiGatewayMethods(params: {
   registerResultMethod("wiki.importInsights", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
     syncImportedSourcesInBackground(config, appConfig);
-    return await listMemoryWikiImportInsights(config);
+    return (await loadMemoryWikiCompiledDashboards(config)).importInsights;
   });
 
-  // Renamed from wiki.palace without an alias by maintainer decision: the method was
-  // undocumented, its only known consumer is the version-locked Control UI, and stale
-  // callers get an explicit unknown-method error rather than a silent failure.
   registerResultMethod("wiki.overview", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
     syncImportedSourcesInBackground(config, appConfig);
-    return await listMemoryWikiOverview(config);
+    return (await loadMemoryWikiCompiledDashboards(config)).overview;
   });
 
   registerResultMethod("wiki.init", WRITE_SCOPE, async (requestParams) => {
@@ -327,30 +313,14 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.obsidian.status", READ_SCOPE, () => probeObsidianCli());
 
-  registerResultMethod("wiki.obsidian.search", WRITE_SCOPE, async (requestParams) => {
-    const { config } = resolveRequestContext(requestParams);
-    assertOfficialObsidianCliSupported(config);
-    const query = readStringParam(requestParams, "query", { required: true });
-    return await runObsidianSearch({ config, query });
-  });
-
-  registerResultMethod("wiki.obsidian.open", WRITE_SCOPE, async (requestParams) => {
-    const { config } = resolveRequestContext(requestParams);
-    assertOfficialObsidianCliSupported(config);
-    const vaultPath = readStringParam(requestParams, "path", { required: true });
-    return await runObsidianOpen({ config, vaultPath });
-  });
-
-  registerResultMethod("wiki.obsidian.command", WRITE_SCOPE, async (requestParams) => {
-    const { config } = resolveRequestContext(requestParams);
-    assertOfficialObsidianCliSupported(config);
-    const id = readStringParam(requestParams, "id", { required: true });
-    return await runObsidianCommand({ config, id });
-  });
-
-  registerResultMethod("wiki.obsidian.daily", WRITE_SCOPE, async (requestParams) => {
-    const { config } = resolveRequestContext(requestParams);
-    assertOfficialObsidianCliSupported(config);
-    return await runObsidianDaily({ config });
-  });
+  for (const action of OBSIDIAN_ACTIONS) {
+    registerResultMethod(`wiki.obsidian.${action.command}`, WRITE_SCOPE, async (requestParams) => {
+      const { config } = resolveRequestContext(requestParams);
+      assertOfficialObsidianCliSupported(config);
+      const value = action.argument
+        ? readStringParam(requestParams, action.argument.name, { required: true })
+        : undefined;
+      return await runObsidianAction({ config, action, value });
+    });
+  }
 }

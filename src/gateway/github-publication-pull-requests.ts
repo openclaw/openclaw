@@ -2,7 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
-import { requirePublicationCommand } from "./github-publication-git-transport.js";
+import {
+  githubPublicationApiArgs,
+  requirePublicationCommand,
+} from "./github-publication-git-transport.js";
 
 type GitHubPublicationPullRequest = {
   userId: number;
@@ -14,47 +17,37 @@ type GitHubPublicationPullRequest = {
   baseRef: string;
 };
 
-function githubPublicationPullRequestLookupArgs(params: {
+type GitHubPublicationPullRequestLookup = {
   repository: string;
-  owner: string;
+  pushOwner: string;
   branch: string;
   baseBranch: string;
   marker: string;
-}): string[] {
-  const marker = JSON.stringify(params.marker);
-  return [
-    "gh",
-    "api",
-    "--hostname",
-    "github.com",
-    "--method",
-    "GET",
-    `repos/${params.repository}/pulls`,
-    "-f",
-    `head=${params.owner}:${params.branch}`,
-    "-f",
-    `base=${params.baseBranch}`,
-    "-f",
-    "state=all",
-    "--paginate",
-    "--jq",
-    // Compact pages remain independently parseable; only the request marker is needed from prose.
-    `map({url: .html_url, userId: .user.id, state: .state, body: (if ((.body // "") | contains(${marker})) then ${marker} else "" end), headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref}) | tojson`,
-  ];
-}
+  refreshIdentity: () => Promise<PreparedGitHubPublicationIdentity>;
+  assertCurrent: () => void;
+};
 
-export function githubPublicationCreatePullRequestArgs(repository: string): string[] {
-  return [
-    "gh",
-    "api",
-    "--hostname",
-    "github.com",
-    "--method",
-    "POST",
-    `repos/${repository}/pulls`,
-    "--input",
-    "-",
-  ];
+async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRequestLookup) {
+  const identity = await params.refreshIdentity();
+  params.assertCurrent();
+  const marker = JSON.stringify(params.marker);
+  const raw = await requirePublicationCommand(
+    [
+      ...githubPublicationApiArgs(`repos/${params.repository}/pulls`),
+      "-f",
+      `head=${params.pushOwner}:${params.branch}`,
+      "-f",
+      `base=${params.baseBranch}`,
+      "-f",
+      "state=all",
+      "--paginate",
+      "--jq",
+      // Compact pages remain independently parseable; only the request marker is needed from prose.
+      `map({url: .html_url, userId: .user.id, state: .state, body: (if ((.body // "") | contains(${marker})) then ${marker} else "" end), headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref}) | tojson`,
+    ],
+    { env: identity.env },
+  );
+  return { identity, candidates: parseGitHubPublicationPullRequests(raw) };
 }
 
 /** Parses the complete authenticated PR lookup; one malformed candidate invalidates the response. */
@@ -128,30 +121,13 @@ function resolveGitHubPublicationPullRequest(
   );
 }
 
-export async function findGitHubPublicationPullRequest(params: {
-  repository: string;
-  pushOwner: string;
-  branch: string;
-  baseBranch: string;
-  headCommit: string;
-  marker: string;
-  refreshIdentity: () => Promise<PreparedGitHubPublicationIdentity>;
-  recordObserved?: (url: string) => void;
-  assertCurrent: () => void;
-}): Promise<string | undefined> {
-  const identity = await params.refreshIdentity();
-  params.assertCurrent();
-  const raw = await requirePublicationCommand(
-    githubPublicationPullRequestLookupArgs({
-      repository: params.repository,
-      owner: params.pushOwner,
-      branch: params.branch,
-      baseBranch: params.baseBranch,
-      marker: params.marker,
-    }),
-    { env: identity.env },
-  );
-  const candidates = parseGitHubPublicationPullRequests(raw);
+export async function findGitHubPublicationPullRequest(
+  params: GitHubPublicationPullRequestLookup & {
+    headCommit: string;
+    recordObserved?: (url: string) => void;
+  },
+): Promise<string | undefined> {
+  const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
   const found = resolveGitHubPublicationPullRequest(candidates, {
     accountId: identity.account.accountId,
     headCommit: params.headCommit,
@@ -208,15 +184,7 @@ export async function reconcileGitHubPublicationPullRequest(
   const identity = await params.refreshIdentity();
   params.assertCurrent();
   const raw = await requirePublicationCommand(
-    [
-      "gh",
-      "api",
-      "--hostname",
-      "github.com",
-      "--method",
-      "GET",
-      `repos/${params.pushRepository}/git/commits/${params.headCommit}`,
-    ],
+    githubPublicationApiArgs(`repos/${params.pushRepository}/git/commits/${params.headCommit}`),
     { env: identity.env },
   );
   params.assertCurrent();
@@ -259,13 +227,9 @@ export async function reconcileGitHubPublicationPullRequest(
     const comparison: unknown = JSON.parse(
       await requirePublicationCommand(
         [
-          "gh",
-          "api",
-          "--hostname",
-          "github.com",
-          "--method",
-          "GET",
-          `repos/${params.pushRepository}/compare/${params.headCommit}...${head}?per_page=1`,
+          ...githubPublicationApiArgs(
+            `repos/${params.pushRepository}/compare/${params.headCommit}...${head}?per_page=1`,
+          ),
           "--jq",
           "{sha: .merge_base_commit.sha}",
         ],
@@ -281,20 +245,7 @@ export async function reconcileGitHubPublicationPullRequest(
     }
     return comparison.sha === params.headCommit;
   };
-  const lookupIdentity = await params.refreshIdentity();
-  params.assertCurrent();
-  const candidates = parseGitHubPublicationPullRequests(
-    await requirePublicationCommand(
-      githubPublicationPullRequestLookupArgs({
-        repository: params.repository,
-        owner: params.pushOwner,
-        branch: params.branch,
-        baseBranch: params.baseBranch,
-        marker: params.marker,
-      }),
-      { env: lookupIdentity.env },
-    ),
-  );
+  const { identity: lookupIdentity, candidates } = await loadGitHubPublicationPullRequests(params);
   let unrelated = false;
   for (const candidate of candidates) {
     if (
@@ -323,15 +274,9 @@ export async function reconcileGitHubPublicationPullRequest(
   params.assertCurrent();
   const refs: unknown = JSON.parse(
     await requirePublicationCommand(
-      [
-        "gh",
-        "api",
-        "--hostname",
-        "github.com",
-        "--method",
-        "GET",
+      githubPublicationApiArgs(
         `repos/${params.pushRepository}/git/matching-refs/heads/${encodeURIComponent(params.branch)}`,
-      ],
+      ),
       { env: refIdentity.env },
     ),
   );

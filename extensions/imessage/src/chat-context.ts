@@ -80,7 +80,7 @@ export function chatContextFromIMessageTarget(
   const trimmedHandle = target.to.trim();
   const canonicalHandle = trimmedHandle.startsWith("+")
     ? normalizeE164(trimmedHandle)
-    : /^[^\s@]+@[^\s@]+$/u.test(trimmedHandle)
+    : EMAIL_HANDLE_PATTERN.test(trimmedHandle)
       ? trimmedHandle.toLowerCase()
       : undefined;
   if (!canonicalHandle) {
@@ -148,11 +148,4 @@ export function resolveIMessageChatMatch(
     return "unknown";
   }
   return comparisons.every(Boolean) ? "match" : "mismatch";
-}
-
-export function isPositiveIMessageChatMatch(
-  cached: IMessageChatContext,
-  current: IMessageChatContext,
-): boolean {
-  return resolveIMessageChatMatch(cached, current) === "match";
 }

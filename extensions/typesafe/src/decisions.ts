@@ -3,11 +3,13 @@ import type {
   DecisionBatchResult,
   DecisionProviderV1,
 } from "openclaw/plugin-sdk/decisions";
-import { evaluate as evaluateTypeSafe } from "./client.js";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { RuntimeConfig } from "./config.js";
 import { decisionFailure } from "./errors.js";
 
-/** Transport and result validation are shared with the independently usable agent tool. */
+const loadClient = createLazyRuntimeModule(() => import("./client.js"));
+
+/** Translate the host-selected decision contract through the TypeSafe transport. */
 export function createDecisionProvider(getConfig: () => RuntimeConfig): DecisionProviderV1 {
   return {
     id: "typesafe",
@@ -17,6 +19,10 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
       return Boolean(config.baseUrl || config.apiKey);
     },
     async evaluate(batch: DecisionBatch, context) {
+      context.signal.throwIfAborted();
+      // Registration and readiness do not need the transport or compiled validators.
+      // Sample configuration and the remaining deadline after the cold import settles.
+      const { evaluate: evaluateTypeSafe } = await loadClient();
       context.signal.throwIfAborted();
       const config = getConfig();
       if (!config.baseUrl && !config.apiKey) {

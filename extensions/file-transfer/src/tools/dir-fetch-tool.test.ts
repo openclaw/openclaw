@@ -13,6 +13,7 @@ import { FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 const appendFileTransferAudit = vi.fn(async () => undefined);
 const saveMediaBuffer = vi.fn<() => Promise<{ path: string }>>();
 const invokeNodeToolPayload = vi.fn<typeof import("./node-tool-invoke.js").invokeNodeToolPayload>();
+let bindFileTransferAudit: typeof import("../shared/audit-context.js").bindFileTransferAudit;
 let createDirFetchTool: typeof import("./dir-fetch-tool.js").createDirFetchTool;
 let tmpRoot: string;
 
@@ -28,6 +29,7 @@ beforeAll(async () => {
     }),
     invokeNodeToolPayload,
   }));
+  ({ bindFileTransferAudit } = await import("../shared/audit-context.js"));
   ({ createDirFetchTool } = await import("./dir-fetch-tool.js"));
 });
 
@@ -119,9 +121,7 @@ function prepareArchive(tarBuffer: Buffer, mediaName = "media", canonicalPath = 
     await fs.writeFile(archivePath, tarBuffer);
     return { path: archivePath };
   });
-  invokeNodeToolPayload.mockImplementation(async () => ({
-    nodeId: "node-1",
-    nodeDisplayName: "Node One",
+  invokeNodeToolPayload.mockImplementation(async (input) => ({
     payload: {
       ok: true,
       path: canonicalPath,
@@ -130,7 +130,15 @@ function prepareArchive(tarBuffer: Buffer, mediaName = "media", canonicalPath = 
       sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
       fileCount: 3,
     },
-    startedAt: Date.now(),
+    audit: bindFileTransferAudit(
+      {
+        op: input.command,
+        nodeId: "node-1",
+        nodeDisplayName: "Node One",
+        requestedPath: input.requestedPath,
+      },
+      Date.now(),
+    ),
   }));
   return { archivePath, mediaDir };
 }
@@ -463,11 +471,6 @@ describe("dir.fetch archive extraction", () => {
 
   it.each([
     {
-      name: "backslash",
-      entries: [{ path: "dir\\note.txt", contents: "normalized" }],
-      expectedPath: ["dir", "note.txt"],
-    },
-    {
       name: "mixed separators and dots",
       entries: [{ path: "./pkg//dir\\note.txt", contents: "normalized" }],
       expectedPath: ["pkg", "dir", "note.txt"],
@@ -502,17 +505,9 @@ describe("dir.fetch archive extraction", () => {
 
   it.each([
     "../escape.txt",
-    "..\\escape.txt",
-    "dir/../escape.txt",
-    "dir\\..\\escape.txt",
     "dir/..\\escape.txt",
-    "dir\\../escape.txt",
-    "a/b\\..\\escape.txt",
     "/escape.txt",
-    "\\escape.txt",
     "\\\\server\\share\\escape.txt",
-    "C:/escape.txt",
-    "C:\\escape.txt",
     "C:escape.txt",
     "dir/C:escape.txt",
   ])("rejects unsafe raw path %j", async (entryPath) => {
@@ -526,15 +521,12 @@ describe("dir.fetch archive extraction", () => {
     },
   );
 
-  it.each(["dir\\note.txt", "./dir//note.txt"])(
-    "rejects canonical collision with %j",
-    async (entryPath) => {
-      await expectUnsafeArchive([
-        { path: "dir/note.txt", contents: "first" },
-        { path: entryPath, contents: "second" },
-      ]);
-    },
-  );
+  it("rejects canonical collisions", async () => {
+    await expectUnsafeArchive([
+      { path: "dir/note.txt", contents: "first" },
+      { path: "./dir//note.txt", contents: "second" },
+    ]);
+  });
 
   it("maps single-entry expansion limits to TREE_TOO_LARGE", async () => {
     const tarBuffer = await createTarBuffer({

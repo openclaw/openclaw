@@ -1,4 +1,3 @@
-// Matrix plugin module implements bounded in-memory cache insertion.
 export function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, maxEntries: number): void {
   map.set(key, value);
   if (map.size <= maxEntries) {

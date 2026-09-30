@@ -1,4 +1,3 @@
-/** Builds doctor reports for session SQLite migration recovery mode. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +5,15 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { hasDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  findLatestFailedSessionSqliteMigrationManifest,
+  resolveSessionSqliteMigrationRunsDir,
+  type SessionSqliteMigrationTargetInput,
+} from "../infra/session-sqlite-migration-manifest.js";
+import {
+  resolveTargetSqliteOptions,
+  resolveTargetSqlitePath,
+} from "../infra/session-sqlite-migration-readers.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   inspectSqliteRecoveryFiles,
@@ -30,15 +38,7 @@ import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
-import {
-  findLatestFailedSessionSqliteMigrationManifest,
-  resolveSessionSqliteMigrationRunsDir,
-  type SessionSqliteMigrationTargetInput,
-} from "./doctor-session-sqlite-migration-run.js";
-import {
-  resolveTargetSqliteOptions,
-  resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
+import type { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTargetReport,
@@ -61,9 +61,13 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   options: DoctorSessionSqliteOptions;
   targets: readonly SessionStoreTarget[];
   historicalArchiveStores?: ReadonlySet<string>;
+  recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
   validateTarget: SessionSqliteRecoverTargetValidator;
 }): Promise<DoctorSessionSqliteReport> {
-  const trustedTargets = resolveRecoverTargets(params.targets, params.env);
+  const trustedTargets = params.targets.map((target) => ({
+    ...target,
+    sqlitePath: resolveTargetSqlitePath(target, params.env),
+  }));
   const failedRun = findLatestFailedSessionSqliteMigrationManifest(params.env, trustedTargets);
   if (!failedRun) {
     const recoveredCorruptTargets = await withAgentDatabaseMaintenanceLease(
@@ -93,7 +97,14 @@ export async function recoverDoctorSessionSqliteTargets(params: {
         );
       }
     }
-    if (retainedReports.length > 0) {
+    if (
+      retainedReports.length > 0 ||
+      (params.recoveryInventory &&
+        !params.recoveryInventory.report.artifacts.some(
+          (artifact) =>
+            artifact.outcome === "blocked" || artifact.reason === "unsupported-target-ownership",
+        ))
+    ) {
       return summarizeRecoverReport(retainedReports);
     }
     return summarizeRecoverReport([
@@ -134,11 +145,15 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     })),
   );
   const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
+  if (report.totals.issues === 0) {
+    report.migrationRun = {
+      manifestPath: failedRun.manifestPath,
+      runId: failedRun.manifest.runId,
+    };
+    return report;
+  }
   const failureReports = writeSessionSqliteMigrationFailureReports(failedRun.manifestPath, {
-    reason:
-      report.totals.issues > 0
-        ? "doctor recover completed with remaining issues"
-        : "doctor recover completed validation of a failed session SQLite migration run",
+    reason: "doctor recover completed with remaining issues",
     recoveryTargets: report.targets,
     trustedTargets,
   });
@@ -339,16 +354,6 @@ function isCanonicalAgentIndexCorruptionError(error: unknown): boolean {
     return false;
   }
   return CANONICAL_AGENT_INDEX_NAMES.some((indexName) => error.message.includes(indexName));
-}
-
-function resolveRecoverTargets(
-  targets: readonly SessionStoreTarget[],
-  env: NodeJS.ProcessEnv,
-): SessionSqliteMigrationTargetInput[] {
-  return targets.map((target) => ({
-    ...target,
-    sqlitePath: resolveTargetSqlitePath(target, env),
-  }));
 }
 
 function createSyntheticRecoverTargetReport(

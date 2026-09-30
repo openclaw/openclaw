@@ -46,6 +46,7 @@ function harness() {
     connection: { gatewayUrl: "ws://example.test", token: "", password: "", bootstrapToken: "" },
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: vi.fn(),
     setSessionKey: vi.fn(),
     start: vi.fn(),
@@ -114,7 +115,7 @@ describe("registered project catalog", () => {
     await refresh;
     expect(invalidated).toEqual({ result: null, repositories: [], ready: false });
     expect(listener).toHaveBeenCalledTimes(2);
-    expect(h.store.snapshot).toEqual({ result: null, repositories: [], ready: true });
+    expect(h.store.snapshot).toEqual({ result: null, repositories: [], ready: false });
     h.request.mockResolvedValue({
       projects: [{ ...project, originUrl: "https://github.com/replacement/clawsweeper.git" }],
     });

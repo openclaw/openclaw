@@ -354,14 +354,15 @@ openclaw models auth login --provider openrouter --method oauth
 openclaw models auth login --provider openrouter --method api-key
 ```
 
-On verified OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw adds
-OpenRouter's documented app-attribution headers:
+On requests to OpenRouter endpoints (`openrouter.ai`), OpenClaw adds OpenRouter's
+documented app-attribution headers. This applies to the bundled `openrouter`
+provider and to custom provider ids whose `baseUrl` points at OpenRouter:
 
-| Header                    | Value                                                                                                  |
-| ------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `HTTP-Referer`            | `https://openclaw.ai`                                                                                  |
-| `X-OpenRouter-Title`      | `OpenClaw`                                                                                             |
-| `X-OpenRouter-Categories` | `cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent` |
+| Header                    | Value                      |
+| ------------------------- | -------------------------- |
+| `HTTP-Referer`            | `https://openclaw.ai`      |
+| `X-OpenRouter-Title`      | `OpenClaw`                 |
+| `X-OpenRouter-Categories` | `personal-agent,cli-agent` |
 
 <Warning>
 If you repoint the OpenRouter provider at some other proxy or base URL, OpenClaw

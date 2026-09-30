@@ -20,10 +20,6 @@ const ACCOUNT_GROUP_ALLOW_FROM_PATH = [
 type ChannelRecord = Record<string, unknown>;
 type SchemaPath = readonly string[];
 
-function isDisabled(record: ChannelRecord): boolean {
-  return record.enabled === false;
-}
-
 function normalizeAllowFrom(raw: unknown): string[] {
   return normalizeUniqueStringEntries(Array.isArray(raw) ? raw : []);
 }
@@ -41,15 +37,6 @@ function readDmAllowFrom(params: {
     resolveChannelDmAllowFrom({
       account: params.account,
       parent: params.parent,
-      mode: getDoctorChannelCapabilities(params.channelName).dmAllowFromMode,
-    }),
-  );
-}
-
-function readOwnDmAllowFrom(params: { channelName: string; account: ChannelRecord }): string[] {
-  return normalizeAllowFrom(
-    resolveChannelDmAllowFrom({
-      account: params.account,
       mode: getDoctorChannelCapabilities(params.channelName).dmAllowFromMode,
     }),
   );
@@ -130,7 +117,10 @@ function migrateRecord(params: {
   if (params.parent && params.parentHadGroupAllowFrom) {
     return false;
   }
-  const ownAllowFrom = readOwnDmAllowFrom(params);
+  const ownAllowFrom = readDmAllowFrom({
+    channelName: params.channelName,
+    account: params.account,
+  });
   if (params.parent && ownAllowFrom.length === 0 && readGroupAllowFrom(params.parent).length > 0) {
     return false;
   }
@@ -168,7 +158,7 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
     ) {
       continue;
     }
-    if (isDisabled(channelConfig)) {
+    if (channelConfig.enabled === false) {
       continue;
     }
     if (!getDoctorChannelCapabilities(channelName).groupAllowFromFallbackToAllowFrom) {
@@ -198,7 +188,7 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
     );
     for (const [accountId, accountConfig] of Object.entries(accounts)) {
       const account = asNullableRecord(accountConfig);
-      if (!account || isDisabled(account)) {
+      if (!account || account.enabled === false) {
         continue;
       }
       migrateRecord({

@@ -14,7 +14,6 @@ import { buildCommandLine } from "./windows-command.js";
 import { normalizeWindowsProcessEnvRecord } from "./windows-env.js";
 import {
   resolveMxcReadOnlySkillMounts,
-  type MxcReadOnlySkillMount,
   type MxcWorkspaceAccess,
 } from "./workspace-skill-mounts.js";
 
@@ -127,7 +126,7 @@ export function buildMxcContainerConfig(params: {
     lifecycle: { destroyOnExit: true },
     process: {
       commandLine: buildCommandLine(params.command, params.args ?? []),
-      cwd: resolveProcessCwd(params.workdir),
+      cwd: params.workdir,
       env: processEnv,
       timeout: resolveProcessTimeoutSeconds(params.config, params.baseline) * 1000,
     },
@@ -168,18 +167,17 @@ function buildFilesystemConfig(params: {
     ...resolveProtectedSkillPolicyPathSpecs(params.workspace),
   ];
 
-  if (params.baseline.filesystem.restrictToProjectDir) {
-    const projectDirPath = params.context.projectDir;
-    if (params.workspace.workspaceAccess === "rw") {
-      readwritePathSpecs.push(requiredFilesystemPath(projectDirPath));
-    } else {
-      readonlyPathSpecs.push(requiredFilesystemPath(projectDirPath));
-    }
-    readwritePathSpecs.push(requiredFilesystemPath(path.resolve(params.sandboxTempDir)));
-    readwritePathSpecs.push(
-      ...params.baseline.configuredPaths.readwritePaths.map(createConfiguredFilesystemPath),
-    );
+  // Policy admission accepts only restrictToProjectDir=true.
+  const projectDirPath = params.context.projectDir;
+  if (params.workspace.workspaceAccess === "rw") {
+    readwritePathSpecs.push(requiredFilesystemPath(projectDirPath));
+  } else {
+    readonlyPathSpecs.push(requiredFilesystemPath(projectDirPath));
   }
+  readwritePathSpecs.push(requiredFilesystemPath(path.resolve(params.sandboxTempDir)));
+  readwritePathSpecs.push(
+    ...params.baseline.configuredPaths.readwritePaths.map(createConfiguredFilesystemPath),
+  );
 
   const protectedSkillPolicyPaths = resolveMxcProtectedSkillPolicyPaths(params.workspace);
   // ProcessContainer writable-parent grants override nested read-only grants.
@@ -238,7 +236,7 @@ function resolveBaselineReadonlyPathSpecs(
 
 function resolveMxcProtectedSkillPolicyPaths(context: MxcWorkspaceContext): string[] {
   const deduped = new Map<string, string>();
-  for (const mount of resolveMxcProtectedSkillMounts(context)) {
+  for (const mount of resolveMxcReadOnlySkillMounts(context)) {
     const hostPath = path.resolve(mount.hostPath);
     deduped.set(normalizeMxcPathForComparison(hostPath), hostPath);
     const containerPath = path.resolve(mount.containerPath);
@@ -251,17 +249,6 @@ function resolveProtectedSkillPolicyPathSpecs(context: MxcWorkspaceContext): Fil
   return resolveMxcProtectedSkillPolicyPaths(context).map((candidatePath) =>
     optionalFilesystemPath(candidatePath),
   );
-}
-
-function resolveMxcProtectedSkillMounts(
-  context: MxcWorkspaceContext,
-): readonly MxcReadOnlySkillMount[] {
-  return resolveMxcReadOnlySkillMounts({
-    agentWorkspaceDir: context.agentWorkspaceDir,
-    skillsWorkspaceDir: context.skillsWorkspaceDir,
-    workdir: context.workdir,
-    workspaceAccess: context.workspaceAccess,
-  });
 }
 
 function resolveExistingFilesystemPaths(
@@ -354,10 +341,6 @@ function processContainerName(runtimeId: string): string {
   }
   const hash = createHash("sha256").update(runtimeId).digest("hex").slice(0, 8);
   return `${runtimeId.slice(0, PROCESS_CONTAINER_NAME_MAX_LEN - hash.length - 1)}-${hash}`;
-}
-
-function resolveProcessCwd(workdir: string): string {
-  return workdir;
 }
 
 function resolveProcessTimeoutSeconds(

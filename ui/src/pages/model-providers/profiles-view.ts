@@ -72,7 +72,7 @@ function profileSource(profile: ProviderProfile): string | undefined {
   }
 }
 
-function apiKeySource(card: ModelProviderCard): string | undefined {
+export function apiKeySource(card: ModelProviderCard): string | undefined {
   if (card.apiKey?.source === "config") {
     return t("modelProviders.credentials.configKey");
   }
@@ -213,13 +213,9 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
   });
 }
 
-function rowsIn(section: HTMLElement, selector: string): HTMLElement[] {
-  return [...section.querySelectorAll<HTMLElement>(selector)];
-}
-
 function clearDragState(section: HTMLElement): void {
   section.classList.remove(SORTING_CLASS);
-  for (const row of rowsIn(section, ".model-providers__profile")) {
+  for (const row of section.querySelectorAll<HTMLElement>(".model-providers__profile")) {
     row.classList.remove(DRAGGING_CLASS);
     row.style.removeProperty("translate");
   }
@@ -246,7 +242,7 @@ function startPointerDrag(params: {
   const sectionTop = section.getBoundingClientRect().top;
   // Use the original slots for hit testing. Measuring animated neighbors would
   // make the insertion point oscillate as they move out from under the pointer.
-  const slots = rowsIn(section, ".model-providers__profile")
+  const slots = [...section.querySelectorAll<HTMLElement>(".model-providers__profile")]
     .filter((candidate) => candidate.dataset.profileProvider === params.provider)
     .map((element) => ({ element, bounds: element.getBoundingClientRect() }));
   const source = slots.find((slot) => slot.element === row);
@@ -315,7 +311,7 @@ function startPointerDrag(params: {
     update(event);
     const targetId = target?.element.dataset.profileId;
     clearDragState(section);
-    grip.removeEventListener("pointermove", handleMove);
+    grip.removeEventListener("pointermove", update);
     grip.removeEventListener("pointerup", handleUp);
     grip.removeEventListener("pointercancel", handleCancel);
     grip.removeEventListener("lostpointercapture", handleCancel);
@@ -329,7 +325,6 @@ function startPointerDrag(params: {
       params.move(targetId, position);
     }
   };
-  const handleMove = (event: PointerEvent) => update(event);
   const handleUp = (event: PointerEvent) => finish(event, true);
   const handleCancel = (event: PointerEvent) => finish(event, false);
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -339,12 +334,105 @@ function startPointerDrag(params: {
       finish(params.event, false);
     }
   };
-  grip.addEventListener("pointermove", handleMove);
+  grip.addEventListener("pointermove", update);
   grip.addEventListener("pointerup", handleUp);
   grip.addEventListener("pointercancel", handleCancel);
   grip.addEventListener("lostpointercapture", handleCancel);
   // A drag owns Escape before the Settings shell handles its back shortcut.
   document.addEventListener("keydown", handleKeyDown, true);
+}
+
+function profileIdentity(profile: ProviderProfile, index: number): string {
+  return (
+    profile.email ||
+    profile.displayName ||
+    t("modelProviders.profiles.account", { number: String(index + 1) })
+  );
+}
+
+function renderProfileIdentity(profile: ProviderProfile, identity: string, showDetails: boolean) {
+  const meta = profileMeta(profile);
+  return html`
+    <span class="model-providers__profile-avatar" aria-hidden="true"
+      >${profileInitials(identity)}</span
+    >
+    <div class="model-providers__profile-copy">
+      <strong>${identity}</strong>
+      ${meta ? html`<span>${meta}</span>` : nothing}
+      ${
+        showDetails
+          ? html`<details>
+              <summary>${t("modelProviders.profiles.details")}</summary>
+              <div>${profile.profileId}</div>
+              ${profile.expiry ? html`<span>${t("modelProviders.expiresIn", { time: profile.expiry.label })}</span>` : nothing}
+            </details>`
+          : nothing
+      }
+    </div>
+  `;
+}
+
+export function renderProviderAccountSummary(
+  cards: ModelProviderCard[],
+  recovery?: {
+    authProvider: string;
+    disabled: boolean;
+    onUse: (profileId: string) => void;
+  },
+) {
+  const profiles = cards.flatMap((card) =>
+    card.profiles.map((profile) => ({
+      profile,
+      authRejected: card.catalogStatus === "auth-rejected",
+      // A display card can combine providers whose credentials are not interchangeable.
+      canUse:
+        card.profileProviderIds[profile.profileId] === recovery?.authProvider &&
+        (profile.source === "saved" || profile.source === "inherited"),
+    })),
+  );
+  const sources = [...new Set(cards.map(apiKeySource).filter(Boolean))];
+  return html`
+    <section
+      class="model-provider-login__accounts"
+      aria-label=${t("modelProviders.login.accounts")}
+    >
+      <h3>${t("modelProviders.login.accounts")}</h3>
+      ${
+        profiles.length
+          ? html`
+              <div role="list">
+                ${profiles.map(
+                  ({ profile, authRejected, canUse }, index) => html`
+                    <div
+                      class="model-provider-login__account"
+                      role="listitem"
+                      data-profile-id=${profile.profileId}
+                    >
+                      ${renderProfileIdentity(profile, profileIdentity(profile, index), false)}
+                      ${profileStatus(profile, authRejected)}
+                      ${
+                        canUse && recovery
+                          ? html`<button
+                              class="btn"
+                              data-models-use-account
+                              ?disabled=${recovery.disabled}
+                              @click=${() => recovery.onUse(profile.profileId)}
+                            >
+                              ${t("modelProviders.login.useAccount")}
+                            </button>`
+                          : nothing
+                      }
+                    </div>
+                  `,
+                )}
+              </div>
+            `
+          : nothing
+      }
+      ${sources.map((source) => html`<p class="muted">${source}</p>`)}
+      ${!profiles.length && !sources.length ? html`<p class="muted">${t("modelProviders.login.noAccounts")}</p>` : nothing}
+    </section>
+  `;
 }
 
 export function renderProviderProfiles(card: ModelProviderCard, props: ProviderProfilesViewProps) {
@@ -354,12 +442,7 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
   const groups = profileGroups(card, props.profileOrders);
   // Account numbers follow the saved inventory, not the editable priority order.
   const identities = new Map(
-    card.profiles.map((profile, index) => [
-      profile.profileId,
-      profile.email ||
-        profile.displayName ||
-        t("modelProviders.profiles.account", { number: String(index + 1) }),
-    ]),
+    card.profiles.map((profile, index) => [profile.profileId, profileIdentity(profile, index)]),
   );
   const rows = groups.flatMap((group) => group.profiles.map((profile) => ({ group, profile })));
   const reorderOffered = groups.some(
@@ -370,7 +453,10 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
   ];
   const additionalCredentialSource = apiKeySource(card);
   return html`
-    <section class="model-providers__profiles" aria-label=${t("modelProviders.profiles.title")}>
+    <section
+      class="model-providers__profiles"
+      aria-label=${`${t("modelProviders.profiles.title")}: ${card.displayName}`}
+    >
       <div class="model-providers__profiles-heading">
         <div class="model-providers__profiles-heading-copy">
           <strong>${t("modelProviders.profiles.title")}</strong>
@@ -425,7 +511,6 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
             const canMove = props.canMutate && !lock && complete && order.length > 1 && index >= 0;
             const showMoves = !lock && (complete || stored) && order.length > 1;
             const identity = identities.get(profile.profileId)!;
-            const meta = profileMeta(profile);
             const logoutProvider = logoutProviderForProfile(card, profile.profileId);
             const logoutLabel = t("modelProviders.logout.actionFor", { account: identity });
             const logoutBlocked = !props.canMutate
@@ -506,18 +591,7 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                       : nothing
                   }
                 </span>
-                <span class="model-providers__profile-avatar" aria-hidden="true"
-                  >${profileInitials(identity)}</span
-                >
-                <div class="model-providers__profile-copy">
-                  <strong>${identity}</strong>
-                  ${meta ? html`<span>${meta}</span>` : nothing}
-                  <details>
-                    <summary>${t("modelProviders.profiles.details")}</summary>
-                    <div>${profile.profileId}</div>
-                    ${profile.expiry ? html`<span>${t("modelProviders.expiresIn", { time: profile.expiry.label })}</span>` : nothing}
-                  </details>
-                </div>
+                ${renderProfileIdentity(profile, identity, true)}
                 ${
                   provider === "openai" && profile.type !== "api_key"
                     ? html`<openclaw-model-account-usage

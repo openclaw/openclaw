@@ -1,4 +1,3 @@
-// Realtime Talk Live Smoke script supports OpenClaw repository automation.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,7 +8,7 @@ import {
   previewForDevToolLog,
   redactJsonValueForDevToolLog,
 } from "../lib/dev-tooling-safety.ts";
-import { toErrorObject as toLintErrorObject } from "../lib/error-format.mts";
+import { sleep as delay } from "../lib/sleep.mjs";
 
 const OPENAI_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2.1";
@@ -138,19 +137,7 @@ async function readBoundedText(
   maxBytes = OPENAI_HTTP_RESPONSE_MAX_BYTES,
   signal?: AbortSignal,
 ): Promise<string> {
-  return await readBoundedResponseText(response, label, maxBytes, {
-    createTooLargeError: (message: string) => new Error(message),
-    signal,
-  });
-}
-
-async function readBoundedJsonResponse(
-  response: Response,
-  label: string,
-  signal?: AbortSignal,
-): Promise<Record<string, unknown>> {
-  const text = await readBoundedText(response, label, OPENAI_HTTP_RESPONSE_MAX_BYTES, signal);
-  return JSON.parse(text) as Record<string, unknown>;
+  return await readBoundedResponseText(response, label, maxBytes, { signal });
 }
 
 function resolveOpenAIHttpTimeoutMs(
@@ -192,12 +179,6 @@ function printResult(result: SmokeResult): void {
 
 function compareStrings(left: string | undefined, right: string | undefined): number {
   return (left ?? "").localeCompare(right ?? "");
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function appendBounded<T>(items: T[], item: T, maxItems: number): void {
@@ -344,7 +325,14 @@ async function createOpenAIClientSecret(
           )}`,
         );
       }
-      return await readBoundedJsonResponse(response, "OpenAI Realtime client secret", signal);
+      return JSON.parse(
+        await readBoundedText(
+          response,
+          "OpenAI Realtime client secret",
+          OPENAI_HTTP_RESPONSE_MAX_BYTES,
+          signal,
+        ),
+      ) as Record<string, unknown>;
     },
   });
   const nested =
@@ -416,7 +404,7 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
     const speechProvider = buildOpenAISpeechProvider();
     const synthesized = await speechProvider.synthesizeTelephony?.({
       text: "Please reply with the single word glacier.",
-      cfg: { plugins: { enabled: true } } as never,
+      cfg: { plugins: { enabled: true } },
       providerConfig: {
         apiKey,
         baseUrl: "https://api.openai.com/v1",
@@ -806,16 +794,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
         details: {
           model: OPENAI_REALTIME_MODEL,
           protocol: "ga-realtime",
-          answerHasAudio: result.answerHasAudio,
-          remoteDescriptionApplied: result.remoteDescriptionApplied,
-          connectionState: result.connectionState,
-          transcriptMarker: result.transcriptMarker,
-          responseDone: result.responseDone,
-          outputAudioBytes: result.outputAudioBytes,
-          outputAudioEnergy: result.outputAudioEnergy,
-          outputAudioSamplesDuration: result.outputAudioSamplesDuration,
-          outputAudioSpeechDuration: result.outputAudioSpeechDuration,
-          outputAudioPeakRms: result.outputAudioPeakRms,
+          ...result,
         },
       };
     } finally {
@@ -971,7 +950,18 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
               }
             })().catch((error: unknown) => {
               window.clearTimeout(timeout);
-              reject(toLintErrorObject(error, "Non-Error rejection"));
+              // This callback is serialized into the browser without module imports.
+              if (error instanceof Error) {
+                reject(error);
+              } else if (typeof error === "string") {
+                reject(new Error(error));
+              } else {
+                const failure = new Error("Non-Error rejection", { cause: error });
+                if ((typeof error === "object" && error !== null) || typeof error === "function") {
+                  Object.assign(failure, error);
+                }
+                reject(failure);
+              }
             });
           });
           ws.addEventListener("error", () => {

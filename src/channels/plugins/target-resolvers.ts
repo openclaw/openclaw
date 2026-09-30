@@ -1,8 +1,3 @@
-/**
- * Channel target resolver helpers.
- *
- * Builds unresolved rows and token-gated resolution flows for setup/allowlist targets.
- */
 import type { ChannelResolveResult } from "./types.adapters.js";
 
 /**

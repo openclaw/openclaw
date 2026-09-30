@@ -14,17 +14,12 @@ enum PhotoLibraryAccess {
 }
 
 final class PhotoLibraryService: PhotosServicing {
-    // The gateway WebSocket has a max payload size; returning large base64 blobs
-    // can cause the gateway to close the connection. Keep photo payloads small
-    // enough to safely fit in a single RPC frame.
-    //
-    // This is a transport constraint (not a security policy). If callers need
-    // full-resolution media, we should switch to an HTTP media handle flow.
+    // Keep the combined base64 payload within one Gateway WebSocket frame.
     private static let maxTotalBase64Chars = 340 * 1024
     private static let maxPerPhotoBase64Chars = 300 * 1024
 
     func latest(params: OpenClawPhotosLatestParams) async throws -> OpenClawPhotosLatestPayload {
-        let status = await Self.ensureAuthorization()
+        let status = PhotoLibraryAccess.authorizationStatus()
         guard PhotoLibraryAccess.canRead(status) else {
             throw NSError(domain: "Photos", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "PHOTOS_PERMISSION_REQUIRED: grant Photos permission",
@@ -67,11 +62,6 @@ final class PhotoLibraryService: PhotosServicing {
         return OpenClawPhotosLatestPayload(photos: results)
     }
 
-    private static func ensureAuthorization() async -> PHAuthorizationStatus {
-        // Don’t prompt during node.invoke; prompts block the invoke and lead to timeouts.
-        PhotoLibraryAccess.authorizationStatus()
-    }
-
     private static func renderAsset(
         _ asset: PHAsset,
         maxWidth: Int,
@@ -84,12 +74,9 @@ final class PhotoLibraryService: PhotosServicing {
         options.isNetworkAccessAllowed = true
         options.deliveryMode = .highQualityFormat
 
-        let targetSize: CGSize = {
-            guard maxWidth > 0 else { return PHImageManagerMaximumSize }
-            let aspect = CGFloat(asset.pixelHeight) / CGFloat(max(1, asset.pixelWidth))
-            let width = CGFloat(maxWidth)
-            return CGSize(width: width, height: width * aspect)
-        }()
+        let aspect = CGFloat(asset.pixelHeight) / CGFloat(max(1, asset.pixelWidth))
+        let width = CGFloat(maxWidth)
+        let targetSize = CGSize(width: width, height: width * aspect)
 
         var image: UIImage?
         manager.requestImage(

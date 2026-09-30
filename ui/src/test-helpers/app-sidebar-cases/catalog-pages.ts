@@ -301,7 +301,7 @@ describe("AppSidebar session catalog pagination", () => {
         sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
       loadMore()?.click();
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(sidebar.textContent).toContain("Updated");
 
@@ -343,7 +343,7 @@ describe("AppSidebar session catalog pagination", () => {
 
       sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(sidebar.textContent).toContain("Updated");
 
@@ -386,7 +386,7 @@ describe("AppSidebar session catalog pagination", () => {
         expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.sessions).toHaveLength(2);
 
         gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         await sidebar.updateComplete;
         const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
         expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-1", "thread-2"]);
@@ -433,12 +433,12 @@ describe("AppSidebar session catalog pagination", () => {
       await sidebar.updateComplete;
 
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
 
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);
       await sidebar.updateComplete;

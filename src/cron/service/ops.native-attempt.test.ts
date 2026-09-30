@@ -37,6 +37,7 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { CommandLane } from "../../process/lanes.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const hoisted = getHoisted();
@@ -86,6 +87,7 @@ describe("native attempt queued automation admission", () => {
           return { status: "ok" as const };
         });
         const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
           storePath,
           cronEnabled: false,
           defaultAgentId: "main",

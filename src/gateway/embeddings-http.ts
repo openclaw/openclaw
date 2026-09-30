@@ -38,6 +38,7 @@ import {
   resolveAgentIdForRequest,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
+import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 
 // OpenAI-compatible `/v1/embeddings` bridge. It maps OpenClaw agent/model
 // routing onto configured memory embedding providers while preserving the
@@ -64,19 +65,6 @@ type MemorySearchEmbeddingConfig = Pick<
   NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
   "local" | "remote" | "inputType" | "queryInputType" | "documentInputType"
 >;
-
-function resolveInputTexts(input: unknown): string[] | null {
-  if (typeof input === "string") {
-    return [input];
-  }
-  if (!Array.isArray(input)) {
-    return null;
-  }
-  if (input.every((entry) => typeof entry === "string")) {
-    return input;
-  }
-  return null;
-}
 
 function encodeEmbeddingBase64(embedding: number[]): string {
   // OpenAI-compatible base64 embeddings are raw float32 bytes, not JSON.
@@ -233,7 +221,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
-  const texts = resolveInputTexts(payload.input);
+  const texts = typeof payload.input === "string" ? [payload.input] : payload.input;
   if (!texts) {
     sendInvalidRequest(res, "`input` must be a string or an array of strings.");
     return true;
@@ -335,11 +323,9 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   } catch (err) {
     if (!abortController.signal.aborted && !res.writableEnded && !res.destroyed) {
       logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
-      sendJson(res, 500, {
-        error: {
-          message: "internal error",
-          type: "api_error",
-        },
+      const mapped = resolveOpenAiCompatError(err);
+      sendJson(res, mapped?.status ?? 500, {
+        error: mapped?.error ?? { message: "internal error", type: "api_error" },
       });
     }
   } finally {

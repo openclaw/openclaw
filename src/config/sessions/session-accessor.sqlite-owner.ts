@@ -31,29 +31,47 @@ export function replaceSessionOwnerInTransaction(
       ensureColumn(database.db, tableName, `${columnName} ${dataType}`);
     }
   }
-  let updated = false;
+  let updated: { current_session_id: string; lifecycle_revision: string | null } | undefined;
   const writeGeneration = trackSessionEntryCacheWrite(database, () => {
-    updated =
-      executeSqliteQuerySync(
-        database.db,
-        getSessionKysely(database.db)
-          .updateTable("session_nodes")
-          .set({
-            owner_actor_type: owner?.actor.type ?? null,
-            owner_actor_id: owner?.actor.id ?? null,
-            owner_assigned_by_type: owner?.assignedBy?.type ?? null,
-            owner_assigned_by_id: owner?.assignedBy?.id ?? null,
-            owner_assigned_at: owner?.assignedAt ?? null,
-          })
-          .where("session_key", "=", sessionKey),
-      ).numAffectedRows === 1n;
+    updated = executeSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .updateTable("session_nodes")
+        .set({
+          owner_actor_type: owner?.actor.type ?? null,
+          owner_actor_id: owner?.actor.id ?? null,
+          owner_assigned_by_type: owner?.assignedBy?.type ?? null,
+          owner_assigned_by_id: owner?.assignedBy?.id ?? null,
+          owner_assigned_at: owner?.assignedAt ?? null,
+        })
+        .where("session_key", "=", sessionKey)
+        .returning((eb) => [
+          "current_session_id",
+          eb
+            .fn<string | null>("json_extract", [
+              eb.ref("entry_json"),
+              eb.val("$.lifecycleRevision"),
+            ])
+            .as("lifecycle_revision"),
+        ]),
+    ).rows[0];
   });
   if (!updated) {
     return false;
   }
   publishSessionEntryCacheInvalidation(
     database,
-    { sessionKey, sharingUnchanged: true },
+    // Publish the committed assignment, without revoking unrelated creator/admin
+    // access or rereading session JSON on the Gateway thread.
+    {
+      sessionKey,
+      facts: {
+        kind: "owner",
+        sessionId: updated.current_session_id,
+        lifecycleRevision: updated.lifecycle_revision,
+        owner,
+      },
+    },
     writeGeneration,
   );
   return true;

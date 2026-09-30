@@ -114,8 +114,12 @@ export function inspectAgentDatabaseSchema(
     }
     return inspection;
   } catch (error) {
-    if (input.requireStartupMigrationReadiness && !checkingShape) {
-      return { ...inspection, failure: toStringifiedError(error) };
+    if (input.requireStartupMigrationReadiness) {
+      return {
+        ...inspection,
+        failure: toStringifiedError(error),
+        ...(checkingShape ? { reason: formatErrorMessage(error) } : {}),
+      };
     }
     // Preserve the observed version even when shape validation fails, so Doctor
     // can still report a pending migration alongside the unreadable shape.

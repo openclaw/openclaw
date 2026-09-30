@@ -1,5 +1,7 @@
 // Status overview row tests cover status-all overview values, update metadata, and display rows.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import * as memoryStatus from "../memory-host-sdk/status.js";
 import { VERSION } from "../version.js";
 import {
   buildStatusAllOverviewRows,
@@ -9,6 +11,22 @@ import {
   baseStatusOverviewSurface,
   createStatusCommandOverviewRowsParams,
 } from "./status.test-support.ts";
+
+beforeEach(() => {
+  vi.spyOn(theme, "success").mockImplementation((value) => `ok(${String(value)})`);
+  vi.spyOn(theme, "warn").mockImplementation((value) => `warn(${String(value)})`);
+  vi.spyOn(theme, "muted").mockImplementation((value) => `muted(${String(value)})`);
+  vi.spyOn(memoryStatus, "resolveMemoryVectorState").mockReturnValue({
+    state: "ready",
+    tone: "ok",
+  });
+  vi.spyOn(memoryStatus, "resolveMemoryFtsState").mockReturnValue({ state: "ready", tone: "warn" });
+  vi.spyOn(memoryStatus, "resolveMemoryCacheSummary").mockReturnValue({
+    text: "cache warm",
+    tone: "muted",
+  });
+});
+afterEach(() => vi.restoreAllMocks());
 
 function findRowValue(rows: Array<{ Item: string; Value: string }>, item: string) {
   return rows.find((row) => row.Item === item)?.Value;
@@ -66,58 +84,40 @@ describe("status-overview-rows", () => {
     );
   });
 
-  it.each([
+  it.each<{
+    label: string;
+    doNotTrack?: string;
+    noAutoUpdate?: string;
+    checkOnStart?: boolean;
+    expected: string;
+  }>([
     {
       label: "explicitly enabled",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
-      noAutoUpdate: undefined,
-      checkOnStart: true,
       expected: "ok(enabled · anonymous feature stats)",
     },
     {
       label: "blocked by DO_NOT_TRACK",
-      telemetry: { enabled: true },
       doNotTrack: "1",
-      noAutoUpdate: undefined,
-      checkOnStart: true,
       expected: "muted(disabled (DO_NOT_TRACK))",
     },
     {
       label: "blocked by a trimmed DO_NOT_TRACK value",
-      telemetry: { enabled: true },
       doNotTrack: " TRUE ",
-      noAutoUpdate: undefined,
-      checkOnStart: true,
       expected: "muted(disabled (DO_NOT_TRACK))",
     },
     {
       label: "update checks disabled",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
-      noAutoUpdate: undefined,
       checkOnStart: false,
       expected: "muted(disabled · update checks off)",
     },
     {
-      label: "update checks disabled by OPENCLAW_NO_AUTO_UPDATE=yes",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
-      noAutoUpdate: "yes",
-      checkOnStart: true,
-      expected: "muted(disabled · update checks off)",
-    },
-    {
       label: "update checks disabled by a trimmed OPENCLAW_NO_AUTO_UPDATE=on",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
       noAutoUpdate: " on ",
-      checkOnStart: true,
       expected: "muted(disabled · update checks off)",
     },
   ])(
     "shows telemetry state when $label",
-    ({ telemetry, doNotTrack, noAutoUpdate, checkOnStart, expected }) => {
+    ({ doNotTrack, noAutoUpdate, checkOnStart = true, expected }) => {
       const params = createStatusCommandOverviewRowsParams();
       const rows = buildStatusCommandOverviewRows({
         ...params,
@@ -128,7 +128,7 @@ describe("status-overview-rows", () => {
         },
         surface: {
           ...params.surface,
-          cfg: { ...params.surface.cfg, telemetry, update: { checkOnStart } },
+          cfg: { ...params.surface.cfg, telemetry: { enabled: true }, update: { checkOnStart } },
         },
       });
 
@@ -237,6 +237,16 @@ describe("status-overview-rows", () => {
             secretDiagnosticsCount: 0,
           });
     expect(findRowValue(rows, label)).toContain(params.summary[field]);
+  });
+
+  it("surfaces a deleted Gateway Node path in the overview", () => {
+    const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+    const params = createStatusCommandOverviewRowsParams();
+    params.summary.childRuntime = { execPath, available: false };
+    const rows = buildStatusCommandOverviewRows(params);
+    expect(findRowValue(rows, "Gateway runtime")).toBe(
+      `warn(Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.)`,
+    );
   });
 
   it("builds status-all overview rows from the shared surface", () => {

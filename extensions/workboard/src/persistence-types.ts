@@ -1,4 +1,3 @@
-// Workboard plugin module implements persistence types behavior.
 import type {
   WorkboardAttachment,
   WorkboardBoardMetadata,
@@ -6,6 +5,10 @@ import type {
   WorkboardNotificationSubscription,
 } from "@openclaw/workboard-contract";
 
+/**
+ * Guard the first accepted write (including CAS retries), then allow its settlement.
+ * Independently authorized effects need separate scopes; settled scopes cannot be reused.
+ */
 export type WorkboardWriteAuthority = <T>(
   assertCurrent: () => void,
   run: () => Promise<T>,

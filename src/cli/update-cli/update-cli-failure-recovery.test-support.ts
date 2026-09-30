@@ -12,6 +12,7 @@ import type {
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { TempHomeEnv } from "../../test-utils/temp-home.js";
 import { VERSION } from "../../version.js";
+import type { updateFinalizeCommand as UpdateFinalizeCommand } from "./update-command-finalize.js";
 import type { updateCommand as UpdateCommand } from "./update-command.js";
 
 export async function mockUnbuiltRecoveryFixture(): Promise<void> {
@@ -106,13 +107,15 @@ export function registerForegroundFailureRecoveryTests({
 export function registerFailureSelectorTests({
   updateCommand,
   updateFinalizeCommand,
+  updateGitCheckout,
   readConfigFileSnapshot,
   profileStateDir,
   runUpdateFailureTriage,
   expectSelectorTriageFailure,
 }: {
   updateCommand: typeof UpdateCommand;
-  updateFinalizeCommand: typeof UpdateCommand;
+  updateFinalizeCommand: typeof UpdateFinalizeCommand;
+  updateGitCheckout: typeof import("../../infra/update-runner-git.js").updateGitCheckout;
   readConfigFileSnapshot: typeof ReadConfigFileSnapshot;
   profileStateDir: () => string;
   runUpdateFailureTriage: typeof RunUpdateFailureTriage;
@@ -124,8 +127,13 @@ export function registerFailureSelectorTests({
   ])(
     "$name pins relative installation selectors before failed-update triage",
     async ({ name, run }) => {
-      const failure = new Error("Config snapshot failed");
-      vi.mocked(readConfigFileSnapshot).mockRejectedValueOnce(failure);
+      const failure = new Error(name === "update" ? "Git update failed" : "Config snapshot failed");
+      if (name === "update") {
+        // Target selection reads config before an admitted update installs failure triage.
+        vi.mocked(updateGitCheckout).mockRejectedValueOnce(failure);
+      } else {
+        vi.mocked(readConfigFileSnapshot).mockRejectedValueOnce(failure);
+      }
       const cwd = process.cwd();
       const selectors = {
         OPENCLAW_STATE_DIR: path.relative(cwd, profileStateDir()),
@@ -158,7 +166,7 @@ export function registerFailureSelectorTests({
                     check: "gateway-recovery",
                     code: "gateway-probe-failed",
                     message:
-                      "service management skipped: non-default state dir or config path. Rerun with HOME set to the OS account home, without OPENCLAW_HOME, and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset o",
+                      "service management skipped: non-default state dir or config path. Rerun with HOME set to the OS account home, OPENCLAW_HOME either unset or pointing at that same home, and OPENCLAW_STATE_DIR and OPENC",
                   },
                 ]),
               ],

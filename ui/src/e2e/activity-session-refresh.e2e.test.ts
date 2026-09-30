@@ -213,39 +213,55 @@ suite.define(() => {
           await page.clock.runFor(10);
         }
         expect(await activityRequests()).toBe(initialRequests + 1);
-        // The completed catch-up owns a 1-second cooldown; the burst consumed 100 ms.
-        await page.clock.runFor(899);
+        // The first visible event starts a five-second window; the burst consumed 100 ms.
+        await page.clock.runFor(4_899);
         expect(await activityRequests()).toBe(initialRequests + 1);
         expect(await row.textContent()).toContain("Caught up activity");
-        // Cross the cooldown boundary and deliver the queued mock response.
+        // Cross the event window and deliver the queued mock response.
         await page.clock.runFor(2);
         await expect.poll(() => row.textContent()).toContain("Latest activity");
         expect(await activityRequests()).toBe(initialRequests + 2);
         await page.screenshot({ path: path.join(suite.artifactDir, "03-visible-burst.png") });
         await page.clock.resume();
 
+        await gateway.setSessionsListResponse({
+          ...response("Latest activity"),
+          sessions: [
+            {
+              key,
+              kind: "direct",
+              label: "Latest activity",
+              updatedAt: Date.now(),
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+          hasMore: true,
+          totalCount: 101,
+        });
+        await page.getByRole("tab", { name: "Live activity", exact: true }).click();
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
         await gateway.emitGatewayEvent("agent", {
           runId: "run-activity",
           stream: "tool",
-          sessionKey: "main",
+          sessionKey: key,
           data: {
             phase: "result",
             name: "exec",
             toolCallId: "tool-activity",
-            result: { content: [{ type: "text", text: "Retained while viewing sessions." }] },
+            result: { content: [{ type: "text", text: "Received while viewing Live activity." }] },
           },
         });
-        await page.getByRole("tab", { name: "Live activity", exact: true }).click();
         const entry = page.locator(".activity-entry");
         await expect.poll(() => entry.count()).toBe(1);
         await entry.locator("summary").click();
-        await entry.getByText("Retained while viewing sessions.", { exact: true }).waitFor();
+        await entry.getByText("Received while viewing Live activity.", { exact: true }).waitFor();
         await page.screenshot({ path: path.join(suite.artifactDir, "04-live-activity.png") });
         for (let index = 0; index < 20; index += 1) {
           await gateway.emitGatewayEvent("agent", {
             runId: "run-activity",
             stream: "tool",
-            sessionKey: "main",
+            sessionKey: key,
             data: { phase: "start", name: "exec", toolCallId: `tool-${index}` },
           });
         }
@@ -271,6 +287,11 @@ suite.define(() => {
           )
           .toBeLessThanOrEqual(1);
         const current = page.getByRole("region", { name: "Active sessions", exact: true });
+        await current
+          .locator(`[data-session-key="${key}"]`)
+          .getByText("Latest activity", { exact: true })
+          .waitFor();
+        await current.getByText("Showing 1 of 101 active sessions.", { exact: true }).waitFor();
         await expect
           .poll(() =>
             current.evaluate((element) => {

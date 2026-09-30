@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { inspectChannelAccount } from "../../channels/account-inspection.js";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
   resolveChannelAccountConfigured,
@@ -8,20 +9,10 @@ import {
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { asBoolean } from "../../utils/boolean.js";
 
 const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
-
-const redactIMessageProbeErrorMessage = (message: string): string => {
-  const trimmed = message.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replaceAll(
-    /\/Users\/[^/\s]+\/Library\/Messages\/chat\.db/g,
-    "~/Library/Messages/chat.db",
-  );
-};
 
 export function buildNonSensitiveProbeFailure(
   channelId: string,
@@ -37,7 +28,9 @@ export function buildNonSensitiveProbeFailure(
 
   // Preserve the actionable Full Disk Access failure while stripping the local
   // username path before health leaves the gateway.
-  const error = redactIMessageProbeErrorMessage(record.error);
+  const error = record.error
+    .trim()
+    .replaceAll(/\/Users\/[^/\s]+\/Library\/Messages\/chat\.db/g, "~/Library/Messages/chat.db");
   if (
     !/\bimsg\b/i.test(error) ||
     !error.includes("~/Library/Messages/chat.db") ||
@@ -48,16 +41,6 @@ export function buildNonSensitiveProbeFailure(
   return { ok: false, error: PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR };
 }
 
-function readBooleanField(value: unknown, key: string): boolean | undefined {
-  const record = asNullableRecord(value);
-  if (!record) {
-    return undefined;
-  }
-  return typeof record[key] === "boolean" ? record[key] : undefined;
-}
-
-const hasAccountValue = (account: unknown): boolean => account !== null && account !== undefined;
-
 function resolveProbeAccountEnabled(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -65,7 +48,7 @@ function resolveProbeAccountEnabled(params: {
   account: unknown;
   diagnostics: string[];
 }): boolean {
-  const fallback = readBooleanField(params.account, "enabled") ?? true;
+  const fallback = asBoolean(asNullableRecord(params.account)?.enabled) ?? true;
   try {
     return resolveChannelAccountEnabled({
       plugin: params.plugin,
@@ -87,7 +70,7 @@ async function resolveProbeAccountConfigured(params: {
   account: unknown;
   diagnostics: string[];
 }): Promise<boolean> {
-  const fallback = readBooleanField(params.account, "configured") ?? true;
+  const fallback = asBoolean(asNullableRecord(params.account)?.configured) ?? true;
   try {
     return await resolveChannelAccountConfigured({
       plugin: params.plugin,
@@ -124,12 +107,13 @@ export async function resolveHealthAccountContext(params: {
     );
   }
 
-  const inspectedEnabled = readBooleanField(inspectedAccount, "enabled");
-  const inspectedConfigured = readBooleanField(inspectedAccount, "configured");
+  const inspected = asNullableRecord(inspectedAccount);
+  const inspectedEnabled = asBoolean(inspected?.enabled);
+  const inspectedConfigured = asBoolean(inspected?.configured);
   let account: unknown;
   if (inspectedEnabled !== false && !hasConfiguredUnavailableCredentialStatus(inspectedAccount)) {
     try {
-      account = params.plugin.config.resolveAccount(params.cfg, params.accountId);
+      account = await resolveChannelAccount(params);
     } catch (error) {
       diagnostics.push(
         `${params.plugin.id}:${params.accountId}: failed to resolve account (${formatErrorMessage(error)}).`,
@@ -137,7 +121,7 @@ export async function resolveHealthAccountContext(params: {
     }
   }
 
-  if (!hasAccountValue(account)) {
+  if (account === null || account === undefined) {
     return {
       probeAccount: undefined,
       inspectedAccount,

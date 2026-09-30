@@ -51,9 +51,11 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
-import { findGitRoot } from "../infra/git-root.js";
+import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { preserveDeferredPluginSessionSource } from "../infra/deferred-plugin-session-sources.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
+import { existsDir, migrationFileExists as existsFile } from "../infra/state-migrations.fs.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
@@ -71,6 +73,7 @@ import {
   noteMainSessionRecoveryIntegrity,
   type MainSessionRecoveryIntegrityCandidate,
 } from "./doctor-main-session-recovery.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
@@ -80,30 +83,9 @@ import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-uncon
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
-type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: {
-    message: string;
-    initialValue?: boolean;
-    requiresInteractiveConfirmation?: boolean;
-  }) => Promise<boolean>;
+type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
   note?: typeof note;
 };
-
-function existsDir(dir: string): boolean {
-  try {
-    return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function existsFile(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
@@ -281,6 +263,15 @@ function dirPermissionHint(dir: string): string | null {
   return null;
 }
 
+function readGroupOrWorldAccessibleMode(targetPath: string): number | null {
+  const linkStat = fs.lstatSync(targetPath);
+  const isSymlink = linkStat.isSymbolicLink();
+  // Symlink permissions describe the link, not the target. Immutable stores cannot be repaired.
+  const stat = isSymlink ? fs.statSync(targetPath) : linkStat;
+  const resolvedPath = isSymlink ? fs.realpathSync(targetPath) : targetPath;
+  return !resolvedPath.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0 ? stat.mode : null;
+}
+
 function addUserRwx(mode: number): number {
   const perms = mode & 0o777;
   return perms | 0o700;
@@ -348,36 +339,13 @@ function resolvePathThroughExistingAncestor(
 }
 
 function escapeControlCharsForTerminal(value: string): string {
-  let escaped = "";
-  for (const char of value) {
-    if (char === "\u001b") {
-      escaped += "\\x1b";
-      continue;
-    }
-    if (char === "\r") {
-      escaped += "\\r";
-      continue;
-    }
-    if (char === "\n") {
-      escaped += "\\n";
-      continue;
-    }
-    if (char === "\t") {
-      escaped += "\\t";
-      continue;
-    }
+  const named: Record<string, string> = { "\r": "\\r", "\n": "\\n", "\t": "\\t" };
+  return Array.from(value, (char) => {
     const code = char.charCodeAt(0);
-    if ((code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31)) {
-      escaped += `\\x${code.toString(16).padStart(2, "0")}`;
-      continue;
-    }
-    if (code === 127) {
-      escaped += "\\x7f";
-      continue;
-    }
-    escaped += char;
-  }
-  return escaped;
+    return code <= 31 || code === 127
+      ? (named[char] ?? `\\x${code.toString(16).padStart(2, "0")}`)
+      : char;
+  }).join("");
 }
 
 type LinuxMountInfoEntry = {
@@ -856,12 +824,9 @@ export function detectStateIntegrityHealthIssues(
 
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const dirLstat = fs.lstatSync(stateDir);
-      const isDirSymlink = dirLstat.isSymbolicLink();
-      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
-      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
-      if (!resolvedDir.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0) {
-        issues.push({ kind: "state-dir-too-open", path: stateDir, mode: stat.mode });
+      const mode = readGroupOrWorldAccessibleMode(stateDir);
+      if (mode !== null) {
+        issues.push({ kind: "state-dir-too-open", path: stateDir, mode });
       }
     } catch {
       // Legacy noteStateIntegrity reports stat failures. Structured findings
@@ -871,12 +836,9 @@ export function detectStateIntegrityHealthIssues(
 
   if (params?.configPath && existsFile(params.configPath) && process.platform !== "win32") {
     try {
-      const configLstat = fs.lstatSync(params.configPath);
-      const isSymlink = configLstat.isSymbolicLink();
-      const stat = isSymlink ? fs.statSync(params.configPath) : configLstat;
-      const resolvedConfig = isSymlink ? fs.realpathSync(params.configPath) : params.configPath;
-      if (!resolvedConfig.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0) {
-        issues.push({ kind: "config-file-too-open", path: params.configPath, mode: stat.mode });
+      const mode = readGroupOrWorldAccessibleMode(params.configPath);
+      if (mode !== null) {
+        issues.push({ kind: "config-file-too-open", path: params.configPath, mode });
       }
     } catch {
       // See state-dir stat handling above.
@@ -1182,15 +1144,7 @@ export async function noteStateIntegrity(
   }
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const dirLstat = fs.lstatSync(stateDir);
-      const isDirSymlink = dirLstat.isSymbolicLink();
-      // For symlinks, check the resolved target permissions instead of the
-      // symlink itself (which always reports 777). Skip the warning only when
-      // the target lives in a known immutable store (e.g. /nix/store/).
-      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
-      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
-      const isImmutableStore = resolvedDir.startsWith("/nix/store/");
-      if (!isImmutableStore && (stat.mode & 0o077) !== 0) {
+      if (readGroupOrWorldAccessibleMode(stateDir) !== null) {
         warnings.push(
           `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
         );
@@ -1210,14 +1164,7 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
-      const configLstat = fs.lstatSync(configPath);
-      const isSymlink = configLstat.isSymbolicLink();
-      // For symlinks, check the resolved target permissions. Skip the warning
-      // only when the target lives in an immutable store (e.g. /nix/store/).
-      const stat = isSymlink ? fs.statSync(configPath) : configLstat;
-      const resolvedConfig = isSymlink ? fs.realpathSync(configPath) : configPath;
-      const isImmutableConfig = resolvedConfig.startsWith("/nix/store/");
-      if (!isImmutableConfig && (stat.mode & 0o077) !== 0) {
+      if (readGroupOrWorldAccessibleMode(configPath) !== null) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
@@ -1332,6 +1279,7 @@ export async function noteStateIntegrity(
   }
 
   const compatibilityAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
+  const pending = readDeferredPluginMigrations({ env });
   const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
     resolveConfiguredAgentDatabaseTargets(cfg, { env }),
   );
@@ -1355,10 +1303,10 @@ export async function noteStateIntegrity(
     if (isRetained(sqliteStorePath, agentId)) {
       return;
     }
-    // A successful SQLite import archives sessions.json. Its continued presence
-    // is therefore the explicit signal that pre-import rows still need inspection.
     const legacyStore =
-      inspectLegacyStore && existsFile(absoluteStorePath)
+      inspectLegacyStore &&
+      existsFile(absoluteStorePath) &&
+      !preserveDeferredPluginSessionSource({ cfg, env, target, pending })
         ? loadLegacySessionStore(absoluteStorePath)
         : {};
     const legacyEntries = Object.entries(legacyStore).filter(
@@ -1426,12 +1374,12 @@ export async function noteStateIntegrity(
         warnings.push(
           [
             `- Found ${wedgedCount} with automatic restart recovery tombstoned.`,
-            "  OpenClaw will not auto-resume these child sessions on restart; reconcile their task records instead.",
+            "  OpenClaw will not auto-resume these child sessions on restart; use Doctor to repair stale native subagent recovery state.",
             `  Examples: ${wedgedSubagentSessions
               .slice(0, 3)
               .map(({ key }) => key)
               .join(", ")}`,
-            `  Fix: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
+            `  Fix: ${formatCliCommand("openclaw doctor --fix")}`,
           ].join("\n"),
         );
         const repairWedged = await prompter.confirmRuntimeRepair({
@@ -1566,7 +1514,7 @@ export async function noteStateIntegrity(
     await inspectAgentSessionIntegrity(target, inspectLegacyStore);
     inspectedLegacyStores.add(legacyStorePath);
   }
-  for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {
+  for (const warning of await describeHeartbeatSessionTargetIssues(cfg)) {
     warnings.push(warning);
   }
 
@@ -1578,23 +1526,4 @@ export async function noteStateIntegrity(
   }
 }
 
-/** Returns the workspace git-backup tip when the workspace exists but is not a git repo. */
-export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
-  if (!existsDir(workspaceDir)) {
-    return null;
-  }
-  const resolvedWorkspaceDir = safeRealpathSync(workspaceDir);
-  if (!resolvedWorkspaceDir || findGitRoot(resolvedWorkspaceDir)) {
-    return null;
-  }
-  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
-}
-
-/** Emits the workspace backup tip when applicable. */
-export function noteWorkspaceBackupTip(workspaceDir: string) {
-  const tip = collectWorkspaceBackupTip(workspaceDir);
-  if (tip) {
-    note(tip, "Workspace");
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

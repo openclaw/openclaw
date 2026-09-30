@@ -25,6 +25,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -48,8 +49,10 @@ import {
   setSessionActivitySummaryState,
   type ActivitySummaryTarget,
 } from "./session-activity-summary-state.js";
+import { readSessionListSelectionFacts } from "./session-list-target.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 
 const log = createSubsystemLogger("gateway/activity-summary");
@@ -82,7 +85,6 @@ type Tracked = ActivitySummaryTarget & {
   failures: number;
   controller?: AbortController;
   inFlight: boolean;
-  queued: boolean;
   dirty: boolean;
   immediate: boolean;
   lastStartedAt: number;
@@ -105,8 +107,10 @@ export type SessionActivitySummaryService = {
 };
 
 export function createSessionActivitySummaries(deps: {
+  scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
-  onChanged: (target: ActivitySummaryTarget) => void;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
+  onChanged: (target: ActivitySummaryTarget & { storePath: string }) => void;
   prepareModel?: typeof defaultPrepareModel;
   completeModel?: typeof defaultCompleteModel;
 }): SessionActivitySummaryService {
@@ -114,11 +118,10 @@ export function createSessionActivitySummaries(deps: {
   const queue: Tracked[] = [];
   const running = new Set<Promise<void>>();
   const modelBackoffs = new Map<string, { until: number; failures: number }>();
-  let pumpTimer: ReturnType<typeof setTimeout> | undefined;
+  let pumpJob: GatewayScheduledJob | undefined;
   const owner = Symbol("activity-summary-owner");
-  let active = 0;
   let disposed = false;
-  const now = () => Date.now();
+  const now = () => deps.scheduler.now();
   const modelRef = (target: ActivitySummaryTarget) =>
     resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId: target.agentId });
   const scope = (target: ActivitySummaryTarget) => ({
@@ -128,8 +131,14 @@ export function createSessionActivitySummaries(deps: {
       agentId: target.agentId,
     }),
   });
-  const read = (target: ActivitySummaryTarget) =>
-    loadSessionEntryReadOnly({ ...scope(target), projection: "list" });
+  const read = (target: ActivitySummaryTarget) => {
+    const projection = deps.getSessionRowProjection?.();
+    if (projection?.sharingRevision) {
+      return projection.sharingTarget(target)?.entry;
+    }
+    // Startup and store-topology recovery have no current resident facts yet.
+    return loadSessionEntryReadOnly({ ...scope(target), projection: "list" });
+  };
   const current = (state: Tracked) =>
     !disposed &&
     states.get(activitySummaryScope(state)) === state &&
@@ -180,7 +189,7 @@ export function createSessionActivitySummaries(deps: {
       entry.initializationPending ||
       entry.incognito ||
       entry.heartbeatIsolatedBaseSessionKey ||
-      entry.spawnedBy
+      readSessionListSelectionFacts(target.key, entry).isSubagent
     ) {
       return undefined;
     }
@@ -201,7 +210,7 @@ export function createSessionActivitySummaries(deps: {
     }
     if (states.size >= MAX_TRACKED) {
       const evictable = [...states.values()].find(
-        (candidate) => !candidate.inFlight && !candidate.queued,
+        (candidate) => !candidate.inFlight && !queue.includes(candidate),
       );
       if (!evictable) {
         return undefined;
@@ -217,7 +226,6 @@ export function createSessionActivitySummaries(deps: {
       retryPending: false,
       failures: 0,
       inFlight: false,
-      queued: false,
       dirty: false,
       immediate: false,
       lastStartedAt: 0,
@@ -249,6 +257,7 @@ export function createSessionActivitySummaries(deps: {
     if (
       !entry ||
       entry.initializationPending ||
+      readSessionListSelectionFacts(state.key, entry).isSubagent ||
       entry.sessionId !== state.sessionId ||
       entry.lifecycleRevision !== state.lifecycleRevision
     ) {
@@ -269,7 +278,7 @@ export function createSessionActivitySummaries(deps: {
     if (state.inFlight) {
       return;
     }
-    if (!state.queued && !state.retryPending && state.retryAt <= now()) {
+    if (!queue.includes(state) && !state.retryPending && state.retryAt <= now()) {
       state.retryAt = 0;
       state.failures = 0;
     }
@@ -290,8 +299,7 @@ export function createSessionActivitySummaries(deps: {
     publish(state, "updating");
     // Every admitted session occupies at most one queue entry. The tracked-session
     // bound also bounds pending work, so a full Activity page cannot overflow it.
-    if (!state.queued) {
-      state.queued = true;
+    if (!queue.includes(state)) {
       queue.push(state);
     }
     pump();
@@ -473,7 +481,6 @@ export function createSessionActivitySummaries(deps: {
         }
         const failure = resolveModelFallbackError(error);
         const reason = failure.kind === "failover" ? failure.error.reason : undefined;
-        const message = formatErrorMessage(error);
         const transient =
           (reason === "overloaded" ||
             reason === "server_error" ||
@@ -509,7 +516,7 @@ export function createSessionActivitySummaries(deps: {
         publish(state, state.retryPending ? "updating" : "unavailable");
         log.debug("Activity recap deferred", {
           agentId: state.agentId,
-          error: message,
+          error: formatErrorMessage(error),
           retryScheduled: state.retryPending,
         });
       }
@@ -525,12 +532,11 @@ export function createSessionActivitySummaries(deps: {
     }
   };
   const pump = () => {
-    clearTimeout(pumpTimer);
-    pumpTimer = undefined;
-    if (disposed) {
+    pumpJob?.cancel();
+    if (disposed || deps.scheduler.signal.aborted) {
       return;
     }
-    while (active < 2 && queue.length) {
+    while (running.size < 2 && queue.length) {
       let earliest = Infinity;
       const index = queue.findIndex((candidate) => {
         if (!current(candidate)) {
@@ -543,33 +549,38 @@ export function createSessionActivitySummaries(deps: {
       });
       if (index < 0) {
         if (Number.isFinite(earliest)) {
-          pumpTimer = setTimeout(pump, Math.min(earliest - now(), HOUR_MS));
-          pumpTimer.unref?.();
+          pumpJob = deps.scheduler.schedule({
+            id: "session-activity-summary-pump",
+            atMs: earliest,
+            run: async () => {
+              pump();
+              while (running.size > 0) {
+                await Promise.all(running);
+              }
+            },
+          });
         }
         return;
       }
       const state = queue.splice(index, 1)[0]!;
-      state.queued = false;
       if (!current(state)) {
         continue;
       }
-      active += 1;
       const work = run(state)
         .catch((error: unknown) => {
           log.debug("Activity recap background work failed", { error: formatErrorMessage(error) });
         })
         .finally(() => {
-          active -= 1;
           running.delete(work);
           pump();
         });
       running.add(work);
     }
   };
-  const request = (target: ActivitySummaryTarget, immediate: boolean) => {
+  const request = (target: ActivitySummaryTarget) => {
     const state = admit(target);
     if (state) {
-      schedule(state, immediate);
+      schedule(state, true);
     }
     return state;
   };
@@ -600,7 +611,7 @@ export function createSessionActivitySummaries(deps: {
       if (isCronSessionKey(target.key)) {
         return { state: "unavailable" };
       }
-      const state = request(target, true);
+      const state = request(target);
       const projected = projectSessionActivitySummary({
         ...target,
         cfg: deps.getConfig(),
@@ -644,7 +655,7 @@ export function createSessionActivitySummaries(deps: {
         event.agentId ?? runContext?.agentId,
       );
       if (target) {
-        request(target, true);
+        request(target);
       }
     },
     handleLifecycle(event) {
@@ -653,12 +664,12 @@ export function createSessionActivitySummaries(deps: {
       }
       const target = eventTarget(event.sessionKey, event.agentId);
       if (target) {
-        request(target, true);
+        request(target);
       }
     },
     async dispose() {
       disposed = true;
-      clearTimeout(pumpTimer);
+      pumpJob?.cancel();
       modelBackoffs.clear();
       unsubscribeIdentity();
       for (const state of states.values()) {

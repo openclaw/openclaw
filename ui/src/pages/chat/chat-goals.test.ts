@@ -15,6 +15,7 @@ import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatGoalRecovery, mutateChatGoal } from "./chat-goals.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 
 const goal: SessionGoal = {
@@ -116,6 +117,27 @@ describe("Goal control requests", () => {
         goal: { ...goal, objective, updatedAt: 3 },
       },
     });
+    // A stale rendered action must not admit a new operation from cached identity alone.
+    setChatHistoryLoad(host, {
+      phase: "pending-connection",
+      sessionKey: host.sessionKey,
+      requestAgentId: undefined,
+      startup: true,
+    });
+    expect(await mutateChatGoal(host, { action: "edit", goalId: goal.id, objective })).toBe(false);
+    expect(host.request).not.toHaveBeenCalled();
+    expect(sessionStorage.length).toBe(0);
+    expect(chatGoalRecovery(host)).toBeUndefined();
+    setChatHistoryLoad(host, {
+      phase: "committed",
+      sessions: host.sessions,
+      client: host.client!,
+      connectionEpoch: host.connectionEpoch,
+      sessionKey: host.sessionKey,
+      requestAgentId: undefined,
+      sessionId: host.currentSessionId,
+      sessionInfo: host.sessionsResult?.sessions[0],
+    });
     expect(await mutateChatGoal(host, { action: "edit", goalId: goal.id, objective })).toBe(true);
     expect(host.request).toHaveBeenCalledWith(
       "sessions.goal.update",
@@ -205,6 +227,10 @@ describe("Goal control requests", () => {
         throw new Error("ACK lost");
       },
     });
+    let renderedError: string | null | undefined;
+    host.requestUpdate = () => {
+      renderedError = host.chatError;
+    };
     Object.defineProperty(host.client, "recoveryScope", { get: () => "" });
     await mutateChatGoal(host, {
       action: "edit",
@@ -212,6 +238,9 @@ describe("Goal control requests", () => {
       objective: "Private account A edit",
     });
     const captured = chatGoalRecovery(host);
+    expect
+      .soft(renderedError)
+      .toBe("Goal update was not sent because its recovery request could not be saved.");
     expect.soft(host.request).not.toHaveBeenCalled();
     expect.soft(sessionStorage.length).toBe(0);
     // Credentials changed, but both clients lack a distinguishable scope and share a session.

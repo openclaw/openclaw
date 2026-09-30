@@ -65,7 +65,7 @@ export type SubagentCompletionDeliveryState = {
   suspendedReason?: "expiry" | "permanent_failure";
   dismissedAt?: number;
   discardedAt?: number;
-  discardReason?: "expired";
+  discardReason?: "expired" | "task-missing";
   discardedPayloadSummary?: {
     requesterSessionKey?: string;
     childSessionKey?: string;
@@ -119,6 +119,8 @@ export type SubagentRunReadRecord = {
   delivery?: SubagentCompletionDeliveryState;
   execution: {
     status: "queued" | "running" | "interrupted" | "terminal";
+    /** Retained after restart settlement; an interrupted execution is not a task failure. */
+    interruptionReason?: "gateway-restart";
     startedAt?: number;
     endedAt?: number;
     outcome?: SubagentRunOutcome;
@@ -127,3 +129,22 @@ export type SubagentRunReadRecord = {
     status: SwarmCollectorStatus;
   };
 };
+
+/** Cloneable comparison input; source custody and the deletion verdict remain with the caller. */
+export type SubagentRunsDurableBasis = Readonly<{
+  databasePath: string;
+  databaseIdentity: string;
+  databaseBirthtime?: string;
+  sessionKeys: readonly string[];
+  liveTopology: readonly Readonly<{
+    childSessionKey: string;
+    requesterSessionKey: string;
+  }>[];
+  digest: string | null;
+}>;
+
+/** Maintenance compares its compact physical projection, without descendant topology. */
+export type SubagentMaintenanceDurableBasis = Pick<
+  SubagentRunsDurableBasis,
+  "databasePath" | "databaseIdentity" | "databaseBirthtime" | "digest"
+>;

@@ -32,7 +32,11 @@ import {
   claimWorktreeRemoval,
   finalizeWorktreeRemoval,
 } from "./run-lease.js";
-import { resolveRepository, type ResolvedRepository } from "./service-preparation.js";
+import {
+  removeFailedWorktree,
+  resolveRepository,
+  type ResolvedRepository,
+} from "./service-preparation.js";
 import {
   exactStateRetirementSchema,
   type ExactStateRetirement,
@@ -65,6 +69,19 @@ type RestoreContext = {
   requireSpace: (target: string, repository: ResolvedRepository, bytes?: number) => void;
   recoveryClaim?: string;
 };
+
+async function restoreSnapshotProjection(
+  worktree: ManagedWorktreeRecord,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: WorktreeAllocationGuard["commitGuard"],
+) {
+  const { withSettledLocalWorkspace } =
+    await import("../../gateway/worker-environments/local-workspace-projection.js");
+  await withSettledLocalWorkspace(
+    { worktree, env, assertCurrent, restoreSnapshot: true },
+    async () => {},
+  );
+}
 
 /** An unfinished retirement still has a live row: reuse removal custody until recovery settles. */
 export async function restoreManagedWorktreeSnapshot(
@@ -232,7 +249,8 @@ async function restoreSnapshot(
   }
   const repository = await resolveRepository(record.repoRoot);
   requireSpace(record.path, repository);
-  const provisionedState = getRegistryWorktreeProvisionedState(env, record.id);
+  const provisionedState = await getRegistryWorktreeProvisionedState(env, record.id);
+  params.commitGuard?.();
   if (provisionedState === undefined) {
     throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
   }
@@ -278,17 +296,7 @@ async function restoreSnapshot(
           assertExactStateSourceIdentity(restoreRecord.path, identity);
         },
       };
-      const { withSettledLocalWorkspace } =
-        await import("../../gateway/worker-environments/local-workspace-projection.js");
-      await withSettledLocalWorkspace(
-        {
-          worktree: restoreRecord,
-          env,
-          assertCurrent: params.commitGuard,
-          restoreSnapshot: true,
-        },
-        async () => {},
-      );
+      await restoreSnapshotProjection(restoreRecord, env, params.commitGuard);
       return await finishRestoredSnapshot(
         params,
         context,
@@ -444,36 +452,17 @@ async function restoreSnapshot(
       params.commitGuard,
     );
     params.commitGuard?.();
-    const { withSettledLocalWorkspace } =
-      await import("../../gateway/worker-environments/local-workspace-projection.js");
-    await withSettledLocalWorkspace(
-      {
-        worktree: record,
-        env,
-        assertCurrent: params.commitGuard,
-        restoreSnapshot: true,
-      },
-      async () => {},
-    );
+    await restoreSnapshotProjection(record, env, params.commitGuard);
     requireSpace(record.path, repository);
     restoredProvisionedPaths = provisionedState.map((state) => state.path);
   } catch (error) {
-    const rollbackOptions = { beforeRun: params.rollbackGuard, killProcessTree: true };
-    const removed = await runGit(
+    const failure = await removeFailedWorktree(
       record.repoRoot,
-      ["worktree", "remove", "--force", record.path],
-      rollbackOptions,
+      record.path,
+      record.branch,
+      params.rollbackGuard,
     );
-    const branchDeleted = await runGit(
-      record.repoRoot,
-      ["branch", "-D", record.branch],
-      rollbackOptions,
-    );
-    if (removed.code !== 0 || branchDeleted.code !== 0) {
-      const failure =
-        removed.code === 0
-          ? commandError("git branch -D", branchDeleted)
-          : commandError("git worktree remove", removed);
+    if (failure) {
       throw new Error(`${String(error)}\nrestore cleanup failed: ${failure.message}`, {
         cause: error,
       });

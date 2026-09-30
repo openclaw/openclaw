@@ -13,7 +13,7 @@ import { packFutureUpdateFixture } from "../update-first-hop-package-fixtures.mj
 import { observePostCoreCommand } from "./process-observer.mjs";
 
 // Without a core tarball, run only the plugin reinstall boundary against the supplied CLI.
-export async function runConsentScenario(entry, coreTarball) {
+export async function runConsentScenario(entry, coreTarball, options = {}) {
   assert(entry, "expected CLI entry");
   let coreTarballSha256;
   if (coreTarball) {
@@ -60,6 +60,11 @@ export async function runConsentScenario(entry, coreTarball) {
   }
 
   async function cli(label, args, { allowFailure = false } = {}) {
+    // Full package replacement shares the 900s budget of the corrupt-plugin and
+    // channel-switch update lanes, rather than the ordinary 300s CLI budget.
+    const timeout =
+      process.env.OPENCLAW_E2E_COMMAND_TIMEOUT ||
+      (args[0] === "update" && args.includes("--tag") ? "900s" : "300s");
     const stdout = path.join(root, `${label}.stdout`);
     const stderr = path.join(root, `${label}.stderr`);
     const out = fs.openSync(stdout, "w");
@@ -75,7 +80,10 @@ export async function runConsentScenario(entry, coreTarball) {
         entry,
         ...args,
       ],
-      { stdio: ["ignore", out, err] },
+      {
+        env: { ...process.env, OPENCLAW_E2E_COMMAND_TIMEOUT: timeout },
+        stdio: ["ignore", out, err],
+      },
     );
     let code;
     let children;
@@ -87,16 +95,7 @@ export async function runConsentScenario(entry, coreTarball) {
     }
     const output = fs.readFileSync(stdout, "utf8");
     const diagnostic = fs.readFileSync(stderr, "utf8");
-    if (!allowFailure) {
-      assert.equal(code, 0, `${label} failed: ${output}\n${diagnostic}`);
-    }
-    let result;
-    if (args[0] === "update" && args.includes("--json")) {
-      assert.doesNotThrow(() => {
-        result = JSON.parse(output);
-      }, `${label} did not return JSON: ${output}\n${diagnostic}`);
-    }
-    runs.push({
+    const run = {
       label,
       args,
       code,
@@ -105,10 +104,24 @@ export async function runConsentScenario(entry, coreTarball) {
       children: children.filter(
         (descendant) => descendant.argv.includes("update") || descendant.postCore,
       ),
-      ...(result ? { result } : {}),
-    });
-    fs.writeFileSync(path.join(root, "runs.json"), JSON.stringify(runs, null, 2));
-    console.log(JSON.stringify({ event: "consent-command", ...runs.at(-1) }));
+    };
+    runs.push(run);
+    const ledger = path.join(root, "runs.json");
+    fs.writeFileSync(ledger, JSON.stringify(runs, null, 2));
+    assert(
+      code !== 124 && code !== 137,
+      `${label} timed out after ${timeout} (exit ${code}); stdout: ${stdout}; stderr: ${stderr}; ledger: ${ledger}\n${output}\n${diagnostic}`,
+    );
+    if (!allowFailure) {
+      assert.equal(code, 0, `${label} failed: ${output}\n${diagnostic}`);
+    }
+    if (args[0] === "update" && args.includes("--json")) {
+      assert.doesNotThrow(() => {
+        run.result = JSON.parse(output);
+      }, `${label} did not return JSON (exit ${code}): ${output}\n${diagnostic}`);
+      fs.writeFileSync(ledger, JSON.stringify(runs, null, 2));
+    }
+    console.log(JSON.stringify({ event: "consent-command", ...run }));
     return { code, output, diagnostic, children };
   }
 
@@ -280,10 +293,27 @@ export async function runConsentScenario(entry, coreTarball) {
         "accepted forced reinstall replaces package and acceptance while remaining disabled",
         "explicit enable activates the reviewed replacement",
       ];
-      if (!coreTarball) {
+      if (!coreTarball || options.coreUpdateConsent === false) {
         console.log(
           JSON.stringify(
-            { status: "passed", root, assertions: reinstallAssertions, runs, snapshots },
+            {
+              status: "passed",
+              root,
+              assertions: reinstallAssertions,
+              ...(coreTarball && options.coreUpdateConsent === false
+                ? {
+                    omissions: [
+                      {
+                        scenario: "core-update-consent",
+                        reason:
+                          "selected frozen target predates the recorded update compatibility contract",
+                      },
+                    ],
+                  }
+                : {}),
+              runs,
+              snapshots,
+            },
             null,
             2,
           ),

@@ -9,15 +9,19 @@ import { afterEach, expect, it, vi } from "vitest";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  triageRuntimeNodeOptions,
+  useTriageLeaseDatabaseFixture,
+} from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
+import { createManagedHandoffLeaseDatabase } from "./update-managed-service-handoff-database.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
-import {
-  createTriageBoundary,
-  triageRuntimeNodeOptions,
-} from "./update-managed-service-triage.test-support.js";
+import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
+
+useTriageLeaseDatabaseFixture();
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -186,8 +190,9 @@ if(process.argv[4]==='defer'){
   await new Promise(resolve=>process.stdin.once('data',resolve));
 }
 process.stdout.write('{"status":"error","reason":"original"}\\n');
-await triageAfterFailure({log:console.log,error:console.error,exit:()=>{throw new Error('original exit overwritten');}},
+const completion=await triageAfterFailure({log:console.log,error:console.error,exit:()=>{throw new Error('original exit overwritten');}},
  {kind,phase,error:'original',installationRoot:${JSON.stringify(root)},gateway:'preserve'});
+console.error('triage-completion:'+completion);
 process.exitCode=7;
 ${heldHandle ? "timerControl.close();" : ""}
 `,
@@ -415,6 +420,7 @@ unix.each([
       expect(await loser.exit).toEqual({ code: 7, signal: null });
       expect(loser.output().stdout).toBe('{"status":"error","reason":"original"}\n');
       expect(loser.output().stderr).toContain("already owned");
+      expect(loser.output().stderr).toContain("triage-completion:undefined");
     }
     expect(readClaim(root)).toEqual(held);
     const label = nativeWon ? "native" : firstLabel;
@@ -437,6 +443,7 @@ unix.each([
     if (order === "failed-but-drained") {
       expect(first!.output().stderr).toContain("failed (exit 17)");
       expect(first!.output().stderr).not.toContain("cleanup is uncertain");
+      expect(first!.output().stderr).toContain("triage-completion:undefined");
       expect(first!.output().stdout).toBe('{"status":"error","reason":"original"}\n');
       expect(await first!.exit).toEqual({ code: 7, signal: null });
     }
@@ -445,6 +452,7 @@ unix.each([
     expect(readClaim(root)?.owner).not.toBe(held?.owner);
     await control(root, "next", "release");
     expect(await next.exit).toEqual({ code: 7, signal: null });
+    expect(next.output().stderr).toContain("triage-completion:completed");
   },
   60_000,
 );
@@ -561,14 +569,15 @@ unix.each(["abrupt-executor", "replacement"] as const)(
       expect(await owner.exit).toEqual({ code: 7, signal: null });
       expect(owner.output().stderr).toContain("cleanup is uncertain");
     } else {
-      const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-      try {
-        db.prepare(
-          "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ? AND owner = ?",
-        ).run("replacement-generation", root, String(held.owner));
-      } finally {
-        db.close();
-      }
+      // Admitted children inspect this database while the fixture replaces the owner.
+      createManagedHandoffLeaseDatabase(resolveManagedUpdateLeaseDatabasePath())(true, (db) => {
+        const replaced = db
+          .prepare(
+            "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ? AND owner = ?",
+          )
+          .run("replacement-generation", root, String(held.owner));
+        expect(replaced.changes).toBe(1);
+      });
       await vi.waitFor(() => fs.access(path.join(root, "held.cancelled")), { timeout: 5000 });
     }
     const fenced = readClaim(root);

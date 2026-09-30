@@ -14,6 +14,10 @@ import {
   writePolicyFixture,
 } from "./register.test-harness.js";
 
+function writeLoopbackOnlyPolicyFixture(): Promise<string> {
+  return writePolicyFixture({ gateway: { exposure: { allowNonLoopbackBind: false } } });
+}
+
 describe("registerPolicyDoctorChecks", () => {
   beforeEach(setupPolicyDoctorTest);
 
@@ -125,13 +129,11 @@ describe("registerPolicyDoctorChecks", () => {
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "policy/sandbox-browser-cdp-source-range-missing",
-          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/browser/cdpSourceRange",
-        }),
-      ]),
+    expect(result.findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "policy/sandbox-browser-cdp-source-range-missing",
+        ocPath: "oc://openclaw.config/agents/list/#0/sandbox/browser/cdpSourceRange",
+      }),
     );
   });
 
@@ -165,13 +167,11 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runPolicyChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
-    expect(evidence.sandboxPosture).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "backend",
-          value: "openshell",
-        }),
-      ]),
+    expect(evidence.sandboxPosture).toContainEqual(
+      expect.objectContaining({
+        kind: "backend",
+        value: "openshell",
+      }),
     );
     expect(evidence.sandboxPosture).not.toEqual(
       expect.arrayContaining([
@@ -239,15 +239,13 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runPolicyChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
-    expect(evidence.sandboxPosture).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "containerMount",
-          bindSurface: "browser",
-          bind: "/var/run/docker.sock:/var/run/docker.sock:rw",
-          source: "oc://openclaw.config/agents/defaults/sandbox/docker/binds/#0",
-        }),
-      ]),
+    expect(evidence.sandboxPosture).toContainEqual(
+      expect.objectContaining({
+        kind: "containerMount",
+        bindSurface: "browser",
+        bind: "/var/run/docker.sock:/var/run/docker.sock:rw",
+        source: "oc://openclaw.config/agents/defaults/sandbox/docker/binds/#0",
+      }),
     );
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -359,16 +357,14 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
-  it("uses explicit agent sandbox scope before inherited legacy perSession", async () => {
-    // `perSession` is retired runtime config but remains raw doctor input so policy evidence can
-    // verify that an explicit modern scope wins over the legacy field.
+  it("uses explicit agent sandbox scope before inherited shared scope", async () => {
     const cfg = rawCfgWithPolicy({
       agents: {
         defaults: {
           sandbox: {
             mode: "all",
             backend: "docker",
-            perSession: false,
+            scope: "shared",
             docker: {
               network: "none",
             },
@@ -526,13 +522,11 @@ describe("registerPolicyDoctorChecks", () => {
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "policy/policy-jsonc-invalid",
-          target: "oc://policy.jsonc/scopes/sebby/channels",
-        }),
-      ]),
+    expect(result.findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        target: "oc://policy.jsonc/scopes/sebby/channels",
+      }),
     );
     expect(result.findings).not.toEqual(
       expect.arrayContaining([
@@ -699,14 +693,12 @@ describe("registerPolicyDoctorChecks", () => {
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "policy/sandbox-mode-unapproved",
-          ocPath: "oc://openclaw.config/agents/defaults/sandbox/mode",
-          requirement: "oc://policy.jsonc/scopes/mainSandbox/sandbox/requireMode",
-        }),
-      ]),
+    expect(result.findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "policy/sandbox-mode-unapproved",
+        ocPath: "oc://openclaw.config/agents/defaults/sandbox/mode",
+        requirement: "oc://policy.jsonc/scopes/mainSandbox/sandbox/requireMode",
+      }),
     );
   });
 
@@ -1149,15 +1141,13 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
-    expect(evidence.toolPosture).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "tools-deny",
-          kind: "deny",
-          entries: ["group:openclaw"],
-          source: "oc://openclaw.config/tools/deny",
-        }),
-      ]),
+    expect(evidence.toolPosture).toContainEqual(
+      expect.objectContaining({
+        id: "tools-deny",
+        kind: "deny",
+        entries: ["group:openclaw"],
+        source: "oc://openclaw.config/tools/deny",
+      }),
     );
     expect(result.findings).toEqual([]);
   });
@@ -1188,15 +1178,13 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
-    expect(evidence.toolPosture).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "reviewer-elevated-enabled",
-          kind: "elevatedEnabled",
-          value: false,
-          source: "oc://openclaw.config/tools/elevated/enabled",
-        }),
-      ]),
+    expect(evidence.toolPosture).toContainEqual(
+      expect.objectContaining({
+        id: "reviewer-elevated-enabled",
+        kind: "elevatedEnabled",
+        value: false,
+        source: "oc://openclaw.config/tools/elevated/enabled",
+      }),
     );
     expect(result.findings).toEqual([]);
   });
@@ -1240,15 +1228,13 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
-    expect(evidence.toolPosture).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "tools-exec-security",
-          kind: "execSecurity",
-          value: "deny",
-          source: "oc://openclaw.config/tools/exec/security",
-        }),
-      ]),
+    expect(evidence.toolPosture).toContainEqual(
+      expect.objectContaining({
+        id: "tools-exec-security",
+        kind: "execSecurity",
+        value: "deny",
+        source: "oc://openclaw.config/tools/exec/security",
+      }),
     );
     expect(result.findings).toEqual([]);
   });
@@ -1274,15 +1260,13 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
-    expect(evidence.toolPosture).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "tools-exec-security",
-          kind: "execSecurity",
-          value: "deny",
-          source: "oc://openclaw.config/tools/exec/security",
-        }),
-      ]),
+    expect(evidence.toolPosture).toContainEqual(
+      expect.objectContaining({
+        id: "tools-exec-security",
+        kind: "execSecurity",
+        value: "deny",
+        source: "oc://openclaw.config/tools/exec/security",
+      }),
     );
     expect(result.findings).toEqual([]);
   });
@@ -1308,15 +1292,13 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
-    expect(evidence.toolPosture).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "tools-exec-security",
-          kind: "execSecurity",
-          value: "full",
-          source: "oc://openclaw.config/tools/exec/security",
-        }),
-      ]),
+    expect(evidence.toolPosture).toContainEqual(
+      expect.objectContaining({
+        id: "tools-exec-security",
+        kind: "execSecurity",
+        value: "full",
+        source: "oc://openclaw.config/tools/exec/security",
+      }),
     );
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -1495,13 +1477,7 @@ describe("registerPolicyDoctorChecks", () => {
     const cfg = cfgWithPolicyOverrides({
       gateway: {},
     });
-    const configPath = await writePolicyFixture({
-      gateway: {
-        exposure: {
-          allowNonLoopbackBind: false,
-        },
-      },
-    });
+    const configPath = await writeLoopbackOnlyPolicyFixture();
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
@@ -1522,13 +1498,7 @@ describe("registerPolicyDoctorChecks", () => {
         tailscale: { mode: "serve" },
       },
     });
-    const configPath = await writePolicyFixture({
-      gateway: {
-        exposure: {
-          allowNonLoopbackBind: false,
-        },
-      },
-    });
+    const configPath = await writeLoopbackOnlyPolicyFixture();
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
@@ -1592,13 +1562,7 @@ describe("registerPolicyDoctorChecks", () => {
         customBindHost: "0.0.0.0",
       },
     });
-    const configPath = await writePolicyFixture({
-      gateway: {
-        exposure: {
-          allowNonLoopbackBind: false,
-        },
-      },
-    });
+    const configPath = await writeLoopbackOnlyPolicyFixture();
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
@@ -1613,13 +1577,7 @@ describe("registerPolicyDoctorChecks", () => {
         customBindHost: "127.0.0.1",
       },
     });
-    const configPath = await writePolicyFixture({
-      gateway: {
-        exposure: {
-          allowNonLoopbackBind: false,
-        },
-      },
-    });
+    const configPath = await writeLoopbackOnlyPolicyFixture();
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
@@ -1634,13 +1592,7 @@ describe("registerPolicyDoctorChecks", () => {
         customBindHost: "192.168.1.20",
       },
     });
-    const configPath = await writePolicyFixture({
-      gateway: {
-        exposure: {
-          allowNonLoopbackBind: false,
-        },
-      },
-    });
+    const configPath = await writeLoopbackOnlyPolicyFixture();
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
@@ -1662,13 +1614,7 @@ describe("registerPolicyDoctorChecks", () => {
         customBindHost: "   ",
       },
     });
-    const configPath = await writePolicyFixture({
-      gateway: {
-        exposure: {
-          allowNonLoopbackBind: false,
-        },
-      },
-    });
+    const configPath = await writeLoopbackOnlyPolicyFixture();
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
@@ -1685,13 +1631,7 @@ describe("registerPolicyDoctorChecks", () => {
           customBindHost,
         },
       });
-      const configPath = await writePolicyFixture({
-        gateway: {
-          exposure: {
-            allowNonLoopbackBind: false,
-          },
-        },
-      });
+      const configPath = await writeLoopbackOnlyPolicyFixture();
 
       registerPolicyDoctorChecks();
       const result = await runDoctorLintChecks(ctx(configPath, cfg));

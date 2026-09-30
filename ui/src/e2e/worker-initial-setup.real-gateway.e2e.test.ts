@@ -26,6 +26,7 @@ import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
   measureLaunchTurn,
+  readLaunchToolNames,
   OWNER_EPOCH,
   unusedEnvironments,
 } from "../../../src/gateway/worker-environments/worker-turn-launcher.test-support.js";
@@ -162,6 +163,7 @@ suite.define(() => {
             timeoutMs: 5000,
           }),
         measureLaunchTurn,
+        readLaunchToolNames,
         launchTurn: async (request) => {
           request.onDispatchReady?.();
           launched.push(request.turnClaim.runId);
@@ -203,6 +205,8 @@ suite.define(() => {
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
         stop: async () => {},
@@ -238,7 +242,7 @@ suite.define(() => {
           waitForAdmissionNode: async () => {
             throw new Error("unexpected runtime refresh");
           },
-          redispatchReclaimed: async () => {
+          redispatchPlacement: async () => {
             throw new Error("unexpected redispatch");
           },
           workspaceOperations: createWorkerWorkspaceOperationCoordinator(),

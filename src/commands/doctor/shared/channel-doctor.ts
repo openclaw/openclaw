@@ -91,25 +91,9 @@ function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig):
   );
 }
 
-function safeGetLoadedChannelPlugin(id: string) {
+function safelyResolveChannelPlugin<T>(id: string, resolve: (id: string) => T): T | undefined {
   try {
-    return getLoadedChannelPlugin(id);
-  } catch {
-    return undefined;
-  }
-}
-
-function safeGetBundledChannelSetupPlugin(id: string) {
-  try {
-    return getBundledChannelSetupPlugin(id);
-  } catch {
-    return undefined;
-  }
-}
-
-function safeGetBundledChannelPlugin(id: string) {
-  try {
-    return getBundledChannelPlugin(id);
+    return resolve(id);
   } catch {
     return undefined;
   }
@@ -203,9 +187,9 @@ function listChannelDoctorEntries(
   for (const id of selectedIds) {
     const doctor = mergeDoctorAdapters([
       readOnlyPluginsById.get(id)?.doctor,
-      safeGetLoadedChannelPlugin(id)?.doctor,
-      safeGetBundledChannelSetupPlugin(id)?.doctor,
-      safeGetBundledChannelPlugin(id)?.doctor,
+      safelyResolveChannelPlugin(id, getLoadedChannelPlugin)?.doctor,
+      safelyResolveChannelPlugin(id, getBundledChannelSetupPlugin)?.doctor,
+      safelyResolveChannelPlugin(id, getBundledChannelPlugin)?.doctor,
     ]);
     if (!doctor) {
       continue;
@@ -311,6 +295,7 @@ export async function runChannelDoctorConfigSequences(params: {
     return { changeNotes: [], warningNotes: preserved.warnings ?? [] };
   }
   const changeNotes: string[] = [];
+  const infoNotes: string[] = [];
   const warningNotes: string[] = [];
   for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(params.cfg), {
     cfg: params.cfg,
@@ -321,9 +306,10 @@ export async function runChannelDoctorConfigSequences(params: {
       continue;
     }
     changeNotes.push(...result.changeNotes);
+    infoNotes.push(...(result.infoNotes ?? []));
     warningNotes.push(...result.warningNotes);
   }
-  return { changeNotes, warningNotes };
+  return { changeNotes, warningNotes, ...(infoNotes.length > 0 ? { infoNotes } : {}) };
 }
 
 /** Collect compatibility migrations from configured channel doctor adapters in order. */

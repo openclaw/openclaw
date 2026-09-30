@@ -6,19 +6,9 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { LookupFn } from "../src/infra/net/ssrf.js";
 import * as cliArgs from "./lib/arg-utils.mts";
 
-type BenchmarkCaseId =
-  | "tool-create"
-  | "tool-text"
-  | "tool-markdown"
-  | "tool-html-article"
-  | "tool-html-article-text"
-  | "tool-html-shell"
-  | "extract-readable-article"
-  | "extract-readable-article-text"
-  | "extract-basic-shell";
+type BenchmarkCaseId = (typeof ALL_CASE_IDS)[number];
 
 type BenchmarkCase = {
-  id: BenchmarkCaseId;
   label: string;
   run: () => Promise<void> | void;
 };
@@ -63,7 +53,7 @@ const ALL_CASE_IDS = [
   "extract-readable-article",
   "extract-readable-article-text",
   "extract-basic-shell",
-] as const satisfies readonly BenchmarkCaseId[];
+] as const;
 
 const SPLIT_VALUE_FLAG_OPTIONS = { allowInline: false, rejectShortOptions: true } as const;
 
@@ -110,7 +100,7 @@ const TEXT_BODY = "OpenClaw web_fetch direct text benchmark body.".repeat(160);
 const MARKDOWN_BODY = "# Web Fetch Benchmark\n\n" + "- markdown list item\n".repeat(220);
 const OFFLINE_PROVIDER_ENV_VARS = ["FIRECRAWL_API_KEY"] as const;
 
-const lookupFn = (async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
+const lookupFn: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
 const toolConfig: OpenClawConfig = {
   tools: {
     web: {
@@ -231,17 +221,16 @@ function stats(values: number[]): SummaryStats {
 }
 
 function installMockFetch(params: { body: string; contentType: string }) {
-  const fetchImpl = (async () =>
-    new Response(params.body, {
-      status: 200,
-      headers: {
-        "content-type": params.contentType,
-      },
-    })) as unknown as typeof globalThis.fetch & { mock: object };
   // fetchWithSsrFGuard preserves dispatcher support unless global fetch is a
   // test double. The marker keeps this benchmark offline and deterministic.
-  fetchImpl.mock = {};
-  globalThis.fetch = fetchImpl;
+  globalThis.fetch = Object.assign(
+    async () =>
+      new Response(params.body, {
+        status: 200,
+        headers: { "content-type": params.contentType },
+      }),
+    { mock: {} },
+  );
 }
 
 async function withOfflineProviderEnv<T>(run: () => Promise<T>): Promise<T> {
@@ -280,65 +269,58 @@ async function loadCaseFactory(): Promise<() => Record<BenchmarkCaseId, Benchmar
     return tool;
   }
 
+  function fetchCase(
+    label: string,
+    body: string,
+    contentType: string,
+    request: { url: string; extractMode?: "text" },
+  ): BenchmarkCase {
+    const tool = createTool();
+    return {
+      label,
+      run: async () => {
+        installMockFetch({ body, contentType });
+        await tool.execute("bench", { ...request });
+      },
+    };
+  }
+
   return () => {
-    const textTool = createTool();
-    const markdownTool = createTool();
-    const articleTool = createTool();
-    const articleTextTool = createTool();
-    const shellTool = createTool();
     return {
       "tool-create": {
-        id: "tool-create",
         label: "create web_fetch tool",
         run: () => {
           createTool();
         },
       },
-      "tool-text": {
-        id: "tool-text",
-        label: "execute text/plain fetch",
-        run: async () => {
-          installMockFetch({ body: TEXT_BODY, contentType: "text/plain; charset=utf-8" });
-          await textTool.execute("bench", { url: "https://example.com/plain" });
-        },
-      },
-      "tool-markdown": {
-        id: "tool-markdown",
-        label: "execute text/markdown fetch",
-        run: async () => {
-          installMockFetch({ body: MARKDOWN_BODY, contentType: "text/markdown; charset=utf-8" });
-          await markdownTool.execute("bench", { url: "https://example.com/markdown" });
-        },
-      },
-      "tool-html-article": {
-        id: "tool-html-article",
-        label: "execute article HTML fetch",
-        run: async () => {
-          installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
-          await articleTool.execute("bench", { url: "https://example.com/article" });
-        },
-      },
-      "tool-html-article-text": {
-        id: "tool-html-article-text",
-        label: "execute article HTML fetch as text",
-        run: async () => {
-          installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
-          await articleTextTool.execute("bench", {
-            url: "https://example.com/article-text",
-            extractMode: "text",
-          });
-        },
-      },
-      "tool-html-shell": {
-        id: "tool-html-shell",
-        label: "execute shell HTML fallback fetch",
-        run: async () => {
-          installMockFetch({ body: SHELL_HTML, contentType: "text/html; charset=utf-8" });
-          await shellTool.execute("bench", { url: "https://example.com/shell" });
-        },
-      },
+      "tool-text": fetchCase("execute text/plain fetch", TEXT_BODY, "text/plain; charset=utf-8", {
+        url: "https://example.com/plain",
+      }),
+      "tool-markdown": fetchCase(
+        "execute text/markdown fetch",
+        MARKDOWN_BODY,
+        "text/markdown; charset=utf-8",
+        { url: "https://example.com/markdown" },
+      ),
+      "tool-html-article": fetchCase(
+        "execute article HTML fetch",
+        ARTICLE_HTML,
+        "text/html; charset=utf-8",
+        { url: "https://example.com/article" },
+      ),
+      "tool-html-article-text": fetchCase(
+        "execute article HTML fetch as text",
+        ARTICLE_HTML,
+        "text/html; charset=utf-8",
+        { url: "https://example.com/article-text", extractMode: "text" },
+      ),
+      "tool-html-shell": fetchCase(
+        "execute shell HTML fallback fetch",
+        SHELL_HTML,
+        "text/html; charset=utf-8",
+        { url: "https://example.com/shell" },
+      ),
       "extract-readable-article": {
-        id: "extract-readable-article",
         label: "extract readable article HTML",
         run: async () => {
           await extractReadableContent({
@@ -350,7 +332,6 @@ async function loadCaseFactory(): Promise<() => Record<BenchmarkCaseId, Benchmar
         },
       },
       "extract-readable-article-text": {
-        id: "extract-readable-article-text",
         label: "extract readable article HTML as text",
         run: async () => {
           await extractReadableContent({
@@ -362,7 +343,6 @@ async function loadCaseFactory(): Promise<() => Record<BenchmarkCaseId, Benchmar
         },
       },
       "extract-basic-shell": {
-        id: "extract-basic-shell",
         label: "extract basic shell HTML",
         run: async () => {
           await extractBasicHtmlContent({
@@ -375,7 +355,11 @@ async function loadCaseFactory(): Promise<() => Record<BenchmarkCaseId, Benchmar
   };
 }
 
-async function measureCase(testCase: BenchmarkCase, options: Options): Promise<CaseReport> {
+async function measureCase(
+  id: BenchmarkCaseId,
+  testCase: BenchmarkCase,
+  options: Options,
+): Promise<CaseReport> {
   for (let index = 0; index < options.warmup; index += 1) {
     await testCase.run();
   }
@@ -386,7 +370,7 @@ async function measureCase(testCase: BenchmarkCase, options: Options): Promise<C
     samplesMs.push(round(performance.now() - started));
   }
   return {
-    id: testCase.id,
+    id,
     label: testCase.label,
     samplesMs,
     summaryMs: stats(samplesMs),
@@ -416,7 +400,7 @@ async function main(): Promise<void> {
     const casesById = createCases();
     const cases: CaseReport[] = [];
     for (const caseId of options.cases) {
-      cases.push(await measureCase(casesById[caseId], options));
+      cases.push(await measureCase(caseId, casesById[caseId], options));
     }
     return {
       cases,

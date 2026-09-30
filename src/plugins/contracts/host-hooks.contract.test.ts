@@ -342,9 +342,7 @@ describe("host-hook fixture plugin contract", () => {
         activationSource: "default",
       }),
       register(api) {
-        api.registerAgentToolResultMiddleware(async (event) => ({ result: event.result }), {
-          runtimes: ["codex"],
-        });
+        api.registerAgentToolResultMiddleware(async (event) => ({ result: event.result }));
       },
     });
 

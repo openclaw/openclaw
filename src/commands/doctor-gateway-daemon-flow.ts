@@ -1,4 +1,3 @@
-/** Doctor gateway daemon repair flow for service install, bootstrap, restart, and port hints. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -15,6 +14,7 @@ import {
   launchAgentPlistExists,
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
+import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceLoadState } from "../daemon/service-types.js";
 import {
@@ -38,12 +38,8 @@ import { isWSL } from "../infra/wsl.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-  type GatewayDaemonRuntime,
-} from "./daemon-runtime.js";
-import { buildGatewayRuntimeHints, formatGatewayRuntimeSummary } from "./doctor-format.js";
+import { GATEWAY_DAEMON_RUNTIME_OPTIONS, type GatewayDaemonRuntime } from "./daemon-runtime.js";
+import { buildGatewayRuntimeHints } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
   confirmDoctorServiceRepair,
@@ -69,7 +65,7 @@ function noteGatewayRuntime(
   serviceRuntime: GatewayServiceRuntime | undefined,
   env: Record<string, string | undefined>,
 ): void {
-  const summary = formatGatewayRuntimeSummary(serviceRuntime);
+  const summary = formatRuntimeStatus(serviceRuntime);
   const hints = buildGatewayRuntimeHints(serviceRuntime, { platform: process.platform, env });
   const lines = summary ? [`Runtime: ${summary}`, ...hints] : hints;
   const sqliteLibrary = ensureSqliteLibrarySelected();
@@ -265,7 +261,11 @@ export async function maybeRepairGatewayDaemon(params: {
   const isLocalDarwinGateway = process.platform === "darwin";
   const serviceState = await readGatewayServiceState(service, { env: process.env });
   if (serviceState.loadState.status === "unknown") {
-    await noteGatewayServiceInspectionFailure(serviceState.loadState);
+    if (service.unsupportedReason) {
+      note(service.unsupportedReason, "Gateway");
+    } else {
+      await noteGatewayServiceInspectionFailure(serviceState.loadState);
+    }
     return;
   }
   let loaded = serviceState.loadState.status === "loaded";
@@ -377,14 +377,14 @@ export async function maybeRepairGatewayDaemon(params: {
       const selection = await resolveGatewaySetupRuntime({
         env: process.env,
         existingCommand: serviceState.command,
-        selectRuntime: () =>
+        selectRuntime: (suggested) =>
           params.prompter.select<GatewayDaemonRuntime>(
             {
               message: "Gateway service runtime",
               options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-              initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+              initialValue: suggested,
             },
-            DEFAULT_GATEWAY_DAEMON_RUNTIME,
+            suggested,
           ),
       });
       const tokenResolution = await resolveGatewayInstallToken({
@@ -410,6 +410,8 @@ export async function maybeRepairGatewayDaemon(params: {
         env: selection.env,
         port,
         runtime: selection.runtime,
+        runtimeExplicit: selection.runtimeExplicit,
+        runtimePath: selection.runtimePath,
         pinnedRuntimePath: selection.pinnedRuntimePath,
         existingCommand: serviceState.command,
         warn: (message, title) => note(message, title),

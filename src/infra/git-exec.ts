@@ -105,16 +105,18 @@ function withForegroundGitMaintenance(argv: string[]): string[] {
 
 export type GitCommandOptions = Pick<
   CommandOptions,
+  | "timeoutMs"
   | "baseEnv"
   | "env"
   | "input"
-  | "timeoutMs"
   | "signal"
   | "killProcessTree"
   | "killGraceMs"
   | "maxOutputBytes"
   | "terminateOnOutputLimit"
 > & {
+  /** An admitted destructive operation must settle without the generic Git deadline. */
+  waitForExit?: boolean;
   /** Recheck caller authority immediately before each attempt. */
   beforeRun?: () => void;
 };
@@ -125,18 +127,7 @@ export async function executeGitCommand(
   args: string[],
   options: GitCommandOptions = {},
 ): Promise<GitCommandResult> {
-  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  const argv = ["git", "-C", cwd, ...args];
-  const result = await withGitNetworkRetry(
-    retryableGitNetworkOperation(args),
-    { ...options, timeoutMs },
-    (attemptTimeoutMs) =>
-      runCommandWithTimeout(options.killProcessTree ? withForegroundGitMaintenance(argv) : argv, {
-        ...options,
-        timeoutMs: attemptTimeoutMs,
-      }),
-  );
-  return { ...result, timeoutMs };
+  return executeGitCommandWithOutput(runCommandWithTimeout, cwd, args, options);
 }
 
 /** The same command/timeout contract, with output bytes owned by a worker consumer. */
@@ -145,16 +136,33 @@ export async function executeGitCommandBytes(
   args: string[],
   options: GitCommandOptions = {},
 ): Promise<GitCommandBytesResult> {
+  return executeGitCommandWithOutput(runCommandBuffersWithTimeout, cwd, args, options);
+}
+
+async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSpawnResult>(
+  run: (argv: string[], options: CommandOptions) => Promise<Result>,
+  cwd: string,
+  args: string[],
+  options: GitCommandOptions,
+): Promise<Result & { timeoutMs: number }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const argv = ["git", "-C", cwd, ...args];
+  if (options.waitForExit === true) {
+    options.beforeRun?.();
+    const result = await run(options.killProcessTree ? withForegroundGitMaintenance(argv) : argv, {
+      ...options,
+      timeoutMs: undefined,
+    });
+    return { ...result, timeoutMs: 0 };
+  }
   const result = await withGitNetworkRetry(
     retryableGitNetworkOperation(args),
     { ...options, timeoutMs },
     (attemptTimeoutMs) =>
-      runCommandBuffersWithTimeout(
-        options.killProcessTree ? withForegroundGitMaintenance(argv) : argv,
-        { ...options, timeoutMs: attemptTimeoutMs },
-      ),
+      run(options.killProcessTree ? withForegroundGitMaintenance(argv) : argv, {
+        ...options,
+        timeoutMs: attemptTimeoutMs,
+      }),
   );
   return { ...result, timeoutMs };
 }

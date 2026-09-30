@@ -1,57 +1,79 @@
+import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
+import type { ChannelsState } from "../../lib/channels/index.ts";
+import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
+export type ChannelsViewTestOverrides = Partial<
+  Omit<ChannelsProps, "channels" | "config" | "presentation" | "wizardHost">
+> & {
+  channels?: Partial<ChannelsProps["channels"]>;
+  config?: Partial<ChannelsProps["config"]>;
+  presentation?: Partial<ChannelsProps["presentation"]>;
+  wizardHost?: Partial<ChannelsProps["wizardHost"]>;
+};
+
 export function createChannelsViewProps(
-  snapshot: ChannelsProps["snapshot"],
-  pairingSnapshot: ChannelsProps["pairingSnapshot"],
-  overrides?: Partial<ChannelsProps>,
+  snapshot: ChannelsStatusSnapshot | null,
+  pairingSnapshot: ChannelsPairingListResult | null,
+  overrides: ChannelsViewTestOverrides = {},
 ): ChannelsProps {
-  return {
+  const { channels, config, presentation, wizardHost, ...props } = overrides;
+  const channelState: ChannelsState = {
+    client: null,
     connected: true,
-    loading: false,
-    snapshot,
-    pluginCatalog: null,
-    pluginIconUrls: {},
-    lastError: null,
-    lastSuccessAt: null,
+    channelsLoading: false,
+    channelsLoadingProbe: null,
+    channelsRefreshSeq: 0,
+    channelsSnapshot: snapshot,
+    channelsError: null,
+    channelsLastSuccess: null,
     pairingLoading: false,
+    pairingRefreshSeq: 0,
     pairingSnapshot,
     pairingError: null,
-    pairingLastSuccessAt: null,
+    pairingLastSuccess: null,
     pairingBusyRequestId: null,
+    whatsappLoginMessage: null,
+    whatsappLoginQrDataUrl: null,
+    whatsappLoginSessionKey: null,
+    whatsappLoginConnected: null,
+    whatsappBusy: false,
+    ...channels,
+  };
+  return {
+    channels: channelState,
+    config: { ...createInitialConfigState(), ...config },
+    presentation: {
+      pluginCatalog: null,
+      pluginIconUrls: {},
+      ...presentation,
+    } as ChannelsProps["presentation"],
+    wizardHost: {
+      state: { phase: "idle" },
+      multiselect: [],
+      textValue: "",
+      secretVisible: false,
+      blockedByDirtyConfig: false,
+      toggleMultiselect: () => {},
+      setTextValue: () => {},
+      toggleSecretVisibility: () => {},
+      answer: () => {},
+      close: () => {},
+      ...wizardHost,
+    } as ChannelsProps["wizardHost"],
     pairingChannelFilter: null,
     pairingAccountFilter: null,
     pairingPrompt: null,
     pairingNotice: null,
     canManagePairing: true,
     canAdmin: true,
-    whatsappMessage: null,
-    whatsappQrDataUrl: null,
-    whatsappConnected: null,
-    whatsappBusy: false,
-    configSchema: null,
-    configSchemaLoading: false,
-    configForm: null,
-    configUiHints: {},
-    configSaving: false,
-    configError: null,
-    configFormDirty: false,
     showAdvancedSettings: false,
     nostrProfileFormState: null,
     nostrProfileAccountId: null,
     selectedChannel: null,
-    wizard: { phase: "idle" },
-    wizardMultiselect: [],
-    wizardTextValue: "",
-    wizardSecretVisible: false,
-    setupBlockedByDirtyConfig: false,
     onShowDetail: () => {},
     onCloseDetail: () => {},
     onStartSetup: () => {},
-    onWizardAnswer: () => {},
-    onWizardToggleMultiselect: () => {},
-    onWizardTextInput: () => {},
-    onWizardToggleSecretVisibility: () => {},
-    onWizardClose: () => {},
     onRefresh: () => {},
     onPairingRefresh: () => {},
     onPairingFilterChange: () => {},
@@ -74,6 +96,6 @@ export function createChannelsViewProps(
     onNostrProfileSave: () => {},
     onNostrProfileImport: () => {},
     onNostrProfileToggleAdvanced: () => {},
-    ...overrides,
+    ...props,
   };
 }

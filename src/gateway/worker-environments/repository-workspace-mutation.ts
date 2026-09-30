@@ -127,6 +127,7 @@ export function createRepositoryWorkspaceMutationService(options: {
                       claim,
                       ref,
                       workspace.repository.workspaceId,
+                      assertCurrent,
                     ),
                 },
                 assertCurrent,
@@ -139,6 +140,7 @@ export function createRepositoryWorkspaceMutationService(options: {
             }
             placements.acceptWorkspaceResult(claim);
             await settleStagedWorkspaceResult({
+              assertCurrent,
               placements,
               turnClaim: claim,
               workspace,

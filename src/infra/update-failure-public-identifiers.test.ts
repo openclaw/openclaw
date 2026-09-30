@@ -25,6 +25,11 @@ it("keeps unknown check and reason identifiers private", async () => {
   ).resolves.toEqual({ check: "[redacted-check]", code: "[redacted-code]" });
 });
 
+it("preserves runtime staging failures in public reports", async () => {
+  const fact = { check: "preflight-runtime-stage", code: "ENOSPC" };
+  await expect(projectPublicUpdateFailureIdentifiers(fact)).resolves.toEqual(fact);
+});
+
 it("publishes only the fixed lease code, not the internal class or arbitrary identities", async () => {
   await expect(
     projectPublicUpdateFailureIdentifiers({ check: "doctor", code: "agent-database-lease-active" }),

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { gitNullConfigPath } from "./git-exec.js";
 import {
@@ -10,7 +11,8 @@ import {
   withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
-import type { CommandRunner, RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
+import type { CommandRunner, RunStepOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 
@@ -119,14 +121,17 @@ it
   .each([
     "none",
     "inventory",
+    "inventory-closed",
     "missing-pack",
     "large-pack",
     "retry",
     "missing-before",
     "legacy-git",
     "configured-limit",
+    "cleanup-uncertain",
+    "cleanup-io",
   ] as const)("transfers Git objects without buffering the pack (scenario=%s)", async (failure) => {
-  const overflow = failure === "inventory";
+  const overflow = failure === "inventory" || failure === "inventory-closed";
   const missingPack = failure === "missing-pack";
   const largePack = failure === "large-pack";
   const root = temporary.make("git-transfer-bounds-");
@@ -206,7 +211,20 @@ it
     if (failure === "legacy-git" && argv.includes("--no-lazy-fetch") && argv.includes("version")) {
       return { code: 129, stdout: "", stderr: "unknown option: --no-lazy-fetch" };
     }
-    if (overflow && argv.includes("rev-list")) {
+    if (overflow && argv.includes("rev-list") && argv.includes(candidateSha)) {
+      if (failure === "inventory-closed") {
+        const result = await runCommandWithTimeout(argv, {
+          ...options,
+          env,
+          maxOutputBytes: 1024 * 1024,
+          terminateOnOutputLimit: false,
+        });
+        expect(result.code).toBe(0);
+        expect(result.stdout.length).toBeGreaterThan(41 * 12);
+        boundedExitObserved = true;
+        // A bounded transport may report incomplete output after normal child closure.
+        return { ...result, stdout: result.stdout.slice(0, 41 * 12), outputLimitExceeded: true };
+      }
       // The child emits real Git output and handles termination with exit zero.
       // This is legal process behavior; exit status alone cannot admit its tail.
       const script = `const { spawnSync } = require("node:child_process");
@@ -303,6 +321,40 @@ it
   if (failure === "missing-before" || failure === "legacy-git") {
     expect(packBytes).toBeGreaterThan(baseBytes.length);
   }
+  if (failure === "cleanup-uncertain" || failure === "cleanup-io") {
+    const error =
+      failure === "cleanup-uncertain"
+        ? new Error("Git cleanup did not join", { cause: new CommandProcessCleanupError() })
+        : Object.assign(new Error("Git cleanup probe denied"), { code: "EACCES" });
+    const recorded = results.length;
+    const keepDirectory = path.join(install, ".git", "objects", "pack");
+    const retained = fs.readdirSync(keepDirectory).filter((name) => name.endsWith(".keep"));
+    expect(retained).toHaveLength(1);
+    const cleanup = admittedTransfer.cleanup({
+      ...step(install),
+      runCommand: async () => {
+        throw error;
+      },
+    });
+    if (failure === "cleanup-uncertain") {
+      await expect(cleanup).rejects.toBe(error);
+      expect(results.slice(recorded)).toEqual([]);
+    } else {
+      await expect(cleanup).resolves.toBeUndefined();
+      expect(results.slice(recorded)).toMatchObject([
+        {
+          name: "git-update-pack-cleanup",
+          advisory: {
+            kind: "recoverable-maintenance",
+            message: expect.stringContaining(error.message),
+          },
+        },
+      ]);
+    }
+    expect(fs.readdirSync(keepDirectory).filter((name) => name.endsWith(".keep"))).toEqual(
+      retained,
+    );
+  }
   if (failure === "retry") {
     await transfer!.cleanup(step(install));
     const inspection = path.join(root, "inspection.git");
@@ -327,6 +379,13 @@ it
   }
   await git(install, "checkout", "--detach", candidateSha);
   await transfer!.cleanup(step(install));
+  if (failure === "cleanup-uncertain" || failure === "cleanup-io") {
+    expect(
+      fs
+        .readdirSync(path.join(install, ".git", "objects", "pack"))
+        .filter((name) => name.endsWith(".keep")),
+    ).toEqual([]);
+  }
   if (failure === "configured-limit") {
     expect(packBytes).toBeGreaterThan(1024 * 1024);
     expect(await git(source, "config", "pack.packSizeLimit")).toBe("1m");

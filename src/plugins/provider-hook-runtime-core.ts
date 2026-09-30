@@ -1,9 +1,9 @@
-import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { attachModelProviderLocalServiceReconciler } from "../agents/provider-local-service-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import {
+  hasConfiguredModelProvider,
   resolveModelCatalogScope,
   resolveProviderConfigApiOwnerHint,
 } from "./provider-config-owner.js";
@@ -88,15 +88,6 @@ export function createProviderHookRuntime(
     return normalizeOptionalString(
       params.modelId ??
         (typeof params.context?.modelId === "string" ? params.context.modelId : undefined),
-    );
-  }
-
-  function hasConfiguredModelProvider(params: {
-    provider: string;
-    config?: OpenClawConfig;
-  }): boolean {
-    return (
-      findNormalizedProviderValue(params.config?.models?.providers, params.provider) !== undefined
     );
   }
 
@@ -257,7 +248,7 @@ export function createProviderHookRuntime(
     const resolved = ensureProviderRuntimePluginHandle(params).plugin?.resolveAuthProfileId?.(
       params.context,
     );
-    return typeof resolved === "string" && resolved.trim() ? resolved.trim() : undefined;
+    return normalizeOptionalString(resolved);
   }
 
   function resolveProviderFollowupFallbackRoute(

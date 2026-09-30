@@ -27,7 +27,11 @@ import {
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
-import { bindPluginRegistryResourceOwner } from "../plugins/registry-lifecycle.js";
+import {
+  bindPluginRegistryGatewayOwner,
+  bindPluginRegistryResourceOwner,
+  getPluginRegistryGatewayOwner,
+} from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getActivePluginRegistry,
@@ -37,6 +41,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { adoptRuntimeToolRegistrations } from "../plugins/tool-registry-adoption.js";
 import { adoptRuntimeWidgetPresenterRegistrations } from "../plugins/widget-presenters.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -164,6 +169,7 @@ function adoptAgentRuntimeRegistrations(
 ): {
   registry: PluginRegistry;
   donor?: PluginRegistry;
+  toolDonor?: PluginRegistry;
 } {
   const activeRegistry = getActivePluginRegistry();
   if (params.purpose === "model-catalog") {
@@ -174,16 +180,28 @@ function adoptAgentRuntimeRegistrations(
     (params.env === undefined || params.env === process.env)
       ? adoptRuntimeChannelRegistrations(pluginRegistry, channelSource)
       : pluginRegistry;
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const toolDonor = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
+  const toolRegistry =
+    toolDonor &&
+    config &&
+    params.allowGatewaySubagentBinding === true &&
+    (params.env === undefined || params.env === process.env)
+      ? adoptRuntimeToolRegistrations(channelRegistry, toolDonor, config)
+      : channelRegistry;
   if (!activeRegistry) {
-    return { registry: channelRegistry };
+    return {
+      registry: bindAdmittingGateway(bindPluginRegistryResourceOwner(toolRegistry, pluginRegistry)),
+      ...(toolRegistry !== channelRegistry ? { toolDonor } : {}),
+    };
   }
   const memoryRegistry =
     params.metadataSnapshot &&
     params.workspaceDir &&
     config &&
     getActivePluginRegistryWorkspaceDir() === resolveUserPath(params.workspaceDir)
-      ? adoptRuntimeMemoryRegistrations(channelRegistry, activeRegistry, config)
-      : channelRegistry;
+      ? adoptRuntimeMemoryRegistrations(toolRegistry, activeRegistry, config)
+      : toolRegistry;
   const registry = bindPluginRegistryResourceOwner(
     adoptRuntimeWidgetPresenterRegistrations(
       adoptRuntimeContextEngineRegistrations(
@@ -198,7 +216,21 @@ function adoptAgentRuntimeRegistrations(
     ),
     pluginRegistry,
   );
-  return { registry, ...(registry !== pluginRegistry ? { donor: activeRegistry } : {}) };
+  return {
+    registry: bindAdmittingGateway(registry),
+    ...(registry !== pluginRegistry ? { donor: activeRegistry } : {}),
+    ...(toolRegistry !== channelRegistry ? { toolDonor } : {}),
+  };
+}
+
+/** The admitting Gateway owns reload recovery for work that runs in a turn registry. */
+function bindAdmittingGateway(registry: PluginRegistry): PluginRegistry {
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const admittingGateway = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry);
+  if (admittingGateway) {
+    bindPluginRegistryGatewayOwner(registry, admittingGateway, requestRegistry);
+  }
+  return registry;
 }
 
 export type AcquiredAgentRuntimePluginRegistry =
@@ -218,7 +250,7 @@ export async function acquireAgentRuntimePluginRegistry(
   const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
-    return { registry: reusable, primaryRegistry: reusable };
+    return { registry: bindAdmittingGateway(reusable), primaryRegistry: reusable };
   }
   const acquire = () => acquirePluginRegistryForInspection(loadOptions);
   const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
@@ -227,7 +259,7 @@ export async function acquireAgentRuntimePluginRegistry(
     : acquire());
   let releaseWork = () => {};
   try {
-    const { registry, donor } = adoptAgentRuntimeRegistrations(
+    const { registry, donor, toolDonor } = adoptAgentRuntimeRegistrations(
       acquired.registry,
       params,
       loadOptions.config,
@@ -242,8 +274,14 @@ export async function acquireAgentRuntimePluginRegistry(
     if (registry !== acquired.registry) {
       primaryResources.attach(registry);
     }
-    if (donor) {
+    if (donor || toolDonor) {
+      // Invocation custody follows every borrowed factory, independently of the lookup donor.
       primaryResources.adoptInvocations(registry, donor);
+      const toolResources = toolDonor && getPluginRegistryInspectionResources(toolDonor);
+      if (toolResources && toolDonor !== donor) {
+        // Release invocation custody before relinquishing this additional physical source.
+        primaryResources.retainDependency(toolResources);
+      }
     }
     return {
       registry,
@@ -275,7 +313,7 @@ export function loadAgentRuntimePluginRegistryHandle(
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
     onPrimaryRegistry?.(reusable);
-    return reusable;
+    return bindAdmittingGateway(reusable);
   }
   // Discovery-only load: full mode can replace process-global sandbox backends.
   // Adopt full-only runtime capabilities from the matching composition-root owners.

@@ -8,6 +8,12 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defineMobileFooterActionCases,
+  expectStableNamePosition,
+  readActionTapArea,
+  readFooterGeometry,
+} from "./chat-attributed-identity.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -34,44 +40,9 @@ async function captureProof(page: Page, name: string) {
   });
 }
 
-async function readFooterGeometry(group: Locator) {
-  return group.locator(".chat-group-footer").evaluate((footer) => {
-    const actions = footer.querySelector<HTMLElement>(".chat-group-footer-actions");
-    const identity = footer.querySelector<HTMLElement>(".chat-group-footer__meta");
-    const name = footer.querySelector<HTMLElement>(".chat-sender-name");
-    if (!actions || !identity || !name) {
-      throw new Error("Expected message footer identity and actions");
-    }
-    const actionsRect = actions.getBoundingClientRect();
-    const footerRect = footer.getBoundingClientRect();
-    const identityRect = identity.getBoundingClientRect();
-    const nameRect = name.getBoundingClientRect();
-    return {
-      actions: {
-        left: actionsRect.left,
-        right: actionsRect.right,
-        top: actionsRect.top,
-      },
-      identity: {
-        bottom: identityRect.bottom,
-        left: identityRect.left,
-        right: identityRect.right,
-      },
-      footer: { right: footerRect.right },
-      name: { left: nameRect.left - footerRect.left, top: nameRect.top - footerRect.top },
-    };
-  });
-}
-
-function expectStableNamePosition(
-  actual: { left: number; top: number },
-  expected: { left: number; top: number },
-) {
-  expect(actual.left).toBe(expected.left);
-  expect(actual.top).toBeCloseTo(expected.top, 0);
-}
-
 suite.define(() => {
+  defineMobileFooterActionCases(suite);
+
   it.each(["none", "min-content", "max-content", "48rem", "82%", "min(768px, 82%)"])(
     "keeps restored message width %s inside the mobile safe area",
     async (messageWidth) => {
@@ -120,9 +91,9 @@ suite.define(() => {
               const rect = element.getBoundingClientRect();
               return { left: rect.left, right: rect.right };
             });
-            expect(bounds.left).toBeGreaterThanOrEqual(48);
-            expect(bounds.right).toBeLessThanOrEqual(916);
-            expect(bounds.left - 48).toBeCloseTo(916 - bounds.right, 0);
+            expect(bounds.left).toBeGreaterThanOrEqual(44 + 20);
+            expect(bounds.right).toBeLessThanOrEqual(932 - 20);
+            expect(bounds.left - 44).toBeCloseTo(932 - bounds.right, 0);
           }
         }
       });
@@ -194,10 +165,9 @@ suite.define(() => {
             }, direction);
             await expectColumn(page.locator(".agent-chat__composer-shell"));
             const frame = await transcript.boundingBox();
-            expect(frame!.x - Math.max(12, safeAreaLeft)).toBeCloseTo(
-              width - 12 - frame!.x - frame!.width,
-              0,
-            );
+            expect(frame!.x).toBeGreaterThanOrEqual(safeAreaLeft + 20);
+            expect(frame!.x + frame!.width).toBeLessThanOrEqual(width - 20);
+            expect(frame!.x - safeAreaLeft).toBeCloseTo(width - frame!.x - frame!.width, 0);
             await expectColumn(page.locator(".chat-group.assistant > .chat-group-messages"));
             await expect(page.locator(".chat-group .chat-avatar:visible")).toHaveCount(0);
           }
@@ -387,7 +357,7 @@ suite.define(() => {
     await expect(
       page.locator(".chat-group-footer--persistent-identity .chat-sender-name"),
     ).toHaveText(["Riley", "Colin", "Alexandria Montgomery-Winter"]);
-    await expect(page.locator(".chat-author-avatar")).toHaveCount(0);
+    await expect(page.locator(".chat-group-footer .chat-author-avatar")).toHaveCount(0);
     const peerGroup = userGroups.nth(1);
     const longNamePeerGroup = userGroups.last();
     const hoverDetails = peerGroup.locator(".chat-group-timestamp");
@@ -397,7 +367,7 @@ suite.define(() => {
     const restingPeerGeometry = await readFooterGeometry(peerGroup);
     await peerGroup.hover();
     await expect(hoverDetails).toHaveCSS("opacity", "1");
-    await expect(page.locator(".chat-author-avatar")).toHaveCount(0);
+    await expect(page.locator(".chat-group-footer .chat-author-avatar")).toHaveCount(0);
     await captureProof(page, "after-hover.png");
     const hoveredPeerGeometry = await readFooterGeometry(peerGroup);
     expectStableNamePosition(hoveredPeerGeometry.name, restingPeerGeometry.name);
@@ -438,26 +408,60 @@ suite.define(() => {
     await page.evaluate(() => {
       document.documentElement.dir = "ltr";
     });
-    await page.setViewportSize({ height: 760, width: 390 });
-    await page.mouse.move(0, 0);
-    const restingTouchGeometry = await readFooterGeometry(longNamePeerGroup);
-    const restingTouchHeight = (await longNamePeerGroup.boundingBox())?.height;
-    await longNamePeerGroup
-      .locator(".chat-bubble")
-      .dispatchEvent("pointerup", { pointerType: "touch" });
-    await expect(longNamePeerGroup).toHaveClass(/\bchat-group--meta-revealed\b/u);
-    const revealedTouchGeometry = await readFooterGeometry(longNamePeerGroup);
-    const revealedTouchHeight = (await longNamePeerGroup.boundingBox())?.height;
-    expectStableNamePosition(revealedTouchGeometry.name, restingTouchGeometry.name);
-    expect(revealedTouchGeometry.actions.top).toBeGreaterThanOrEqual(
-      revealedTouchGeometry.identity.bottom,
-    );
-    expect(revealedTouchGeometry.actions.right).toBeCloseTo(revealedTouchGeometry.footer.right, 0);
-    await expect(longNamePeerGroup.getByRole("button", { name: "Reply to message" })).toHaveCSS(
-      "opacity",
-      "1",
-    );
-    expect(revealedTouchHeight).toBeGreaterThan(restingTouchHeight ?? 0);
+    for (const width of [320, 390, 430]) {
+      await page.setViewportSize({ height: 760, width });
+      await page.mouse.move(0, 0);
+      // The prior native rewind/cancel interaction can leave fine-pointer hover/focus behind.
+      await page.mouse.move(0, 0);
+      await page.getByRole("textbox", { name: "Chat composer" }).focus();
+      const restingTouchGeometry = await readFooterGeometry(longNamePeerGroup);
+      const restingTouchHeight = (await longNamePeerGroup.boundingBox())?.height;
+      await longNamePeerGroup
+        .locator(".chat-bubble")
+        .dispatchEvent("pointerup", { pointerType: "touch" });
+      await expect(longNamePeerGroup).toHaveClass(/\bchat-group--meta-revealed\b/u);
+      const revealedTouchGeometry = await readFooterGeometry(longNamePeerGroup);
+      expectStableNamePosition(revealedTouchGeometry.name, restingTouchGeometry.name);
+      // Metadata and 44px touch controls share one row, including when the
+      // timestamp wraps within its own column. No disconnected action row.
+      expect(revealedTouchGeometry.actions.top).toBeLessThan(revealedTouchGeometry.identity.bottom);
+      expect(revealedTouchGeometry.actions.bottom).toBeGreaterThan(
+        revealedTouchGeometry.identity.top,
+      );
+      expect(revealedTouchGeometry.actions.left - revealedTouchGeometry.identity.right).toBeCloseTo(
+        8,
+        0,
+      );
+      expect(revealedTouchGeometry.actions.right).toBeCloseTo(
+        revealedTouchGeometry.footer.right,
+        0,
+      );
+      expect(revealedTouchGeometry.actions.left).toBeGreaterThanOrEqual(0);
+      expect(revealedTouchGeometry.footer.right).toBeLessThanOrEqual(width);
+      const reply = longNamePeerGroup.getByRole("button", { name: "Reply to message" });
+      await expect(reply).toHaveCSS("opacity", "1");
+      for (const control of [
+        reply,
+        longNamePeerGroup.getByRole("button", { name: "Rewind", exact: true }),
+      ]) {
+        const target = await readActionTapArea(control);
+        expect(target.width).toBeGreaterThanOrEqual(44);
+        expect(target.height).toBeGreaterThanOrEqual(44);
+        expect(target.hitCorners).toBe(4);
+        if (width === 390 && (await control.getAttribute("aria-label")) === "Rewind") {
+          await page.mouse.click(target.left + 2, target.top + target.height - 2);
+          const confirmation = page.locator(".chat-confirm-popover");
+          await expect(confirmation).toBeVisible();
+          await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+          await expect(confirmation).toHaveCount(0);
+        }
+      }
+      expect((await longNamePeerGroup.boundingBox())?.height).toBe(restingTouchHeight);
+      await longNamePeerGroup
+        .locator(".chat-bubble")
+        .dispatchEvent("pointerup", { pointerType: "touch" });
+      await expect(longNamePeerGroup).not.toHaveClass(/\bchat-group--meta-revealed\b/u);
+    }
 
     await page.setViewportSize({ height: 760, width: 1180 });
     // Own-message footer: the always-visible name must stay put when hover
@@ -484,6 +488,59 @@ suite.define(() => {
       hoveredNameBox?.x ?? 0,
     );
 
+    // Own actions used to sit inside the metadata flex row, unlike peer and
+    // assistant actions. Large touch targets must not center the timestamp
+    // below the visible icons in any of those production renderers.
+    for (const width of [320, 390, 430]) {
+      await page.setViewportSize({ height: 760, width });
+      for (const group of [ownGroup, peerGroup, page.locator(".chat-group.assistant").last()]) {
+        const restingHeight = (await group.boundingBox())?.height;
+        await group.locator(".chat-bubble").dispatchEvent("pointerup", { pointerType: "touch" });
+        await expect(group).toHaveClass(/\bchat-group--meta-revealed\b/u);
+        const alignment = await group.locator(".chat-group-footer").evaluate((footer) => {
+          const centerY = (element: Element) => {
+            const bounds = element.getBoundingClientRect();
+            return bounds.top + bounds.height / 2;
+          };
+          return {
+            time: centerY(footer.querySelector(".chat-group-timestamp")!),
+            icons: [...footer.querySelectorAll(".chat-group-footer-actions button svg")].map(
+              centerY,
+            ),
+            targets: [...footer.querySelectorAll(".chat-group-footer-actions button")].map(
+              (button) => {
+                const bounds = button.getBoundingClientRect();
+                const extension = getComputedStyle(button, "::before");
+                return {
+                  width: Number.parseFloat(extension.width) || bounds.width,
+                  height: Number.parseFloat(extension.height) || bounds.height,
+                };
+              },
+            ),
+          };
+        });
+        expect((await group.boundingBox())?.height).toBe(restingHeight);
+        expect(alignment.icons.length).toBeGreaterThan(0);
+        for (const center of alignment.icons) {
+          expect(Math.abs(center - alignment.time)).toBeLessThanOrEqual(1);
+        }
+        for (const target of alignment.targets) {
+          expect(target.width).toBeGreaterThanOrEqual(44);
+          expect(target.height).toBeGreaterThanOrEqual(44);
+        }
+        await group.locator(".chat-bubble").dispatchEvent("pointerup", { pointerType: "touch" });
+      }
+    }
+
+    // Tight touch rows still expose the complete keyboard focus ring.
+    await ownGroup.getByRole("button", { name: "Rewind", exact: true }).focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(ownGroup.getByRole("button", { name: "Reply to message" })).toBeFocused();
+    await expect(ownGroup.getByRole("button", { name: "Reply to message" })).toHaveCSS(
+      "outline-style",
+      "solid",
+    );
+
     const footerOrder = await peerGroup
       .locator(".chat-group-footer")
       .locator("button, .chat-sender-name, .chat-group-timestamp")
@@ -498,7 +555,7 @@ suite.define(() => {
           return element.getAttribute("aria-label");
         }),
       );
-    expect(footerOrder).toEqual(["name", "time", "Reply to message", "Rewind"]);
+    expect(footerOrder).toEqual(["name", "time", "Reply to message", "Rewind", "Copy as markdown"]);
 
     await context.close();
   });

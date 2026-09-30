@@ -16,6 +16,7 @@ import {
   waitForConfirmModal,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -76,16 +77,12 @@ suite.define(() => {
       await captureUiProof(suite, page, "agent-archive-after.png");
 
       await page.getByRole("button", { name: "Filter & sort" }).click();
-      await page
-        .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Archived" })
-        .click();
+      await chooseSidebarMenuOption(page, "Status", "Archived");
+      await closeSidebarMenu(page);
       await row.waitFor({ state: "visible" });
       await page.getByRole("button", { name: "Filter & sort" }).click();
-      await page
-        .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Active", exact: true })
-        .click();
+      await chooseSidebarMenuOption(page, "Status", "Active");
+      await closeSidebarMenu(page);
       await row.waitFor({ state: "detached" });
 
       await gateway.setSessionsListResponse(sessionsListResponse([main, target]));
@@ -125,10 +122,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByRole("button", { name: "Filter & sort" }).click();
-      await page
-        .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Archived" })
-        .click();
+      await chooseSidebarMenuOption(page, "Status", "Archived");
+      await closeSidebarMenu(page);
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const archivedRow = sidebar.locator(`[data-session-key="${archived.key}"]`);
@@ -509,11 +504,13 @@ suite.define(() => {
       await rowFor(selected.key).locator("a").first().click();
       await assertSelectedRoute();
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
-      const replyPreview = activePane.locator(".chat-reply-preview", {
-        hasText: "Replying to current message",
-      });
+      // An unresolved reply_to_current keeps its answer without a reply strip.
+      const retainedReply = activePane
+        .locator(".chat-group")
+        .filter({ hasText: "Reply retained in the transcript." });
       const progressCard = activePane.locator('[data-progress-card-placement="composer"]');
-      await replyPreview.waitFor({ state: "visible" });
+      await retainedReply.waitFor({ state: "visible" });
+      expect(await retainedReply.locator(".chat-reply-attribution").count()).toBe(0);
       await progressCard.waitFor({ state: "visible" });
       await page.evaluate((sessionKey) => {
         const titleHistory: string[] = [];
@@ -694,7 +691,7 @@ suite.define(() => {
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
       await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
-      await expect.poll(() => replyPreview.locator(".session-run-spinner").count()).toBe(0);
+      await expect.poll(() => retainedReply.locator(".session-run-spinner").count()).toBe(0);
       await expect.poll(() => progressCard.count()).toBe(0);
       const archiveEvent = activePane.locator(".chat-notice", { hasText: "Archived by Mira" });
       await archiveEvent.waitFor({ state: "visible", timeout: 10_000 });

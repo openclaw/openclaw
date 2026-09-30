@@ -2,13 +2,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
+import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import type { OpenClawStateReadOutcome } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import {
@@ -16,10 +18,10 @@ import {
   readUserProfileIdentity,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
+import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import {
   adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
-  getProfileAvatar,
   linkEmail,
   setAvatar,
   setDisplayName,
@@ -35,25 +37,42 @@ vi.mock("./openclaw-state-read-worker.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-read-worker.js")>();
   return {
     ...actual,
-    createOpenClawStateReadTransport: (
-      ...args: Parameters<typeof actual.createOpenClawStateReadTransport>
-    ) => {
-      const owned = actual.createOpenClawStateReadTransport(...args);
+    captureOpenClawStateReadSource: () => {
+      const source = actual.captureOpenClawStateReadSource();
       return {
-        ...owned,
-        read: async (...readArgs: Parameters<typeof owned.read>) => {
-          if (delivery.readFailure) {
-            throw delivery.readFailure;
-          }
-          const result = await owned.read(...readArgs);
-          await delivery.afterRead?.();
-          return result;
-        },
-        close: async () => {
-          if (delivery.closeFailure) {
-            throw delivery.closeFailure;
-          }
-          await owned.close();
+        ...source,
+        createTransport: (...args: Parameters<typeof source.createTransport>) => {
+          const owned = source.createTransport(...args);
+          return {
+            ...owned,
+            startRead: (...readArgs: Parameters<typeof owned.startRead>) => {
+              let read: RetainedOperation<OpenClawStateReadOutcome> | undefined;
+              const completion = createRetainedOperation<OpenClawStateReadOutcome>(() =>
+                read?.service(),
+              );
+              if (delivery.readFailure) {
+                completion.reject(delivery.readFailure);
+              } else {
+                read = owned.startRead(...readArgs);
+                // The existing race control holds delivery after the real worker read.
+                void read.result
+                  .then(async (outcome) => {
+                    await delivery.afterRead?.();
+                    return outcome;
+                  })
+                  .then(completion.resolve, completion.reject);
+              }
+              return completion.operation;
+            },
+            startClose: () => {
+              if (delivery.closeFailure) {
+                const completion = createRetainedOperation<void>(() => {});
+                completion.reject(delivery.closeFailure);
+                return completion.operation;
+              }
+              return owned.startClose();
+            },
+          };
         },
       };
     },
@@ -217,17 +236,9 @@ it.each(["read", "retirement", "both"] as const)(
       }
       await expect(closing).rejects.toThrow();
       expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(false);
-      expect(() =>
-        acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }),
-      ).toThrow();
       delivery.readFailure = undefined;
       delivery.closeFailure = undefined;
       await closeOpenClawStateDatabaseByPathAsync(pathname);
-      const exclusion = acquireStateDatabaseHandleExclusion({
-        databasePath: pathname,
-        busyTimeoutMs: 0,
-      });
-      exclusion.release();
       expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(true);
       expect(getProfileAvatar(profile.id)?.bytes).toEqual(Uint8Array.from(bytes));
     } finally {
@@ -337,14 +348,8 @@ it("adopts an avatar off-thread and publishes its catalog before identity observ
       });
     });
     const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
-    const { DatabaseSync, StatementSync } = requireNodeSqlite();
-    const calls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
     const adopted = await adoptTailscaleProfileAvatar(
       alias.id,
       "https://avatars.example.test/p",
@@ -365,8 +370,8 @@ it("adopts an avatar off-thread and publishes its catalog before identity observ
         identity: { profileId: profile.id, role: null, aliases: new Set([profile.id, alias.id]) },
       },
     ]);
-    expect(calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-    calls.forEach((call) => call.mockRestore());
+    sql.expectIdle();
+    sql.restore();
     expect(getProfileAvatar(profile.id)?.bytes).toEqual(Uint8Array.from(bytes));
   } finally {
     vi.restoreAllMocks();

@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   readAgentRuntimeRestrictionErrorDetails,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -15,8 +16,12 @@ import { resolveTextCommand } from "../../auto-reply/commands-registry.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionRoutingContract,
+  SESSION_ROUTING_CHANGED_ERROR_REASON,
 } from "../../config/sessions/main-session.js";
+import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/session-accessor.js";
+import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";
@@ -33,15 +38,10 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import {
-  hasGatewayAdminScope,
-  resolveChatSendActiveScopeKey,
-  validateChatSelectedAgent,
-} from "./chat-origin-routing.js";
+import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
-import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
@@ -94,7 +94,10 @@ function loadChatSendSessionContext(params: {
   const { request, context } = params;
   const { p, explicitOrigin, normalizedAttachments } = request;
   const rawSessionKey = p.sessionKey;
-  const agentIdOverride = normalizeOptionalChatText(p.agentId);
+  if (!rawSessionKey.trim()) {
+    return { ok: false as const, error: "sessionKey must not be blank" };
+  }
+  const agentIdOverride = normalizeOptionalString(p.agentId);
   const clientRunId = p.idempotencyKey;
   const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
   const runtimeConfig = context.getRuntimeConfig();
@@ -118,7 +121,7 @@ function loadChatSendSessionContext(params: {
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = measureDiagnosticsTimelineSpanSync(
     "gateway.chat_send.load_session",
-    () => loadSessionEntry(sessionLoadKey, sessionLoadOptions),
+    () => loadSessionEntry(sessionLoadKey, sessionLoadOptions, runtimeConfig),
     {
       phase: "agent-turn",
       attributes: {
@@ -129,12 +132,10 @@ function loadChatSendSessionContext(params: {
     },
   );
   const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
-  const { cfg, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
-  const expectedSessionRoutingContract = normalizeOptionalChatText(
-    p.expectedSessionRoutingContract,
-  );
+  const { cfg, agentId, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
+  const expectedSessionRoutingContract = normalizeOptionalString(p.expectedSessionRoutingContract);
   const expectedLeafEntryId =
-    p.expectedLeafEntryId === null ? null : normalizeOptionalChatText(p.expectedLeafEntryId);
+    p.expectedLeafEntryId === null ? null : normalizeOptionalString(p.expectedLeafEntryId);
   const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
     expectedSessionRoutingContract !== undefined &&
     expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
@@ -148,8 +149,16 @@ function loadChatSendSessionContext(params: {
       sessionLoadOptions,
       sessionLoadMs,
       cfg,
+      agentId,
+      selectedAgent: requestedAgent,
       storePath,
       ...(sessionLoadResult.readSource ? { readSource: sessionLoadResult.readSource } : {}),
+      ...(sessionLoadResult.capturedReadSource
+        ? { capturedReadSource: sessionLoadResult.capturedReadSource }
+        : {}),
+      ...(sessionLoadResult.capturedReadSources
+        ? { capturedReadSources: sessionLoadResult.capturedReadSources }
+        : {}),
       entry,
       sessionKey,
       legacyKey,
@@ -174,7 +183,7 @@ export function prepareChatSendSession(params: {
   const loadedValue = loaded.value;
   const { request, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
-  const { cfg, sessionKey, entry, legacyKey, rawSessionKey, agentIdOverride } = loadedValue;
+  const { cfg, agentId, sessionKey, entry, legacyKey } = loadedValue;
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
   }
@@ -183,14 +192,6 @@ export function prepareChatSendSession(params: {
     return { ok: false as const, error: missingHarnessSessionError };
   }
 
-  const selectedAgent = validateChatSelectedAgent({
-    cfg,
-    requestedSessionKey: rawSessionKey,
-    explicitAgentId: agentIdOverride,
-  });
-  if (!selectedAgent.ok) {
-    return { ok: false as const, error: selectedAgent.error };
-  }
   const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey, entry, {
     acpMetadataSessionKey: legacyKey ?? sessionKey,
   });
@@ -201,13 +202,8 @@ export function prepareChatSendSession(params: {
     };
   }
 
-  const requestedSessionId = normalizeOptionalChatText(p.sessionId);
+  const requestedSessionId = normalizeOptionalString(p.sessionId);
   const backingSessionId = entry?.sessionId ?? requestedSessionId;
-  const agentId = resolveSessionAgentId({
-    sessionKey,
-    config: cfg,
-    agentId: selectedAgent.agentId,
-  });
   if (!entry) {
     const creationError = authorizeGatewaySessionCreation({
       cfg,
@@ -218,11 +214,6 @@ export function prepareChatSendSession(params: {
       return { ok: false as const, error: creationError };
     }
   }
-  const activeRunScopeKey = resolveChatSendActiveScopeKey({
-    sessionKey,
-    agentId: selectedAgent.agentId,
-    mainKey: cfg.session?.mainKey,
-  });
   const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
   const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
     config: cfg,
@@ -255,11 +246,8 @@ export function prepareChatSendSession(params: {
     ok: true as const,
     value: {
       ...loadedValue,
-      selectedAgent,
       requestedSessionId,
       backingSessionId,
-      agentId,
-      activeRunScopeKey,
       resolvedSessionModel,
       resolvedSessionAuthProvider,
       timeoutMs,
@@ -269,10 +257,60 @@ export function prepareChatSendSession(params: {
   };
 }
 
-export type PreparedChatSendSession = Extract<
+export type LoadedChatSendSession = Extract<
   ReturnType<typeof prepareChatSendSession>,
   { ok: true }
 >["value"];
+
+export type PreparedChatSendSession = LoadedChatSendSession & {
+  sessionTarget: QualifiedSessionEntryAccessTarget;
+  assertSessionTargetCurrent: () => void;
+  releaseSessionTarget: () => void;
+  activeRunScopeKey: string;
+  readSource?: CapturedSessionEntryReadSource;
+};
+
+export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedChatSendSession {
+  const qualified = prepareQualifiedSessionEntryTarget(
+    {
+      ...loaded,
+      canonicalKey: loaded.sessionKey,
+      requestedKey: loaded.sessionLoadKey,
+      storeKey: loaded.legacyKey ?? loaded.sessionKey,
+      readSource: loaded.capturedReadSource,
+    },
+    loaded.capturedReadSources,
+  );
+  return {
+    ...loaded,
+    sessionTarget: qualified.target,
+    assertSessionTargetCurrent: qualified.assertCurrent,
+    releaseSessionTarget: qualified.release,
+    activeRunScopeKey: qualified.target.canonicalKey,
+    readSource: qualified.target.readSource,
+  };
+}
+
+/** Admission reloads once, retaining the original physical choice and logical identity. */
+export function loadCurrentChatSendSession(session: PreparedChatSendSession) {
+  const latest = loadSessionEntry(session.sessionLoadKey, {
+    ...session.sessionLoadOptions,
+    clone: false,
+  });
+  if (session.sessionRoutingChanged(latest.cfg)) {
+    throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
+  }
+  if (
+    latest.agentId !== session.sessionTarget.agentId ||
+    (latest.legacyKey ?? latest.canonicalKey) !== session.sessionTarget.storeKey ||
+    !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource) ||
+    !isDeepStrictEqual(latest.capturedReadSources, session.capturedReadSources)
+  ) {
+    throw new Error("Session storage changed while starting work. Retry.");
+  }
+  session.assertSessionTargetCurrent();
+  return latest;
+}
 
 /** Refuse before send admission so confirmation can retain the unsent composer. */
 export async function prepareChatSendNativeRuntimeRestriction(params: {
@@ -371,6 +409,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
     sessionEntry: prepared.entry,
     commitGuard: () => {
       params.assertCurrent?.();
+      session.assertSessionTargetCurrent();
       prepared.assertSkillSelection();
       const currentConfig = context.getRuntimeConfig();
       const current = loadSessionEntry(session.sessionLoadKey, session.sessionLoadOptions);

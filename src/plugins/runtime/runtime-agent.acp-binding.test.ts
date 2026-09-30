@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { readAcpSessionMeta, upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import * as acpSessionMeta from "../../acp/runtime/session-meta.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 
@@ -12,50 +10,60 @@ describe("plugin runtime ACP session creation", () => {
       const runtime = createRuntimeAgent();
       const key = "agent:main:plugin:acpx:catalog-adopt:pi:source";
       let successor: ReturnType<typeof runtime.session.getSessionEntry>;
-      const database = openOpenClawStateDatabase();
-      database.db.function("replace_prepared_child", () => {
-        const current = runtime.session.getSessionEntry({
-          sessionKey: key,
-          readConsistency: "latest",
+      const upsert = acpSessionMeta.upsertAcpSessionMeta;
+      const prepare = vi
+        .spyOn(acpSessionMeta, "upsertAcpSessionMeta")
+        .mockImplementationOnce(async (params) => {
+          const prepared = await upsert(params);
+          expect(prepared?.acp).toMatchObject({ backend: "acpx", agent: "pi" });
+          const current = runtime.session.getSessionEntry({
+            sessionKey: key,
+            readConsistency: "latest",
+          });
+          if (!current) {
+            throw new Error("expected the freshly created ACP child");
+          }
+          const replacement = await replaceSessionEntry(
+            { agentId: "main", sessionKey: key },
+            {
+              ...current,
+              sessionId: "successor",
+              lifecycleRevision: "successor-generation",
+            },
+          );
+          if (!replacement) {
+            throw new Error("expected the successor to replace the prepared ACP child");
+          }
+          successor = replacement;
+          return prepared;
         });
-        if (!current) {
-          throw new Error("expected the freshly created ACP child");
-        }
-        successor = {
-          ...current,
-          sessionId: "successor",
-          lifecycleRevision: "successor-generation",
-        };
-        runOpenClawAgentWriteTransaction(
-          (agentDatabase) => {
-            writeSessionEntry(agentDatabase, key, successor!);
-          },
-          { agentId: "main" },
-        );
-        return 0;
-      });
-      database.db.exec(
-        "CREATE TEMP TRIGGER replace_prepared_child AFTER INSERT ON acp_sessions BEGIN SELECT replace_prepared_child(); END",
-      );
       const afterCreate = vi.fn(async () => {
         throw new Error("initializer must not receive a successor");
       });
-      await expect(
-        runtime.session.createSessionEntry({
-          cfg: {},
-          key,
-          initialEntry: {
-            acpBackendId: "acpx",
-            acpSessionBinding: { acpAgentId: "pi", agentSessionId: "pi-source" },
-            pluginOwnerId: "acpx",
-          },
-          afterCreate,
-        }),
-      ).rejects.toThrow();
-      expect(afterCreate).not.toHaveBeenCalled();
-      expect(
-        runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
-      ).toEqual(successor);
+      try {
+        await expect(
+          runtime.session.createSessionEntry({
+            cfg: {},
+            key,
+            initialEntry: {
+              acpBackendId: "acpx",
+              acpSessionBinding: { acpAgentId: "pi", agentSessionId: "pi-source" },
+              pluginOwnerId: "acpx",
+            },
+            afterCreate,
+          }),
+        ).rejects.toThrow();
+        expect(successor).toMatchObject({
+          sessionId: "successor",
+          lifecycleRevision: "successor-generation",
+        });
+        expect(afterCreate).not.toHaveBeenCalled();
+        expect(
+          runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
+        ).toEqual(successor);
+      } finally {
+        prepare.mockRestore();
+      }
     });
   });
 
@@ -82,19 +90,21 @@ describe("plugin runtime ACP session creation", () => {
         spawnedCwd: "/workspace/pi",
       });
       expect(created.entry.initializationPending).toBeUndefined();
-      expect(readAcpSessionMeta({ cfg: {}, sessionKey: created.key })).toMatchObject({
-        backend: "acpx",
-        agent: "pi",
-        runtimeSessionName: created.key,
-        identity: {
-          state: "resolved",
-          agentSessionId: "pi-source",
-          source: "ensure",
+      expect(acpSessionMeta.readAcpSessionMeta({ cfg: {}, sessionKey: created.key })).toMatchObject(
+        {
+          backend: "acpx",
+          agent: "pi",
+          runtimeSessionName: created.key,
+          identity: {
+            state: "resolved",
+            agentSessionId: "pi-source",
+            source: "ensure",
+          },
+          mode: "persistent",
+          cwd: "/workspace/pi",
+          state: "idle",
         },
-        mode: "persistent",
-        cwd: "/workspace/pi",
-        state: "idle",
-      });
+      );
     });
   });
 
@@ -120,7 +130,7 @@ describe("plugin runtime ACP session creation", () => {
           },
         },
       });
-      await upsertAcpSessionMeta({
+      await acpSessionMeta.upsertAcpSessionMeta({
         cfg: {},
         sessionKey: key,
         mutate: () => ({
@@ -210,7 +220,7 @@ describe("plugin runtime ACP session creation", () => {
 
       expect(recovered.entry.initializationPending).toBeUndefined();
       expect(recovered.entry.acpSessionBinding).toBeUndefined();
-      expect(readAcpSessionMeta({ cfg: {}, sessionKey: key })).toMatchObject({
+      expect(acpSessionMeta.readAcpSessionMeta({ cfg: {}, sessionKey: key })).toMatchObject({
         backend: "acpx",
         agent: "pi",
         identity: { agentSessionId: "pi-source" },

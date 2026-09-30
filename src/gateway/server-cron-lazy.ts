@@ -1,8 +1,11 @@
 // Gateway cron lazy loader.
 // Defers scheduler startup until cron is touched by runtime or API handlers.
 import type { CliDeps } from "../cli/deps.types.js";
+import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
@@ -14,6 +17,7 @@ type LazyGatewayCronParams = {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   env?: NodeJS.ProcessEnv;
+  scheduler: GatewayScheduler;
   /**
    * Resolves the live Gateway request context for scheduler-triggered runs.
    * RPC-triggered runs inherit one from the caller; timer-triggered runs have
@@ -28,16 +32,17 @@ type LoadedGatewayCronState = {
   startPromise: Promise<void> | null;
   startGeneration: number | null;
   schedulingPaused: boolean;
-  underlyingStartInFlight: boolean;
-  underlyingStarted: boolean;
+  underlyingStartAttempted: boolean;
 };
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
   const spawnBroker = getSpawnBroker();
+  const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   const env = params.env ?? process.env;
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
-  const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const cronEnabled =
+    env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
   let loaded: LoadedGatewayCronState | null = null;
   let stopped = false;
   let exitWatcherHandoff: GatewayCronExitWatcherHandoff | undefined;
@@ -64,13 +69,14 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     () =>
       import("./server-cron.js").then(({ buildGatewayCronService }) => {
         loaded = {
-          state: runWithSpawnBroker(spawnBroker, () => buildGatewayCronService(params)),
+          state: runWithSpawnBroker(spawnBroker, () =>
+            runWithReadOnlyWorkers(() => buildGatewayCronService(params)),
+          ),
           phase: "idle",
           startPromise: null,
           startGeneration: null,
           schedulingPaused: false,
-          underlyingStartInFlight: false,
-          underlyingStarted: false,
+          underlyingStartAttempted: false,
         };
         if (schedulingPaused) {
           loaded.state.cron.pauseScheduling();
@@ -92,7 +98,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
 
   const stopResolvedCron = async (resolved: LoadedGatewayCronState): Promise<void> => {
     resolved.phase = "stopped";
-    resolved.underlyingStarted = false;
+    resolved.underlyingStartAttempted = false;
     if (exitWatcherHandoff) {
       // A cancelled startup must join the exact prepared owner's drain, not
       // prepare or stop another owner after its watchers have been adopted.
@@ -159,16 +165,12 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.state.cron.resumeScheduling();
           resolved.schedulingPaused = false;
         }
-        resolved.underlyingStartInFlight = true;
+        resolved.underlyingStartAttempted = true;
         try {
           await resolved.state.cron.start();
-          resolved.underlyingStarted = true;
         } catch (err) {
-          resolved.underlyingStarted = false;
           resolved.phase = startCancelled() ? "stopped" : "idle";
           throw err;
-        } finally {
-          resolved.underlyingStartInFlight = false;
         }
         if (startCancelled()) {
           await stopResolvedCron(resolved);
@@ -213,7 +215,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       releaseSchedulingResumeWaiters();
       if (loaded) {
         loaded.phase = "stopped";
-        loaded.underlyingStarted = false;
+        loaded.underlyingStartAttempted = false;
         loaded.state.cron.stop();
         return;
       }
@@ -227,7 +229,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
               return;
             }
             resolved.phase = "stopped";
-            resolved.underlyingStarted = false;
+            resolved.underlyingStartAttempted = false;
             resolved.state.cron.stop();
           })
           .catch(() => {});
@@ -246,11 +248,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     resumeScheduling() {
       schedulingPaused = false;
       releaseSchedulingResumeWaiters();
-      if (
-        loaded &&
-        loaded.schedulingPaused &&
-        (loaded.underlyingStarted || loaded.underlyingStartInFlight)
-      ) {
+      // A rejected catch-up can still leave live scheduling; the service owns readiness.
+      if (loaded && loaded.schedulingPaused && loaded.underlyingStartAttempted) {
         loaded.state.cron.resumeScheduling();
         loaded.schedulingPaused = false;
       }
@@ -304,8 +303,11 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async readJob(id) {
       return await (await load()).state.cron.readJob(id);
     },
-    async readScratch(id) {
-      return await (await load()).state.cron.readScratch(id);
+    async readScratch(id, options) {
+      options?.assertCurrent?.();
+      const current = await load();
+      options?.assertCurrent?.();
+      return await current.state.cron.readScratch(id, options);
     },
     async writeScratch(id, write) {
       return await (await load()).state.cron.writeScratch(id, write);

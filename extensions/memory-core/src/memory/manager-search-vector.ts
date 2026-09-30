@@ -1,39 +1,27 @@
 import type { DatabaseSync } from "node:sqlite";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   cosineSimilarity,
   decodeMemoryEmbedding,
-  truncateUtf16Safe,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
-import { resolveSnippetProjection, type SearchRowResult } from "./manager-search-shared.js";
+import {
+  buildMemoryModelFilter,
+  projectMemorySearchRow,
+  resolveSnippetProjection,
+  type MemorySearchRow,
+  type SearchRowResult,
+} from "./manager-search-shared.js";
 
-// Scan fallback vector rows in bounded batches so large chunk tables (no usable
-// vec0 index) cannot pin the main thread for multi-second windows and starve
-// channel I/O / liveness signals. Matches the session-indexing yield pattern
-// introduced in #76978 for the same class of bug. Issue #81172.
+// Bound scan batches so worker cancellation can interrupt large vectorless indexes.
 const FALLBACK_VECTOR_BATCH_SIZE = 256;
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
-type SearchSource = MemorySource;
 
 function resolveProviderModels(primary: string, aliases: string[] | undefined): string[] {
   return Array.from(new Set([primary, ...(aliases ?? []).filter(Boolean)]));
 }
 
-function buildModelFilter(column: string, models: string[]): string {
-  return models.length === 1
-    ? `${column} = ?`
-    : `${column} IN (${models.map(() => "?").join(", ")})`;
-}
-
 export async function searchVector(params: {
-  db: DatabaseSync;
   vectorTable: string;
   providerModel: string;
   providerModelAliases?: string[];
@@ -43,28 +31,14 @@ export async function searchVector(params: {
   signal?: AbortSignal;
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
   runVectorKnn?: (request: VectorKnnRequest, signal?: AbortSignal) => Promise<VectorKnnResponse>;
-  runFallback?: () => Promise<SearchRowResult[]>;
-  sourceFilterVec: { sql: string; params: SearchSource[] };
-  sourceFilterChunks: { sql: string; params: SearchSource[] };
+  runFallback: () => Promise<SearchRowResult[]>;
+  sourceFilterVec: { sql: string; params: MemorySource[] };
 }): Promise<SearchRowResult[]> {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
   }
   params.signal?.throwIfAborted();
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
-  const searchFallback =
-    params.runFallback ??
-    (() =>
-      searchChunksByEmbedding({
-        db: params.db,
-        providerModel: params.providerModel,
-        providerModelAliases: params.providerModelAliases,
-        sourceFilter: params.sourceFilterChunks,
-        queryVec: params.queryVec,
-        limit: params.limit,
-        snippetMaxChars: params.snippetMaxChars,
-        signal: params.signal,
-      }));
   const vectorReady = await params.ensureVectorReady(params.queryVec.length);
   params.signal?.throwIfAborted();
   if (vectorReady) {
@@ -83,27 +57,21 @@ export async function searchVector(params: {
       params.signal,
     );
     if (response.fallbackScanRequired) {
-      return await searchFallback();
+      return await params.runFallback();
     }
-    return response.rows.map((row) => ({
-      id: row.id,
-      path: row.path,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      score: 1 - row.dist,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
-      source: row.source,
-    }));
+    return response.rows.map((row) =>
+      projectMemorySearchRow(row, params.snippetMaxChars, 1 - row.dist),
+    );
   }
 
-  return await searchFallback();
+  return await params.runFallback();
 }
 
 export async function searchChunksByEmbedding(params: {
   db: DatabaseSync;
   providerModel: string;
   providerModelAliases?: string[];
-  sourceFilter: { sql: string; params: SearchSource[] };
+  sourceFilter: { sql: string; params: MemorySource[] };
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
@@ -113,7 +81,7 @@ export async function searchChunksByEmbedding(params: {
     return [];
   }
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
-  const modelFilter = buildModelFilter("model", providerModels);
+  const modelFilter = buildMemoryModelFilter("model", providerModels);
   // Keep batches bounded instead of calling `.all()` across the entire chunks
   // table, and do not hold a sqlite iterator open across the setImmediate yield
   // below. The rowid cursor keeps memory bounded without OFFSET rescans.
@@ -135,15 +103,6 @@ export async function searchChunksByEmbedding(params: {
   const payloadStmt = params.db.prepare(
     `SELECT id, path, start_line, end_line, ${snippet.sql} AS text, source FROM memory_index_chunks WHERE rowid = ?`,
   );
-  type ChunkPayload = {
-    id: string;
-    path: string;
-    start_line: number;
-    end_line: number;
-    text: string;
-    source: SearchSource;
-  };
-
   const topResults: SearchRowResult[] = [];
   let lastRowid: bigint | undefined;
   while (true) {
@@ -175,16 +134,8 @@ export async function searchChunksByEmbedding(params: {
         // Hydrate contenders before yielding so an old score cannot acquire a
         // replacement chunk's payload.
         // SAFETY: these schema-defined columns belong to this rowid in the active read snapshot.
-        const payload = payloadStmt.get(...snippet.params, row.rowid) as ChunkPayload;
-        const result: SearchRowResult = {
-          id: payload.id,
-          path: payload.path,
-          startLine: payload.start_line,
-          endLine: payload.end_line,
-          score,
-          snippet: truncateUtf16Safe(payload.text, params.snippetMaxChars),
-          source: payload.source,
-        };
+        const payload = payloadStmt.get(...snippet.params, row.rowid) as MemorySearchRow;
+        const result = projectMemorySearchRow(payload, params.snippetMaxChars, score);
         if (topResults.length < params.limit) {
           topResults.push(result);
           if (topResults.length === params.limit) {

@@ -1,8 +1,9 @@
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import type { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -12,6 +13,7 @@ import type {
 } from "./update-command-service-context-types.js";
 export type FinishUpdateParams = UpdateRestartParams & {
   coreAlreadyCurrent?: boolean;
+  deferredMaintenance?: string;
   failure?: { cause: unknown; detail: string };
   mutationStarted: boolean;
   expectedVersion?: string;
@@ -28,6 +30,7 @@ export type FinishUpdateParams = UpdateRestartParams & {
   startedAt: number;
   packageUpdateNodeRunner?: string;
   packageTransaction?: PackageUpdateTransaction;
+  databaseBackup?: UpdateDatabaseBackup;
   schemaVersions?: UpdateStateSchemaVersion[];
   candidateSchemaVersions?: OpenClawSchemaVersions;
   previousSchemaVersions?: OpenClawSchemaVersions;

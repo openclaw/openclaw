@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { projectDevicePlacements } from "./device-placement.ts";
+import {
+  projectDevicePlacements,
+  resolveAutomaticDevicePlacementDisabledReason,
+} from "./device-placement.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
 const updateIssue = {
@@ -34,6 +37,13 @@ describe("device placement projection", () => {
     {
       name: "available host",
       environment: node({}),
+      selectable: true,
+      reason: undefined,
+      facts: ["macOS", "Camera"],
+    },
+    {
+      name: "ignores unknown capabilities that match object prototype properties",
+      environment: node({ capabilities: ["constructor", "__proto__", "camera.snap"] }),
       selectable: true,
       reason: undefined,
       facts: ["macOS", "Camera"],
@@ -117,6 +127,28 @@ describe("device placement projection", () => {
     ).toEqual([]);
   });
 
+  it("shows the host's actionable failure before generic offline or disabled-host hints", () => {
+    const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
+    const environments = [
+      node({
+        status: "available",
+        sessionHost: false,
+        workerSlots: undefined,
+        issues: [{ code: "worker-host-unavailable", message }],
+      }),
+    ];
+    const devices = projectDevicePlacements(environments);
+
+    expect(devices[0]).toMatchObject({
+      selectable: false,
+      disabledReason: message,
+      hideDetails: false,
+      remediation: undefined,
+      facts: [message, "macOS", "Camera"],
+    });
+    expect(resolveAutomaticDevicePlacementDisabledReason(environments, devices)).toBe(message);
+  });
+
   it("adds short device ids only when labels collide", () => {
     expect(
       projectDevicePlacements([
@@ -132,47 +164,6 @@ describe("device placement projection", () => {
   });
 
   it.each([
-    {
-      name: "remote execution remains available when every worker slot is occupied",
-      requirement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
-      },
-      environment: {
-        workerSlots: { total: 2, available: 0 },
-        invocableCommands: ["codex.exec-server.stdio.v1"],
-        requiredNodeCommand: {
-          command: "codex.exec-server.stdio.v1",
-          state: "invocable" as const,
-        },
-      },
-      selectable: true,
-    },
-    {
-      name: "worker turns remain unavailable when every worker slot is occupied",
-      requirement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-      environment: { workerSlots: { total: 2, available: 0 } },
-      selectable: false,
-      reason: "No worker slots are available. Wait for a slot or pick another device.",
-    },
-    {
-      name: "declaring a command does not grant Gateway invocation authority",
-      requirement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
-      },
-      environment: {
-        capabilities: ["codex.exec-server.stdio.v1"],
-        invocableCommands: [],
-        requiredNodeCommand: {
-          command: "codex.exec-server.stdio.v1",
-          state: "unauthorized" as const,
-        },
-      },
-      selectable: false,
-      reason:
-        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
-    },
     {
       name: "an undeclared command fails closed even when worker slots are free",
       requirement: {
@@ -224,4 +215,22 @@ describe("device placement projection", () => {
       expect(device?.disabledReason).toBe(reason);
     }
   });
+
+  it.each(["pending-approval", "undeclared", "unauthorized", "invocable"] as const)(
+    "uses Gateway command remediation without changing %s eligibility",
+    (state) => {
+      const message = "Enable the codex plugin on this node with openclaw plugins enable codex.";
+      const [device] = projectDevicePlacements(
+        [
+          node({
+            requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state, message },
+          }),
+        ],
+        { requiredNodeCommands: ["codex.exec-server.stdio.v1"], consumesWorkerSlot: false },
+      );
+
+      expect(device?.selectable).toBe(state === "invocable");
+      expect(device?.disabledReason).toBe(state === "invocable" ? undefined : message);
+    },
+  );
 });

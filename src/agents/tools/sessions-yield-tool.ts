@@ -1,8 +1,3 @@
-/**
- * sessions_yield built-in tool.
- *
- * Ends the current turn after subagent spawning so completion events can resume the session later.
- */
 import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import type { UnsettledRequesterChild } from "../subagents/registry/subagent-registry-requester-yield.js";
@@ -16,7 +11,7 @@ export type SessionsYieldClaimResult =
   | boolean
   | { error: string }
   | { pendingChildren: readonly UnsettledRequesterChild[] };
-export type SessionsYieldIntent = { waitFor?: "message" };
+export type SessionsYieldIntent = { waitFor?: "message"; acknowledgment?: string };
 
 function describePendingChild(child: UnsettledRequesterChild): string {
   const name = child.label ? `${child.label} (${child.childSessionKey})` : child.childSessionKey;
@@ -56,7 +51,7 @@ const SessionsYieldToolSchema = Type.Object({
   waitFor: Type.Optional(
     Type.Literal("message", {
       description:
-        "Explicitly pause an unfinished subagent until an incoming continuation message. Does not schedule a message or submit the final result.",
+        "Explicitly pause an unfinished subagent until an incoming continuation message; its requester is notified once. Does not schedule a message or submit the final result.",
     }),
   ),
   message: Type.Optional(
@@ -64,12 +59,12 @@ const SessionsYieldToolSchema = Type.Object({
   ),
   acknowledgment: Type.Optional(
     Type.String({
-      description: "Optional waiting reply for an otherwise-silent interactive parent turn.",
+      description:
+        "Optional waiting reply for an otherwise-silent interactive parent turn; with waitFor, the pause notice for the requester.",
     }),
   ),
 });
 
-/** Creates the sessions_yield tool for runtimes that support yield callbacks. */
 export function createSessionsYieldTool(opts?: {
   sessionId?: string;
   claimYield?: (
@@ -107,7 +102,9 @@ export function createSessionsYieldTool(opts?: {
             "Earlier async tool results are still being delivered. Finish this response to receive them, then yield again only if external work still requires waiting.",
         });
       }
-      const claim = await opts.claimYield?.(waitFor ? { waitFor } : undefined);
+      const claim = await opts.claimYield?.(
+        waitFor ? { waitFor, ...(acknowledgment ? { acknowledgment } : {}) } : undefined,
+      );
       if (typeof claim === "object" && "pendingChildren" in claim) {
         // Not an error: the session already waits for these children through
         // durable registry state, so the model only needs to end the turn.

@@ -599,6 +599,32 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
     });
 
+    it("retains workspace binding and restrictions across a persistent rollover but not a detached run", () => {
+      const boundContext = {
+        spawnedBy: "agent:main:parent",
+        spawnedCwd: "/repo/task",
+        spawnedWorkspaceDir: "/repo/task",
+        sessionRoot: "/repo/task",
+        permissionMode: "read-only" as const,
+        sandboxMode: "off" as const,
+        inheritedToolPolicyVersion: 1 as const,
+        inheritedToolAllow: ["read"],
+        inheritedToolDeny: ["exec"],
+        spawnDepth: 2,
+        subagentRole: "leaf" as const,
+        subagentControlScope: "none" as const,
+        worktree: { id: "worktree-1", branch: "task", repoRoot: "/repo" },
+        projectId: "project",
+      };
+      const entry = { sessionId: "bound", updatedAt: NOW_MS - 1000, ...boundContext };
+      const persistent = resolveWithStoredEntry({ entry, fresh: false });
+      expect(persistent.sessionEntry).toMatchObject(boundContext);
+      const detached = resolveWithStoredEntry({ entry, forceNew: true });
+      for (const field of Object.keys(boundContext)) {
+        expect(detached.sessionEntry).not.toHaveProperty(field);
+      }
+    });
+
     it("preserves non-delivery ambient session context for non-isolated expiration rollovers", () => {
       const result = resolveWithStoredEntry({
         entry: {

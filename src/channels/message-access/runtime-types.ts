@@ -1,8 +1,3 @@
-/**
- * Public channel ingress runtime types.
- *
- * Defines identity descriptors, resolver inputs, route access, and resolved access results.
- */
 import type { AccessGroupConfig } from "../../config/types.access-groups.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { IdentifierAuthentication } from "./identifier-authentication.js";
@@ -17,17 +12,10 @@ import type {
   ChannelIngressState,
   ChannelIngressStateInput,
   IngressReasonCode,
-  InternalChannelIngressAdapter,
   InternalChannelIngressSubject,
   InternalNormalizedEntry,
   RouteGateFacts,
 } from "./types.js";
-
-/** Normalized allowlist entry material produced by a channel identity adapter. */
-export type ChannelIngressAdapterEntry = InternalNormalizedEntry;
-
-/** Adapter used by the ingress resolver to normalize entries and match subjects. */
-export type ChannelIngressAdapter = InternalChannelIngressAdapter;
 
 /** Describes one identity field used for stable ids or platform-specific aliases. */
 export type ChannelIngressIdentityField = {
@@ -71,7 +59,7 @@ export type ChannelIngressIdentityDescriptor = {
   /** Optional custom match hook for platform-specific identity equivalence. */
   matchEntry?: (params: {
     subject: InternalChannelIngressSubject;
-    entry: ChannelIngressAdapterEntry;
+    entry: InternalNormalizedEntry;
     context: "dm" | "group" | "route" | "command";
   }) => boolean | undefined;
   /** Generates stable redacted entry ids for diagnostics. */
@@ -290,7 +278,7 @@ export type ChannelIngressResolverMessageParams = Omit<
   | "command"
 > & {
   /** Event facts or presets; defaults to a normal inbound message event. */
-  event?: ChannelIngressEventInput | ChannelIngressEventPresetInput;
+  event?: ChannelIngressEventPresetInput;
   /** DM policy override for this event. */
   dmPolicy?: ChannelIngressPolicyInput["dmPolicy"];
   /** Group policy override for this event. */
@@ -298,7 +286,7 @@ export type ChannelIngressResolverMessageParams = Omit<
   /** Additional policy fields merged with resolver defaults. */
   policy?: Partial<Omit<ChannelIngressPolicyInput, "dmPolicy" | "groupPolicy">>;
   /** Command gate input, preset, or false to suppress command checks. */
-  command?: ChannelMessageIngressCommandInput | ChannelIngressCommandPresetInput | false;
+  command?: ChannelIngressCommandPresetInput | false;
 };
 
 /** Reusable high-level ingress resolver for message, command, and event surfaces. */

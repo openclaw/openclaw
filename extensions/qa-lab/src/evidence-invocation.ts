@@ -86,10 +86,7 @@ export function createQaEvidenceInvocation(params: {
       throw new Error("continued evidence requires recorded v3 invocation custody");
     }
     const containment = resolveQaEvidenceContainment(continued.occurrences, continued.entries);
-    const continuedAnchors = continued.occurrences.filter(
-      (occurrence) =>
-        occurrence.scenario?.kind === "instance" && !containment.parentById.has(occurrence.id),
-    );
+    const continuedAnchors = containment.rootInstances;
     if (!params.anchors || JSON.stringify(continuedAnchors) !== JSON.stringify(anchors)) {
       throw new Error("continued evidence does not match the captured invocation");
     }
@@ -253,6 +250,7 @@ export function createQaEvidenceInvocation(params: {
 
   function select(index: number, occurrenceId: string): string;
   function select(index: number, occurrenceId: null): null;
+  function select(index: number, occurrenceId: string | null): string | null;
   function select(index: number, occurrenceId: string | null): string | null {
     anchorFor(index);
     const nextAnchors = structuredClone(anchors);
@@ -446,18 +444,9 @@ export function createQaEvidenceInvocation(params: {
       const pending = pendingChildren.get(index);
       if (pending) {
         if (
-          JSON.stringify([
-            pending.additions,
-            pending.completions,
-            pending.rows,
-            pending.updates,
-          ]) !==
-          JSON.stringify([
-            proposed.additions,
-            proposed.completions,
-            proposed.rows,
-            proposed.updates,
-          ])
+          (["additions", "completions", "rows", "updates"] as const).some(
+            (key) => JSON.stringify(pending[key]) !== JSON.stringify(proposed[key]),
+          )
         ) {
           throw new Error("child evidence changed its pending observation");
         }

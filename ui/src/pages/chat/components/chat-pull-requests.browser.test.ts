@@ -1,17 +1,23 @@
 import { html, nothing, render } from "lit";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { renderChatPullRequests } from "./chat-pull-requests.ts";
 import baseStyles from "../../../styles/base.css?inline";
 import layoutStyles from "../../../styles/chat/layout.css?inline";
 
 const container = document.createElement("div");
-afterEach(() => {
+let originalViewport: { width: number; height: number };
+beforeEach(() => {
+  originalViewport = { width: window.innerWidth, height: window.innerHeight };
+});
+afterEach(async () => {
   render(nothing, container);
   container.remove();
+  await page.viewport(originalViewport.width, originalViewport.height);
 });
 
 it("hides a retained pane's CI popup and restores its open disclosure when presented", async () => {
+  await page.viewport(800, 600);
   document.body.append(container);
   const draw = (presented: boolean) =>
     render(

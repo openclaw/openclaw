@@ -35,7 +35,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: edges.note }));
 
-import { repairGatewayServiceInstallation } from "./doctor-gateway-installation.js";
+import { installDoctorGatewayService } from "./doctor-gateway-installation.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 
 const refusals = [
@@ -389,11 +389,11 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
             throw new Error("Missing fixture service command");
           }
           try {
-            await repairGatewayServiceInstallation({
+            await installDoctorGatewayService({
               service,
               command: inspected.command,
-              activeRoot: path.join(root, "candidate"),
-              env: process.env,
+              repair: { kind: "installation", root: path.join(root, "candidate") },
+              runtime,
               maintenance: {
                 assertCurrent: () => {
                   if (!current) {
@@ -402,14 +402,12 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
                 },
                 assertReadCurrent: () => {},
               },
-              install: (assertCurrent) =>
-                service.install({
-                  env: process.env,
-                  stdout: new PassThrough(),
-                  assertCurrent,
-                  programArguments: [wrapperPath, "gateway", "--port", "19989"],
-                  environment: { ...environment, OPENCLAW_GATEWAY_PORT: "19989" },
-                }),
+              args: {
+                env: process.env,
+                stdout: new PassThrough(),
+                programArguments: [wrapperPath, "gateway", "--port", "19989"],
+                environment: { ...environment, OPENCLAW_GATEWAY_PORT: "19989" },
+              },
             });
           } catch (error) {
             authorityFailure = error;

@@ -402,7 +402,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         let inputRoot, pid, leafPid, commandResult, lateResult, readyObserved=false, closed=false;
         const lateMarker=${JSON.stringify(path.join(directory, "late-launch"))};
         aroundEach(async runTest=>{try {await runTest();} finally {await lifetime.cleanup();}});
-        it.fails('failed body with an unfinished sibling',${fault === "timeout" ? "{timeout:3000}," : ""}({signal,onTestFinished})=>lifetime.run(async()=>{
+        it.fails('failed body with an unfinished sibling',${fault === "timeout" ? "{timeout:1500}," : ""}({signal,onTestFinished})=>lifetime.run(async()=>{
           inputRoot=lifetime.createTempDir('body-input-',${JSON.stringify(directory)});
           const input=path.join(inputRoot,'input');fs.writeFileSync(input,'still owned');
           const readyFile=path.join(inputRoot,'ready'), script=path.join(inputRoot,'child.mjs');
@@ -1368,10 +1368,17 @@ export default class {
           },
         );
         expect(policy.code, policy.stderr + policy.stdout).toBe(0);
-        for (const filename of Object.keys(manifest.inputs)) {
+        const directories = new Map<string, Promise<string | undefined>>();
+        const copyInput = async (filename: string) => {
           const target = path.join(fixture, path.relative(root, filename));
-          fs.mkdirSync(path.dirname(target), { recursive: true });
-          fs.copyFileSync(filename, target);
+          const parent = path.dirname(target);
+          let created = directories.get(parent);
+          if (!created) {
+            created = fs.promises.mkdir(parent, { recursive: true });
+            directories.set(parent, created);
+          }
+          await created;
+          await fs.promises.copyFile(filename, target, fs.constants.COPYFILE_FICLONE);
           const dependencies = path.join(path.dirname(filename), "node_modules");
           if (path.basename(filename) === "package.json" && fs.existsSync(dependencies)) {
             fs.symlinkSync(
@@ -1379,6 +1386,17 @@ export default class {
               path.join(path.dirname(target), "node_modules"),
               process.platform === "win32" ? "junction" : "dir",
             );
+          }
+        };
+        const inputs = Object.keys(manifest.inputs);
+        for (let offset = 0; offset < inputs.length; offset += 32) {
+          // Join every started copy before fixture cleanup can remove its inputs.
+          const completed = await Promise.allSettled(
+            inputs.slice(offset, offset + 32).map(copyInput),
+          );
+          const failed = completed.find((result) => result.status === "rejected");
+          if (failed) {
+            throw failed.reason;
           }
         }
         // This is a synthetic source checkout. Its dist is valid old code, not an
@@ -1396,7 +1414,8 @@ export default class {
             "infra/sqlite-readonly-location.worker": "src/infra/sqlite-readonly-location.worker.ts",
             "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
           };
-          export const legacyFinalizerBuildSources = ["src/infra/runtime-process-entrypoints.ts"];
+          export const preservedModuleBuildSources = ["src/infra/runtime-process-entrypoints.ts"];
+          export const preservedModuleBuildAssets = [];
           `,
         );
         const databasePath = path.join(fixture, "probe.sqlite");

@@ -1,4 +1,3 @@
-// Telegram helper module supports config schema behavior.
 import {
   buildChannelConfigSchema,
   buildChannelExecApprovalsSchema,
@@ -88,6 +87,7 @@ const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional(
 const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
@@ -101,6 +101,7 @@ const TelegramTopicSchema = z
   .strict();
 
 const TelegramGroupSchema = buildGroupEntrySchema({
+  requireMentionInBotThreads: z.boolean().optional(),
   ingest: z.boolean().optional(),
   disableAudioPreflight: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional(),
@@ -129,7 +130,9 @@ const TelegramDirectSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
-    topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    topics: z
+      .record(z.string(), TelegramTopicSchema.omit({ requireMentionInBotThreads: true }).optional())
+      .optional(),
     errorPolicy: TelegramErrorPolicySchema,
     requireTopic: z.boolean().optional(),
     autoTopicLabel: AutoTopicLabelSchema,
@@ -213,19 +216,16 @@ const TelegramAccountSchemaBase = z
       .describe(
         "Local webhook route path served by the gateway listener. Defaults to /telegram-webhook.",
       ),
-    webhookHost: z
-      .string()
+    legacyWebhook: z
+      .union([
+        z.literal(false),
+        z
+          .object({ port: z.number().int().nonnegative().max(65535), host: z.string().optional() })
+          .strict(),
+      ])
       .optional()
       .describe(
-        "Local bind host for the webhook listener. Defaults to 127.0.0.1; keep loopback unless you intentionally expose direct ingress.",
-      ),
-    webhookPort: z
-      .number()
-      .int()
-      .nonnegative()
-      .optional()
-      .describe(
-        "Local bind port for the webhook listener. Defaults to 8787; set to 0 to let the OS assign an ephemeral port.",
+        "Webhook forwarding endpoint. Omitted keeps 127.0.0.1:8787; set false after moving the reverse proxy to the Gateway webhook route.",
       ),
     webhookCertPath: z
       .string()
@@ -275,13 +275,8 @@ const TelegramAccountSchemaBase = z
   })
   .strict();
 
-const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
-  // Account-level schemas skip allowFrom validation because accounts inherit
-  // allowFrom from the parent channel config at runtime (resolveTelegramAccount
-  // shallow-merges top-level and account values in src/telegram/accounts.ts).
-  // Validation is enforced at the top-level TelegramConfigSchema instead.
-  validateTelegramCustomCommands(value, ctx);
-});
+// DM policy validation below uses each account's effective inherited allowFrom.
+const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine(validateTelegramCustomCommands);
 
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   ...rootPolicyShape,

@@ -5,6 +5,7 @@
 }
 
 .chat-position-rail {
+  contain: layout;
   /* Centered previews need clearance at both ends of a capped rail. */
   --chat-position-rail-clearance: 60px;
   --chat-position-rail-height: min(
@@ -32,7 +33,7 @@
 .chat-position-rail__track {
   position: absolute;
   top: 0;
-  left: 10px;
+  inset-inline-start: 10px;
   width: 44px;
   height: var(--chat-position-rail-height);
 }
@@ -110,7 +111,7 @@
 
 .chat-position-rail__marker {
   position: absolute;
-  left: 0;
+  inset-inline-start: 0;
   z-index: 1;
   display: flex;
   align-items: center;
@@ -126,7 +127,7 @@
 
 .chat-position-rail__tick {
   display: block;
-  width: 8px;
+  width: var(--chat-position-tick-width, 8px);
   height: 2px;
   border-radius: 1px;
   background: currentColor;
@@ -144,45 +145,43 @@
   color: var(--muted);
 }
 
-.chat-position-rail .chat-position-rail__marker:hover {
+.chat-position-rail__item[data-hovered] .chat-position-rail__marker {
   color: var(--text);
 }
 
-/* The wave is pointer-only; resting and keyboard-focused marks stay uniform. */
+/* The preview owner retains pointer hover over the card; keyboard-only marks stay uniform. Items carry the
+   width so :has() stays in the subject compound: a tick selector after it joins Chromium's
+   shared :has() invalidation set and restyles every tick on each transcript row insertion. */
 .chat-position-rail__item:has(
-    + .chat-position-rail__item + .chat-position-rail__item + .chat-position-rail__item:hover
-  )
-  .chat-position-rail__tick,
-.chat-position-rail__item:hover
+  + .chat-position-rail__item + .chat-position-rail__item + .chat-position-rail__item[data-hovered]
+),
+.chat-position-rail__item[data-hovered]
   + .chat-position-rail__item
   + .chat-position-rail__item
-  + .chat-position-rail__item
-  .chat-position-rail__tick {
-  width: 12px;
+  + .chat-position-rail__item {
+  --chat-position-tick-width: 12px;
 }
 
-.chat-position-rail__item:has(+ .chat-position-rail__item + .chat-position-rail__item:hover)
-  .chat-position-rail__tick,
-.chat-position-rail__item:hover
-  + .chat-position-rail__item
-  + .chat-position-rail__item
-  .chat-position-rail__tick {
-  width: 16px;
+.chat-position-rail__item:has(
+  + .chat-position-rail__item + .chat-position-rail__item[data-hovered]
+),
+.chat-position-rail__item[data-hovered] + .chat-position-rail__item + .chat-position-rail__item {
+  --chat-position-tick-width: 16px;
 }
 
-.chat-position-rail__item:has(+ .chat-position-rail__item:hover) .chat-position-rail__tick,
-.chat-position-rail__item:hover + .chat-position-rail__item .chat-position-rail__tick {
-  width: 24px;
+.chat-position-rail__item:has(+ .chat-position-rail__item[data-hovered]),
+.chat-position-rail__item[data-hovered] + .chat-position-rail__item {
+  --chat-position-tick-width: 24px;
 }
 
-.chat-position-rail__marker:hover .chat-position-rail__tick {
-  width: 32px;
+.chat-position-rail__item[data-hovered] {
+  --chat-position-tick-width: 32px;
 }
 
 .chat-position-rail__preview {
   position: absolute;
   top: var(--chat-position-preview);
-  left: 100%;
+  inset-inline-start: 100%;
   display: grid;
   width: 200px;
   gap: 4px;
@@ -271,6 +270,7 @@
 }
 
 .chat-message-image-button {
+  position: relative;
   display: inline-flex;
   max-width: 100%;
   padding: 0;
@@ -278,6 +278,18 @@
   border-radius: var(--radius-xl);
   background: transparent;
   cursor: zoom-in;
+}
+
+/* Keep the edge above hover-zoomed pixels without changing image layout. */
+.chat-message-image-button:not(.chat-attachment-image-button)::before {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 4%, transparent);
+  border-radius: inherit;
+  corner-shape: inherit;
+  content: "";
+  pointer-events: none;
 }
 
 .chat-image-frame {
@@ -406,12 +418,14 @@
   background: transparent;
 }
 
-.chat-image-action:focus-visible {
+.chat-image-action:focus-visible,
+.chat-assistant-attachment-card__action:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
-.chat-image-action svg {
+.chat-image-action svg,
+.chat-assistant-attachment-card__action svg {
   width: 15px;
   height: 15px;
 }
@@ -884,16 +898,6 @@
   background: color-mix(in srgb, var(--media-foreground) 8%, transparent);
 }
 
-.chat-assistant-attachment-card__action:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-.chat-assistant-attachment-card__action svg {
-  width: 15px;
-  height: 15px;
-}
-
 .chat-assistant-attachment-card__expand--icon svg {
   transform: rotate(45deg);
 }
@@ -1086,11 +1090,5 @@
   .chat-position-rail__marker[data-visible] .chat-position-rail__tick {
     background: Highlight;
     outline: 1px solid Highlight;
-  }
-}
-
-@media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .chat-thread {
-    min-height: 40vh;
   }
 }

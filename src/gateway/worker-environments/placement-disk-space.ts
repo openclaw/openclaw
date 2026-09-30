@@ -151,16 +151,14 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     if (!hasExactBinding(candidate, current)) {
       return;
     }
-    const previous = observations.get(placement.sessionId);
-    const previousStatus =
-      previous && hasExactBinding(previous, current) ? previous.snapshot.status : undefined;
+    const previous = read(current);
+    const previousStatus = previous?.status;
     const snapshotChanged =
       !previous ||
-      !hasExactBinding(previous, current) ||
-      previous.snapshot.status !== snapshot.status ||
-      previous.snapshot.availableBytes !== snapshot.availableBytes ||
-      previous.snapshot.totalBytes !== snapshot.totalBytes ||
-      previous.snapshot.observedAtMs !== snapshot.observedAtMs;
+      previous.status !== snapshot.status ||
+      previous.availableBytes !== snapshot.availableBytes ||
+      previous.totalBytes !== snapshot.totalBytes ||
+      previous.observedAtMs !== snapshot.observedAtMs;
     observations.set(placement.sessionId, candidate);
     if (snapshotChanged) {
       observationVersion += 1;

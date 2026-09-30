@@ -1,15 +1,12 @@
-// Memory Wiki plugin module implements the memory wiki overview.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  loadMemoryWikiCompiledDashboards,
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
   type MemoryWikiOverviewCluster,
   type MemoryWikiOverviewItem,
   type MemoryWikiOverviewPageCounts,
   type MemoryWikiOverviewStatus,
 } from "./compiled-cache.js";
-import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type { WikiPageKind, WikiPageSummary } from "./markdown.js";
 
 const OVERVIEW_KIND_ORDER: WikiPageKind[] = ["synthesis", "entity", "concept", "source", "report"];
@@ -78,12 +75,6 @@ function compareOverviewItems(left: MemoryWikiOverviewItem, right: MemoryWikiOve
   return left.title.localeCompare(right.title);
 }
 
-export async function listMemoryWikiOverview(
-  config: ResolvedMemoryWikiConfig,
-): Promise<MemoryWikiOverviewStatus> {
-  return (await loadMemoryWikiCompiledDashboards(config)).overview;
-}
-
 export function projectMemoryWikiOverviewItem(
   page: WikiPageSummary,
   body: string,
@@ -91,21 +82,21 @@ export function projectMemoryWikiOverviewItem(
   const updatedAt = normalizeOptionalString(page.updatedAt);
   const sourceType = normalizeOptionalString(page.sourceType);
   const snippet = extractSnippet(body);
-  return Object.assign(
-    { pagePath: page.relativePath, title: page.title, kind: page.kind },
-    page.id ? { id: page.id } : {},
-    updatedAt ? { updatedAt } : {},
-    sourceType ? { sourceType } : {},
-    {
-      claimCount: page.claims.length,
-      questionCount: page.questions.length,
-      contradictionCount: page.contradictions.length,
-      claims: page.claims.map((claim) => claim.text).slice(0, 3),
-      questions: page.questions.slice(0, 3),
-      contradictions: page.contradictions.slice(0, 3),
-    },
-    snippet ? { snippet } : {},
-  );
+  return {
+    pagePath: page.relativePath,
+    title: page.title,
+    kind: page.kind,
+    ...(page.id ? { id: page.id } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+    ...(sourceType ? { sourceType } : {}),
+    claimCount: page.claims.length,
+    questionCount: page.questions.length,
+    contradictionCount: page.contradictions.length,
+    claims: page.claims.map((claim) => claim.text).slice(0, 3),
+    questions: page.questions.slice(0, 3),
+    contradictions: page.contradictions.slice(0, 3),
+    ...(snippet ? { snippet } : {}),
+  };
 }
 
 export function buildMemoryWikiOverview(

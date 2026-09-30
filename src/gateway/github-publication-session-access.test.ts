@@ -97,12 +97,11 @@ describe("registered session GitHub publication access", () => {
       };
       prepareGatewayConnectOperatorAccess(person);
       if (target === "member") {
-        expect(
-          addSessionMember(
-            { agentId: "main", sessionKey: SESSION_KEY },
-            { identityId: profileId, addedBy: f.guestProfile },
-          ).inserted,
-        ).toBe(true);
+        const { inserted } = await addSessionMember(
+          { agentId: "main", sessionKey: SESSION_KEY },
+          { identityId: profileId, addedBy: f.guestProfile },
+        );
+        expect(inserted).toBe(true);
       }
       const { loadGatewaySessionEntryReadOnly } =
         await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");

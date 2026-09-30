@@ -5,6 +5,7 @@ import * as diskSpace from "../../infra/disk-space.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
 import { updateGitInstall } from "./update-command-git.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -19,9 +20,13 @@ async function git(root: string, ...args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
-it.each([true, false])(
-  "checks snapshot space after the Git no-op decision (current=%s)",
-  async (current) => {
+it.each([
+  { current: true, runtimeReady: true, noOp: true },
+  { current: false, runtimeReady: true, noOp: false },
+  { current: true, runtimeReady: false, noOp: false },
+])(
+  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady)",
+  async ({ current, runtimeReady, noOp }) => {
     await withTestDir({ prefix: "git-update-snapshot-" }, async (base) => {
       const root = path.join(base, "checkout");
       const stateDir = path.join(base, "state");
@@ -46,6 +51,9 @@ it.each([true, false])(
       await git(root, "add", ".");
       await git(root, "commit", "-m", "fixture");
       const before = await git(root, "rev-parse", "HEAD");
+      if (runtimeReady) {
+        await writeOpenClawPackageFixture(root, "2026.9.1", { builtSha: before });
+      }
       let target = before;
       if (!current) {
         await fs.writeFile(path.join(root, "candidate.txt"), "candidate\n");
@@ -84,11 +92,10 @@ it.each([true, false])(
           root,
           switchToGit: false,
           installKind: "git",
-          timeoutMs: 5000,
+          timeoutMs: undefined,
           startedAt: Date.now(),
           progress: {},
           channel: "dev",
-          tag: "latest",
           devTarget: { mode: "detached", ref: target },
           beforeGitMutation,
           validateCandidate,
@@ -96,17 +103,23 @@ it.each([true, false])(
           getManagedServiceEnv: () => undefined,
           getSnapshotSource,
           jsonMode: true,
-          allowGatewayServiceRepair: false,
-          allowGatewayActivation: false,
         });
+        const headCommandOptions = vi
+          .mocked(processRunner.runCommandWithTimeout)
+          .mock.calls.find(([argv]) => argv.join(" ") === `git -C ${root} rev-parse HEAD`)?.[1];
+        expect(
+          typeof headCommandOptions === "number"
+            ? headCommandOptions
+            : headCommandOptions?.timeoutMs,
+        ).toBe(20 * 60_000);
         expect(result).toMatchObject(
-          current
+          noOp
             ? { status: "skipped", reason: "already-current" }
             : { status: "error", reason: "snapshot-capacity-insufficient" },
         );
-        expect(capacity.mock.calls.length === 0).toBe(current);
-        expect(getSnapshotSource).toHaveBeenCalledTimes(current ? 0 : 1);
-        if (!current) {
+        expect(capacity.mock.calls.length === 0).toBe(noOp);
+        expect(getSnapshotSource).toHaveBeenCalledTimes(noOp ? 0 : 1);
+        if (!noOp) {
           expect(result.steps).toContainEqual(
             expect.objectContaining({
               name: "snapshot-space-preflight",

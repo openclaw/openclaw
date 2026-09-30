@@ -1,4 +1,3 @@
-// Bench Gateway Startup script supports OpenClaw repository automation.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -153,12 +152,7 @@ function buildLargePluginModelAgentEntries() {
     primary: `${LARGE_PLUGIN_MODEL_PROVIDER_IDS[0]}/model-01`,
     fallbacks: Array.from({ length: LARGE_PLUGIN_MODEL_COUNT - 1 }, (_, offset) => {
       const index = offset + 1;
-      const provider =
-        index % 3 === 0
-          ? LARGE_PLUGIN_MODEL_PROVIDER_IDS[0]
-          : index % 3 === 1
-            ? LARGE_PLUGIN_MODEL_PROVIDER_IDS[1]
-            : LARGE_PLUGIN_MODEL_PROVIDER_IDS[2];
+      const provider = LARGE_PLUGIN_MODEL_PROVIDER_IDS[index % 3];
       return `${provider}/model-${String(index + 1).padStart(2, "0")}`;
     }),
   };
@@ -168,6 +162,19 @@ function buildLargePluginModelAgentEntries() {
       { model },
     ]),
   );
+}
+
+function preparedRuntimeConfig(): Record<string, unknown> {
+  const model = `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`;
+  return {
+    ...BASE_CONFIG,
+    agents: {
+      defaults: {
+        model: { primary: model },
+        models: { [model]: { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+  };
 }
 
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
@@ -187,19 +194,7 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     name: "gateway, prepared runtime with CPU-stalling live catalog",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
     providerCatalogStallMs: 2_000,
-    config: {
-      ...BASE_CONFIG,
-      agents: {
-        defaults: {
-          model: { primary: `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}` },
-          models: {
-            [`${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`]: {
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      },
-    },
+    config: preparedRuntimeConfig(),
   },
   {
     id: "preparedRuntimeScaleOne",
@@ -209,19 +204,7 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
     providerStaticCatalogModelCount: 64,
     providerStaticCatalogStallMs: 100,
-    config: {
-      ...BASE_CONFIG,
-      agents: {
-        defaults: {
-          model: { primary: `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}` },
-          models: {
-            [`${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`]: {
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      },
-    },
+    config: preparedRuntimeConfig(),
   },
   {
     id: "preparedRuntimeScaleMany",
@@ -231,19 +214,7 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
     providerStaticCatalogModelCount: 64,
     providerStaticCatalogStallMs: 100,
-    config: {
-      ...BASE_CONFIG,
-      agents: {
-        defaults: {
-          model: { primary: `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}` },
-          models: {
-            [`${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`]: {
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      },
-    },
+    config: preparedRuntimeConfig(),
   },
   {
     id: "oneInternalHook",
@@ -445,56 +416,24 @@ Case ids:
 
 function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): CaseResult {
   const startupTrace = summarizeTraceStats(samples, (sample) => sample.startupTrace);
+  const summarize = (read: (sample: GatewaySample) => number | null) =>
+    summarizeNumbers(
+      samples.map(read).filter((value): value is number => typeof value === "number"),
+    );
   return {
     id: benchCase.id,
     name: benchCase.name,
     samples,
     summary: {
-      completionMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.completionMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      firstOutputMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.firstOutputMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      cpuCoreRatio: summarizeNumbers(
-        samples
-          .map((sample) => sample.cpuCoreRatio)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      cpuMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.cpuMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      gatewayReadyLogMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.gatewayReadyLogMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      healthzMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.healthz.ms)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      httpListenLogMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.httpListenLogMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      maxRssMb: summarizeNumbers(
-        samples
-          .map((sample) => sample.maxRssMb)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      readyzMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.readyz.ms)
-          .filter((value): value is number => typeof value === "number"),
-      ),
+      completionMs: summarize((sample) => sample.completionMs),
+      firstOutputMs: summarize((sample) => sample.firstOutputMs),
+      cpuCoreRatio: summarize((sample) => sample.cpuCoreRatio),
+      cpuMs: summarize((sample) => sample.cpuMs),
+      gatewayReadyLogMs: summarize((sample) => sample.gatewayReadyLogMs),
+      healthzMs: summarize((sample) => sample.healthz.ms),
+      httpListenLogMs: summarize((sample) => sample.httpListenLogMs),
+      maxRssMb: summarize((sample) => sample.maxRssMb),
+      readyzMs: summarize((sample) => sample.readyz.ms),
       startupTrace,
     },
   };
@@ -542,25 +481,18 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
     if (result.id !== "incidentCombined") {
       continue;
     }
-    const healthzP95 = result.summary.healthzMs?.p95;
-    if (healthzP95 == null || healthzP95 >= INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS) {
-      failures.push({
-        id: result.id,
-        reason:
-          `/healthz p95 ${healthzP95 == null ? "missing" : formatMs(healthzP95)} ` +
-          `must be under ${formatMs(INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS)}`,
-        sampleIndex: 0,
-      });
-    }
-    const readyzP95 = result.summary.readyzMs?.p95;
-    if (readyzP95 == null || readyzP95 >= INCIDENT_COMBINED_READYZ_P95_MAX_MS) {
-      failures.push({
-        id: result.id,
-        reason:
-          `/readyz p95 ${readyzP95 == null ? "missing" : formatMs(readyzP95)} ` +
-          `must be under ${formatMs(INCIDENT_COMBINED_READYZ_P95_MAX_MS)}`,
-        sampleIndex: 0,
-      });
+    for (const [probe, stats, limit] of [
+      ["/healthz", result.summary.healthzMs, INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS],
+      ["/readyz", result.summary.readyzMs, INCIDENT_COMBINED_READYZ_P95_MAX_MS],
+    ] as const) {
+      const p95 = stats?.p95;
+      if (p95 == null || p95 >= limit) {
+        failures.push({
+          id: result.id,
+          reason: `${probe} p95 ${p95 == null ? "missing" : formatMs(p95)} must be under ${formatMs(limit)}`,
+          sampleIndex: 0,
+        });
+      }
     }
   }
   return failures;
@@ -900,14 +832,9 @@ async function runGatewaySample(options: {
       sampleRss();
       rssTimer = setInterval(sampleRss, 100);
       rssTimer.unref?.();
-      const childExitPromise = new Promise<{ exitCode: number | null; signal: string | null }>(
-        (resolve) => {
-          startedChild.once("exit", (exitCode, signal) => {
-            childExited = true;
-            resolve({ exitCode, signal });
-          });
-        },
-      );
+      startedChild.once("exit", () => {
+        childExited = true;
+      });
 
       const onLine = (line: string, nowMs: number) => {
         const readyLogKind = classifyGatewayReadyLog(line);
@@ -940,22 +867,15 @@ async function runGatewaySample(options: {
       startedChild.stdout.on("data", (chunk: Buffer) => onChunk("stdout", chunk));
       startedChild.stderr.on("data", (chunk: Buffer) => onChunk("stderr", chunk));
 
-      const [healthz, readyz] = await Promise.all([
+      const probe = (probePath: string) =>
         waitForProbe({
           deadlineAt,
           isDone: () => childExited,
-          path: "/healthz",
+          path: probePath,
           port,
           startAt,
-        }),
-        waitForProbe({
-          deadlineAt,
-          isDone: () => childExited,
-          path: "/readyz",
-          port,
-          startAt,
-        }),
-      ]);
+        });
+      const [healthz, readyz] = await Promise.all([probe("/healthz"), probe("/readyz")]);
       const completionMs = options.benchCase.completionTracePhase
         ? await waitForStartupTracePhase({
             deadlineAt,
@@ -972,8 +892,6 @@ async function runGatewaySample(options: {
       const exit = await stopChild(startedChild);
       sampleRss();
       child = undefined;
-      // stopChild is the bounded teardown wait; the raw exit promise may never settle.
-      void childExitPromise.catch(() => null);
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt, {
         flushPartial: true,
       });

@@ -1,10 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { formatUnsupportedNodeVersionMessage } from "../../../node-version.mjs";
-import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { resolveConfigPath } from "../../config/paths.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
@@ -78,12 +76,19 @@ import { VERSION } from "../../version.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import type { UpdateDisplayProgress } from "./progress.js";
-import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
+import {
+  parseUpdateTimeoutMs,
+  resolveUpdateRoot,
+  usesCandidateUpdateAdmission,
+  type UpdateCommandOptions,
+} from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
+import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
+  retireMutableUpdateSignalRun,
   withMutableUpdateSignals,
 } from "./update-command-mutable-signals.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
@@ -233,16 +238,8 @@ export async function admitUpdateCommandRun(params: {
   invocationCwd?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
   expectedForeground?: true;
-  initialization?: {
-    env: NodeJS.ProcessEnv;
-    runId: string;
-    databasePath: string;
-    configPath: string;
-    target: {
-      configSnapshot: ConfigFileSnapshot;
-      legacyConfigPlan?: LegacyConfigUpdatePlan;
-    };
-  };
+  initialization?: UpdateInitializationAdmission;
+  assertCurrent?: () => void;
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
   assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
   const env = await resolveUpdateCommandAdmissionEnv(params);
@@ -266,17 +263,28 @@ export async function admitUpdateCommandRun(params: {
       throw new GatewayServiceUpdateOwnershipError(
         "Gateway state or configuration selectors changed during target initialization. Retry from the installation's current owning account.",
         undefined,
+        undefined,
+        "service-context-changed",
       );
     }
-    await revalidateUpdateDatabaseContext({
-      env,
-      readEnv: env,
-      config: initialized.target.configSnapshot.sourceConfig,
-      configSnapshot: initialized.target.configSnapshot,
-      ...(initialized.target.legacyConfigPlan
-        ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
-        : {}),
-    });
+    if (initialized.target) {
+      const current = await revalidateUpdateDatabaseContext({
+        env,
+        readEnv: env,
+        config: initialized.target.configSnapshot.sourceConfig,
+        configSnapshot: initialized.target.configSnapshot,
+        ...(initialized.target.updateInstallKind === "package" &&
+        usesCandidateUpdateAdmission(params.opts, params.installKind ?? "unknown")
+          ? { configValidation: "candidate" as const }
+          : {}),
+        ...(initialized.target.legacyConfigPlan
+          ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
+          : {}),
+      });
+      initialized.target.configSnapshot = current.configSnapshot;
+      initialized.target.legacyConfigPlan = current.legacyConfigPlan;
+      initialized.target.configReadFailure = undefined;
+    }
   }
   const meta = await readControlPlaneUpdateSentinelMeta(env);
   await resolveForegroundUpdateAdmission({
@@ -294,12 +302,13 @@ export async function admitUpdateCommandRun(params: {
     env,
     busyTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
   };
+  params.assertCurrent?.();
   const created = createUpdateRun(
     {
       runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
       trigger: "cli",
       preview: params.opts.dryRun === true,
-      origin: { driver },
+      origin: { driver, admission: { owner: "installed" } },
       supersedeStaleIdentityless:
         !env[UPDATE_RUN_ID_ENV]?.trim() && env[POST_CORE_UPDATE_ENV] !== "1",
       target: {
@@ -328,6 +337,8 @@ export async function admitUpdateCommandRun(params: {
       : undefined;
   const run = {
     runId: record.runId,
+    originalRecoveryCapture:
+      params.initialization?.originalRecoveryCapture ?? params.opts.run?.originalRecoveryCapture,
     defaultStepTimeoutMs: record.trigger === "campaign" ? AUTO_UPDATE_STEP_TIMEOUT_MS : undefined,
     env,
     ...(record.trigger !== "cli" &&
@@ -433,7 +444,9 @@ export function createUpdateRunProgress(
   return {
     pendingSteps,
     onRollbackOutcome: (rollbackOutcome) => {
-      recordUpdateRunVerification(run.runId, { rollbackOutcome }, { env: run.env });
+      if (!deferred) {
+        recordUpdateRunVerification(run.runId, { rollbackOutcome }, { env: run.env });
+      }
     },
     onHeartbeat() {
       if (!deferred) {
@@ -444,6 +457,7 @@ export function createUpdateRunProgress(
       // Candidate Doctor can advance SQLite beyond this process's reader. Hold
       // activation receipts until the supported runtime owns ledger writes.
       deferred = true;
+      retireMutableUpdateSignalRun(run);
     },
     flushLedgerWrites() {
       deferred = false;

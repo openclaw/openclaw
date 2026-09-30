@@ -29,6 +29,7 @@ import {
   acceptsHistoryResult,
 } from "./chat-history-state.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;
@@ -68,7 +69,8 @@ export function attachHistoryActivity<Result extends ChatHistoryResponse>(result
 }
 
 type SharedChatHistoryResponse = ChatHistoryResponse & {
-  observation?: ChatHistoryObservation;
+  observation?: Omit<ChatHistoryObservation, "run">;
+  consumersAtIssue: ReadonlyMap<SharedChatHistoryConsumer, ChatHistoryRunObservation | undefined>;
 };
 
 type SharedChatHistoryRequest = {
@@ -84,6 +86,7 @@ type SharedChatHistoryRegistry = {
 
 type SharedChatHistoryConsumer = {
   isCurrent: () => boolean;
+  captureRun?: () => ChatHistoryRunObservation | undefined;
   retryDeadlineMs: number;
 };
 
@@ -147,7 +150,7 @@ type SharedChatHistoryArgs = [
   sessionKey: string,
   requestAgentId: string | undefined,
   consumerOwner: object,
-  isCurrentConsumer: () => boolean,
+  consumerObservation: Pick<SharedChatHistoryConsumer, "isCurrent" | "captureRun">,
   cursor?: string,
   inputRunIds?: string[],
   budget?: { limit: number; maxBytes: number },
@@ -170,12 +173,12 @@ export function requestSharedHistory(
     sessionKey,
     requestAgentId,
     consumerOwner,
-    isCurrentConsumer,
+    consumerObservation,
     cursor,
     inputRunIds = [],
     budget = { limit: CHAT_HISTORY_REQUEST_LIMIT, maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES },
   ]: SharedChatHistoryArgs
-): Promise<SharedChatHistoryResponse> {
+): Promise<ChatHistoryResponse & { observation?: ChatHistoryObservation }> {
   let owners = sharedChatHistoryRequests.get(client);
   if (!owners) {
     owners = new WeakMap();
@@ -194,8 +197,8 @@ export function requestSharedHistory(
   const requests = registry.requests;
   let shared = requests.get(requestKey);
   const existingOwner = (registry.ownerRequestCounts.get(consumerOwner)?.get(requestKey) ?? 0) > 0;
-  const consumer = {
-    isCurrent: isCurrentConsumer,
+  const consumer: SharedChatHistoryConsumer = {
+    ...consumerObservation,
     retryDeadlineMs: Date.now() + CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS,
   };
   if (!shared || existingOwner) {
@@ -216,13 +219,18 @@ export function requestSharedHistory(
     const promise = requestChatHistory(
       method,
       async () => {
+        // Each attempt observes only its present consumers and their current runs.
+        // A late join acquires custody on a retry, never from an earlier read.
+        const consumersAtIssue = new Map(
+          [...consumers].map((entry) => [entry, entry.captureRun?.()] as const),
+        );
         const observation = sessions
           ? { owner: sessions, reconcile: sessions.captureReconcile() }
           : undefined;
         const response = attachHistoryActivity(
           await client.request<ChatHistoryResponse>(method, params, { signal: controller.signal }),
         );
-        return observation ? { ...response, observation } : response;
+        return { ...response, observation, consumersAtIssue };
       },
       shouldContinue,
       shouldRetry,
@@ -261,6 +269,16 @@ export function requestSharedHistory(
         requests.delete(requestKey);
       }
     },
+  ).then(({ consumersAtIssue, observation, ...response }) =>
+    observation
+      ? {
+          ...response,
+          observation: {
+            ...observation,
+            run: consumersAtIssue.get(consumer),
+          },
+        }
+      : response,
   );
 }
 
@@ -287,7 +305,7 @@ export async function requestChatSessionSnapshot(
     sessionKey,
     undefined,
     consumerOwner,
-    isCurrentConsumer,
+    { isCurrent: isCurrentConsumer },
     cursor,
     undefined,
     CHAT_HISTORY_PREFETCH_BUDGET,

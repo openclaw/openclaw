@@ -11,6 +11,54 @@ import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { createRestartFlowFixture } from "./scenario-restart-flow.test-support.js";
 
 describe("qa scenario catalog causality", () => {
+  it("exposes the message tool directly for delivery decision inspection", () => {
+    const scenario = readQaScenarioById("message-delivery-decision-inspection");
+
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      tools: {
+        toolSearch: false,
+        alsoAllow: ["message"],
+      },
+    });
+  });
+
+  it("requires one host-owned fallback for message suppression and no duplicate after restart", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("message-delivery-decision-inspection"),
+    );
+    const suppressionActions = scenario.execution.flow?.steps[1]?.actions ?? [];
+    const restartActions = scenario.execution.flow?.steps[2]?.actions ?? [];
+    const outboundCount =
+      "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length";
+
+    expect(scenario.execution.config?.expectedFallbackText).toBe(
+      "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
+    );
+    expect(suppressionActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          waitForOutbound: {
+            conversation: { id: "qa-message-suppression-room", kind: "direct" },
+            textIncludes: { ref: "config.expectedFallbackText" },
+            timeoutMs: 60000,
+          },
+          saveAs: "suppressionOutbound",
+        }),
+      ]),
+    );
+    expect(suppressionActions.map(readFlowAssertExpression)).toContain(
+      `${outboundCount} === suppressionOutboundStart + 1 && suppressionOutbound.text === config.expectedFallbackText`,
+    );
+    expect(restartActions.map(readFlowAssertExpression)).toContain(
+      `${outboundCount} === suppressionOutboundStart + 1`,
+    );
+    expect([...suppressionActions, ...restartActions].map(readFlowAssertExpression)).not.toContain(
+      `${outboundCount} === suppressionOutboundStart`,
+    );
+    expect(JSON.stringify(scenario.execution.flow)).not.toContain("waitForNoOutbound");
+    expect(JSON.stringify(scenario.execution.flow)).not.toContain("visibleOutbound=0");
+  });
+
   it("treats denied Telegram admission as silent transport suppression", () => {
     for (const scenarioId of [
       "telegram-policy-hot-reload",
@@ -301,7 +349,7 @@ describe("qa scenario catalog causality", () => {
     const childIndex = actions.findIndex(
       (action) =>
         (action as { call?: string; saveAs?: string }).call === "waitForCondition" &&
-        (action as { saveAs?: string }).saveAs === "childTask",
+        (action as { saveAs?: string }).saveAs === "childRun",
     );
     const childWait = actions[childIndex] as
       | { args?: Array<{ lambda?: { expr?: string } }> }
@@ -309,11 +357,10 @@ describe("qa scenario catalog causality", () => {
 
     expect(prompt).toContain("expectsCompletionMessage false");
     expect(prompt).toContain("do not call sessions_yield or wait for the child");
-    expect(childWait?.args?.[0]?.lambda?.expr).toContain("task.status === 'completed'");
+    expect(childWait?.args?.[0]?.lambda?.expr).toContain("run.execution.status === 'terminal'");
+    expect(childWait?.args?.[0]?.lambda?.expr).toContain("run.execution.outcome?.status === 'ok'");
     expect(childWait?.args?.[0]?.lambda?.expr).not.toContain("terminalOutcome");
-    expect(childWait?.args?.[0]?.lambda?.expr).toContain(
-      "task.deliveryStatus === 'not_applicable'",
-    );
+    expect(childWait?.args?.[0]?.lambda?.expr).toContain("run.delivery?.status === 'not_required'");
     expect(outboundIndex).toBeGreaterThanOrEqual(0);
     expect(childIndex).toBeGreaterThan(outboundIndex);
 
@@ -323,7 +370,7 @@ describe("qa scenario catalog causality", () => {
         flow: {
           steps: [
             {
-              name: "accepts a successful silent child task",
+              name: "accepts a successful silent child run",
               actions: [
                 { set: "sessionKey", value: "agent:qa:restart-proof" },
                 ...childAssertionPath,
@@ -332,21 +379,16 @@ describe("qa scenario catalog causality", () => {
           ],
         },
         api: {
-          env: {
-            gateway: {
-              call: async () => ({
-                tasks: [
-                  {
-                    title: "restart-proof-child",
-                    sessionKey: "agent:qa:restart-proof",
-                    childSessionKey: "agent:qa:restart-proof:child",
-                    status: "completed",
-                    deliveryStatus: "not_applicable",
-                  },
-                ],
-              }),
+          readNativeQaSubagentRuns: async () => [
+            {
+              runId: "restart-proof-child-run",
+              label: "restart-proof-child",
+              requesterSessionKey: "agent:qa:restart-proof",
+              childSessionKey: "agent:qa:restart-proof:child",
+              execution: { status: "terminal", outcome: { status: "ok" } },
+              delivery: { status: "not_required" },
             },
-          },
+          ],
           readSessionTranscriptSummary: async () => ({ finalText: "CHILD-RESTART-OK" }),
         },
       }),

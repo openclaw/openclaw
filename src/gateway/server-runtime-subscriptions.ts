@@ -22,15 +22,23 @@ import {
 import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
 import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import {
   onGatewaySuspendAdmissionChange,
   runWithRetainedGatewayRootWork,
 } from "../process/gateway-work-admission.js";
-import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  onSessionIdentityMutation,
+  onSessionLifecycleEvent,
+} from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import {
+  createLazyPromise,
+  createLazyPromiseLoader,
+  createLazyRuntimeSurface,
+} from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import {
   bindChatAbortTerminalDispatch,
@@ -42,6 +50,7 @@ import {
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import type {
   ChatRunState,
@@ -50,11 +59,10 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
-import { startGatewayTaskSubscriptions } from "./server-task-subscriptions.js";
 import { createSessionActivitySummaries } from "./session-activity-summaries.js";
+import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
-import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { sessionObserverScopeKey } from "./session-observer-model.js";
 import { createSessionObserver } from "./session-observer.js";
@@ -63,7 +71,6 @@ import {
   resolveSessionEventAgentScope,
 } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import type { TerminalSessionManager } from "./terminal/session-manager.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -87,6 +94,7 @@ function dispatchEventHandler<TEvent>(params: {
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
+  scheduler: GatewayScheduler;
   signal: AbortSignal;
   log: SubsystemLogger;
   broadcast: GatewayBroadcastFn;
@@ -105,12 +113,14 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
-  terminalSessions: Pick<TerminalSessionManager, "closeTaskSessions">;
   refreshConnectedUserProfiles: () => void;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
   // Collection changes gate new work; the writer retains accepted work and maintenance.
-  const auditRecorder = createAuditEventRecorder({ getConfig: getRuntimeConfig });
+  const auditRecorder = createAuditEventRecorder({
+    getConfig: getRuntimeConfig,
+    scheduler: params.scheduler,
+  });
   const clearAuditSinks = [
     configureExecutionIdentityAdmissionSink(auditRecorder.recordExecutionIdentity),
     configureExecutionDecisionWorkSink(auditRecorder.recordExecutionDecisionWork),
@@ -137,35 +147,11 @@ export function startGatewayEventSubscriptions(params: {
   };
   reconcileAuditPolicy(getRuntimeConfig());
   const sessionActivitySummaries = createSessionActivitySummaries({
+    scheduler: params.scheduler,
     getConfig: getRuntimeConfig,
+    getSessionRowProjection: params.getSessionRowProjection,
     onChanged: (target) => {
-      const publication = (async () => {
-        const projection = params.getSessionRowProjection?.();
-        const captured = projection?.capture({ key: target.key, agentId: target.agentId });
-        if (projection) {
-          do {
-            await projection.ensureMaterialized();
-          } while (projection.needsMaterialization);
-        }
-        if (projection && (!captured || !projection.isCurrent(captured))) {
-          return;
-        }
-        const row = projection?.snapshot({ key: target.key, agentId: target.agentId }).row;
-        params.broadcast(
-          "sessions.changed",
-          {
-            sessionKey: target.key,
-            agentId: target.agentId,
-            reason: "activity-summary",
-            ...buildGatewaySessionSnapshot({
-              sessionRow: row,
-              agentId: target.agentId,
-              includeSession: true,
-            }),
-          },
-          { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
-        );
-      })().catch((error: unknown) =>
+      const publication = broadcastSessionActivitySummary(target, params).catch((error: unknown) =>
         params.log.warn("Activity summary publication failed", { error }),
       );
       agentEventDispatches.add(publication);
@@ -179,6 +165,7 @@ export function startGatewayEventSubscriptions(params: {
     broadcastToConnIds: params.broadcastToConnIds,
   });
   const sessionCompanion = createSessionCompanion({
+    scheduler: params.scheduler,
     contextReader: defaultSessionCompanionContextReader,
     getConfig: getRuntimeConfig,
     sessionObserver,
@@ -201,7 +188,7 @@ export function startGatewayEventSubscriptions(params: {
   }
   const unsubscribePrivateAuditEvents = onAgentAuditEvent(auditRecorder.record);
   const unsubscribeToolAuditEvents = onTrustedToolExecutionEvent(auditRecorder.recordTool);
-  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner();
+  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner(params.scheduler);
   const agentEventDispatches = new Set<Promise<void>>();
   const eventRowOwners = new WeakMap<
     AgentEventRuntimePayload,
@@ -325,7 +312,11 @@ export function startGatewayEventSubscriptions(params: {
             nodeSendToSession: params.nodeSendToSession,
             agentRunSeq: params.agentRunSeq,
             chatRunState: params.chatRunState,
-            resolveSessionKeyForRun,
+            resolveSessionKeyForRun: (runId, options) =>
+              resolveSessionKeyForRun(runId, {
+                ...options,
+                projection: params.getSessionRowProjection?.(),
+              }),
             clearAgentRunContext,
             toolEventRecipients: params.toolEventRecipients,
             sessionEventSubscribers: params.sessionEventSubscribers,
@@ -353,10 +344,16 @@ export function startGatewayEventSubscriptions(params: {
                 key,
                 options?.agentId,
               );
+              const read = options?.sessionRows;
+              const prepared = scope?.[1] ? read?.describe({ key, agentId: scope[1] }) : undefined;
               const snapshot = scope?.[1]
-                ? (params.getSessionRowProjection?.()?.snapshot({ key, agentId: scope[1] }) ?? {
-                    row: null,
-                  })
+                ? read
+                  ? prepared
+                    ? { row: read.present(prepared), lifecycleRunId: prepared.entry.lifecycleRunId }
+                    : { row: null }
+                  : (params.getSessionRowProjection?.()?.snapshot({ key, agentId: scope[1] }) ?? {
+                      row: null,
+                    })
                 : { row: null };
               return options?.ownerEvent?.sessionId &&
                 snapshot.row?.sessionId !== options.ownerEvent.sessionId
@@ -403,38 +400,14 @@ export function startGatewayEventSubscriptions(params: {
     cacheRejections: true,
   });
 
-  let transcriptUpdateHandlerPromise: Promise<
-    ReturnType<typeof import("./server-session-events.js").createTranscriptUpdateBroadcastHandler>
-  > | null = null;
-  const getTranscriptUpdateHandler = () => {
-    transcriptUpdateHandlerPromise ??= getSessionEventsModule().then(
-      ({ createTranscriptUpdateBroadcastHandler }) =>
-        createTranscriptUpdateBroadcastHandler({
-          broadcastToConnIds: params.broadcastToConnIds,
-          sessionEventSubscribers: params.sessionEventSubscribers,
-          sessionMessageSubscribers: params.sessionMessageSubscribers,
-          chatAbortControllers: params.chatAbortControllers,
-          getSessionRowProjection: params.getSessionRowProjection,
-        }),
-    );
-    return transcriptUpdateHandlerPromise;
-  };
-
-  let lifecycleEventHandlerPromise: Promise<
-    ReturnType<typeof import("./server-session-events.js").createLifecycleEventBroadcastHandler>
-  > | null = null;
-  const getLifecycleEventHandler = () => {
-    lifecycleEventHandlerPromise ??= getSessionEventsModule().then(
-      ({ createLifecycleEventBroadcastHandler }) =>
-        createLifecycleEventBroadcastHandler({
-          broadcastToConnIds: params.broadcastToConnIds,
-          sessionEventSubscribers: params.sessionEventSubscribers,
-          chatAbortControllers: params.chatAbortControllers,
-          getSessionRowProjection: params.getSessionRowProjection,
-        }),
-    );
-    return lifecycleEventHandlerPromise;
-  };
+  const getTranscriptUpdateHandler = createLazyRuntimeSurface(
+    getSessionEventsModule,
+    ({ createTranscriptUpdateBroadcastHandler }) => createTranscriptUpdateBroadcastHandler(params),
+  );
+  const getLifecycleEventHandler = createLazyRuntimeSurface(
+    getSessionEventsModule,
+    ({ createLifecycleEventBroadcastHandler }) => createLifecycleEventBroadcastHandler(params),
+  );
 
   const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
     if (evt.stream === "lifecycle") {
@@ -571,10 +544,10 @@ export function startGatewayEventSubscriptions(params: {
           // Context cleanup can precede a terminal event. Resolve its persisted
           // run mapping before the lazy chat handler consumes the same event.
           terminalPreparation = getSessionKeyModule().then(async ({ resolveSessionKeyForRun }) => {
-            const sessionKey = resolveSessionKeyForRun(
-              evt.runId,
-              sessionAgentId ? { agentId: sessionAgentId } : undefined,
-            );
+            const sessionKey = resolveSessionKeyForRun(evt.runId, {
+              agentId: sessionAgentId,
+              projection: params.getSessionRowProjection?.(),
+            });
             if (sessionKey) {
               await prepareTerminalPersistence(sessionKey);
             }
@@ -665,6 +638,10 @@ export function startGatewayEventSubscriptions(params: {
     });
   });
 
+  // Committed resets/rotations can change access after the originating run is gone.
+  // Invalidate synchronously before any yielded reader can accept its old access snapshot.
+  // Each runtime owns its callback so late disposal cannot remove a replacement's listener.
+  const unsubscribeSessionIdentity = onSessionIdentityMutation(() => bumpGatewayAccessRevision());
   const unsubscribeProfileChanges = onUserProfilesChanged(() => {
     params.refreshConnectedUserProfiles();
     params.broadcastToConnIds(
@@ -697,12 +674,11 @@ export function startGatewayEventSubscriptions(params: {
     params.broadcast("gateway.suspension", { phase });
   });
   const lifecycleUnsub = () => {
+    unsubscribeSessionIdentity();
     unsubscribeSuspension();
     unsubscribeProfileChanges();
     unsubscribeLifecycle();
   };
-
-  const taskUnsub = startGatewayTaskSubscriptions(params);
 
   return {
     channelAdmissionAudit,
@@ -714,6 +690,5 @@ export function startGatewayEventSubscriptions(params: {
     heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub,
-    taskUnsub,
   };
 }

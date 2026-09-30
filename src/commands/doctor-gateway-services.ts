@@ -1,4 +1,3 @@
-/** Doctor repairs for installed gateway service config and duplicate legacy services. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +14,7 @@ import {
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
   type ExtraGatewayService,
+  type GatewayServiceInventory,
 } from "../daemon/inspect.js";
 import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
@@ -37,16 +37,8 @@ import {
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
 } from "../daemon/service-types.js";
-import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import {
-  findSystemdGatewayInstallation,
-  isSystemUnitActiveAndEnabled,
-  isSystemdUnitActive,
-  uninstallLegacySystemdUnits,
-  uninstallUserSystemdGatewayUnit,
-} from "../daemon/systemd.js";
-import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { isSystemdUnitActive, uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -54,18 +46,22 @@ import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import {
   assertGatewayServiceInstallationRepairAllowed,
+  canRepairRunningGatewayDefinition,
+  installDoctorGatewayService,
   isExecStartRepairIssue,
-  repairGatewayServiceInstallation,
   resolveSystemdScopeFromServicePath,
   resolveSystemdServiceRewriteBlock,
   resolveSystemdUnitNameFromServicePath,
   type DoctorGatewayInstallationMaintenance,
 } from "./doctor-gateway-installation.js";
+import { classifyLegacyServices } from "./doctor-gateway-legacy-services.js";
 import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
   formatServiceConfigIssues,
+  hasRepairableServiceDefinitionDrift,
   isOperatorOwnedEnvironmentIssue,
+  isServiceDefinitionOnlyRepair,
   isServiceInstallationOnlyRepair,
   reportServiceDefinitionDrift,
 } from "./doctor-service-audit.js";
@@ -76,6 +72,8 @@ import {
   resolveServiceRepairPolicy,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
+
+export { maybeResolveDuelingSystemdGatewayScopes } from "./doctor-gateway-dueling.js";
 
 type GatewayServiceConfigRepairOptions = {
   allowExecSecretRefs?: boolean;
@@ -109,7 +107,6 @@ async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promi
   }
   return false;
 }
-const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function extractDetailPath(detail: string, prefix: string): string | null {
   if (!detail.startsWith(prefix)) {
@@ -141,44 +138,17 @@ async function filterInactiveExtraGatewayServices(
 
 export async function detectExtraGatewayServiceIssues(
   options: Pick<DoctorOptions, "deep"> = {},
-): Promise<readonly ExtraGatewayService[]> {
+): Promise<GatewayServiceInventory> {
   if (!isDefaultInstallIdentity(process.env) || !(await shouldManageGatewayService())) {
-    return [];
+    return { services: [], errors: [] };
   }
   const detectedExtraServices = await findExtraGatewayServices(process.env, {
     deep: options.deep,
   });
-  return await filterInactiveExtraGatewayServices(detectedExtraServices);
-}
-
-export function extraGatewayServiceToHealthFinding(service: ExtraGatewayService): HealthFinding {
   return {
-    checkId: GATEWAY_SERVICES_EXTRA_CHECK_ID,
-    severity: service.legacy === true ? "warning" : "info",
-    message: `Other gateway-like service detected: ${service.label} (${service.scope}, ${service.detail})`,
-    source: service.platform,
-    target: service.label,
-    fixHint:
-      service.legacy === true
-        ? "Run `openclaw doctor` interactively to review legacy gateway services and confirm supported cleanup."
-        : "Run a single gateway per machine unless this extra gateway is intentional.",
+    services: await filterInactiveExtraGatewayServices(detectedExtraServices.services),
+    errors: detectedExtraServices.errors,
   };
-}
-
-export function extraGatewayServiceToRepairEffects(
-  service: ExtraGatewayService,
-): readonly HealthRepairEffect[] {
-  if (service.legacy !== true) {
-    return [];
-  }
-  return [
-    {
-      kind: "service",
-      action: "would-remove-legacy-gateway-service",
-      target: service.label,
-      dryRunSafe: false,
-    },
-  ];
 }
 
 async function cleanupLegacyLaunchdService(params: {
@@ -218,40 +188,6 @@ async function cleanupLegacyLaunchdService(params: {
   } catch {
     return { status: "failed", reason: "could not move plist" };
   }
-}
-
-function classifyLegacyServices(legacyServices: ExtraGatewayService[]): {
-  darwinUserServices: ExtraGatewayService[];
-  linuxUserServices: ExtraGatewayService[];
-  failed: string[];
-} {
-  const darwinUserServices: ExtraGatewayService[] = [];
-  const linuxUserServices: ExtraGatewayService[] = [];
-  const failed: string[] = [];
-
-  for (const svc of legacyServices) {
-    if (svc.platform === "darwin") {
-      if (svc.scope === "user") {
-        darwinUserServices.push(svc);
-      } else {
-        failed.push(`${svc.label} (${svc.scope})`);
-      }
-      continue;
-    }
-
-    if (svc.platform === "linux") {
-      if (svc.scope === "user") {
-        linuxUserServices.push(svc);
-      } else {
-        failed.push(`${svc.label} (${svc.scope})`);
-      }
-      continue;
-    }
-
-    failed.push(`${svc.label} (${svc.platform})`);
-  }
-
-  return { darwinUserServices, linuxUserServices, failed };
 }
 
 async function cleanupLegacyDarwinServices(
@@ -344,12 +280,7 @@ export async function maybeRepairGatewayServiceConfig(
   const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
 
   const service = resolveGatewayService();
-  let command: Awaited<ReturnType<typeof service.readCommand>> | null;
-  try {
-    command = await service.readCommand(process.env);
-  } catch {
-    command = null;
-  }
+  const command = await service.readCommand(process.env).catch(() => null);
   if (!command) {
     const audit = await auditGatewayServiceConfig({
       env: process.env,
@@ -452,6 +383,11 @@ export async function maybeRepairGatewayServiceConfig(
     ...(installationDrift ? { expectedCommand: expectedPlan } : {}),
   });
   reportServiceDefinitionDrift(audit);
+  const definitionRepair =
+    !installationDrift &&
+    Boolean(expectedRoot) &&
+    !expectedLayout?.entrypointSourceCheckout &&
+    hasRepairableServiceDefinitionDrift(audit);
   if (audit.runtimeNote) {
     note(audit.runtimeNote, "Gateway runtime");
   }
@@ -518,12 +454,10 @@ export async function maybeRepairGatewayServiceConfig(
     expectedRuntimePlan === expectedPlan
       ? expectedLayout
       : await summarizeGatewayServiceLayout(expectedRuntimePlan);
-  const normalizedExpectedEntrypoint = runtimeLayout?.entrypointReal;
-  const normalizedCurrentEntrypoint = serviceLayout?.entrypointReal;
   if (
-    normalizedExpectedEntrypoint &&
-    normalizedCurrentEntrypoint &&
-    normalizedExpectedEntrypoint !== normalizedCurrentEntrypoint
+    runtimeLayout?.entrypointReal &&
+    serviceLayout?.entrypointReal &&
+    runtimeLayout.entrypointReal !== serviceLayout.entrypointReal
   ) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
@@ -543,31 +477,30 @@ export async function maybeRepairGatewayServiceConfig(
   const hasEntrypointMismatch = audit.issues.some(
     (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
   );
-  const showSourceCheckoutWarning = sourceCheckoutWarning !== null && !hasEntrypointMismatch;
+  const sourceCheckoutWarningToShow = hasEntrypointMismatch ? null : sourceCheckoutWarning;
 
-  if (audit.issues.length === 0) {
-    if (sourceCheckoutWarning !== null && !hasEntrypointMismatch) {
-      note(sourceCheckoutWarning, "Gateway service config");
+  if (audit.issues.length === 0 && !definitionRepair) {
+    if (sourceCheckoutWarningToShow !== null) {
+      note(sourceCheckoutWarningToShow, "Gateway service config");
     }
     return cfg;
   }
 
   const consolidatedLines: string[] = [];
-  let emittedSourceCheckoutWarning = false;
-  if (sourceCheckoutWarning !== null && showSourceCheckoutWarning) {
-    consolidatedLines.push(sourceCheckoutWarning);
-    consolidatedLines.push("");
-    emittedSourceCheckoutWarning = true;
+  if (sourceCheckoutWarningToShow !== null) {
+    consolidatedLines.push(sourceCheckoutWarningToShow, "");
   }
   consolidatedLines.push(...formatServiceConfigIssues(audit.issues));
   note(consolidatedLines.join("\n"), "Gateway service config");
-  if (audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)) {
+  if (
+    audit.issues.length > 0 &&
+    audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)
+  ) {
     return cfg;
   }
 
-  const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
   const needsAggressive =
-    aggressiveIssues.length > 0 ||
+    audit.issues.some((issue) => issue.level === "aggressive") ||
     (installationDrift !== undefined &&
       (audit.definitionDriftError !== undefined ||
         audit.definitionDrift?.some((finding) => finding.kind === "unknown-edit") === true));
@@ -581,6 +514,14 @@ export async function maybeRepairGatewayServiceConfig(
 
   if (serviceRepairDeferred) {
     note(formatServiceRepairDeferredNote(), "Gateway service config");
+    return cfg;
+  }
+
+  if (
+    definitionRepair &&
+    !options.serviceMaintenance &&
+    !(await canRepairRunningGatewayDefinition({ service, command, env: serviceInstallEnv }))
+  ) {
     return cfg;
   }
 
@@ -608,16 +549,24 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
 
-  const repairMessage = needsAggressive
-    ? "Overwrite gateway service config with current defaults now?"
-    : "Update gateway service config to the recommended defaults now?";
+  const gatewayTokenForRepair = expectedGatewayToken ?? readEmbeddedGatewayToken(managedDefinition);
+  const configuredGatewayToken =
+    typeof cfg.gateway?.auth?.token === "string"
+      ? normalizeOptionalString(cfg.gateway.auth.token)
+      : undefined;
+  const needsConfigWrite =
+    !tokenRefConfigured && !configuredGatewayToken && Boolean(gatewayTokenForRepair);
   const repair = await prompter.confirmRuntimeRepair({
-    message: repairMessage,
+    message: needsAggressive
+      ? "Overwrite gateway service config with current defaults now?"
+      : "Update gateway service config to the recommended defaults now?",
     initialValue: needsAggressive ? prompter.shouldForce : true,
-    requiresInteractiveConfirmation: !installationDrift || !isServiceInstallationOnlyRepair(audit),
+    requiresInteractiveConfirmation:
+      !(installationDrift && isServiceInstallationOnlyRepair(audit)) &&
+      !(definitionRepair && !needsConfigWrite && isServiceDefinitionOnlyRepair(audit)),
   });
   if (!repair) {
-    if (!emittedSourceCheckoutWarning) {
+    if (sourceCheckoutWarningToShow === null) {
       note(
         "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
         "Gateway service config",
@@ -643,14 +592,8 @@ export async function maybeRepairGatewayServiceConfig(
     runtime.error(`Gateway service repair blocked: ${String(err)}`);
     return cfg;
   }
-  const serviceEmbeddedToken = readEmbeddedGatewayToken(managedDefinition);
-  const gatewayTokenForRepair = expectedGatewayToken ?? serviceEmbeddedToken;
-  const configuredGatewayToken =
-    typeof cfg.gateway?.auth?.token === "string"
-      ? normalizeOptionalString(cfg.gateway.auth.token)
-      : undefined;
   let cfgForServiceInstall = cfg;
-  if (!tokenRefConfigured && !configuredGatewayToken && gatewayTokenForRepair) {
+  if (needsConfigWrite) {
     const nextCfg: OpenClawConfig = {
       ...cfg,
       gateway: {
@@ -688,47 +631,28 @@ export async function maybeRepairGatewayServiceConfig(
     runtimePath: needsNodeRuntime && systemNodePath ? systemNodePath : installedRuntimePath,
     pinnedRuntimePath: pinSnapshot.pin?.path,
   });
-  try {
-    const install = (assertCurrent = options.serviceMaintenance?.assertCurrent) =>
-      service.install({
-        assertCurrent,
-        runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
-        env: serviceInstallEnv,
-        stdout: process.stdout,
-        warn: (message) => note(message, "Gateway"),
-        programArguments: updatedPlan.programArguments,
-        workingDirectory: updatedPlan.workingDirectory,
-        environment: updatedPlan.environment,
-        environmentValueSources: updatedPlan.environmentValueSources,
-      });
-    if (installationDrift && expectedRoot) {
-      await repairGatewayServiceInstallation({
-        service,
-        command,
-        activeRoot: expectedRoot,
-        maintenance: options.serviceMaintenance,
-        env: serviceInstallEnv,
-        install,
-      });
-      note(
-        "Gateway service installation reconciled with the active CLI.",
-        "Gateway service installation",
-      );
-    } else {
-      await install();
-    }
-  } catch (err) {
-    if (err instanceof GatewayServiceAuthorityError) {
-      throw err;
-    }
-    runtime.error(`Gateway service update failed: ${String(err)}`);
-  }
+  await installDoctorGatewayService({
+    service,
+    command,
+    maintenance: options.serviceMaintenance,
+    runtime,
+    repair:
+      installationDrift && expectedRoot
+        ? { kind: "installation", root: expectedRoot }
+        : definitionRepair && expectedRoot
+          ? { kind: "definition", root: expectedRoot }
+          : { kind: "config" },
+    args: {
+      ...updatedPlan,
+      runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
+      env: serviceInstallEnv,
+      stdout: process.stdout,
+      warn: (message) => note(message, "Gateway"),
+    },
+  });
   return cfgForServiceInstall;
 }
 
-/**
- * Reports duplicate gateway-like services and removes legacy user services after confirmation.
- */
 export async function maybeScanExtraGatewayServices(
   options: DoctorOptions,
   runtime: RuntimeEnv,
@@ -738,7 +662,13 @@ export async function maybeScanExtraGatewayServices(
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;
   }
-  const extraServices = await detectExtraGatewayServiceIssues(options);
+  const { services: extraServices, errors } = await detectExtraGatewayServiceIssues(options);
+  if (errors.length > 0) {
+    note(
+      errors.map((error) => `- ${error.source}: ${error.message}`).join("\n"),
+      "Gateway service inspection incomplete",
+    );
+  }
   if (extraServices.length === 0) {
     return;
   }
@@ -799,7 +729,7 @@ export async function maybeScanExtraGatewayServices(
   if (cleanupHints.length > 0) {
     note(
       cleanupHints.map((hint) => `- ${hint}`).join("\n"),
-      process.platform === "linux" ? "Inspection hints" : "Cleanup hints",
+      process.platform === "darwin" ? "Cleanup hints" : "Inspection hints",
     );
   }
 
@@ -812,117 +742,3 @@ export async function maybeScanExtraGatewayServices(
     "Gateway recommendation",
   );
 }
-
-/**
- * Resolves a `dueling` systemd install (both a user-scope and a system-scope
- * gateway unit present) by removing the redundant user-scope unit after
- * confirmation, keeping the root-installed system-scope unit as authoritative.
- *
- * This is the fix for issue #79375: on Linux the two units bind the same port
- * and SIGTERM each other in an endless restart loop. The canonical units are
- * deliberately excluded from `findExtraGatewayServices`, so this detects the
- * condition directly via `findSystemdGatewayInstallation`. Removing a unit
- * under `$HOME` needs no root; the system-scope unit is never auto-removed
- * (only a `sudo`-flavored hint is offered for that direction).
- */
-export async function maybeResolveDuelingSystemdGatewayScopes(
-  runtime: RuntimeEnv,
-  prompter: DoctorPrompter,
-) {
-  if (process.platform !== "linux") {
-    return;
-  }
-  const installation = await findSystemdGatewayInstallation(process.env).catch(() => null);
-  if (installation?.kind !== "dueling") {
-    return;
-  }
-  const { user, system } = installation;
-  note(
-    [
-      "Both a user-scope and a system-scope OpenClaw gateway unit are installed:",
-      `- user:   ${user.unitPath}`,
-      `- system: ${system.unitPath}`,
-      "They bind the same port and will SIGTERM each other in a restart loop.",
-    ].join("\n"),
-    "Dueling gateway services detected",
-  );
-
-  // Ownership guard: delete the user unit only when the system unit is the
-  // live or boot-configured supervisor. A staged/disabled/failed/uncheckable
-  // system unit file with a working user gateway must fail closed to hints,
-  // or doctor would take down the operator's only running gateway.
-  const systemOwnsGateway = await isSystemUnitActiveAndEnabled(process.env, system.unitName).catch(
-    () => false,
-  );
-  if (!systemOwnsGateway) {
-    note(
-      [
-        "Could not verify the system-scope unit is both running and enabled at boot, so the",
-        "user-scope unit may be your working gateway. Not removing anything",
-        "automatically.",
-        "If the system-scope unit is the one you want, activate it and re-run doctor:",
-        `- sudo systemctl enable --now ${system.unitName}`,
-        "If the user-scope unit is the one you want, remove the system unit:",
-        `- sudo systemctl disable --now ${system.unitName} && sudo rm ${system.unitPath}`,
-      ].join("\n"),
-      "Gateway cleanup needs an owner decision",
-    );
-    return;
-  }
-  note(
-    [
-      "The system-scope unit is the active and boot-enabled supervisor and is",
-      "treated as authoritative; the user-scope unit is the redundant leftover.",
-    ].join("\n"),
-    "System-scope unit owns the gateway",
-  );
-
-  const policy = resolveServiceRepairPolicy();
-  if (isServiceRepairDeferred(policy)) {
-    note(formatServiceRepairDeferredNote(), "Gateway cleanup skipped");
-    return;
-  }
-
-  const shouldRemove = await confirmDoctorServiceRepair(
-    prompter,
-    {
-      message: "Remove the redundant user-scope gateway unit and keep the system-scope unit?",
-      initialValue: true,
-    },
-    policy,
-  );
-  if (!shouldRemove) {
-    const hints = renderGatewayServiceCleanupHints();
-    if (hints.length > 0) {
-      note(hints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
-    }
-    return;
-  }
-
-  try {
-    const result = await uninstallUserSystemdGatewayUnit({
-      env: process.env,
-      stdout: process.stdout,
-    });
-    note(
-      result.removed
-        ? `Removed user-scope unit ${result.unitPath}.`
-        : `User-scope unit already absent at ${result.unitPath}.`,
-      "Redundant user gateway removed",
-    );
-    // Only claim the conflict is resolved when systemd actually released the
-    // unit; a file-only removal can leave the loaded unit running.
-    runtime.log(
-      result.disabled
-        ? "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager."
-        : `Removed the user-scope unit file, but systemctl was unavailable to stop it. Run: systemctl --user disable --now ${result.unitName} && systemctl --user daemon-reload`,
-    );
-  } catch (err) {
-    runtime.error(`Failed to remove redundant user-scope gateway unit: ${String(err)}`);
-    const hints = renderGatewayServiceCleanupHints();
-    if (hints.length > 0) {
-      note(hints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
-    }
-  }
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

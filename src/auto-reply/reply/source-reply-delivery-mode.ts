@@ -111,17 +111,12 @@ export function resolveSourceReplyDeliveryMode(params: {
   ) {
     return "message_tool_only";
   }
-  let mode: SourceReplyDeliveryMode;
-  if (chatType === "group" || chatType === "channel") {
-    const configuredMode =
-      params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
-    mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
-  } else {
-    const configuredMode =
-      params.cfg.messages?.visibleReplies ??
-      (isInternalSourceReplyChannel(params.ctx) ? "automatic" : params.defaultVisibleReplies);
-    mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
-  }
+  const configuredMode =
+    chatType === "group" || chatType === "channel"
+      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+      : (params.cfg.messages?.visibleReplies ??
+        (isInternalSourceReplyChannel(params.ctx) ? "automatic" : params.defaultVisibleReplies));
+  const mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
   if (mode === "message_tool_only" && params.messageToolAvailable === false) {
     return "automatic";
   }
@@ -238,6 +233,12 @@ export function resolveSourceReplyVisibilityPolicy(params: {
         ? "sourceReplyDeliveryMode: message_tool_only"
         : "";
 
+  const suppressTyping =
+    progressRefresh ||
+    sendPolicyDenied ||
+    params.explicitSuppressTyping === true ||
+    params.shouldSuppressTyping === true;
+
   return {
     sourceReplyDeliveryMode,
     sessionStableSourceReplyDeliveryMode,
@@ -245,17 +246,8 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     suppressAutomaticSourceDelivery,
     suppressDelivery,
     suppressHookUserDelivery: params.suppressAcpChildUserDelivery === true || suppressDelivery,
-    suppressHookReplyLifecycle:
-      progressRefresh ||
-      sendPolicyDenied ||
-      params.suppressAcpChildUserDelivery === true ||
-      params.explicitSuppressTyping === true ||
-      params.shouldSuppressTyping === true,
-    suppressTyping:
-      progressRefresh ||
-      sendPolicyDenied ||
-      params.explicitSuppressTyping === true ||
-      params.shouldSuppressTyping === true,
+    suppressHookReplyLifecycle: suppressTyping || params.suppressAcpChildUserDelivery === true,
+    suppressTyping,
     deliverySuppressionReason,
   };
 }

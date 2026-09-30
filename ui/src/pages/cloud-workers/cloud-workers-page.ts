@@ -38,7 +38,8 @@ import {
   type CloudWorkerProfileDraft,
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
-import { renderCloudWorkerRepositories } from "./cloud-worker-repositories.ts";
+import "./cloud-worker-repositories.ts";
+import "./cloud-worker-pool.ts";
 import "./cloud-worker-snapshots.ts";
 
 registerSettingsEnglish();
@@ -60,7 +61,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @state() private view: "profiles" | "snapshots" = "profiles";
+  @state() private view: "profiles" | "pool" | "snapshots" = "profiles";
   @state() private editor: EditorState = null;
   @state() private draft: CloudWorkerProfileDraft = createCloudWorkerDraft();
 
@@ -145,24 +146,15 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     );
   }
 
-  private openAdd() {
+  private openEditor(profile?: ConfiguredCloudWorkerProfile) {
     if (!this.canManage()) {
       return;
     }
-    this.editor = { kind: "add" };
-    this.draft = createCloudWorkerDraft();
-    this.configSave.update({ error: null, notice: null });
-  }
-
-  private openEdit(profile: ConfiguredCloudWorkerProfile) {
-    if (!this.canManage()) {
-      return;
-    }
-    if (profile.providerId !== "crabbox" || !profile.machineClass) {
+    if (profile && (profile.providerId !== "crabbox" || !profile.machineClass)) {
       this.context.navigate("advanced", { search: "?section=cloudWorkers" });
       return;
     }
-    this.editor = { kind: "edit", profileId: profile.id };
+    this.editor = profile ? { kind: "edit", profileId: profile.id } : { kind: "add" };
     this.draft = createCloudWorkerDraft(profile);
     this.configSave.update({ error: null, notice: null });
   }
@@ -299,14 +291,16 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         <button
           class="btn btn--sm"
           type="button"
+          aria-label=${`${t("cloudWorkersPage.editAction")}: ${profile.id}`}
           ?disabled=${!canManage}
-          @click=${() => this.openEdit(profile)}
+          @click=${() => this.openEditor(profile)}
         >
           ${t("cloudWorkersPage.editAction")}
         </button>
         <button
           class="btn btn--sm danger"
           type="button"
+          aria-label=${`${t("common.delete")}: ${profile.id}`}
           ?disabled=${!canManage}
           @click=${() => void this.deleteProfile(profile)}
         >
@@ -524,7 +518,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     const profiles = this.profiles();
     const canManage = this.canManage();
     const addAction = canManage
-      ? html`<button class="btn btn--sm primary" type="button" @click=${() => this.openAdd()}>
+      ? html`<button class="btn btn--sm primary" type="button" @click=${() => this.openEditor()}>
           ${t("cloudWorkersPage.addProfile")}
         </button>`
       : undefined;
@@ -565,7 +559,10 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         },
         rows,
       )}
-      ${this.renderEditor()} ${renderCloudWorkerRepositories(canManage)}
+      ${this.renderEditor()}
+      <openclaw-cloud-worker-repositories
+        .canManage=${canManage}
+      ></openclaw-cloud-worker-repositories>
     `);
     return html`
       ${renderSettingsPageHeader({
@@ -580,6 +577,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             ariaLabel: t("cloudWorkersPage.snapshots.viewLabel"),
             options: [
               { value: "profiles", label: t("cloudWorkersPage.sectionTitle") },
+              { value: "pool", label: t("cloudWorkersPage.pool.tab") },
               { value: "snapshots", label: t("cloudWorkersPage.snapshots.title") },
             ],
             onChange: (value) => {
@@ -587,7 +585,13 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             },
           }),
         )}
-        ${this.view === "profiles" ? body : html`<openclaw-cloud-worker-snapshots></openclaw-cloud-worker-snapshots>`}
+        ${
+          this.view === "profiles"
+            ? body
+            : this.view === "pool"
+              ? html`<openclaw-cloud-worker-pool></openclaw-cloud-worker-pool>`
+              : html`<openclaw-cloud-worker-snapshots></openclaw-cloud-worker-snapshots>`
+        }
       `)}
     `;
   }

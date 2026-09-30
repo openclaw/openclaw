@@ -15,6 +15,11 @@ import {
   type CodexNativeSubagentHistoryOwner,
 } from "./native-subagent-history-owner.js";
 import {
+  matchesNativeAssignmentLifecycle,
+  readNativePendingAssignments,
+  type CodexNativeSubagentPendingAssignment,
+} from "./native-subagent-pending-assignments.js";
+import {
   matchesCodexNativeSubagentSubmissionOwner,
   readCodexNativeSubagentSubmissions,
   type CodexNativeSubagentSubmission,
@@ -130,6 +135,10 @@ const pluginAppPolicyContextSchema = z
     pluginAppIds: z.record(z.string(), z.array(z.string())).default({}),
   })
   .strict();
+const legacyAppPolicyEntrySchema = z.union([
+  accountAppPolicyEntrySchema.strip(),
+  pluginAppPolicyEntrySchema.strip(),
+]);
 const threadBindingSchema = z
   .object({
     threadId: z.string().refine((value) => Boolean(value.trim())),
@@ -281,6 +290,23 @@ export type CodexAppServerThreadBinding = z.infer<typeof threadBindingSchema>;
 /** Persisted source snapshot and orphan-cleanup state for a supervised native branch. */
 export type CodexAppServerPendingSupervisionBranch = z.infer<typeof pendingSupervisionBranchSchema>;
 
+export function matchesPendingSupervisionBranch(
+  binding: CodexAppServerThreadBinding | undefined,
+  expected: CodexAppServerPendingSupervisionBranch,
+): boolean {
+  const pending = binding?.pendingSupervisionBranch;
+  const cleanup = pending?.cleanupThreadIds ?? [];
+  const expectedCleanup = expected.cleanupThreadIds ?? [];
+  return (
+    binding?.threadId === expected.sourceThreadId &&
+    pending?.sourceThreadId === expected.sourceThreadId &&
+    pending.connectionFingerprint === expected.connectionFingerprint &&
+    pending.lastTurnId === expected.lastTurnId &&
+    cleanup.length === expectedCleanup.length &&
+    cleanup.every((threadId, index) => threadId === expectedCleanup[index])
+  );
+}
+
 /** Context-engine state persisted with a Codex app-server thread binding. */
 export type CodexAppServerContextEngineBinding = z.infer<typeof contextEngineSchema>;
 /** Context-engine projection metadata used to guard resumed native threads. */
@@ -307,6 +333,9 @@ const storedBindingSchema = z.discriminatedUnion("state", [
     lease: bindingLeaseSchema.optional().catch(undefined),
     // Keep unknown receipt versions opaque; ordinary binding writes must not erase them.
     nativeSubagentSubmissions: z.unknown().optional(),
+    // Independent vendor facts; never widen the strict V1 follow-up receipt codec.
+    nativeSubagentAssignments: z.unknown().optional(),
+    nativeSubagentTaskImport: z.unknown().optional(),
   }),
   z.object({
     version: z.literal(1),
@@ -314,6 +343,7 @@ const storedBindingSchema = z.discriminatedUnion("state", [
     sessionId: storedSessionIdSchema,
     lease: bindingLeaseSchema.optional().catch(undefined),
     retired: z.literal(true).optional().catch(undefined),
+    nativeSubagentTaskImport: z.unknown().optional(),
   }),
 ]);
 
@@ -496,6 +526,32 @@ export function readCurrentCodexNativeSubagentSubmissions(
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
 ): readonly CodexNativeSubagentSubmission[] {
+  const stored = readCurrentNativeSubagentBinding(state, identity, owner);
+  if (!stored) {
+    return [];
+  }
+  const submissions = readCodexNativeSubagentSubmissions(stored.nativeSubagentSubmissions);
+  return submissions && matchesCodexNativeSubagentSubmissionOwner(submissions.owner, owner)
+    ? submissions.receipts
+    : [];
+}
+
+export function readCurrentNativePendingAssignments(
+  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+  identity: CodexAppServerBindingIdentity,
+  owner: CodexNativeSubagentHistoryOwner,
+): readonly CodexNativeSubagentPendingAssignment[] {
+  const stored = readCurrentNativeSubagentBinding(state, identity, owner);
+  return (
+    readNativePendingAssignments(stored?.nativeSubagentAssignments)?.assignments ?? []
+  ).filter((entry) => matchesNativeAssignmentLifecycle(entry.owner, owner));
+}
+
+function readCurrentNativeSubagentBinding(
+  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+  identity: CodexAppServerBindingIdentity,
+  owner: CodexNativeSubagentHistoryOwner,
+): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
   const key = bindingStoreKey(identity);
   const raw = state.lookup(key);
   const stored = readStoredCodexAppServerBinding(raw);
@@ -508,12 +564,28 @@ export function readCurrentCodexNativeSubagentSubmissions(
     (identity.kind === "session" && owner.sessionId !== identity.sessionId) ||
     !matchesCodexNativeSubagentSubmissionBinding(stored.binding, owner)
   ) {
-    return [];
+    return undefined;
   }
-  const submissions = readCodexNativeSubagentSubmissions(stored.nativeSubagentSubmissions);
-  return submissions && matchesCodexNativeSubagentSubmissionOwner(submissions.owner, owner)
-    ? submissions.receipts
-    : [];
+  return stored;
+}
+
+export function preserveNativeTaskImport(current: StoredCodexAppServerBinding | undefined) {
+  return current?.nativeSubagentTaskImport !== undefined
+    ? { nativeSubagentTaskImport: current.nativeSubagentTaskImport }
+    : {};
+}
+
+/** Preserve inventory through native rotation, never across a connection-policy change. */
+export function preserveNativePendingAssignments(
+  current: CodexAppServerThreadBinding,
+  next: CodexAppServerThreadBinding,
+  value: unknown,
+): unknown {
+  return codexNativeSubagentHistoryConnectionFingerprint(current) ===
+    codexNativeSubagentHistoryConnectionFingerprint(next) &&
+    isDeepStrictEqual(current.pendingSupervisionBranch, next.pendingSupervisionBranch)
+    ? value
+    : undefined;
 }
 
 export class CodexSupervisionBindingReplacementError extends Error {
@@ -564,76 +636,44 @@ export function readPluginAppPolicyContext(
       entry.destructiveApprovalMode,
       bindingSchemaVersion,
     );
-    const mcpServerNames =
-      Array.isArray(entry.mcpServerNames) &&
-      entry.mcpServerNames.every((serverName) => typeof serverName === "string")
-        ? entry.mcpServerNames
-        : undefined;
-    if (entry.source === "account") {
-      if (
-        "appId" in entry ||
-        typeof entry.appName !== "string" ||
-        typeof entry.allowDestructiveActions !== "boolean" ||
-        (entry.allowOpenWorld !== undefined && typeof entry.allowOpenWorld !== "boolean") ||
-        destructiveApprovalMode === "invalid" ||
-        !mcpServerNames
-      ) {
-        return undefined;
-      }
-      parsedApps[appId] = {
-        source: "account",
-        appName: entry.appName,
-        allowDestructiveActions: entry.allowDestructiveActions,
-        ...(typeof entry.allowOpenWorld === "boolean"
-          ? { allowOpenWorld: entry.allowOpenWorld }
-          : {}),
-        ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
-        mcpServerNames,
-      };
-      continue;
-    }
-    if (
-      "appId" in entry ||
-      (entry.source !== undefined && entry.source !== "plugin") ||
-      typeof entry.configKey !== "string" ||
-      typeof entry.marketplaceName !== "string" ||
-      !CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN.test(entry.marketplaceName) ||
-      typeof entry.pluginName !== "string" ||
-      typeof entry.allowDestructiveActions !== "boolean" ||
-      (entry.allowOpenWorld !== undefined && typeof entry.allowOpenWorld !== "boolean") ||
-      destructiveApprovalMode === "invalid" ||
-      !mcpServerNames
-    ) {
+    if ("appId" in entry || destructiveApprovalMode === "invalid") {
       return undefined;
     }
-    parsedApps[appId] = {
-      configKey: entry.configKey,
-      marketplaceName: entry.marketplaceName,
-      pluginName: entry.pluginName,
-      allowDestructiveActions: entry.allowDestructiveActions,
-      ...(typeof entry.allowOpenWorld === "boolean"
-        ? { allowOpenWorld: entry.allowOpenWorld }
+    const parsed = legacyAppPolicyEntrySchema.safeParse({ ...entry, destructiveApprovalMode });
+    if (!parsed.success) {
+      return undefined;
+    }
+    const validated = parsed.data;
+    const policy = {
+      allowDestructiveActions: validated.allowDestructiveActions,
+      ...(validated.allowOpenWorld !== undefined
+        ? { allowOpenWorld: validated.allowOpenWorld }
         : {}),
       ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
-      mcpServerNames,
+      mcpServerNames: validated.mcpServerNames,
     };
+    if (validated.source === "account") {
+      parsedApps[appId] = { source: "account", appName: validated.appName, ...policy };
+    } else {
+      parsedApps[appId] = {
+        configKey: validated.configKey,
+        marketplaceName: validated.marketplaceName,
+        pluginName: validated.pluginName,
+        ...policy,
+      };
+    }
   }
   const parsedPluginAppIds: PluginAppPolicyContext["pluginAppIds"] = {};
-  if (
-    record.pluginAppIds !== undefined &&
-    (!record.pluginAppIds ||
-      typeof record.pluginAppIds !== "object" ||
-      Array.isArray(record.pluginAppIds))
-  ) {
+  const pluginAppIds =
+    record.pluginAppIds === undefined ? {} : asOptionalRecord(record.pluginAppIds);
+  if (!pluginAppIds) {
     return undefined;
   }
-  if (record.pluginAppIds && typeof record.pluginAppIds === "object") {
-    for (const [configKey, appIds] of Object.entries(record.pluginAppIds)) {
-      if (!Array.isArray(appIds) || appIds.some((appId) => typeof appId !== "string")) {
-        return undefined;
-      }
-      parsedPluginAppIds[configKey] = appIds;
+  for (const [configKey, appIds] of Object.entries(pluginAppIds)) {
+    if (!Array.isArray(appIds) || appIds.some((appId) => typeof appId !== "string")) {
+      return undefined;
     }
+    parsedPluginAppIds[configKey] = appIds;
   }
   return {
     fingerprint: record.fingerprint,

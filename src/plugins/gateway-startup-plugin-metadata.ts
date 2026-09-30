@@ -2,6 +2,7 @@
 import { getConfiguredDecisionProviderIds } from "../agents/decision-model-setting.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
 import { addRequiredAgentHarnessPluginIds } from "./gateway-startup-plugin-activation.js";
 import {
   addConfiguredActivationPathPluginIds,
@@ -11,7 +12,6 @@ import {
   collectConfiguredStartupChannelIds,
   collectValidationConfiguredRefs,
   collectValidationConfiguredShorthandModelIds,
-  normalizePluginsConfigForInstalledIndex,
   readStartupBundledDiscoveryMode,
   resolveAuthorizedGatewayStartupDreamingPluginIds,
   resolveMemorySlotStartupPluginId,
@@ -35,10 +35,16 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   const lookup = createInstalledPluginIndexScopeLookup(params.index);
   const activationSourceConfig = params.activationSourceConfig ?? params.config;
   const sameConfig = activationSourceConfig === params.config;
-  const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config.plugins, lookup);
+  const pluginsConfig = normalizePluginsConfigWithResolverCore(
+    params.config.plugins,
+    lookup.normalizePluginId,
+  );
   const activationSourcePlugins = sameConfig
     ? pluginsConfig
-    : normalizePluginsConfigForInstalledIndex(activationSourceConfig.plugins, lookup);
+    : normalizePluginsConfigWithResolverCore(
+        activationSourceConfig.plugins,
+        lookup.normalizePluginId,
+      );
   if (!pluginsConfig.enabled || !activationSourcePlugins.enabled) {
     return [];
   }
@@ -182,16 +188,12 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
     resolve: ({ index }) =>
       resolveGatewayStartupMetadataPluginIds({
         config: params.config,
-        ...(params.activationSourceConfig !== undefined
-          ? { activationSourceConfig: params.activationSourceConfig }
-          : {}),
+        activationSourceConfig: params.activationSourceConfig,
         env: params.env,
         index,
         ...(workerProviderIds.length > 0 ? { workerProviderIds } : {}),
-        ...(params.platform !== undefined ? { platform: params.platform } : {}),
-        ...(params.ambientEnvTriggers !== undefined
-          ? { ambientEnvTriggers: params.ambientEnvTriggers }
-          : {}),
+        platform: params.platform,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       }),
   };
 }

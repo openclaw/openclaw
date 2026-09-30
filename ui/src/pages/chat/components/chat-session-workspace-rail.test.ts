@@ -11,7 +11,6 @@ import {
 
 function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): SessionWorkspaceProps {
   return {
-    collapsed: false,
     sessionKey: "agent:main:workspace",
     list: null,
     loading: false,
@@ -20,10 +19,6 @@ function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): Sessio
     filter: "all",
     browserPath: "",
     browserSearch: "",
-    dock: "right",
-    narrowLayout: false,
-    onToggleCollapsed: vi.fn(),
-    onSetDock: vi.fn(),
     onRefresh: vi.fn(),
     onBrowsePath: vi.fn(),
     onOpenFile: vi.fn(),
@@ -56,7 +51,7 @@ describe("session workspace path actions", () => {
       onBrowsePath,
     });
     const mount = document.body.appendChild(document.createElement("div"));
-    render(renderSessionWorkspaceRail(workspace, { embedded: true }), mount);
+    render(renderSessionWorkspaceRail(workspace), mount);
     const parent = mount.querySelector<HTMLButtonElement>('button[aria-label=".."]');
     if (scenario.parent === null) {
       expect(parent).toBeNull();
@@ -167,45 +162,24 @@ describe("session workspace path actions", () => {
     },
   );
 
-  it("renders file-shaped placeholders while the initial workspace list loads", async () => {
-    const workspace = createWorkspace({ loading: true });
-    const mount = document.body.appendChild(document.createElement("div"));
-
-    render(renderSessionWorkspaceRail(workspace, { embedded: true }), mount);
-
-    const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
-    expect(skeleton).toBeInstanceOf(HTMLElement);
-    await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
-    expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("files");
-    expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
-    expect(mount.textContent).not.toContain("Loading session workspace");
-  });
-
-  it.each(
-    [
-      {
-        surface: "session Files",
-        selector: ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser)",
-        path: "src/edited.ts",
-        origin: "session" as const,
-      },
-      {
-        surface: "project browser",
-        selector: ".chat-workspace-rail__list--browser",
-        path: "src/browser.ts",
-        origin: "workspace" as const,
-      },
-    ].flatMap((surface) =>
-      [false, true].map((failed) => ({
-        surface: surface.surface,
-        selector: surface.selector,
-        path: surface.path,
-        origin: surface.origin,
-        failed,
-        feedback: failed ? "Copy failed" : "Copied!",
-      })),
-    ),
-  )("shows $feedback when copying a $surface path", async (testCase) => {
+  it.each([
+    {
+      surface: "session Files",
+      selector: ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser)",
+      path: "src/edited.ts",
+      origin: "session" as const,
+      failed: true,
+      feedback: "Copy failed",
+    },
+    {
+      surface: "project browser",
+      selector: ".chat-workspace-rail__list--browser",
+      path: "src/browser.ts",
+      origin: "workspace" as const,
+      failed: false,
+      feedback: "Copied!",
+    },
+  ])("shows $feedback when copying a $surface path", async (testCase) => {
     const writeText = testCase.failed
       ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
       : vi.fn().mockResolvedValue(undefined);

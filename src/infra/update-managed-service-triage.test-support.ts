@@ -1,20 +1,26 @@
 // Synthetic native boundary only: real Node helpers, IPC, leases and descendants.
 import { spawn } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { vi } from "vitest";
-import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
+import type { FixtureAcquisitionRollback } from "../../test/helpers/fixture-lifetime.js";
+import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveSystemdUnitPath } from "../daemon/systemd-service-files.js";
 import { buildCliRespawnPlan } from "../entry.respawn.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { cleanupTriageBoundary } from "./triage-boundary-cleanup.test-support.js";
+import {
+  triageLeaseFixtureLifetime,
+  triageRuntimeNodeOptions,
+} from "./triage-lease-fixture.test-support.js";
 import {
   triageTestRuntimeEntrypoints,
   triageMaintenanceRuntimeEntrypoints,
@@ -36,14 +42,20 @@ const nativeStatePublisher = `function publishState(file, value) {
   fs.renameSync(temporary, file);
 }`;
 
-export function triageRuntimeNodeOptions(): string {
-  // Prepared JavaScript does not need a source loader in every fixing descendant.
-  return resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.continuation).pathname.endsWith(".ts")
-    ? `--import ${path.resolve("scripts/tsx.mjs")}`
-    : "";
+export function createTriageBoundary(
+  mode: "startup" | "update" = "startup",
+  fault?: "scope" | "placement" | "unit",
+  maintenance?: "active" | "inactive",
+  beforeStart?: (root: string, env: NodeJS.ProcessEnv) => Promise<void>,
+  switchRoot?: true | string,
+) {
+  return triageLeaseFixtureLifetime.acquire((rejectAfterCleanup) =>
+    acquireTriageBoundary(rejectAfterCleanup, mode, fault, maintenance, beforeStart, switchRoot),
+  );
 }
 
-export async function createTriageBoundary(
+async function acquireTriageBoundary(
+  rejectAfterCleanup: FixtureAcquisitionRollback,
   mode: "startup" | "update" = "startup",
   fault?: "scope" | "placement" | "unit",
   maintenance?: "active" | "inactive",
@@ -56,14 +68,16 @@ export async function createTriageBoundary(
     // No actor exists yet if the package's fallible source closure cannot be staged.
     runtimeFiles = stageManagedHandoffRuntime(root);
   } catch (error) {
-    await fs.rm(root, { recursive: true, force: true });
-    throw error;
+    return rejectAfterCleanup(error, () => fs.rm(root, { recursive: true, force: true }));
   }
   const installRoot = switchRoot ? path.join(root, "package") : root;
   const candidateRoot = switchRoot === true ? path.join(root, "checkout") : switchRoot || root;
   await fs.mkdir(installRoot, { recursive: true });
   await fs.mkdir(candidateRoot, { recursive: true });
   const events = path.join(root, "events.jsonl");
+  const branchReadyPath = path.join(root, "branch-ready");
+  const fixtureStopping = new AbortController();
+  let branchReady: Promise<void> | undefined;
   const scopeFile = path.join(root, "scope.json");
   const primaryFile = path.join(root, "primary.json");
   const bin = path.join(root, "bin");
@@ -241,6 +255,7 @@ if (${Boolean(maintenance)}) {
   event('maintenance-exit',exit);
 }
 const branch=spawn(process.execPath,['-e',${JSON.stringify(common + "event('descendant', {stateDir:process.env.OPENCLAW_STATE_DIR, workspace:process.env.OPENCLAW_WORKSPACE_DIR, shell:process.env.OPENCLAW_SHELL, compileCache:process.env.NODE_DISABLE_COMPILE_CACHE}); const {spawn}=require('node:child_process'); spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); setInterval(()=>{},1000)")}],{detached:true,stdio:'ignore'});
+branch.once('spawn',()=>fs.writeFileSync(${JSON.stringify(branchReadyPath)},'ready'));
 event('branch',{child:branch.pid});
 admission.signal.addEventListener('abort',()=>{event('cancelled');void admission.finish("uncertain");process.exitCode=1;});
 await new Promise(resolve=>admission.signal.addEventListener('abort',resolve,{once:true}));
@@ -354,10 +369,11 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     await beforeStart?.(root, env);
   } catch (error) {
     // The caller cannot register cleanup until this fixture returns.
-    parent.kill("SIGKILL");
-    await parentExit;
-    await fs.rm(root, { recursive: true, force: true });
-    throw error;
+    return rejectAfterCleanup(error, async () => {
+      parent.kill("SIGKILL");
+      await parentExit;
+      await fs.rm(root, { recursive: true, force: true });
+    });
   }
   const helper = spawn(testNodeExecPath, [helperFile, paramsFile], {
     env,
@@ -420,6 +436,16 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     helper,
     parent,
     exit,
+    waitForBranch: () => {
+      fixtureStopping.signal.throwIfAborted();
+      branchReady ??= waitForFixtureFile(
+        branchReadyPath,
+        racePromiseWithAbortSignal(exit, fixtureStopping.signal),
+      ).then(() => {
+        fixtureStopping.signal.throwIfAborted();
+      });
+      return branchReady;
+    },
     readEvents,
     output: () => output,
     stderr: () => stderr,
@@ -501,91 +527,19 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
         })),
       ),
     cleanup: async () => {
-      const deadline = Date.now() + 5000;
-      // Close descendant admission before taking the census. Controllers inherit
-      // their creator's group, including children still starting before registration.
-      const closingGroups = path.join(root, "closing-groups");
-      await fs.rename(groups, closingGroups);
-      const groupIds = new Set([helper.pid!]);
-      const failures: unknown[] = [];
-      try {
-        await vi.waitFor(
-          () => {
-            const pending: string[] = [];
-            for (const entry of readdirSync(closingGroups)) {
-              const value = readFileSync(path.join(closingGroups, entry), "utf8");
-              if (!/^\d+$/u.test(value)) {
-                pending.push(entry);
-              } else if (Number(value) > 0) {
-                groupIds.add(Number(value));
-              }
-            }
-            if (pending.length) {
-              throw new Error(
-                `detached fixture launches have not published: ${pending.join(", ")}`,
-              );
-            }
-          },
-          { timeout: Math.max(1, deadline - Date.now()), interval: 20 },
-        );
-      } catch (error) {
-        failures.push(error);
-      }
-      // An unpublished launch retains the files, but known actors still need joining.
-      for (const pid of groupIds) {
-        try {
-          process.kill(-pid, "SIGKILL");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-            failures.push(error);
-          }
-        }
-      }
-      for (const child of [helper, parent]) {
-        try {
-          if (child.exitCode === null && child.signalCode === null) {
-            child.kill("SIGKILL");
-          }
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      await Promise.all([exit, parentExit]);
-      try {
-        await vi.waitFor(
-          () => {
-            for (const pid of groupIds) {
-              if (
-                inspectManagedProcessGroup(
-                  { pid, exitCode: 0 },
-                  { errorPolicy: "indeterminate" },
-                ) !== "dead"
-              ) {
-                throw new Error(`native fixture process group ${pid} has not exited`);
-              }
-            }
-          },
-          { timeout: Math.max(1, deadline - Date.now()), interval: 20 },
-        );
-      } catch (error) {
-        failures.push(error);
-      }
-      lines.close();
-      if (failures.length) {
-        throw new AggregateError(failures, "Could not join all native fixture process groups");
-      }
-      const finalEvents = await readEvents();
-      const db = new DatabaseSync(databasePath);
-      try {
-        setSqliteBusyTimeout(db, 5000);
-        db.prepare("DELETE FROM managed_update_handoffs WHERE owner = ?").run(root);
-      } finally {
-        db.close();
-      }
-      await fs.rm(root, { recursive: true, force: true });
-      if (finalEvents.some((event) => event.kind === "unexpected-native")) {
-        throw new Error("Triage fixture attempted an unexpected native service command");
-      }
+      fixtureStopping.abort();
+      await branchReady?.catch(() => {});
+      await cleanupTriageBoundary({
+        root,
+        groups,
+        helper,
+        parent,
+        exit,
+        parentExit,
+        lines,
+        readEvents,
+        databasePath,
+      });
     },
   };
 }

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
@@ -28,7 +29,7 @@ export function refreshCommittedProviderCatalogs(
     }
     void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
       if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
-        log.warn(`provider catalog refresh failed: ${String(error)}`);
+        log.warn(`provider catalog refresh failed: ${formatErrorMessage(error)}`);
       }
     });
   }

@@ -2,18 +2,10 @@
 import type { AgentAcpBinding, AgentBinding, AgentRouteBinding } from "./types.agents.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-function normalizeBindingType(binding: AgentBinding): "route" | "acp" {
-  // Missing `type` is the legacy/default route binding shape.
-  return binding.type === "acp" ? "acp" : "route";
-}
-
 /** Narrows a configured binding to the channel route form. */
 export function isRouteBinding(binding: AgentBinding): binding is AgentRouteBinding {
-  return normalizeBindingType(binding) === "route";
-}
-
-function isAcpBinding(binding: AgentBinding): binding is AgentAcpBinding {
-  return normalizeBindingType(binding) === "acp";
+  // Missing `type` is the legacy/default route binding shape.
+  return binding.type !== "acp";
 }
 
 /** Returns the configured binding list, treating missing/non-array config as empty. */
@@ -28,5 +20,5 @@ export function listRouteBindings(cfg: OpenClawConfig): AgentRouteBinding[] {
 
 /** Lists ACP conversation bindings only. */
 export function listAcpBindings(cfg: OpenClawConfig): AgentAcpBinding[] {
-  return listConfiguredBindings(cfg).filter(isAcpBinding);
+  return listConfiguredBindings(cfg).filter((binding) => binding.type === "acp");
 }

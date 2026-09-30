@@ -1,9 +1,8 @@
 // Frontmatter tests cover shared Markdown frontmatter parsing helpers.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, test } from "vitest";
 import {
   applyOpenClawManifestInstallCommonFields,
-  getFrontmatterString,
-  normalizeStringList,
   parseFrontmatterBool,
   parseOpenClawManifestInstallBase,
   resolveOpenClawManifestBlock,
@@ -12,27 +11,7 @@ import {
   resolveOpenClawManifestRequires,
 } from "./frontmatter.js";
 
-function expectInstallBase(
-  parsed: ReturnType<typeof parseOpenClawManifestInstallBase>,
-): NonNullable<ReturnType<typeof parseOpenClawManifestInstallBase>> {
-  if (parsed === undefined) {
-    throw new Error("Expected manifest install base");
-  }
-  return parsed;
-}
-
 describe("shared/frontmatter", () => {
-  test("normalizeStringList handles strings, arrays, and non-list values", () => {
-    expect(normalizeStringList("a, b,,c")).toEqual(["a", "b", "c"]);
-    expect(normalizeStringList([" a ", "", "b", 42])).toEqual(["a", "b", "42"]);
-    expect(normalizeStringList(null)).toStrictEqual([]);
-  });
-
-  test("getFrontmatterString extracts strings only", () => {
-    expect(getFrontmatterString({ a: "b" }, "a")).toBe("b");
-    expect(getFrontmatterString({ a: 1 }, "a")).toBeUndefined();
-  });
-
   test("parseFrontmatterBool respects explicit values and fallback", () => {
     expect(parseFrontmatterBool("true", false)).toBe(true);
     expect(parseFrontmatterBool("false", true)).toBe(false);
@@ -145,7 +124,7 @@ describe("shared/frontmatter", () => {
         id?: string;
         label?: string;
         bins?: string[];
-      }>({ extra: true }, expectInstallBase(parsed)),
+      }>({ extra: true }, expectDefined(parsed, "manifest install base")),
     ).toEqual({
       extra: true,
       id: "brew.git",

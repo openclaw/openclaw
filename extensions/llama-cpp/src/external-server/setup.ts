@@ -253,21 +253,6 @@ async function discoverForSetup(
   }
 }
 
-async function discoverWithAccess(params: {
-  baseUrl: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
-}): Promise<LlamaServerDiscoveryResult> {
-  return await discoverLlamaServer({
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-    headers: params.headers,
-    signal: params.signal,
-    cacheTtlMs: 0,
-  });
-}
-
 /** Read-only discovery for the guided local-provider setup ladder. */
 export async function detectLlamaServerSetup(
   ctx: ProviderAppGuidedSetupContext,
@@ -316,7 +301,17 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     message: `${LLAMA_CPP_PROVIDER_LABEL} URL`,
     initialValue: defaultOrigin,
     placeholder: LLAMA_SERVER_DEFAULT_ORIGIN,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
+    validate: (value) => {
+      if (!value?.trim()) {
+        return "Required";
+      }
+      try {
+        resolveLlamaServerEndpoint(value);
+        return undefined;
+      } catch {
+        return "Enter a valid HTTP or HTTPS URL without embedded credentials (e.g. http://localhost:8080).";
+      }
+    },
   });
   const endpoint = resolveLlamaServerEndpoint(baseUrl);
   const endpointChanged =
@@ -376,11 +371,12 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     }
   }
 
-  const discovery = await discoverWithAccess({
+  const discovery = await discoverLlamaServer({
     baseUrl: endpoint.inferenceBaseUrl,
     apiKey,
     headers,
     signal: ctx.signal,
+    cacheTtlMs: 0,
   });
   if (discovery.kind !== "success") {
     throw new Error(describeDiscoveryFailure(discovery));
@@ -453,7 +449,7 @@ async function validateNonInteractiveDiscovery(
   } else {
     persistence = { kind: "remove" };
   }
-  const discovery = await discoverWithAccess({ baseUrl, apiKey, headers });
+  const discovery = await discoverLlamaServer({ baseUrl, apiKey, headers, cacheTtlMs: 0 });
   if (discovery.kind !== "success") {
     ctx.runtime.error(describeDiscoveryFailure(discovery));
     ctx.runtime.exit(1);
@@ -495,9 +491,7 @@ export async function configureLlamaServerNonInteractive(
   }
   const providerConfig = buildExistingProviderConfig({
     config: ctx.config,
-    discovery: validated.discovery,
-    resetEndpoint: validated.resetEndpoint,
-    persistence: validated.persistence,
+    ...validated,
   });
   let config: OpenClawConfig = {
     ...ctx.config,

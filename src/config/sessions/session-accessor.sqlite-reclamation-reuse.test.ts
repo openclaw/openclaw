@@ -1,13 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
-import fs from "node:fs";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Worker, WorkerOptions } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   conversation,
   queueConversationDeliveryForTest,
@@ -18,10 +15,16 @@ import { completeDurableDelivery } from "../../infra/outbound/delivery-completio
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
-import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lease.js";
+import {
+  claimOpenClawAgentDatabaseLease,
+  releaseOpenClawAgentDatabaseLease,
+  type OpenClawAgentDatabaseWorkerLeaseReceipt,
+} from "../../state/openclaw-agent-db-lease.js";
 import {
   getOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidationForTransfer,
@@ -38,44 +41,61 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
-import { createAgentDatabaseNativeGeneration } from "../../state/openclaw-agent-execution-native.js";
+import { removeAgentIntegrityMetadataForTest } from "../../state/openclaw-agent-db.test-support.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
+import {
+  clearOpenClawAgentIntegrityVerification,
+  readOpenClawAgentIntegrityVerification,
+} from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
   markConversationDeliveryQueued,
 } from "./conversation-delivery-store.js";
 import { listConversations, registerConversationAddresses } from "./conversation-registry.js";
-import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
-import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
+import { loadTranscriptEvents } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
-import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
-import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import {
-  createLifecycleArtifactReclamationPlan,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+  createFixture,
+  createNativeReclamationSource,
+  leasesFor,
+  observeNativeGenerationRetirement,
+  observeReclamationLeaseReceipts,
+  observeReclamationWorkers,
+  tempDirs,
+} from "./session-accessor.sqlite-reclamation-reuse.test-support.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
+import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
+import type { SqliteReclamationWorkerMessage } from "./session-accessor.sqlite-reclamation-worker.types.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
-import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
-import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 
-const validation = vi.hoisted(() => ({
+const validation = vi.hoisted<{
+  checks: SharedArrayBuffer;
+  admissionPath?: string;
+}>(() => ({
   checks: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
 }));
+vi.mock("node:diagnostics_channel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:diagnostics_channel")>();
+  const pressure = actual.channel(Symbol("reclamation-worker-pressure"));
+  return {
+    ...actual,
+    channel: (name: string | symbol) =>
+      name === "openclaw.memory.critical" ? pressure : actual.channel(name),
+  };
+});
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   return {
@@ -84,8 +104,13 @@ vi.mock("node:worker_threads", async (importOriginal) => {
       constructor(filename: string | URL, options: WorkerOptions = {}) {
         super(
           filename,
-          options.workerData?.operation === "reclaim"
-            ? withWorkerSqliteIntegrityCounter(options, validation.checks)
+          options.workerData?.operation === "reclaim" || validation.admissionPath
+            ? withWorkerSqliteIntegrityCounter(
+                options,
+                validation.checks,
+                undefined,
+                options.workerData?.operation === "reclaim" ? undefined : validation.admissionPath,
+              )
             : options,
         );
       }
@@ -95,14 +120,15 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 
 beforeEach(() => {
   validation.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  validation.admissionPath = undefined;
 });
 function fullChecks() {
   return Atomics.load(new Int32Array(validation.checks), 0);
 }
 
-const tempDirs = createTempDirTracker();
 afterEach(async () => {
   vi.useRealTimers();
+  resetGatewayWorkAdmission();
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
@@ -112,110 +138,54 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-function createFixture(sessionIds = ["first", "second"], agentId = "main") {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("reclamation-reuse-")) };
-  const options = { agentId, env };
-  const scopes = sessionIds.map((sessionId) => ({
-    agentId: options.agentId,
-    env,
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-  }));
-  for (const scope of scopes) {
-    ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  }
-  const database = openOpenClawAgentDatabase(options);
-  const plans = scopes.map((scope) =>
-    createLifecycleArtifactReclamationPlan({
-      agentId: "main",
-      databaseOptions: { ...options, path: database.path },
-      entries: [{ sessionKey: scope.sessionKey, expectedEntry: loadSessionEntryReadOnly(scope) }],
-      materializedPlans: [],
-    }),
+test.each([
+  "current",
+  "two-leases",
+  "two-leases-missing",
+  "revoked-after-open",
+  "revoked-during-open",
+] as const)("reclamation borrows native-only verification unless revoked (%s)", async (proof) => {
+  const { database, options, plans, scopes } = createFixture(["victim"]);
+  closeOpenClawAgentDatabasesForTest(options.env.OPENCLAW_STATE_DIR);
+  const { source, wasRevokedDuringOpen } = createNativeReclamationSource(
+    { database, options },
+    proof === "revoked-during-open",
   );
-  return { options, scopes, database, plans };
-}
-
-function observeReclamationWorkers(onSpawn?: (worker: Worker) => void) {
-  const spawned: Worker[] = [];
-  const create = archiveWorker.createSqliteTranscriptArchiveWorker;
-  vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-    const worker = create(data);
-    spawned.push(worker);
-    onSpawn?.(worker);
-    return worker;
-  });
-  return spawned;
-}
-
-function leasesFor(fixture: ReturnType<typeof createFixture>) {
-  return openOpenClawStateDatabase({ env: fixture.options.env })
-    .db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?")
-    .all(fixture.database.path);
-}
-
-test.each(["current", "revoked-after-open", "revoked-during-open"] as const)(
-  "reclamation borrows native-only verification unless revoked (%s)",
-  async (proof) => {
-    const { database, options, plans, scopes } = createFixture(["victim"]);
-    closeOpenClawAgentDatabasesForTest(options.env.OPENCLAW_STATE_DIR);
-    const context = captureOpenClawStateWorkerContext(options);
-    const assertCurrent = () => context.admission.assertCurrent();
-    let revokedDuringOpen = false;
-    const source: AgentDatabaseRequestExecutionSource = {
-      assertCurrent,
-      createAdmission(binding) {
-        return () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            if (
-              proof === "revoked-during-open" &&
-              !revokedDuringOpen &&
-              request.stage === "prepare" &&
-              isRecord(request.facts) &&
-              isRecord(request.facts.identity) &&
-              request.facts.identity.kind === "file"
-            ) {
-              invalidateOpenClawAgentDatabaseValidation(database.path);
-              revokedDuringOpen = true;
-            }
-            binding.authorize(request);
-            assertCurrent();
-            if (!grant()) {
-              throw new Error("Native reclamation fixture lost admission");
-            }
-          }),
-        });
-      },
-    };
-    const generation = createAgentDatabaseNativeGeneration(
-      database.agentId,
-      database.path,
-      context,
-      assertCurrent,
-      assertCurrent,
-      undefined,
-      () => {},
-    );
-    try {
-      await generation.runExisting(source, async () => "opened");
-      expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
-      const transferred = getOpenClawAgentDatabaseValidationForTransfer(database);
-      expect(Boolean(transferred)).toBe(proof !== "revoked-during-open");
-      if (proof === "revoked-after-open") {
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+  const execution = captureOpenClawAgentDatabaseExecution({ ...options, path: database.path });
+  let peerLease: string | undefined;
+  try {
+    await execution.runExisting(source, async () => "opened");
+    if (proof.startsWith("two-leases")) {
+      const before = readOpenClawAgentIntegrityVerification(database.path, options.env);
+      peerLease = claimOpenClawAgentDatabaseLease({ ...options, path: database.path });
+      expect(readOpenClawAgentIntegrityVerification(database.path, options.env)).toEqual(before);
+      if (proof === "two-leases-missing") {
+        removeAgentIntegrityMetadataForTest(options.env);
       }
-      await expect(
-        runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! }),
-      ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
-      expect(fullChecks()).toBe(proof === "current" ? 0 : 1);
-      expect(revokedDuringOpen).toBe(proof === "revoked-during-open");
-      expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
-    } finally {
-      await generation.close();
     }
-  },
-);
+    expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+    const transferred = getOpenClawAgentDatabaseValidationForTransfer(database);
+    expect(Boolean(transferred)).toBe(proof !== "revoked-during-open");
+    if (proof === "revoked-after-open") {
+      invalidateOpenClawAgentDatabaseValidation(database.path);
+    }
+    await expect(
+      runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! }),
+    ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
+    expect(fullChecks()).toBe(proof.startsWith("revoked") ? 1 : 0);
+    expect(wasRevokedDuringOpen()).toBe(proof === "revoked-during-open");
+    expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
+  } finally {
+    try {
+      await execution.release();
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    } finally {
+      if (peerLease) {
+        releaseOpenClawAgentDatabaseLease(peerLease, options, "read-only");
+      }
+    }
+  }
+});
 
 test.each(["directory discovery", "Gateway send", "durable completion"] as const)(
   "admits %s behind a native reclamation commit request",
@@ -400,6 +370,8 @@ test("retained reclamation operations share the first full scan until the Gatewa
   }
   closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
   clearOpenClawAgentIntegrityVerification(database.path, databaseOptions.env);
+  // Count the native admission carrier as well as the reclamation actor for this exact file.
+  validation.admissionPath = database.path;
   const workerIds = new Set<number>();
   for (let pass = 0; pass < 3; pass += 1) {
     if (pass === 2) {
@@ -432,16 +404,13 @@ test("warm Worker results cannot revive proof invalidated after a competing pare
     parent?: OpenClawAgentDatabaseValidation;
   } = {};
   const spawned = observeReclamationWorkers((worker) => {
-    worker.prependListener(
-      "message",
-      (message: reclamationWorker.SqliteReclamationWorkerMessage) => {
-        if (message.type === "reclaimed" && message.operationId === 1) {
-          observed.worker = message.validation;
-          // A concurrent canonical opener can finish before the first Worker result is adopted.
-          observed.parent = setOpenClawAgentDatabaseValidation(database);
-        }
-      },
-    );
+    worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
+      if (message.type === "reclaimed" && message.operationId === 1) {
+        observed.worker = message.validation;
+        // A concurrent canonical opener can finish before the first Worker result is adopted.
+        observed.parent = setOpenClawAgentDatabaseValidation(database);
+      }
+    });
   });
   await runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! });
   expect(observed.worker).toBeDefined();
@@ -466,7 +435,8 @@ test.each([
     const fixture = createFixture(undefined, agentId);
     const { options, database, plans, scopes } = fixture;
     invalidateOpenClawAgentDatabaseValidation(database.path);
-    const spawned = observeReclamationWorkers();
+    const leases = observeReclamationLeaseReceipts(database);
+    const spawned = observeReclamationWorkers(leases.onSpawn);
     const context = new AsyncLocalStorage<number>();
     const diagnostics: SqliteSessionReclamationDiagnostics[] = [{}, {}];
     try {
@@ -474,6 +444,7 @@ test.each([
         if (cold && index === 1) {
           expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
           expect(spawned[0]?.threadId).toBe(-1);
+          expect(leasesFor(fixture)).toHaveLength(0);
         }
         let checks = 0;
         await expect(
@@ -503,7 +474,17 @@ test.each([
       if (cold) {
         expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
       }
-      expect(leasesFor(fixture)).toHaveLength(cold ? 1 : 2);
+      const { admittedLeaseId, reclamationLeaseId } = leases.read();
+      if (!reclamationLeaseId) {
+        throw new Error("Expected the real reclamation Worker's admitted lease receipt");
+      }
+      expect(reclamationLeaseId).not.toBe(admittedLeaseId);
+      const held = leasesFor(fixture);
+      // Cold preparation owns only the reclaimer; it does not open a foreground actor.
+      expect(held).toHaveLength(cold ? 1 : 2);
+      expect(new Set(held.map((row) => row.lease_id))).toEqual(
+        new Set(cold ? [reclamationLeaseId] : [admittedLeaseId, reclamationLeaseId]),
+      );
     } finally {
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
     }
@@ -580,19 +561,21 @@ test.each(["path", "root"] as const)(
     const enteredQueue = createDeferredCore();
     const releaseQueue = createDeferredCore();
     const enqueued = createDeferredCore();
-    const observed: { claim?: OpenClawAgentDatabaseClaim } = {};
+    const observed: { assertCurrent?: () => void } = {};
     const withWorker = reclamationWorker.withSqliteReclamationWorker;
     vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
       (options, claim, run, assertRequestCurrent, signal) => {
         const result = withWorker(options, claim, run, assertRequestCurrent, signal);
-        observed.claim = claim;
+        observed.assertCurrent = assertRequestCurrent;
         enqueued.resolve();
         return result;
       },
     );
+    let unrelatedSettled = false;
     const holding = archiveWorker.runExclusiveSqliteTranscriptArchiveWorker(async () => {
       enteredQueue.resolve();
       await releaseQueue.promise;
+      unrelatedSettled = true;
     });
     await enteredQueue.promise;
     const request = runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
@@ -600,25 +583,24 @@ test.each(["path", "root"] as const)(
     let closing: Promise<unknown> | undefined;
     try {
       await Promise.race([enqueued.promise, request]);
-      expect(observed.claim?.isCurrent()).toBe(true);
+      const assertCurrent = observed.assertCurrent;
+      if (!assertCurrent) {
+        throw new Error("Expected reclamation to retain its original opening authority");
+      }
+      expect(assertCurrent).not.toThrow();
       closing =
         retirement === "path"
           ? closeOpenClawAgentDatabaseByPathAsync(fixture.database.path)
           : closeOpenClawAgentDatabasesAsync(fixture.options.env.OPENCLAW_STATE_DIR);
-      let closeSettled = false;
-      void closing.then(
-        () => {
-          closeSettled = true;
-        },
-        () => {
-          closeSettled = true;
-        },
-      );
-      await yieldToEventLoop();
-      expect(closeSettled).toBe(true);
-      await expect(request).rejects.toThrow(/revoked|no longer current|admission.*changed/i);
-      await closing;
-      expect(observed.claim?.isCurrent()).toBe(false);
+      expect(assertCurrent).toThrow("SQLite mutation Worker request was revoked");
+      expect(spawned).toHaveLength(0);
+      expect(unrelatedSettled).toBe(false);
+      await Promise.all([
+        expect(request).rejects.toThrow(/revoked|no longer current|admission.*changed/i),
+        closing,
+      ]);
+      expect(unrelatedSettled).toBe(false);
+      expect(assertCurrent).toThrow(/revoked|no longer current|retired|retiring|released/i);
       expect(spawned).toHaveLength(0);
       expect(loadSessionEntryReadOnly(fixture.scopes[0]!)).toMatchObject({ sessionId: "first" });
       expect(leasesFor(fixture)).toHaveLength(0);
@@ -633,7 +615,62 @@ test.each(["path", "root"] as const)(
   },
 );
 
-test("retires the previous database before opening a different agent store", async () => {
+test("retains maintenance Workers across alternating databases and retires all idle heaps under pressure", async () => {
+  const pressure = channel("openclaw.memory.critical");
+  expect(pressure.hasSubscribers).toBe(false);
+  const fixtures = [createFixture(), createFixture()];
+  const spawned = observeReclamationWorkers();
+  const threads = fixtures.map(() => new Set<number>());
+  for (let pass = 0; pass < 6; pass += 1) {
+    const index = pass % fixtures.length;
+    const fixture = fixtures[index]!;
+    const databaseOptions = { ...fixture.options, path: fixture.database.path };
+    const diagnostics: SqliteSessionReclamationDiagnostics = {};
+    const plan =
+      pass % 3 === 0
+        ? reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions)
+        : { kind: "maintenance-pages" as const, databaseOptions, materializedPlans: [] };
+    await expect(
+      runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics }),
+    ).resolves.toMatchObject({ kind: plan.kind });
+    threads[index]!.add(diagnostics.workerThreadId!);
+  }
+  expect(spawned).toHaveLength(2);
+  expect(threads.map((ids) => ids.size)).toEqual([1, 1]);
+  expect(fullChecks()).toBe(0);
+  for (const fixture of fixtures) {
+    expect(leasesFor(fixture)).toHaveLength(2);
+  }
+  expect(pressure.hasSubscribers).toBe(true);
+  const retired = Promise.all(spawned.map((worker) => once(worker, "exit")));
+  pressure.publish({});
+  await retired;
+  await closeOpenClawAgentDatabasesAsync();
+  for (const fixture of fixtures) {
+    expect(leasesFor(fixture)).toHaveLength(0);
+  }
+  await closeOpenClawStateDatabaseAsync();
+  expect(pressure.hasSubscribers).toBe(false);
+
+  const fixture = fixtures[0]!;
+  await runSqliteSessionReclamation({
+    forceInProcess: false,
+    plan: reclamation.createSessionMaintenanceStatisticsOperation({
+      ...fixture.options,
+      path: fixture.database.path,
+    }),
+  });
+  expect(spawned).toHaveLength(3);
+  expect(pressure.hasSubscribers).toBe(true);
+  const reopenedExit = once(spawned[2]!, "exit");
+  pressure.publish({});
+  await reopenedExit;
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  expect(pressure.hasSubscribers).toBe(false);
+});
+
+test("joins explicit Worker retirement before opening a different agent store", async () => {
   const first = createFixture();
   const second = createFixture();
   invalidateOpenClawAgentDatabaseValidation(first.database.path);
@@ -649,7 +686,7 @@ test("retires the previous database before opening a different agent store", asy
         async (worker) => {
           if (options.path === first.database.path) {
             const close = worker.close.bind(worker);
-            closeRetained = close;
+            closeRetained = () => worker.close();
             vi.spyOn(worker, "close").mockImplementation(() => {
               const pending = close();
               closeEntered.resolve();
@@ -716,7 +753,9 @@ test("retires the previous database before opening a different agent store", asy
     order.push("foreground-release");
   });
   await entered.promise;
-  const switching = runSqliteSessionReclamation({ forceInProcess: false, plan: second.plans[0]! });
+  const switching = retirePrevious().then(() =>
+    runSqliteSessionReclamation({ forceInProcess: false, plan: second.plans[0]! }),
+  );
   void switching.catch(() => undefined);
   try {
     await Promise.race([closeEntered.promise, switching]);
@@ -753,6 +792,68 @@ test("retires the previous database before opening a different agent store", asy
   expect(await loadTranscriptEvents(survivor)).toContainEqual({ type: "after-reclamation-close" });
   expect(loadSessionEntryReadOnly(second.scopes[1]!)).toMatchObject({ sessionId: "second" });
 });
+
+test.each(["idle", "active"] as const)(
+  "retires a retained %s writer on Gateway drain and preserves its clean witness",
+  async (timing) => {
+    const fixture = createFixture(["first", "second", "third"]);
+    const leases = observeReclamationLeaseReceipts(fixture.database);
+    const nativeCloses = observeNativeGenerationRetirement(fixture.database.path);
+    validation.admissionPath = fixture.database.path;
+    closeOpenClawAgentDatabasesForTest(fixture.options.env.OPENCLAW_STATE_DIR);
+    clearOpenClawAgentIntegrityVerification(fixture.database.path, fixture.options.env);
+    const close = vi.spyOn(SqliteReclamationWorker.prototype, "close");
+    let drainOnCommit = false;
+    let closesAtDrain: number | undefined;
+    let nativeClosesAtDrain: number | undefined;
+    const spawned = observeReclamationWorkers((worker) => {
+      leases.onSpawn(worker);
+      worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
+        if (drainOnCommit && message.type === "commit-request") {
+          drainOnCommit = false;
+          markGatewayRestartDraining("restart (SIGTERM)");
+          closesAtDrain = close.mock.calls.length;
+          nativeClosesAtDrain = nativeCloses.length;
+        }
+      });
+    });
+    await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
+    const { admittedLeaseId, reclamationLeaseId } = leases.read();
+    expect(reclamationLeaseId).toBeDefined();
+    expect(reclamationLeaseId).not.toBe(admittedLeaseId);
+    const held = leasesFor(fixture);
+    expect(held).toHaveLength(1);
+    expect(new Set(held.map((row) => row.lease_id))).toEqual(new Set([reclamationLeaseId]));
+    expect(fullChecks()).toBe(1);
+    if (timing === "active") {
+      drainOnCommit = true;
+      await expect(
+        runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[1]! }),
+      ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
+      expect(closesAtDrain).toBe(0);
+      expect(nativeClosesAtDrain).toBe(0);
+      expect(loadSessionEntryReadOnly(fixture.scopes[1]!)).toBeUndefined();
+    } else {
+      markGatewayRestartDraining("restart (SIGTERM)");
+    }
+    // Join the real native retirement without a timer or a whole-Gateway close.
+    expect(close).toHaveBeenCalledOnce();
+    expect(nativeCloses).toHaveLength(0);
+    await Promise.all([close.mock.results[0]?.value, ...nativeCloses]);
+    expect(spawned[0]?.threadId).toBe(-1);
+    expect(leasesFor(fixture)).toHaveLength(0);
+    expect(
+      readOpenClawAgentIntegrityVerification(fixture.database.path, fixture.options.env)
+        ?.clean_close,
+    ).toBe(1);
+    resetGatewayWorkAdmission();
+    await expect(
+      runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[2]! }),
+    ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
+    expect(spawned).toHaveLength(2);
+    expect(fullChecks()).toBe(1);
+  },
+);
 
 test("retires after thirty idle minutes and opens a new Worker for the next request", async () => {
   const fixture = createFixture(["first", "second", "third"]);
@@ -797,6 +898,7 @@ test("joins a crashed reused Worker, releases its exact lease, and preserves the
   expect(terminated).toBe(true);
   expect(child.threadId).toBe(-1);
   expect(leasesFor(fixture)).toHaveLength(1);
+  expect(getOpenClawAgentDatabaseValidationForTransfer(fixture.database)).toBeUndefined();
   expect(loadSessionEntryReadOnly(fixture.scopes[1]!)).toMatchObject({ sessionId: "second" });
   await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[2]! });
   expect(spawned).toHaveLength(2);
@@ -805,29 +907,42 @@ test("joins a crashed reused Worker, releases its exact lease, and preserves the
 
 test("retains a crashed Worker's mismatched lease and retries only its restored receipt", async () => {
   const fixture = createFixture();
+  const previousExitHooks = new Set(process.rawListeners("beforeExit"));
+  const closeAttempts: Promise<void>[] = [];
   let closeRetained: (() => Promise<void>) | undefined;
   const withWorker = reclamationWorker.withSqliteReclamationWorker;
   vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-    (options, claim, run, assertCurrent) =>
+    (options, claim, run, assertCurrent, signal) =>
       withWorker(
         options,
         claim,
         async (worker) => {
-          closeRetained = worker.close.bind(worker);
+          const close = worker.close.bind(worker);
+          closeRetained = close;
+          vi.spyOn(worker, "close").mockImplementation(() => {
+            const attempt = close();
+            closeAttempts.push(attempt);
+            return attempt;
+          });
           return run(worker);
         },
         assertCurrent,
+        signal,
       ),
   );
   const received: { receipt?: OpenClawAgentDatabaseWorkerLeaseReceipt } = {};
   const spawned = observeReclamationWorkers((worker) => {
-    worker.on("message", (message: reclamationWorker.SqliteReclamationWorkerMessage) => {
+    worker.on("message", (message: SqliteReclamationWorkerMessage) => {
       if (message.type === "lease") {
         received.receipt = message.receipt;
       }
     });
   });
   await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
+  const exitHooks = () =>
+    process.rawListeners("beforeExit").filter((hook) => !previousExitHooks.has(hook));
+  expect(exitHooks()).toHaveLength(1);
+  const emitBeforeExit = () => exitHooks().forEach((hook) => hook.call(process, 0));
   const retainedReceipt = received.receipt;
   const retireWorker = closeRetained;
   if (!retainedReceipt || !retireWorker) {
@@ -851,6 +966,18 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
     .run(retainedReceipt.ownerPid + 1, retainedReceipt.leaseId);
   try {
     const mismatched = readLeases();
+    const memoryPressure = channel("openclaw.memory.critical");
+    memoryPressure.publish(undefined);
+    await expect(closeAttempts[0]).rejects.toThrow("receipt no longer matches");
+    memoryPressure.publish(undefined);
+    expect(closeAttempts).toHaveLength(1);
+    // The first failed close may schedule another beforeExit event; it must not retry itself.
+    emitBeforeExit();
+    await expect(closeAttempts[1]).rejects.toThrow("receipt no longer matches");
+    emitBeforeExit();
+    await Promise.allSettled(closeAttempts);
+    expect(closeAttempts).toHaveLength(2);
+    expect(readLeases()).toEqual(mismatched);
     await expect(
       closeOpenClawAgentDatabaseByPathAsync(fixture.database.path),
     ).rejects.toMatchObject({
@@ -887,74 +1014,3 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
   expect(readLeases()).toEqual(before.filter((row) => row.path === kept.path));
   expect(kept.db.isOpen).toBe(true);
 });
-
-test.each([false, true])(
-  "reuses one Worker across history and cap-entry victims until lifecycle close (failure: %s)",
-  async (failure) => {
-    await withOpenClawTestState(
-      { prefix: "reclamation-sweep-", layout: "state-only" },
-      async (state) => {
-        const sessionKey = "agent:main:explicit:sweep-lifetime";
-        const storePath = path.join(state.sessionsDir(), "sessions.json");
-        const databaseOptions = { agentId: "main", env: state.env };
-        for (const [index, sessionId] of ["first", "second", "current"].entries()) {
-          await replaceSessionEntry(
-            { sessionKey, storePath },
-            {
-              sessionId,
-              updatedAt: index + 1,
-              ...(sessionId === "current"
-                ? { archivedAt: 4, archiveReason: "active-session-cap" as const }
-                : {}),
-            },
-          );
-        }
-        await closeOpenClawAgentDatabasesAsync(state.root);
-        await reclaimSqliteFreePages(databaseOptions);
-        const workers: Worker[] = [];
-        const spawn = archiveWorker.createSqliteTranscriptArchiveWorker;
-        vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation(
-          (data) => {
-            const worker = spawn(data);
-            workers.push(worker);
-            return worker;
-          },
-        );
-        const run = reclamation.runSqliteSessionReclamation;
-        vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation(async (params) => {
-          if (
-            failure &&
-            params.plan.kind === "history-eviction" &&
-            params.plan.sessionId === "second"
-          ) {
-            throw new Error("next victim preparation failed");
-          }
-          return run(params);
-        });
-        const sweep = enforceSqliteSessionHistoryDiskBudget({
-          storePath,
-          mode: "enforce",
-          maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
-        });
-        if (failure) {
-          await expect(sweep).rejects.toThrow("next victim preparation failed");
-        } else {
-          const result = await sweep;
-          expect(result?.removedEntries).toBe(3);
-          expect(result?.totalBytesAfter).toBe(
-            (await measureSessionPhysicalDiskUsage(storePath)).totalBytes,
-          );
-        }
-        expect(
-          openOpenClawAgentDatabase(databaseOptions)
-            .db.prepare("SELECT session_id FROM session_windows ORDER BY session_id")
-            .all(),
-        ).toEqual(failure ? [{ session_id: "current" }, { session_id: "second" }] : []);
-        expect(workers).toHaveLength(1);
-        expect(workers[0]?.threadId).toBeGreaterThan(0);
-        await closeOpenClawAgentDatabasesAsync(state.root);
-        expect(workers[0]?.threadId).toBe(-1);
-      },
-    );
-  },
-);

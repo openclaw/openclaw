@@ -254,6 +254,111 @@ OpenClaw release:
   </Tab>
 </Tabs>
 
+## Use Claude Opus 5.5
+
+After setting up either auth route above, select the canonical model ref:
+
+```bash
+openclaw models set anthropic/claude-opus-5-5
+```
+
+The bare `opus` alias and explicit aliases `opus-5.5` / `opus-5-5` select this model.
+Fresh API and Claude CLI setup defaults to Opus 5.5; existing version-pinned
+models and authored aliases remain unchanged.
+
+For Claude CLI authentication, keep the canonical ref and select the CLI runtime:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "anthropic/claude-opus-5-5" },
+      models: {
+        "anthropic/claude-opus-5-5": {
+          agentRuntime: { id: "claude-cli" },
+        },
+      },
+    },
+  },
+}
+```
+
+The API and Claude CLI catalogs expose a 1,000,000-token context window and
+128,000-token output limit. API pricing is `$4/$20` per million input/output
+tokens, with `$0.20` cache reads and `$5` five-minute cache writes. See
+Anthropic's [Opus 5.5 specifications](https://platform.claude.com/docs/en/models/opus-5-5/overview).
+
+Opus 5.5 always uses adaptive thinking. OpenClaw defaults to `medium` and offers
+`low`, `medium`, `high`, `xhigh`, and `max`. Stored `off` and `minimal` settings
+map to `low`; stored `adaptive` uses the `medium` default. Use `/think low`
+to reduce thinking effort. OpenClaw omits manual thinking budgets, custom
+sampling parameters, assistant prefills, and Priority Tier.
+
+Forced tool choices become `auto`; state in the prompt when a particular tool
+must run. Opus 5.5 also binds retained thinking to its conversation prefix.
+OpenClaw applies the append-only context and retained-thinking repair described
+under [Tool calls and retained thinking](/providers/anthropic#tool-calls-and-retained-thinking).
+See Anthropic's [migration guide](https://platform.claude.com/docs/en/models/opus-5-5/migration-guide)
+for model-switching and response-shape changes.
+
+## Use Claude Sonnet 5.5
+
+After setting up either auth route above, select the canonical model ref:
+
+```bash
+openclaw models set anthropic/claude-sonnet-5-5
+```
+
+The bare `sonnet` alias and explicit aliases `sonnet-5.5` / `sonnet-5-5` select
+this model. Fresh API and Claude CLI setup still defaults to Opus 5.5; select
+Sonnet 5.5 explicitly. Existing version-pinned models and authored aliases
+remain unchanged. Use `sonnet-5` to keep Sonnet 5.
+
+For Claude CLI authentication, keep the canonical ref and select the CLI runtime:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "anthropic/claude-sonnet-5-5" },
+      models: {
+        "anthropic/claude-sonnet-5-5": {
+          agentRuntime: { id: "claude-cli" },
+        },
+      },
+    },
+  },
+}
+```
+
+The API and Claude CLI catalogs expose a 1,000,000-token context window and
+128,000-token output limit. Sonnet 5.5 supports image and PDF input. API pricing
+is `$2/$10` per million input/output tokens, with `$0.20` cache reads and `$2.50`
+five-minute cache writes, the same rates as Sonnet 5. See Anthropic's
+[Sonnet 5.5 specifications](https://platform.claude.com/docs/en/models/sonnet-5-5/overview).
+
+Sonnet 5.5 uses adaptive thinking at `high` effort by default. OpenClaw offers
+`off`, `low`, `medium`, `high`, `xhigh`, and `max`. `/think off` sends Anthropic's
+`between_tools` setting: it disables up-front thinking, while notes between tool
+calls still return as ordinary text. New `/think minimal` and `/think adaptive`
+directives are rejected with the supported choices; stored `minimal` maps to
+`low`, and stored `adaptive` uses the `high` default. Use `/think default` to
+restore that default. OpenClaw omits manual thinking budgets, custom sampling
+parameters, and assistant prefills. Sonnet 5.5 supports neither native fast mode
+nor Priority Tier.
+
+Forced tool choices become `auto`, including with `/think off`; state in the
+prompt when a particular tool must run. Sonnet 5.5 binds retained thinking to its
+conversation prefix. OpenClaw applies the append-only context and
+retained-thinking repair described under
+[Tool calls and retained thinking](/providers/anthropic#tool-calls-and-retained-thinking).
+A session moving onto Sonnet 5.5 keeps reasoning from Sonnet 5 or Claude 4.x
+models, but not from Opus 5, Opus 5.5, Fable, or Mythos. No other model reads
+Sonnet 5.5 reasoning. Direct API-key requests opt into Anthropic's safety
+fallback to Sonnet 5 for `cyber` and `frontier_llm` declines, at the same price.
+See Anthropic's [migration guide](https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide)
+for model-switching and response-shape changes.
+
 ## Use Claude Fable 5.1
 
 After setting up either auth route above, select the canonical model ref:
@@ -301,10 +406,10 @@ Fable 5.1 binds retained thinking to the preceding system prompt, tools, and
 conversation history. Changing that prefix can invalidate later thinking
 blocks. Claude Code manages this history for the CLI runtime. OpenClaw's
 embedded runtime uses append-only context only for prefix-binding models such as
-Fable 5.1: it persists hidden runtime-context carriers after their user turn,
-keeps earlier carriers and inline inbound metadata in place, and preserves
-consecutive user turns on the Messages API. This also applies to matching Claude
-models on Bedrock, Vertex, and Foundry, although Bedrock Converse still merges
+Fable 5.1, Opus 5.5, and Sonnet 5.5: it persists hidden runtime-context carriers
+after their user turn, keeps earlier carriers and inline inbound metadata in
+place, and preserves consecutive user turns on the Messages API. This also
+applies to matching Claude models on Bedrock, Vertex, and Foundry, although Bedrock Converse still merges
 consecutive user turns. Carriers contain only the delimited context body; the
 instruction to use it privately lives once in the stable system prompt.
 Other Claude models keep transient carriers and normal user-turn merging.
@@ -316,7 +421,8 @@ Direct Anthropic API-key requests with adaptive thinking send the
 `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`. Anthropic drops
 invalidated replayed thinking server-side, and OpenClaw logs a warning with the
 count and up to five affected paths. These controls are not sent for OAuth,
-proxies, Bedrock, Vertex, Foundry, or budget-based or disabled thinking.
+proxies, Bedrock, Vertex, Foundry, or budget-based, disabled, or `between_tools`
+thinking.
 Client-side compaction removes stale thinking signatures; a provider-confirmed
 thinking rejection can still trigger one retry without prior thinking and
 persist the successful repair. Adaptive mode remains enabled,
@@ -335,13 +441,14 @@ by a client-side edit is handled by `drop_block` where the binding controls abov
 apply, or by the existing rejection-and-repair path elsewhere.
 
 Fable 5.1 thinking is also bound to the model that produced it. Switching a
-session from Fable 5.1 to any other model (Opus 5, Sonnet 5, Fable 5, or
-older) continues the visible conversation without Fable's earlier reasoning;
+session from Fable 5.1 to any other model (Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5,
+Fable 5, or older) continues the visible conversation without Fable's earlier reasoning;
 Anthropic drops those blocks unbilled, and OpenClaw's embedded runtime omits
-them from the replay for the same result. The reverse move keeps reasoning:
-Fable 5.1 reads thinking produced by Opus 5, Sonnet 5, Opus 4.8, and Fable 5,
-so a session that moves onto Fable 5.1 replays that history intact. Switching
-away and back does not restore the pre-switch Fable reasoning: the switch
+them from the replay for the same result. The reverse move keeps compatible
+reasoning: Fable 5.1 reads thinking produced by Opus 5, Sonnet 5, Opus 4.8, and
+Fable 5, so a session that moves onto Fable 5.1 replays that history intact. It
+cannot read Sonnet 5.5 reasoning. Switching away and back does not restore the
+pre-switch Fable reasoning: the switch
 changes the system prompt, which invalidates every earlier Fable block. On
 direct API-key routes Anthropic drops those blocks server-side and OpenClaw
 logs the drop; elsewhere, organizations that enforce the prefix check reject
@@ -349,6 +456,10 @@ the request once and the embedded runtime retries without prior thinking.
 Changing the thinking level with `/think` has the same effect. Pick the model
 and thinking level when you start the session when reasoning continuity
 matters.
+
+Sonnet 5.5 preserves prior Sonnet 5 and Claude 4.x reasoning when a session
+moves onto it, but drops reasoning from Opus 5, Opus 5.5, Fable, and Mythos.
+Switching away from Sonnet 5.5 drops its reasoning on every other model.
 
 ## Claude sessions across computers
 
@@ -394,6 +505,8 @@ affected project directory. It re-reads the whole tree at most every five
 minutes as a backstop, and falls back to per-request scanning if the platform
 cannot provide a file watcher. Desktop metadata also refreshes every 60 seconds
 to pick up custom-group changes outside the watched session store.
+Desktop metadata caching keeps only bounded catalog fields and PR summaries;
+unused MCP configurations and launch snapshots are discarded after each read.
 Gateway enumeration keeps each caller isolated;
 the plugin reuses its watched filesystem snapshot across those enumerations.
 
@@ -474,14 +587,17 @@ rather than appearing in the picker and failing every request. Discovery is
 advisory: without an API key, or if the endpoint is unreachable, the shipped
 catalog is used unchanged.
 
-## Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
+<a id="thinking-defaults-(claude-opus-5%2C-sonnet-5%2C-mythos-5%2C-fable-5%2C-4.8%2C-and-4.6)" />
+<a id="thinking-defaults-claude-opus-5-sonnet-5-mythos-5-fable-5-4-8-and-4-6" />
 
-Bare family aliases are rolling: `opus` tracks the current supported Claude
-Opus generation and today resolves to `anthropic/claude-opus-5`, the same way
-`sonnet` tracks the current Sonnet. Upgrading OpenClaw can therefore move a
-config that says `opus` onto a newer model generation. Pin a version to opt
-out — versioned aliases such as `opus-4.8` keep resolving to their own model,
-and configs that already name `claude-opus-4-8` are never rewritten.
+## Thinking defaults (Claude 5.5, 5, 4.8, and 4.6)
+
+Bare family aliases are rolling: `opus` currently resolves to
+`anthropic/claude-opus-5-5`, and `sonnet` resolves to
+`anthropic/claude-sonnet-5-5`. Upgrading OpenClaw can move either alias onto a
+newer model generation. Pin a version to opt out: `opus-5`, `sonnet-5`,
+`claude-opus-5`, `claude-sonnet-5`, and other explicit versioned selections keep
+their own model.
 
 `anthropic/claude-opus-5` uses adaptive thinking at `high` effort by default.
 Use `/think off` to disable thinking, or `/think xhigh|max` for the model's
@@ -515,8 +631,9 @@ stored `off` and `minimal` settings to `low`, and omits caller-selected sampling
 The catalog publishes its 1,000,000-token context window, 128,000-token output
 limit, image input, and `$10/$50` input/output pricing.
 
-For Fable and Mythos, new `/think minimal` and `/think adaptive` directives are
-rejected with the supported choices. Use `/think low` in place of `minimal`,
+For Opus 5.5, Sonnet 5.5, Fable, and Mythos, new `/think minimal` and
+`/think adaptive` directives are rejected with the supported choices. Use
+`/think low` in place of `minimal`,
 and `/think default` to use the model's default effort. The remapping above
 applies to previously stored settings.
 
@@ -549,12 +666,14 @@ Related Anthropic docs:
 </Note>
 
 <a id="safety-refusal-fallback-claude-fable-5" />
+<a id="safety-refusal-fallback-(claude-opus-5-and-fable-5)" />
+<a id="safety-refusal-fallback-claude-opus-5-and-fable-5" />
 
-## Safety refusal fallback (Claude Opus 5 and Fable 5)
+## Safety refusal fallback (Claude Opus, Sonnet 5.5, and Fable)
 
 <Warning>
-Claude Opus 5, Fable 5.1, and Fable 5 can route a safety-classifier refusal to
-another Claude model. OpenClaw opts into Anthropic's recommended per-category
+Claude Opus 5.5, Opus 5, Sonnet 5.5, Fable 5.1, and Fable 5 can route a
+safety-classifier refusal to another Claude model. OpenClaw opts into Anthropic's recommended per-category
 routing for direct API-key requests. A fallback-served turn is billed at the model
 that answered. If your policy requires every turn to stay on the requested
 model, do not use these models through the automatic fallback path.
@@ -562,17 +681,19 @@ model, do not use these models through the automatic fallback path.
 
 ### Why this exists
 
-Opus 5 and Fable classifiers return `stop_reason: "refusal"` on requests in
-restricted domains. Without a fallback, the turn ends with an error even when
+Opus 5.5, Opus 5, Sonnet 5.5, and Fable classifiers return `stop_reason: "refusal"`
+on requests in restricted domains. Without a fallback, the turn ends with an error even when
 Anthropic has a recommended model for that refusal category.
 
 ### How it works
 
-1. For every direct API-key request to `anthropic/claude-opus-5`,
+1. For every direct API-key request to `anthropic/claude-opus-5-5`,
+   `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5-5`,
    `anthropic/claude-fable-5-1`, or `anthropic/claude-fable-5`, OpenClaw sends the
    `server-side-fallback-2026-07-01` beta header plus
    `fallbacks: "default"`. Anthropic selects the recommended model for the
-   reported refusal category.
+   reported refusal category. Sonnet 5.5 falls back to Sonnet 5 for `cyber` and
+   `frontier_llm` declines.
 2. Only a safety-classifier decline triggers the fallback. Rate limits,
    overloads, and server errors behave exactly as before and go through
    OpenClaw's normal [model failover](/concepts/model-failover).
@@ -596,14 +717,17 @@ need to be in your configured OpenClaw fallback chain.
   assistant message naming `fromModel` and `toModel`, and the message's
   `responseModel` reports the model that answered.
 - Anthropic bills the fallback attempt at the serving model's rates. OpenClaw
-  prices known Opus 4.8 fallback-served turns at Opus 4.8 rates.
+  prices known Opus 4.8 fallback-served turns at Opus 4.8 rates. Sonnet 5.5
+  fallback-served turns on Sonnet 5 keep the requested cost because their rates
+  are identical.
 - A mid-stream decline additionally bills the already-streamed primary-model partial
   on Anthropic's side; that portion is reported in the API's per-attempt
   usage but not folded into OpenClaw's per-turn estimate.
 
 ### Scope
 
-Applies to `anthropic/claude-opus-5`, `anthropic/claude-fable-5-1`, and
+Applies to `anthropic/claude-opus-5-5`, `anthropic/claude-opus-5`,
+`anthropic/claude-sonnet-5-5`, `anthropic/claude-fable-5-1`, and
 `anthropic/claude-fable-5` with API-key auth against `api.anthropic.com`.
 OAuth (including Claude CLI subscription reuse), proxy base URLs, Bedrock,
 Vertex, and Foundry requests are unchanged and still surface refusals as errors there.
@@ -680,7 +804,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
 <AccordionGroup>
   <Accordion title="Fast mode">
-    For Claude Opus 5 and Opus 4.8, OpenClaw's shared `/fast` toggle uses
+    For Claude Opus 5.5, Opus 5, and Opus 4.8, OpenClaw's shared `/fast` toggle uses
     Anthropic's native fast mode for direct API-key traffic to `api.anthropic.com`.
 
     | Command | Maps to |
@@ -703,13 +827,13 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     ```
 
     <Note>
-    - Native fast mode is a research preview for Claude Opus 5 and Opus 4.8. It can deliver up to 2.5x higher output-token throughput and is billed at `$10/$50` per million input/output tokens. OpenClaw applies the same 2x multiplier to cache pricing in its cost estimate.
+    - Native fast mode is a research preview with up to 2.5x higher output-token throughput. It is billed at `$8/$40` per million input/output tokens for Opus 5.5 and `$10/$50` for Opus 5 and Opus 4.8. OpenClaw applies the same 2x multiplier to cache pricing in its cost estimate.
     - Native fast mode only applies to direct `api.anthropic.com` requests made with an API key. OAuth/subscription-token requests, Claude CLI, proxies, Bedrock, Vertex, and Foundry never receive the beta or `speed` field.
     - Accounts need fast-mode access and a non-zero fast-mode rate limit. Anthropic returns a fast-specific `429` when the separate fast quota is exhausted or zero.
     - For other direct Anthropic models, `/fast` retains the existing Priority Tier mapping: on uses `service_tier: "auto"` and off uses `service_tier: "standard_only"`.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
-    - Claude Sonnet 5 supports neither native fast mode nor Priority Tier, so OpenClaw omits both fields.
-    - The Control UI disables confirmed no-op Fast choices, including Sonnet 5 and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
+    - Claude Sonnet 5.5 and Sonnet 5 support neither native fast mode nor Priority Tier, so OpenClaw omits both fields.
+    - The Control UI disables confirmed no-op Fast choices, including Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
 
     </Note>
 
@@ -787,7 +911,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     | Property        | Value                 |
     | --------------- | --------------------- |
-    | Default model   | `claude-opus-5`       |
+    | Default model   | `claude-opus-5-5`       |
     | Supported input | Images, PDF documents |
 
     When an image or PDF is attached to a conversation, OpenClaw automatically
@@ -796,8 +920,8 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="1M context window">
-    Claude Opus 5, Sonnet 5, Mythos 5, Fable 5.1, and Fable 5 have an exact
-    1,000,000-token input window and support up to 128,000 output tokens.
+    Claude Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Mythos 5, Fable 5.1, and
+    Fable 5 have an exact 1,000,000-token input window and support up to 128,000 output tokens.
     Anthropic's 1M context window is also GA on Claude 4.x models with adaptive
     thinking: Opus 4.8,
     Opus 4.7, Opus 4.6, and Sonnet 4.6. OpenClaw sizes these models
@@ -809,6 +933,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
         defaults: {
           models: {
             "anthropic/claude-opus-5": {},
+            "anthropic/claude-sonnet-5-5": {},
             "anthropic/claude-sonnet-5": {},
             "anthropic/claude-mythos-5": {},
             "anthropic/claude-opus-4-8": {},

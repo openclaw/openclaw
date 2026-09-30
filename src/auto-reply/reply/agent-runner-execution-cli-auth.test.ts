@@ -288,6 +288,7 @@ describe("executeAgentTurn: CLI credential selection", () => {
       const executeAgentTurn = await getExecuteAgentTurnForTest();
       const runTurn = async () => {
         const selected = await createModelSelectionState({
+          agentId: followupRun.run.agentId,
           cfg: followupRun.run.config,
           agentCfg: followupRun.run.config.agents?.defaults,
           sessionEntry: entry,

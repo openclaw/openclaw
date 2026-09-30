@@ -1,7 +1,6 @@
 // Defines WhatsApp provider schema fragments for config parsing.
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
-import { buildGroupEntrySchema } from "../channels/plugins/config-schema.js";
+import { buildGroupEntrySchema, refineChannelDmPolicy } from "../channels/plugins/config-schema.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import {
   ChannelSendReadReceiptsSchema,
@@ -52,48 +51,6 @@ const WhatsAppCommonShape = {
   pluginHooks: WhatsAppPluginHooksSchema,
 };
 
-function enforceOpenDmPolicyAllowFromStar(params: {
-  dmPolicy: unknown;
-  allowFrom: unknown;
-  ctx: z.RefinementCtx;
-  message: string;
-  path?: Array<string | number>;
-}) {
-  if (params.dmPolicy !== "open") {
-    return;
-  }
-  const allow = normalizeStringEntries(Array.isArray(params.allowFrom) ? params.allowFrom : []);
-  if (allow.includes("*")) {
-    return;
-  }
-  params.ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    path: params.path ?? ["allowFrom"],
-    message: params.message,
-  });
-}
-
-function enforceAllowlistDmPolicyAllowFrom(params: {
-  dmPolicy: unknown;
-  allowFrom: unknown;
-  ctx: z.RefinementCtx;
-  message: string;
-  path?: Array<string | number>;
-}) {
-  if (params.dmPolicy !== "allowlist") {
-    return;
-  }
-  const allow = normalizeStringEntries(Array.isArray(params.allowFrom) ? params.allowFrom : []);
-  if (allow.length > 0) {
-    return;
-  }
-  params.ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    path: params.path ?? ["allowFrom"],
-    message: params.message,
-  });
-}
-
 const WhatsAppAccountSchema = z
   .object({
     ...WhatsAppCommonShape,
@@ -124,50 +81,19 @@ export const WhatsAppConfigSchema = z
   .strict()
   .superRefine((value, ctx) => {
     const defaultAccount = resolveAccountEntry(value.accounts, "default");
-    enforceOpenDmPolicyAllowFromStar({
-      dmPolicy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      message:
-        'channels.whatsapp.dmPolicy="open" requires channels.whatsapp.allowFrom to include "*"',
-    });
-    enforceAllowlistDmPolicyAllowFrom({
-      dmPolicy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      message:
-        'channels.whatsapp.dmPolicy="allowlist" requires channels.whatsapp.allowFrom to contain at least one sender ID',
-    });
-    if (!value.accounts) {
-      return;
-    }
-    for (const [accountId, account] of Object.entries(value.accounts)) {
-      if (!account) {
-        continue;
-      }
-      const effectivePolicy =
-        account.dmPolicy ??
-        (accountId === "default" ? undefined : defaultAccount?.dmPolicy) ??
-        value.dmPolicy;
-      const effectiveAllowFrom =
-        account.allowFrom ??
-        (accountId === "default" ? undefined : defaultAccount?.allowFrom) ??
-        value.allowFrom;
-      enforceOpenDmPolicyAllowFromStar({
-        dmPolicy: effectivePolicy,
-        allowFrom: effectiveAllowFrom,
+    refineChannelDmPolicy({ channelId: "whatsapp", value, ctx });
+    // Named accounts inherit the default account before the channel root.
+    const inherited = {
+      ...value,
+      dmPolicy: defaultAccount?.dmPolicy ?? value.dmPolicy,
+      allowFrom: defaultAccount?.allowFrom ?? value.allowFrom,
+    };
+    for (const accountId of Object.keys(value.accounts ?? {})) {
+      refineChannelDmPolicy({
+        channelId: "whatsapp",
+        value: accountId === "default" ? value : inherited,
+        accountId,
         ctx,
-        path: ["accounts", accountId, "allowFrom"],
-        message:
-          'channels.whatsapp.accounts.*.dmPolicy="open" requires channels.whatsapp.accounts.*.allowFrom (or channels.whatsapp.allowFrom) to include "*"',
-      });
-      enforceAllowlistDmPolicyAllowFrom({
-        dmPolicy: effectivePolicy,
-        allowFrom: effectiveAllowFrom,
-        ctx,
-        path: ["accounts", accountId, "allowFrom"],
-        message:
-          'channels.whatsapp.accounts.*.dmPolicy="allowlist" requires channels.whatsapp.accounts.*.allowFrom (or channels.whatsapp.allowFrom) to contain at least one sender ID',
       });
     }
   });

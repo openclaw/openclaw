@@ -1,15 +1,16 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  captureAgentLifecycleBinding,
+  matchesAgentLifecycleBinding,
+} from "../../agents/agent-lifecycle-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type {
   WorkerDesktopEndpoint,
-  WorkerProfile,
-  WorkerSshEndpoint,
+  WorkerSshEndpoint as WorkerEnvironmentSshEndpoint,
 } from "../../plugins/types.js";
+import { recordAgentProvenance } from "../../state/agent-provenance.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 import { ensureAdditiveStateColumns } from "../../state/openclaw-state-db-schema-additive.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -19,29 +20,12 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { hashWorkerCredential } from "./credential.js";
+import { createEnvironmentStoreFixture } from "./placement-test-fixtures.js";
 import { ensureWorkerEnvironmentStoreSchema } from "./store-schema.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
-type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
-  installKind?: "bundle" | "local";
-};
-type WorkerEnvironmentProfileSnapshot = WorkerProfile;
-type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
-
-const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
-const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {
-  host: "worker.example.test",
-  port: 2222,
-  fallbackPorts: [22, 2200],
-  user: "openclaw",
-  hostKey: HOST_KEY,
-  keyRef: {
-    source: "file",
-    provider: "worker-keys",
-    id: "/static-development-key",
-  },
-};
 const DESKTOP: WorkerDesktopEndpoint = {
   protocol: "rfb",
   port: 5900,
@@ -57,93 +41,65 @@ const DESKTOP: WorkerDesktopEndpoint = {
     { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
   ],
 };
-const BOOTSTRAP_RECEIPT: WorkerEnvironmentBootstrapReceipt = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.7.1",
-  protocolFeatures: ["workspace-sync-v1", "model-proxy-v1"],
-};
-const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 
 describe("worker environment store", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerEnvironmentStore;
   let nowMs: number;
+  const {
+    hostKey: HOST_KEY,
+    sshEndpoint: SSH_ENDPOINT,
+    bootstrapReceipt: BOOTSTRAP_RECEIPT,
+    credential: CREDENTIAL,
+    createIntent,
+    fallbackPortRows,
+    seedBootstrapping,
+    readyPatch,
+    attachedPatch,
+  } = createEnvironmentStoreFixture({
+    getStore: () => store,
+    getDatabase: () => database,
+    now: () => nowMs,
+  });
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-env-"));
+    root = tempDirs.make("openclaw-worker-env-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
   });
 
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
+  it("revalidates agent incarnation inside worker admission without joining its writer lock", async () => {
+    const options = { path: database.path };
+    const config = { agents: { entries: { worker: {} } } };
+    const binding = captureAgentLifecycleBinding(config, "worker", options);
+    expect(binding).toBeDefined();
+    const assertCurrent = () => {
+      if (!binding || !matchesAgentLifecycleBinding(config, binding, options)) {
+        throw new Error("Agent incarnation changed");
+      }
+    };
+    const create = (environmentId: string) =>
+      store.createIntent(
+        {
+          environmentId,
+          providerId: "fake-provider",
+          profileId: "test-profile",
+          profileSnapshot: { settings: {} },
+          provisionOperationId: `provision:${environmentId}`,
+        },
+        assertCurrent,
+      );
+
+    await expect(create("live-agent")).resolves.toMatchObject({ state: "requested" });
+    await withOpenClawStateDatabaseReadSnapshot(async () => {
+      recordAgentProvenance("worker", { createdVia: "operator" }, { ...options, nowMs: 42 });
+      await expect(create("replaced-agent")).rejects.toThrow("Agent incarnation changed");
+    }, options);
+    expect(store.get("replaced-agent")).toBeUndefined();
   });
-
-  function createIntent(
-    environmentId = "worker-1",
-    profileSnapshot: WorkerEnvironmentProfileSnapshot = {
-      settings: { region: "test" },
-      lifetime: { idleMinutes: 10 },
-    },
-  ) {
-    return store.createIntent({
-      environmentId,
-      providerId: "fake-provider",
-      profileId: "test-profile",
-      profileSnapshot,
-      provisionOperationId: `provision:${environmentId}`,
-    });
-  }
-
-  function fallbackPortRows(environmentId: string) {
-    return database.db
-      .prepare(
-        `SELECT position, port
-         FROM worker_environment_ssh_fallback_ports
-         WHERE environment_id = ?
-         ORDER BY position`,
-      )
-      .all(environmentId);
-  }
-
-  async function seedBootstrapping(environmentId: string, leaseId: string) {
-    await createIntent(environmentId);
-    await store.transition({ environmentId, from: "requested", to: "provisioning" });
-    return store.transition({
-      environmentId,
-      from: "provisioning",
-      to: "bootstrapping",
-      patch: { leaseId, sshEndpoint: SSH_ENDPOINT },
-    });
-  }
-
-  function readyPatch(receipt = BOOTSTRAP_RECEIPT) {
-    return {
-      bootstrapReceipt: receipt,
-      credential: {
-        credentialHash: hashWorkerCredential(CREDENTIAL),
-        sessionId: null,
-        rpcSetVersion: 1,
-        expiresAtMs: nowMs + 10_000,
-      },
-    };
-  }
-
-  function attachedPatch(sessionId: string, suffix: string) {
-    return {
-      attachedSessionIds: [sessionId],
-      credential: {
-        credentialHash: hashWorkerCredential([CREDENTIAL, suffix].join("-")),
-        sessionId,
-        rpcSetVersion: 1,
-        expiresAtMs: nowMs + 10_000,
-      },
-    };
-  }
 
   it("persists immutable intent before provisioning and survives reopen", async () => {
     const snapshot = { settings: { region: "original" }, lifetime: { idleMinutes: 10 } };

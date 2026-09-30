@@ -45,15 +45,17 @@ function setNativeGatewayTestState(snapshot: SidebarNativeGatewayTestSnapshot): 
   nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = snapshot;
 }
 
-afterEach(() => {
-  const nativeWindow = window as SidebarNativeGatewayTestWindow;
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_WEB_CHROME__");
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_GATEWAYS__");
-  Object.assign(CONTROL_UI_BUILD_INFO as MutableControlUiBuildInfo, ORIGINAL_CONTROL_UI_BUILD_INFO);
-  vi.useRealTimers();
-});
-
 describe("AppSidebar gateway footer subtitle", () => {
+  afterEach(() => {
+    const nativeWindow = window as SidebarNativeGatewayTestWindow;
+    Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_WEB_CHROME__");
+    Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_GATEWAYS__");
+    Object.assign(
+      CONTROL_UI_BUILD_INFO as MutableControlUiBuildInfo,
+      ORIGINAL_CONTROL_UI_BUILD_INFO,
+    );
+  });
+
   const twoGateways = {
     gateways: [
       { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },

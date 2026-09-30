@@ -372,15 +372,12 @@ defineDiscordVoiceTests(
       },
     );
 
-    it.each(
-      (["live", "other autoJoin", "empty autoJoin", "unknown autoJoin"] as const).flatMap(
-        (residency) =>
-          [ChannelType.GuildVoice, ChannelType.GuildStageVoice].map((type) => ({
-            residency,
-            type,
-          })),
-      ),
-    )(
+    it.each([
+      { residency: "live", type: ChannelType.GuildVoice },
+      { residency: "other autoJoin", type: ChannelType.GuildStageVoice },
+      { residency: "empty autoJoin", type: ChannelType.GuildVoice },
+      { residency: "unknown autoJoin", type: ChannelType.GuildStageVoice },
+    ] as const)(
       "registers valid channel type $type beside $residency without joining",
       async ({ residency, type }) => {
         const f = await fixture(residency);

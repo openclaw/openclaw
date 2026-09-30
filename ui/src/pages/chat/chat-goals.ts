@@ -8,7 +8,6 @@ import {
   type SessionsGoalUpdateParams,
 } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalDraft, ChatGoalRecovery } from "../../lib/chat/chat-types.ts";
@@ -29,9 +28,8 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
-import type { ChatSendSubmitOptions } from "./chat-send-submit.ts";
+import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
+import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import { refreshChatSessionListForTarget } from "./chat-session.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
 
@@ -62,6 +60,12 @@ const rejectedGoalReasons = new Set([
   "capacity",
   "invalid",
 ]);
+
+function rejectGoalOperation(host: ChatHost, message: string): false {
+  setChatError(host, message);
+  host.requestUpdate?.();
+  return false;
+}
 
 function goalOperationTarget(host: ChatHost) {
   if (!host.client?.recoveryScopeReady || !host.client.recoveryScope) {
@@ -154,8 +158,7 @@ export async function submitChatGoalDraft(
     return false;
   }
   if (draft.sessionId && draft.sessionId !== host.currentSessionId) {
-    setChatError(host, t("chat.goals.sessionChanged"));
-    return false;
+    return rejectGoalOperation(host, t("chat.goals.sessionChanged"));
   }
   if (draft.action === "edit") {
     return mutateChatGoal(host, {
@@ -196,19 +199,19 @@ async function runGoalOperation(
 ): Promise<boolean> {
   const client = host.client;
   if (!client || !host.connected || !client.recoveryScopeReady) {
-    setChatError(host, t("chat.goals.offline"));
-    return false;
+    return rejectGoalOperation(host, t("chat.goals.offline"));
   }
   if (!client.recoveryScope) {
-    setChatError(host, t("chat.goals.recoveryUnavailable"));
-    return false;
+    return rejectGoalOperation(host, t("chat.goals.recoveryUnavailable"));
   }
   let target: ReturnType<typeof goalOperationTarget>;
   try {
     target = goalOperationTarget(host);
   } catch (error) {
-    setChatError(host, `${t("chat.goals.recoveryUnavailable")} ${formatUiError(error)}`);
-    return false;
+    return rejectGoalOperation(
+      host,
+      `${t("chat.goals.recoveryUnavailable")} ${formatUiError(error)}`,
+    );
   }
   if (!target) {
     return false;
@@ -230,8 +233,7 @@ async function runGoalOperation(
     (host.currentSessionId ?? undefined) === sessionId &&
     visibleSessionMatches(host, sessionKey, agentId);
   if (operation?.pending) {
-    setChatError(host, t("chat.goals.actionPending"));
-    return false;
+    return rejectGoalOperation(host, t("chat.goals.actionPending"));
   }
   if (operation?.retired) {
     // Expired/invalid identities cannot be replayed. Refresh before letting the operator
@@ -268,10 +270,9 @@ async function runGoalOperation(
         { onInvalidate: () => {} },
       );
       const reconcile = observation.captureReconcile();
-      const described = await client.request<{ session?: GatewaySessionRow | null }>(
-        "sessions.describe",
+      const described = await sessions.describe(
         { key: sessionKey, ...(agentId ? { agentId } : {}) },
-        { timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
+        { client, refresh: true, timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
       );
       if (!ownsRecovery()) {
         return false;
@@ -327,18 +328,21 @@ async function runGoalOperation(
       (action.action === "edit" &&
         (!("objective" in params) || params.objective !== action.objective))
     ) {
-      setChatError(host, t("chat.goals.outcomeUnknown"));
-      return false;
+      return rejectGoalOperation(host, t("chat.goals.outcomeUnknown"));
     }
   }
   if (!operation) {
     if (!action) {
       return false;
     }
+    // A descriptor can expose Goal actions before history binds their recovery identity.
+    if (!sessionId || isInitialChatHistoryUnavailable(host)) {
+      return rejectGoalOperation(host, t("chat.thread.loading"));
+    }
     const identity = {
       sessionKey,
       ...(agentId ? { agentId } : {}),
-      ...(sessionId ? { sessionId } : {}),
+      sessionId,
       goalId: action.goalId,
       operationId: generateUUID(),
       issuedAtMs: Date.now(),
@@ -355,15 +359,16 @@ async function runGoalOperation(
     const schema =
       action.action === "clear" ? SessionsGoalClearParamsSchema : SessionsGoalUpdateParamsSchema;
     if (!Value.Check(schema, operation.params)) {
-      setChatError(host, t("chat.goals.invalidRequest"));
-      return false;
+      return rejectGoalOperation(host, t("chat.goals.invalidRequest"));
     }
     try {
       // Persist before sending: a storage failure must not start an unrecoverable Resume.
       storage?.setItem(storageKey, JSON.stringify(operation.params));
     } catch (error) {
-      setChatError(host, `${t("chat.goals.recoveryUnavailable")} ${formatUiError(error)}`);
-      return false;
+      return rejectGoalOperation(
+        host,
+        `${t("chat.goals.recoveryUnavailable")} ${formatUiError(error)}`,
+      );
     }
     operations.set(signature, operation);
   }
@@ -461,7 +466,12 @@ async function runGoalOperation(
       }
     }
     if (targetIsCurrent()) {
-      setChatError(host, rejected ? formatUiError(error) : null);
+      setChatError(
+        host,
+        rejected
+          ? formatUiError(error)
+          : `${t("chat.goals.outcomeUnknown")} ${formatUiError(error)}`,
+      );
     }
     return false;
   } finally {

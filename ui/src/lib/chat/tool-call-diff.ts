@@ -1,3 +1,5 @@
+import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+
 /**
  * Inline diff data for tool-call rendering.
  *
@@ -30,6 +32,20 @@ export type DiffLine = {
 };
 
 export type DiffStat = { added: number; removed: number };
+
+export function readLiveDiffStat(value: unknown): DiffStat | undefined {
+  const diff = readRecord(value);
+  const added = diff?.added;
+  const removed = diff?.removed;
+  return typeof added === "number" &&
+    Number.isInteger(added) &&
+    added >= 0 &&
+    typeof removed === "number" &&
+    Number.isInteger(removed) &&
+    removed >= 0
+    ? { added, removed }
+    : undefined;
+}
 
 type LineDiffResult =
   | { kind: "complete"; lines: DiffLine[]; stat: DiffStat }
@@ -104,7 +120,7 @@ export function parseDiffDetailsString(diff: string): LineDiffResult | null {
     : { kind: "complete", lines, stat: diffStat(lines) };
 }
 
-function splitDiffLines(text: string): string[] {
+export function splitDiffLines(text: string): string[] {
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   // Empty snippets are zero lines: deletions (`newText: ""`) and insertions
   // from an empty old side must not produce a phantom blank row in the diff.
@@ -253,10 +269,6 @@ export function buildWriteDiffLines(content: string, maxLines = 80): DiffLine[] 
     lines.push({ kind: "skip", text: "" });
   }
   return lines;
-}
-
-export function countTextLines(content: string): number {
-  return splitDiffLines(content).length;
 }
 
 /**

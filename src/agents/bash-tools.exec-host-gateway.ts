@@ -12,7 +12,7 @@ import {
 } from "../gateway/operator-approval-standing-grants.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
-import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
 import { lookupCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
@@ -21,10 +21,8 @@ import {
   commandRequiresSecurityAuditSuppressionApproval,
   countObsoleteGeneratedExecApprovals,
   createExecApprovalPolicySnapshot,
-  type ExecAsk,
   type ExecApprovalUsageAuthorization,
   resolveExecApprovalAllowedDecisions,
-  type ExecSecurity,
   buildEnforcedShellCommand,
   evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
@@ -51,6 +49,7 @@ import {
   type ExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   prepareSystemRunMutableFileBinding,
   revalidateSystemRunMutableFileBinding,
@@ -72,7 +71,6 @@ import {
   formatExecApprovalContinuationSourceOutput,
 } from "./bash-tools.exec-approval-output.js";
 import {
-  buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
@@ -124,12 +122,7 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
   );
   consecutiveAutoReviewDenials.delete(sessionKey);
   consecutiveAutoReviewDenials.set(sessionKey, count);
-  if (consecutiveAutoReviewDenials.size > MAX_AUTO_REVIEW_SESSIONS) {
-    const oldest = consecutiveAutoReviewDenials.keys().next().value;
-    if (oldest !== undefined) {
-      consecutiveAutoReviewDenials.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(consecutiveAutoReviewDenials, MAX_AUTO_REVIEW_SESSIONS);
   return count;
 }
 
@@ -170,19 +163,6 @@ function publishGatewayGuardianReview(
       review,
     },
   });
-}
-
-function hasGatewayAllowlistMiss(params: {
-  hostSecurity: ExecSecurity;
-  analysisOk: boolean;
-  allowlistSatisfied: boolean;
-  durableApprovalSatisfied: boolean;
-}): boolean {
-  return (
-    params.hostSecurity === "allowlist" &&
-    (!params.analysisOk || !params.allowlistSatisfied) &&
-    !params.durableApprovalSatisfied
-  );
 }
 
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
@@ -278,59 +258,6 @@ function formatDiagnosticsExportSuccess(aggregated: string): string {
   } catch {
     return trimmed;
   }
-}
-
-function emitGatewayExecApprovalSecurityEvent(params: {
-  action: "exec.approval.requested" | "exec.approval.approved" | "exec.approval.denied";
-  outcome: "success" | "denied" | "error";
-  severity: "low" | "medium" | "high";
-  agentId?: string | null;
-  reason?: string;
-  hostSecurity: ExecSecurity;
-  hostAsk: ExecAsk;
-  host: "gateway";
-  segmentCount: number;
-  trigger?: string;
-  decision?: string | null;
-}) {
-  emitTrustedSecurityEvent({
-    category: "approval",
-    action: params.action,
-    outcome: params.outcome,
-    severity: params.severity,
-    actor: {
-      kind: "agent",
-    },
-    target: {
-      kind: "tool",
-      name: "system.exec",
-      owner: params.host,
-    },
-    policy: {
-      id: "exec.approval",
-      decision:
-        params.action === "exec.approval.requested"
-          ? "ask"
-          : params.outcome === "success"
-            ? "allow"
-            : "deny",
-      ...(params.reason ? { reason: params.reason } : {}),
-    },
-    control: {
-      id: "exec.approval",
-      family: "approval",
-    },
-    ...(params.reason ? { reason: params.reason } : {}),
-    attributes: {
-      host: params.host,
-      security: params.hostSecurity,
-      ask: params.hostAsk,
-      segment_count: params.segmentCount,
-      has_agent_id: Boolean(params.agentId?.trim()),
-      ...(params.trigger ? { trigger: params.trigger } : {}),
-      ...(params.decision ? { decision: params.decision } : {}),
-    },
-  });
 }
 
 function formatDiagnosticsExportFailure(params: {
@@ -516,8 +443,58 @@ export async function processGatewayAllowlist(
     allowlist: approvals.allowlist,
     commandText: params.command,
   });
+  const hasAllowlistMiss =
+    hostSecurity === "allowlist" &&
+    (!analysisOk || !allowlistSatisfied) &&
+    !durableApprovalSatisfied;
+  function emitApprovalEvent(event: {
+    action: "exec.approval.requested" | "exec.approval.approved" | "exec.approval.denied";
+    outcome: "success" | "denied" | "error";
+    severity: "low" | "medium" | "high";
+    reason?: string;
+    decision?: string | null;
+  }) {
+    emitTrustedSecurityEvent({
+      category: "approval",
+      action: event.action,
+      outcome: event.outcome,
+      severity: event.severity,
+      actor: {
+        kind: "agent",
+      },
+      target: {
+        kind: "tool",
+        name: "system.exec",
+        owner: "gateway",
+      },
+      policy: {
+        id: "exec.approval",
+        decision:
+          event.action === "exec.approval.requested"
+            ? "ask"
+            : event.outcome === "success"
+              ? "allow"
+              : "deny",
+        ...(event.reason ? { reason: event.reason } : {}),
+      },
+      control: {
+        id: "exec.approval",
+        family: "approval",
+      },
+      ...(event.reason ? { reason: event.reason } : {}),
+      attributes: {
+        host: "gateway",
+        security: hostSecurity,
+        ask: hostAsk,
+        segment_count: allowlistEval.segments.length,
+        has_agent_id: Boolean(params.agentId?.trim()),
+        ...(params.trigger ? { trigger: params.trigger } : {}),
+        ...(event.decision ? { decision: event.decision } : {}),
+      },
+    });
+  }
   const inlineEvalHit =
-    params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
+    params.strictInlineEval === true ? detectInlineEvalInSegments(allowlistEval.segments) : null;
   const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
     segments: allowlistEval.segments,
     cwd: params.workdir,
@@ -747,17 +724,11 @@ export async function processGatewayAllowlist(
     const deniedReason = "ask-fallback-deny: execution-plan-miss";
     // The allowlist matched, but the gateway cannot bind an enforceable command.
     // With prompting disabled, apply the fail-closed fallback before registration.
-    emitGatewayExecApprovalSecurityEvent({
+    emitApprovalEvent({
       action: "exec.approval.denied",
       outcome: "denied",
       severity: "medium",
-      agentId: params.agentId,
       reason: deniedReason,
-      hostSecurity,
-      hostAsk,
-      host: "gateway",
-      segmentCount: allowlistEval.segments.length,
-      trigger: params.trigger,
     });
     return {
       deniedResult: buildGatewayExecApprovalDeniedToolResult({
@@ -841,17 +812,11 @@ export async function processGatewayAllowlist(
     }
     if (grantCheck?.outcome === "consumed") {
       const emitGrantEvent = (approved: boolean, reason: string) =>
-        emitGatewayExecApprovalSecurityEvent({
+        emitApprovalEvent({
           action: approved ? "exec.approval.approved" : "exec.approval.denied",
           outcome: approved ? "success" : "denied",
           severity: "medium",
-          agentId: params.agentId,
           reason,
-          hostSecurity,
-          hostAsk,
-          host: "gateway",
-          segmentCount: allowlistEval.segments.length,
-          trigger: params.trigger,
           decision: "standing-grant",
         });
       return {
@@ -1013,12 +978,7 @@ export async function processGatewayAllowlist(
             ? "heredoc"
             : autoReviewEnforcedCommand === undefined
               ? "execution-plan-miss"
-              : hasGatewayAllowlistMiss({
-                    hostSecurity,
-                    analysisOk,
-                    allowlistSatisfied,
-                    durableApprovalSatisfied,
-                  })
+              : hasAllowlistMiss
                 ? "allowlist-miss"
                 : "approval-required",
         analysis: {
@@ -1073,16 +1033,10 @@ export async function processGatewayAllowlist(
           params.warnings.push(
             `Exec auto-review allowed once (${formatExecAutoReviewAssessment(decision)}): ${decision.rationale}`,
           );
-          emitGatewayExecApprovalSecurityEvent({
+          emitApprovalEvent({
             action: "exec.approval.approved",
             outcome: "success",
             severity: "medium",
-            agentId: params.agentId,
-            hostSecurity,
-            hostAsk,
-            host: "gateway",
-            segmentCount: allowlistEval.segments.length,
-            trigger: params.trigger,
             decision: "auto-review",
           });
           await commitExecutionAuthorization({
@@ -1102,16 +1056,10 @@ export async function processGatewayAllowlist(
             );
             break;
           }
-          emitGatewayExecApprovalSecurityEvent({
+          emitApprovalEvent({
             action: "exec.approval.denied",
             outcome: "denied",
             severity: "medium",
-            agentId: params.agentId,
-            hostSecurity,
-            hostAsk,
-            host: "gateway",
-            segmentCount: allowlistEval.segments.length,
-            trigger: params.trigger,
             decision: "auto-review",
           });
           return {
@@ -1151,10 +1099,8 @@ export async function processGatewayAllowlist(
         ...unavailableDecisionRequestParams,
         commandHighlighting: params.commandHighlighting,
         warningText: params.warnings.join("\n").trim() || undefined,
-        ...buildExecApprovalRequesterContext({
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-        }),
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         runId: params.runId,
         toolCallId: params.toolCallId,
@@ -1176,13 +1122,7 @@ export async function processGatewayAllowlist(
       turnSourceAccountId: params.turnSourceAccountId,
       register: registerGatewayApproval,
       askFallback,
-      resolveTimedOut: (state) => {
-        const adjusted = applyTimedOutAllowlistFallback(state);
-        return {
-          approvedByAsk: adjusted.approvedByAsk,
-          deniedReason: adjusted.deniedReason,
-        };
-      },
+      resolveTimedOut: applyTimedOutAllowlistFallback,
       requiresExplicitApproval: requiresInlineEvalApproval,
       requiresAutoReviewHumanApproval:
         autoReviewRequiresHumanApproval ||
@@ -1199,33 +1139,21 @@ export async function processGatewayAllowlist(
       sentApproverDms,
       unavailableReason,
     } = approvalRoute;
-    emitGatewayExecApprovalSecurityEvent({
+    emitApprovalEvent({
       action: "exec.approval.requested",
       outcome: "success",
       severity: "low",
-      agentId: params.agentId,
-      hostSecurity,
-      hostAsk,
-      host: "gateway",
-      segmentCount: allowlistEval.segments.length,
-      trigger: params.trigger,
     });
     if (approvalRoute.kind === "inline") {
       const strictInlineEvalDecision = approvalRoute.state;
 
       if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
         const inlineDeniedReason = strictInlineEvalDecision.deniedReason ?? "approval-required";
-        emitGatewayExecApprovalSecurityEvent({
+        emitApprovalEvent({
           action: "exec.approval.denied",
           outcome: "denied",
           severity: "medium",
-          agentId: params.agentId,
           reason: inlineDeniedReason,
-          hostSecurity,
-          hostAsk,
-          host: "gateway",
-          segmentCount: allowlistEval.segments.length,
-          trigger: params.trigger,
           decision: preResolvedDecision,
         });
         throw new Error(
@@ -1255,16 +1183,10 @@ export async function processGatewayAllowlist(
         };
       }
 
-      emitGatewayExecApprovalSecurityEvent({
+      emitApprovalEvent({
         action: "exec.approval.approved",
         outcome: "success",
         severity: "medium",
-        agentId: params.agentId,
-        hostSecurity,
-        hostAsk,
-        host: "gateway",
-        segmentCount: allowlistEval.segments.length,
-        trigger: params.trigger,
         decision: null,
       });
       await commitExecutionAuthorization({
@@ -1293,13 +1215,7 @@ export async function processGatewayAllowlist(
         preResolvedDecision,
         signal: params.signal,
         askFallback,
-        resolveTimedOut: (state) => {
-          const adjusted = applyTimedOutAllowlistFallback(state);
-          return {
-            approvedByAsk: adjusted.approvedByAsk,
-            deniedReason: adjusted.deniedReason,
-          };
-        },
+        resolveTimedOut: applyTimedOutAllowlistFallback,
         requiresExplicitApproval: requiresInlineEvalApproval,
         requiresAutoReviewHumanApproval:
           autoReviewRequiresHumanApproval ||
@@ -1317,17 +1233,11 @@ export async function processGatewayAllowlist(
       }
       if (approvalOutcome.kind === "request-failed") {
         await onFailure();
-        emitGatewayExecApprovalSecurityEvent({
+        emitApprovalEvent({
           action: "exec.approval.denied",
           outcome: "error",
           severity: "high",
-          agentId: params.agentId,
           reason: "approval-request-failed",
-          hostSecurity,
-          hostAsk,
-          host: "gateway",
-          segmentCount: allowlistEval.segments.length,
-          trigger: params.trigger,
         });
         return {
           deniedReason: "approval-request-failed",
@@ -1344,15 +1254,7 @@ export async function processGatewayAllowlist(
       const { approvedByAsk } = resolvedDecision;
       let { deniedReason } = resolvedDecision;
 
-      if (
-        !approvedByAsk &&
-        hasGatewayAllowlistMiss({
-          hostSecurity,
-          analysisOk,
-          allowlistSatisfied,
-          durableApprovalSatisfied,
-        })
-      ) {
+      if (!approvedByAsk && hasAllowlistMiss) {
         deniedReason = deniedReason ?? "allowlist-miss";
       }
 
@@ -1367,17 +1269,11 @@ export async function processGatewayAllowlist(
         }
       }
 
-      emitGatewayExecApprovalSecurityEvent({
+      emitApprovalEvent({
         action: deniedReason ? "exec.approval.denied" : "exec.approval.approved",
         outcome: deniedReason ? "denied" : "success",
         severity: "medium",
-        agentId: params.agentId,
         reason: deniedReason ?? undefined,
-        hostSecurity,
-        hostAsk,
-        host: "gateway",
-        segmentCount: allowlistEval.segments.length,
-        trigger: params.trigger,
         decision,
       });
       return {
@@ -1477,17 +1373,11 @@ export async function processGatewayAllowlist(
       direct: params.approvalFollowupMode === "direct",
     });
     const denyApprovalStateWriteFailure = async () => {
-      emitGatewayExecApprovalSecurityEvent({
+      emitApprovalEvent({
         action: "exec.approval.denied",
         outcome: "error",
         severity: "high",
-        agentId: params.agentId,
         reason: "approval-state-write-failed",
-        hostSecurity,
-        hostAsk,
-        host: "gateway",
-        segmentCount: allowlistEval.segments.length,
-        trigger: params.trigger,
       });
       await sendExecApprovalFollowupResult(
         followupTarget,
@@ -1618,10 +1508,7 @@ export async function processGatewayAllowlist(
           return { status: "started" as const, run };
         }, "exec-host:approval");
       } catch (error) {
-        if (
-          error instanceof GatewayDrainingError ||
-          (error instanceof Error && error.message === "gateway is draining for restart")
-        ) {
+        if (error instanceof GatewayDrainingError) {
           await sendExecApprovalFollowupResult(
             followupTarget,
             `Exec denied (gateway id=${approvalId}, gateway-draining): ${params.command}`,
@@ -1703,14 +1590,7 @@ export async function processGatewayAllowlist(
     };
   }
 
-  if (
-    hasGatewayAllowlistMiss({
-      hostSecurity,
-      analysisOk,
-      allowlistSatisfied,
-      durableApprovalSatisfied,
-    })
-  ) {
+  if (hasAllowlistMiss) {
     throw new Error("exec denied: allowlist miss");
   }
 

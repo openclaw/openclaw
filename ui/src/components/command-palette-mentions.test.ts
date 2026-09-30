@@ -176,6 +176,8 @@ describe("command palette people mentions", () => {
     const f = await mount();
     await f.search("  🙂 @");
     expect(f.input.getAttribute("aria-controls")).toBe(f.menu()?.id);
+    expect(f.input.getAttribute("aria-haspopup")).toBe("listbox");
+    expect(f.input.hasAttribute("aria-expanded")).toBe(false);
     const active = f.menu()?.querySelector('[role="option"][aria-selected="true"]');
     expect(f.input.getAttribute("aria-activedescendant")).toBe(active?.id);
     await f.key("ArrowDown");

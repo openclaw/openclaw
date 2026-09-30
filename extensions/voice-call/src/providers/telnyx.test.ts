@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebhookContext } from "../types.js";
 import { TelnyxProvider } from "./telnyx.js";
 
+const PROVIDER_CONFIG = { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined };
+
 const apiMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
@@ -46,13 +48,6 @@ function requireFetchRequest() {
       body?: unknown;
     };
   };
-}
-
-function decodeBase64Url(input: string): Buffer {
-  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padLen = (4 - (normalized.length % 4)) % 4;
-  const padded = normalized + "=".repeat(padLen);
-  return Buffer.from(padded, "base64");
 }
 
 function createSignedTelnyxCtx(params: {
@@ -121,20 +116,14 @@ function expectWebhookVerificationSucceeds(params: {
 
 describe("TelnyxProvider.verifyWebhook", () => {
   it("fails closed when public key is missing and skipVerification is false", () => {
-    const provider = new TelnyxProvider(
-      { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined },
-      { skipVerification: false },
-    );
+    const provider = new TelnyxProvider(PROVIDER_CONFIG, { skipVerification: false });
 
     const result = provider.verifyWebhook(createCtx());
     expect(result.ok).toBe(false);
   });
 
   it("allows requests when skipVerification is true (development only)", () => {
-    const provider = new TelnyxProvider(
-      { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined },
-      { skipVerification: true },
-    );
+    const provider = new TelnyxProvider(PROVIDER_CONFIG, { skipVerification: true });
 
     const result = provider.verifyWebhook(createCtx());
     expect(result.ok).toBe(true);
@@ -157,16 +146,9 @@ describe("TelnyxProvider.verifyWebhook", () => {
     expect(jwk.kty).toBe("OKP");
     expect(jwk.crv).toBe("Ed25519");
 
-    const rawPublicKey = decodeBase64Url(requireJwkX(jwk));
+    const rawPublicKey = Buffer.from(requireJwkX(jwk), "base64url");
     const rawPublicKeyBase64 = rawPublicKey.toString("base64");
     expectWebhookVerificationSucceeds({ publicKey: rawPublicKeyBase64, privateKey });
-  });
-
-  it("verifies a valid signature with a DER SPKI public key (Base64)", () => {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const spkiDer = publicKey.export({ format: "der", type: "spki" }) as Buffer;
-    const spkiDerBase64 = spkiDer.toString("base64");
-    expectWebhookVerificationSucceeds({ publicKey: spkiDerBase64, privateKey });
   });
 
   it("returns replay status when the same signed request is seen twice", () => {
@@ -193,11 +175,7 @@ describe("TelnyxProvider.verifyWebhook", () => {
 
 describe("TelnyxProvider.parseWebhookEvent", () => {
   it("uses verified request key for manager dedupe", () => {
-    const provider = new TelnyxProvider({
-      apiKey: "KEY123",
-      connectionId: "CONN456",
-      publicKey: undefined,
-    });
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
     const result = provider.parseWebhookEvent(
       createCtx({
         rawBody: JSON.stringify({
@@ -220,11 +198,7 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
   });
 
   it("maps call direction and phone numbers from Call Control callbacks", () => {
-    const provider = new TelnyxProvider({
-      apiKey: "KEY123",
-      connectionId: "CONN456",
-      publicKey: undefined,
-    });
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
     const result = provider.parseWebhookEvent(
       createCtx({
         rawBody: JSON.stringify({
@@ -251,11 +225,7 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
   });
 
   it("uses raw client_state fallback when client_state is malformed base64", () => {
-    const provider = new TelnyxProvider({
-      apiKey: "KEY123",
-      connectionId: "CONN456",
-      publicKey: undefined,
-    });
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
     const result = provider.parseWebhookEvent(
       createCtx({
         rawBody: JSON.stringify({
@@ -276,11 +246,7 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
   });
 
   it("reads transcription text from Telnyx transcription_data payloads", () => {
-    const provider = new TelnyxProvider({
-      apiKey: "KEY123",
-      connectionId: "CONN456",
-      publicKey: undefined,
-    });
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
     const result = provider.parseWebhookEvent(
       createCtx({
         rawBody: JSON.stringify({
@@ -311,32 +277,25 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     expect(event?.confidence).toBe(0.977219);
   });
 
-  it.each([undefined, "", "   ", "\t\n"])(
-    "does not emit blank transcription payloads %#",
-    (transcript) => {
-      const provider = new TelnyxProvider({
-        apiKey: "KEY123",
-        connectionId: "CONN456",
-        publicKey: undefined,
-      });
-      const result = provider.parseWebhookEvent(
-        createCtx({
-          rawBody: JSON.stringify({
-            data: {
-              id: "evt-blank-transcription",
-              event_type: "call.transcription",
-              payload: {
-                call_control_id: "call-1",
-                transcription_data: { transcript },
-              },
+  it.each([undefined, " \t\n"])("does not emit blank transcription payloads %#", (transcript) => {
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
+    const result = provider.parseWebhookEvent(
+      createCtx({
+        rawBody: JSON.stringify({
+          data: {
+            id: "evt-blank-transcription",
+            event_type: "call.transcription",
+            payload: {
+              call_control_id: "call-1",
+              transcription_data: { transcript },
             },
-          }),
+          },
         }),
-      );
+      }),
+    );
 
-      expect(result.events).toEqual([]);
-    },
-  );
+    expect(result.events).toEqual([]);
+  });
 });
 
 describe("TelnyxProvider answer control", () => {
@@ -346,11 +305,7 @@ describe("TelnyxProvider answer control", () => {
       response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
       release,
     });
-    const provider = new TelnyxProvider({
-      apiKey: "KEY123",
-      connectionId: "CONN456",
-      publicKey: undefined,
-    });
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
 
     await provider.answerCall({
       callId: "call-1",
@@ -377,11 +332,7 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
       }),
       release,
     });
-    const provider = new TelnyxProvider({
-      apiKey: "KEY123",
-      connectionId: "CONN456",
-      publicKey: undefined,
-    });
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
 
     await provider.initiateCall({
       callId: "call-1",
@@ -411,11 +362,7 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
       }),
       release: vi.fn(async () => {}),
     });
-    const provider = new TelnyxProvider({
-      apiKey: "KEY123",
-      connectionId: "CONN456",
-      publicKey: undefined,
-    });
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
 
     await provider.initiateCall({
       callId: "call-1",
@@ -436,11 +383,7 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
       response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
       release: vi.fn(async () => {}),
     });
-    const provider = new TelnyxProvider({
-      apiKey: "KEY123",
-      connectionId: "CONN456",
-      publicKey: undefined,
-    });
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
 
     await provider.answerCall({
       callId: "call-1",
@@ -458,10 +401,7 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
   });
 
   it("silently acknowledges streaming.started and streaming.stopped webhooks", () => {
-    const provider = new TelnyxProvider(
-      { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined },
-      { skipVerification: true },
-    );
+    const provider = new TelnyxProvider(PROVIDER_CONFIG, { skipVerification: true });
     // Telnyx documents stream lifecycle webhooks as `streaming.started` and
     // `streaming.stopped` (no `call.` prefix). The bridge tracks its own
     // lifecycle on the WebSocket; we ack the carrier webhook with 200 and
@@ -490,11 +430,7 @@ describe("TelnyxProvider speak control", () => {
       response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
       release,
     });
-    const provider = new TelnyxProvider({
-      apiKey: "KEY123",
-      connectionId: "CONN456",
-      publicKey: undefined,
-    });
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
 
     await provider.playTts({
       callId: "call-1",

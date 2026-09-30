@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -8,8 +9,13 @@ import { resolveGatewayPort } from "../../src/config/paths.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveGatewayUrlOverride } from "../../src/gateway/client-bootstrap.js";
 import { reserveGatewayTestListener } from "../../src/gateway/test-helpers.listener.js";
+import { probeTcpListener } from "../../src/infra/ports-probe.js";
 import { captureFullEnv, withEnvAsync } from "../../src/test-utils/env.js";
-import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
+import {
+  acquireTestPortBlock,
+  reserveTestPortListener,
+  type TestPortClaim,
+} from "../../src/test-utils/port-claims.js";
 import * as testPorts from "../../src/test-utils/ports.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
@@ -17,6 +23,79 @@ import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 describe("createOpenClawTestInstance acquisition", () => {
+  it("keeps an absent Gateway unreachable while retaining its port claims", async () => {
+    const instance = await createOpenClawTestInstance({
+      name: "absent-gateway",
+      reserveIdlePort: false,
+    });
+    await runQaGatewayFixture(
+      async () => {
+        await expect(probeTcpListener(instance.port, "127.0.0.1")).resolves.toBe("free");
+        await instance.stopGateway();
+        await expect(probeTcpListener(instance.port, "127.0.0.1")).resolves.toBe("free");
+        for (const port of [instance.port, instance.port + 1]) {
+          await expect(acquireTestPortBlock({ port, offsets: [0] })).rejects.toMatchObject({
+            code: "EADDRINUSE",
+          });
+        }
+      },
+      () => instance.cleanup(),
+    );
+    const released = await acquireTestPortBlock({ port: instance.port, offsets: [0, 1] });
+    await released.release();
+  });
+
+  it.each([
+    { platform: "win32", explicit: false, advances: true },
+    { platform: "win32", explicit: true, advances: false },
+    { platform: "darwin", explicit: false, advances: false },
+  ] as const)(
+    "preserves reservation policy after $platform EACCES (explicit=$explicit)",
+    async ({ platform, explicit, advances }) => {
+      const port = await testPorts.getDeterministicFreePortBlock({ offsets: [0] });
+      const denied = Object.assign(new Error("candidate listener denied"), { code: "EACCES" });
+      const platformSpy = vi.spyOn(os, "platform").mockReturnValue(platform);
+      syncBuiltinESMExports();
+      const pickerSpy = vi
+        .spyOn(testPorts, "getDeterministicFreePortBlock")
+        .mockResolvedValueOnce(port);
+      let first = true;
+      let reservation: Awaited<ReturnType<typeof reserveTestPortListener>> | undefined;
+      try {
+        const pending = reserveTestPortListener({
+          offsets: [0],
+          ...(explicit ? { port } : {}),
+          createListener: () => {
+            const listener = net.createServer();
+            if (first) {
+              first = false;
+              vi.spyOn(listener, "listen").mockImplementationOnce(() => {
+                queueMicrotask(() => listener.emit("error", denied));
+                return listener;
+              });
+            }
+            return listener;
+          },
+        });
+        if (advances) {
+          reservation = await pending;
+          expect(reservation.claim.port).not.toBe(port);
+          expect(reservation.listener.listening).toBe(true);
+        } else {
+          await expect(pending).rejects.toBe(denied);
+        }
+        const released = await acquireTestPortBlock({ port, offsets: [0] });
+        await released.release();
+      } finally {
+        platformSpy.mockRestore();
+        syncBuiltinESMExports();
+        pickerSpy.mockRestore();
+        await reservation?.releaseListener();
+        await reservation?.claim.release();
+      }
+    },
+  );
+
   it.each([
     {
       name: "child-process",
@@ -39,8 +118,8 @@ describe("createOpenClawTestInstance acquisition", () => {
     async (adapter) => {
       const competitor = net.createServer((socket) => socket.destroy());
       const exclusiveProbe = net.createServer((socket) => socket.destroy());
-      const allocate = testPorts.getDeterministicFreePortBlock;
-      let competitorPort: number | undefined;
+      let competitorClaim: TestPortClaim | undefined;
+      let restoreAllocation: (() => void) | undefined;
       let reserved: { port: number; cleanup: () => Promise<void> } | undefined;
       const listen = (server: net.Server, port: number) =>
         new Promise<void>((resolve, reject) => {
@@ -57,21 +136,23 @@ describe("createOpenClawTestInstance acquisition", () => {
           });
         }
       };
-      const allocationSpy = vi
-        .spyOn(testPorts, "getDeterministicFreePortBlock")
-        .mockImplementationOnce(async (params) => {
-          competitorPort = await allocate(params);
-          // This listener does not borrow a file claim; the real probe has already closed.
-          await listen(competitor, competitorPort);
-          return competitorPort;
-        });
       await runQaGatewayFixture(
         async () => {
+          const competing = await reserveTestPortListener({
+            offsets: adapter.offsets,
+            createListener: () => competitor,
+          });
+          competitorClaim = competing.claim;
+          const competitorPort = competitorClaim.port;
+          // Bind under the claim, then retain only the socket to model an unclaimed listener.
+          await competitorClaim.release();
+          competitorClaim = undefined;
+          const allocationSpy = vi
+            .spyOn(testPorts, "getDeterministicFreePortBlock")
+            .mockResolvedValueOnce(competitorPort);
+          restoreAllocation = () => allocationSpy.mockRestore();
           reserved = await adapter.acquire();
           expect(competitor.listening).toBe(true);
-          if (competitorPort === undefined) {
-            throw new Error("real allocator did not return a competitor port");
-          }
           expect(reserved.port).not.toBe(competitorPort);
           await expect(listen(exclusiveProbe, reserved.port)).rejects.toMatchObject({
             code: "EADDRINUSE",
@@ -86,10 +167,11 @@ describe("createOpenClawTestInstance acquisition", () => {
             code: "EADDRINUSE",
           });
         },
-        () => allocationSpy.mockRestore(),
+        () => restoreAllocation?.(),
         () => close(exclusiveProbe),
         () => reserved?.cleanup(),
         () => close(competitor),
+        () => competitorClaim?.release(),
         () => {
           expect(competitor.listening).toBe(false);
           expect(competitor.address()).toBeNull();
@@ -384,15 +466,9 @@ const cases: Array<{
   explicit?: EndpointEnv;
   expected: { port: number; override: { url?: string; source?: "env" } };
 }> = [
-  { name: "clean environment", inherited: {}, expected: { port, override: {} } },
   {
-    name: "inherited port",
-    inherited: { OPENCLAW_GATEWAY_PORT: "19702" },
-    expected: { port, override: {} },
-  },
-  {
-    name: "inherited URL",
-    inherited: { OPENCLAW_GATEWAY_URL: inheritedUrl },
+    name: "inherited endpoints",
+    inherited: { OPENCLAW_GATEWAY_PORT: "19702", OPENCLAW_GATEWAY_URL: inheritedUrl },
     expected: { port, override: {} },
   },
   {

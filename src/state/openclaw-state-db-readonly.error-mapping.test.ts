@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OwnedWorkerTask } from "../infra/worker-task-pool.types.js";
+import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
+import type { OwnedWorkerTask, RetainedWorkerTask } from "../infra/worker-task-pool.types.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -15,8 +16,19 @@ import type {
   OpenClawStateReadPhase,
   OpenClawStateReadReply,
 } from "./openclaw-state-read.types.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+
+// These awaited fixtures observe Promise settlement; they do not prove blocked-host progress.
+function observeAsyncFixture<T>(run: () => Promise<T>): RetainedOperation<T> {
+  const completion = createRetainedOperation<T>(() => undefined);
+  try {
+    void run().then(completion.resolve, completion.reject);
+  } catch (error) {
+    completion.reject(error);
+  }
+  return completion.operation;
+}
 
 const mock = vi.hoisted(() => ({
   run: vi.fn<() => Promise<OpenClawStateReadReply>>(),
@@ -28,15 +40,15 @@ vi.mock("./openclaw-state-worker-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-worker-context.js")>();
   return {
     ...actual,
-    captureOpenClawStateWorkerContext: vi.fn(actual.captureOpenClawStateWorkerContext),
+    captureOpenClawStateReadWorkerContext: vi.fn(actual.captureOpenClawStateReadWorkerContext),
   };
 });
 vi.mock("../infra/worker-task-pool.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/worker-task-pool.js")>()),
   createOwnedWorkerTaskPool: () => ({
-    runTask: (): OwnedWorkerTask<OpenClawStateReadReply> => ({
-      result: mock.run(),
-      close: mock.close,
+    startTask: (): RetainedWorkerTask<OpenClawStateReadReply> => ({
+      ...observeAsyncFixture(mock.run),
+      release: (options) => observeAsyncFixture(() => mock.close(options)),
     }),
     close: mock.closePool,
     closeResources: mock.closeResources,
@@ -80,7 +92,7 @@ it.each(["retired", "different-source"] as const)(
   "maps %s captured authority before dispatching a read",
   async (kind) => {
     const options = source();
-    const context = captureOpenClawStateWorkerContext(options);
+    const context = captureOpenClawStateReadWorkerContext(options);
     if (kind === "retired") {
       await closeOpenClawStateDatabaseByPathAsync(options.path);
     }
@@ -110,7 +122,7 @@ it.each(["retired", "different-source"] as const)(
 it("maps synchronous read admission refusal once before read work", () => {
   const options = source();
   const original = new Error("original read admission refusal");
-  vi.mocked(captureOpenClawStateWorkerContext).mockImplementationOnce(() => {
+  vi.mocked(captureOpenClawStateReadWorkerContext).mockImplementationOnce(() => {
     throw original;
   });
   const { mapped, mapError } = mapper();
@@ -129,9 +141,9 @@ it.each(["read admission", "schema scope"] as const)(
     const context =
       kind === "schema scope"
         ? withExistingOpenClawStateSchema({ path: options.path }, () =>
-            captureOpenClawStateWorkerContext(options),
+            captureOpenClawStateReadWorkerContext(options),
           )
-        : captureOpenClawStateWorkerContext(options);
+        : captureOpenClawStateReadWorkerContext(options);
     if (kind === "read admission") {
       await closeOpenClawStateDatabaseByPathAsync(options.path);
     }

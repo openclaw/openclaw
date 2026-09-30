@@ -1,12 +1,13 @@
 import { performance } from "node:perf_hooks";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { resolveSessionKeyBySessionId } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { projectSqliteSessionParticipants } from "../config/sessions/session-accessor.sqlite-participant-projection.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -15,10 +16,12 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
+import type { prepareSessionRowScopes } from "./session-row-scope.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle, type SessionChildLink } from "./session-utils-core.js";
@@ -28,6 +31,52 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
 
+/** Exact descriptions use the projection's custody and materialization owners in one frame. */
+export function createSessionRowDescriptionReader(owner: {
+  runInOwner: <T>(consume: () => T) => T;
+  prepare: () => boolean;
+  lookup: (query: records.Lookup) => records.Row | undefined;
+  dirty: ReadonlySet<string>;
+  refresh: (ids: string[]) => void;
+  describeArchived: (row: records.Row | undefined) => records.Row | undefined;
+  isCurrent: (row: records.Row) => boolean;
+  materializePrivate: (
+    row: records.Row,
+    repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null,
+  ) => void;
+  preparePresentation: (row: records.MaterializedRow) => void;
+}) {
+  return (
+    query: records.Lookup,
+    captured?: records.Row,
+    repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null,
+  ) =>
+    owner.runInOwner(() => {
+      if (!owner.prepare()) {
+        return undefined;
+      }
+      let row = owner.lookup(query);
+      if (row && isIncognitoSessionKey(row.key)) {
+        owner.materializePrivate(row, repositoryWorkspace);
+      } else {
+        if (row && owner.dirty.has(records.identity(row))) {
+          // Keyed reads refresh only their owner; unrelated bulk work never gates a response.
+          owner.refresh([records.identity(row)]);
+          row = owner.lookup(query);
+        }
+        row = owner.describeArchived(row);
+      }
+      if (captured && !owner.isCurrent(captured)) {
+        return undefined;
+      }
+      if (!records.ready(row)) {
+        return undefined;
+      }
+      owner.preparePresentation(row);
+      return row;
+    });
+}
+
 /** One synchronous refresh slice shares agent policy; each later slice starts fresh. */
 function createSessionRowMaterializationBatch(): typeof readResidentSessionRow {
   const activitySummaryEnabledByAgent = new Map<string, boolean>();
@@ -35,55 +84,116 @@ function createSessionRowMaterializationBatch(): typeof readResidentSessionRow {
 }
 
 /** Keyed and worker-prepared refreshes share the same bounded materialization slice. */
-export function refreshSessionRowMaterializations(owner: {
-  ids: readonly string[];
-  prepared?: ReadonlyMap<string, SessionRowDatabaseFacts>;
+export function createSessionRowMaterializer(owner: {
+  isActive: () => boolean;
   rows: ReadonlyMap<string, records.Row>;
   dirty: Set<string>;
   prepare: () => records.Inputs["cfg"];
   revision: () => number;
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
+  readEntry: (row: records.Row) => records.Row["storedEntry"];
   materialize: (
     row: records.Row,
     agentIds: Set<string>,
     read: typeof readResidentSessionRow,
-    facts?: SessionRowDatabaseFacts,
+    facts?: records.PreparedSessionRowDatabaseFacts,
   ) => boolean;
   forgetBackfill: (id: string) => void;
+  retainArchived: (row: records.MaterializedRow) => void;
 }) {
-  const started = performance.now();
-  const cfg = owner.prepare();
-  const configuredAgentIds = new Set(listAgentIds(cfg));
-  const readRow = createSessionRowMaterializationBatch();
-  for (const [offset, id] of owner.ids.entries()) {
-    if (offset > 0 && performance.now() - started >= 12) {
-      break;
+  function refresh(ids: readonly string[], accepted = false) {
+    if (!owner.isActive()) {
+      return;
     }
-    const current = owner.rows.get(id),
-      revision = owner.revision();
-    const databaseFacts = owner.prepared?.get(id);
-    const row =
-      current &&
-      owner.acquireEntry(
-        databaseFacts ? { ...current, hasBoard: databaseFacts.hasBoard } : current,
-        owner.prepared ? databaseFacts?.entry : readSessionRowEntry(current),
-      );
-    if (row && isColdArchivedSessionRow(row)) {
-      owner.dirty.delete(id);
-      owner.forgetBackfill(id);
-      continue;
-    }
-    if (
-      row &&
-      owner.materialize(row, configuredAgentIds, readRow, databaseFacts) &&
-      owner.revision() === revision
-    ) {
-      owner.dirty.delete(id);
-    }
-    if (owner.revision() !== revision) {
-      break;
-    }
+    const started = performance.now();
+    const cfg = owner.prepare();
+    withAgentRosterFactsBatch(cfg, () => {
+      const configuredAgentIds = new Set(listAgentIds(cfg));
+      const readRow = createSessionRowMaterializationBatch();
+      for (const [offset, id] of ids.entries()) {
+        if (offset > 0 && performance.now() - started >= 12) {
+          break;
+        }
+        const current = owner.rows.get(id),
+          revision = owner.revision();
+        const databaseFacts = accepted ? current?.pendingDatabaseFacts : undefined;
+        if (accepted && !databaseFacts) {
+          continue;
+        }
+        const row =
+          current && (accepted ? current : owner.acquireEntry(current, owner.readEntry(current)));
+        if (row && isColdArchivedSessionRow(row) && !accepted) {
+          owner.dirty.delete(id);
+          owner.forgetBackfill(id);
+          continue;
+        }
+        if (
+          row &&
+          owner.materialize(row, configuredAgentIds, readRow, databaseFacts) &&
+          owner.revision() === revision
+        ) {
+          row.pendingDatabaseFacts = undefined;
+          owner.dirty.delete(id);
+          // A bulk slice may finish an exact read's accepted archive row. Keep its
+          // residency under the archive owner's pins and bounded cache either way.
+          if (accepted && records.ready(row) && row.entry.archivedAt !== undefined) {
+            owner.retainArchived(row);
+          }
+        }
+        if (owner.revision() !== revision) {
+          break;
+        }
+      }
+    });
   }
+  return {
+    refresh,
+    refreshPending(this: void, ids: readonly string[]) {
+      const pending = ids.filter((id) => owner.rows.get(id)?.pendingDatabaseFacts);
+      if (pending.length === 0) {
+        return false;
+      }
+      refresh(pending, true);
+      return true;
+    },
+    accept(
+      ids: readonly string[],
+      facts: ReadonlyMap<string, records.PreparedSessionRowDatabaseFacts>,
+      materializeArchived = false,
+    ) {
+      if (!owner.isActive()) {
+        return;
+      }
+      const cfg = owner.prepare();
+      const revision = owner.revision();
+      withAgentRosterFactsBatch(cfg, () => {
+        for (const id of ids) {
+          const current = owner.rows.get(id);
+          const databaseFacts = facts.get(id);
+          const row =
+            current &&
+            owner.acquireEntry(
+              databaseFacts ? { ...current, hasBoard: databaseFacts.hasBoard } : current,
+              databaseFacts?.entry,
+            );
+          if (owner.revision() !== revision) {
+            break;
+          }
+          if (row && databaseFacts) {
+            row.preparedAcpMeta = databaseFacts.acpMeta;
+          }
+          if (row && isColdArchivedSessionRow(row) && !materializeArchived) {
+            owner.dirty.delete(id);
+            owner.forgetBackfill(id);
+          } else if (row) {
+            row.pendingDatabaseFacts = databaseFacts;
+            row.retainedDatabaseFacts = databaseFacts;
+          }
+        }
+      });
+      refresh(ids, true);
+    },
+  };
 }
 
 /** Resident rows consume committed metadata; optional transcript work has a separate budget. */
@@ -99,7 +209,8 @@ export function readResidentSessionRow(
     placementFactsReader?: Parameters<typeof readSessionRowFacts>[0]["placementFactsReader"];
     links: SessionChildLink[];
     readSourceEntry: (key: string) => records.Row["storedEntry"];
-    databaseFacts?: SessionRowDatabaseFacts;
+    databaseFacts?: records.PreparedSessionRowDatabaseFacts;
+    repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   },
   activitySummaryEnabledByAgent?: Map<string, boolean>,
 ) {
@@ -117,6 +228,10 @@ export function readResidentSessionRow(
   const { inputs, presentation } = readSessionRowInputs({
     ...row,
     cfg,
+    preparedAcpMeta: params.databaseFacts ? params.databaseFacts.acpMeta : row.preparedAcpMeta,
+    preparedRepositoryWorkspace: params.databaseFacts
+      ? params.databaseFacts.repositoryWorkspace
+      : params.repositoryWorkspace,
     configuredAgentIds: params.configuredAgentIds,
     store: source?.store ?? {},
     storePath: row.storeTarget.storePath,
@@ -167,15 +282,17 @@ export function readResidentSessionRow(
   });
   return {
     materialized,
+    preparedAcpMeta: materialized.source.thinkingProjection.acpMeta ?? null,
     fallbackModel: presentation.activeModel,
     facts,
     hasBoard: facts.hasBoard,
-    membership: new Set(
-      params.databaseFacts?.memberIdentityIds ??
-        listSessionMembers({ ...row.storeTarget, sessionKey: row.key }).map(
-          (member) => member.identityId,
-        ),
-    ),
+    membership: source
+      ? new Set(
+          listSessionMembers({ ...row.storeTarget, sessionKey: row.key }).map(
+            (member) => member.identityId,
+          ),
+        )
+      : row.membership,
   };
 }
 
@@ -186,9 +303,11 @@ export function readSessionRowEntry(row: records.Row) {
         row.generation = readOpenClawAgentDatabaseIdentity(database).identity;
       }
       const cache = readCommittedSessionEntryCache(database.db);
-      return cache
-        ? cache.get(row.key)
-        : readExactSessionEntryRow(database, row.key, "list")?.entry;
+      if (cache) {
+        const entry = cache.get(row.key);
+        return entry ? projectSqliteSessionParticipants(database.db, row.key, entry) : undefined;
+      }
+      return readExactSessionEntryRow(database, row.key, "list")?.entry;
     },
     { agentId: row.storeTarget.agentId, path: row.storeTarget.storePath },
   );
@@ -221,23 +340,61 @@ function readIncognitoSessionRow(params: {
 
 /** Resident identities use indexes; private identities remain exact process-local reads. */
 export function findSessionRowById(
-  query: { sessionId: string; agentId?: string; storePath?: string },
+  query: { sessionId: string; agentId?: string; storePath?: string; federated?: boolean },
   owner: {
     disposed: boolean;
     lookup: (query: records.Lookup) => records.Row | undefined;
     matching: (query: records.Query, kind?: string) => records.Row[];
+    scope: ReturnType<typeof prepareSessionRowScopes>;
   },
-) {
-  if (
-    !query.agentId ||
-    !query.storePath ||
-    !isIncognitoOpenClawAgentSqlitePath(query.storePath, { agentId: query.agentId })
-  ) {
-    return owner.matching({ ...query, key: query.sessionId }, "id");
+): records.Row[] {
+  if (owner.disposed) {
+    return [];
   }
-  const key = !owner.disposed && resolveSessionKeyBySessionId(query);
-  const row = key ? owner.lookup({ ...query, agentId: query.agentId, key }) : undefined;
-  return row?.entry?.sessionId === query.sessionId ? [row] : [];
+  if (
+    query.agentId &&
+    query.storePath &&
+    isIncognitoOpenClawAgentSqlitePath(query.storePath, { agentId: query.agentId })
+  ) {
+    const key = resolveSessionKeyBySessionId(query);
+    if (!key || (query.federated && isInternalSessionEffectsKey(key))) {
+      return [];
+    }
+    const row = owner.lookup({ ...query, agentId: query.agentId, key });
+    return row?.entry?.sessionId === query.sessionId &&
+      (!query.federated || row.entry.incognito === true)
+      ? [row]
+      : [];
+  }
+  const candidates = owner.matching({ ...query, key: query.sessionId }, "id");
+  if (!query.federated) {
+    return candidates;
+  }
+  // Select each key's physical winner before matching its ID. A shadowed row
+  // must not resurrect an old run mapping that the combined store would hide.
+  const selected = candidates.length
+    ? [...new Set(candidates.map((row) => row.key))].flatMap((key) => {
+        const paths = owner.scope.select(query).paths;
+        const row = records.first(
+          owner
+            .matching({ ...query, key })
+            .filter((candidate) => paths.has(candidate.storeTarget.storePath)),
+          paths.keys(),
+        );
+        return row?.entry?.sessionId === query.sessionId ? [row] : [];
+      })
+    : [];
+  // Process-held private stores keep their existing exact native reader;
+  // private rows never enter the resident index or a new cache.
+  for (const store of listOpenIncognitoAgentDatabases()) {
+    if (
+      (!query.agentId || query.agentId === store.agentId) &&
+      (!query.storePath || query.storePath === store.storePath)
+    ) {
+      selected.push(...findSessionRowById({ ...query, ...store }, owner));
+    }
+  }
+  return selected;
 }
 
 export function lookupSessionRow(

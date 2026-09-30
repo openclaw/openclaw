@@ -25,15 +25,24 @@ export function createStubSessionHarness(): {
   session: EmbeddedAgentSession;
   emit: (evt: unknown) => void;
 } {
-  let handler: ((evt: unknown) => void) | undefined;
+  let handlers: Array<(evt: unknown) => void> = [];
   const session = {
     subscribe: (fn: (evt: unknown) => void) => {
-      handler = fn;
-      return () => {};
+      handlers = [...handlers, fn];
+      return () => {
+        handlers = handlers.filter((handler) => handler !== fn);
+      };
     },
   } as unknown as EmbeddedAgentSession;
 
-  return { session, emit: (evt: unknown) => handler?.(evt) };
+  return {
+    session,
+    emit: (evt: unknown) => {
+      for (const handler of handlers) {
+        handler(evt);
+      }
+    },
+  };
 }
 
 export function createSubscribedSessionHarness(

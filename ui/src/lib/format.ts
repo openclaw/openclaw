@@ -3,7 +3,6 @@ import {
   formatCompactTokenCount as formatTokenUnits,
   type RelativeTimeUnit,
 } from "@openclaw/normalization-core";
-// Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { DurationPart } from "../../../src/infra/format-time/format-duration-internal.ts";
@@ -254,13 +253,7 @@ export function formatCost(cost: number | null | undefined, fallback = "$0.00"):
   if (cost === 0) {
     return "$0.00";
   }
-  if (cost < 0.01) {
-    return `$${cost.toFixed(4)}`;
-  }
-  if (cost < 1) {
-    return `$${cost.toFixed(3)}`;
-  }
-  return `$${cost.toFixed(2)}`;
+  return `$${cost.toFixed(cost < 0.01 ? 4 : cost < 1 ? 3 : 2)}`;
 }
 
 // Keep token presentation consistent across UI session and usage surfaces.

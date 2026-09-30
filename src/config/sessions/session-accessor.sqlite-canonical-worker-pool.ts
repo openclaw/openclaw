@@ -133,7 +133,8 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
       }
     },
   });
-  process.on("beforeExit", beforeExit);
+  // Failed exit cleanup retains custody for explicit retries without restarting the event loop.
+  process.once("beforeExit", beforeExit);
   try {
     context.maintenanceScope?.own(execution, "shared-resources", execution.close);
     return await canonicalWorkerPool.run(execution, run);

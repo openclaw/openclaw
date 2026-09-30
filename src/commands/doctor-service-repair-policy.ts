@@ -1,4 +1,3 @@
-/** Doctor policy for native gateway service ownership and repair. */
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
@@ -84,7 +83,6 @@ export function resolveServiceRepairPolicy(
   return isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]) ? "update" : "auto";
 }
 
-/** Returns true when Doctor service mutations must defer to an external supervisor. */
 export function isServiceRepairExternallyManaged(
   policy: ServiceRepairPolicy = resolveServiceRepairPolicy(),
 ): boolean {

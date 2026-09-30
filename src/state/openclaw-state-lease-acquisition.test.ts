@@ -1,14 +1,17 @@
 import fs from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import * as backoff from "../infra/backoff.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  resolveStateLifecycleRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
+import { getTrackedWorkerCpuSources } from "../infra/worker-cpu.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
@@ -84,6 +87,43 @@ it.each([false, true])(
   },
 );
 
+it("rebinds the real shared-state lease worker and joins its retained generation", async () => {
+  await withOpenClawTestState({ label: "lease-retained-worker-generation" }, async (state) => {
+    const options = {
+      scope: "core:test",
+      key: "retained-generation",
+      database: { scope: "shared" as const, options: { env: state.env } },
+      leaseMs: 60_000,
+      waitMs: 0,
+    };
+    const initialWorkers = getTrackedWorkerCpuSources().workers.length;
+    await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+    const source = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore);
+    const retainedPath = path.join(
+      path.dirname(resolveOpenClawStateSqlitePath(state.env)),
+      "retained-state-worker.mts",
+    );
+    await fs.promises.writeFile(retainedPath, `export * from ${JSON.stringify(source.href)};\n`);
+    const retained = pathToFileURL(await fs.promises.realpath(retainedPath));
+    const dispatch = vi.spyOn(Worker.prototype, "postMessage");
+    await withRuntimeWorkerGeneration(
+      async (bind) => {
+        bind((url) => (url.href === source.href ? retained : url));
+        await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+        expect(
+          dispatch.mock.calls.some(
+            ([request]) =>
+              isRecord(request) && request.type === "open" && request.moduleUrl === retained.href,
+          ),
+        ).toBe(true);
+      },
+      async () => {},
+    );
+    expect(getTrackedWorkerCpuSources().workers).toHaveLength(initialWorkers);
+    await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+  });
+});
+
 it.each([false, true])(
   "preserves authority refusal before native open (prepare: %s)",
   async (prepareDatabase) => {
@@ -129,8 +169,11 @@ it("preserves the caller's typed admission refusal through lease acquisition", a
     const capture = workerContext.captureOpenClawStateWorkerContext;
     vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockImplementation((options) => {
       const context = capture(options);
-      context.admission.assertCurrent = () => {
-        throw refusal;
+      context.admission = {
+        ...context.admission,
+        assertCurrent() {
+          throw refusal;
+        },
       };
       return context;
     });
@@ -192,7 +235,7 @@ it.each(["maintenance", "generic"] as const)(
   },
 );
 
-it("records unavailable storage when a lifecycle writer prevents observing a held lease", async () => {
+it("records unavailable storage when a native SQLite writer prevents observing a held lease", async () => {
   await withOpenClawTestState({ label: "lease-preparation-contention" }, async (state) => {
     const database = openOpenClawStateDatabase({ env: state.env });
     const identity = { scope: "core:test", key: "preparation-contention", owner: "other-process" };
@@ -200,16 +243,9 @@ it("records unavailable storage when a lifecycle writer prevents observing a hel
       ({ db }) => leaseStore.acquireOpenClawStateLeaseInTransaction(db, identity, 60_000),
       { env: state.env },
     );
-    const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-      databasePath: database.path,
-      runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-      uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-    });
     closeOpenClawStateDatabaseForTest();
-    const writer = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, { busyTimeoutMs: 0 });
-    if (!writer) {
-      throw new Error("independent writer did not acquire its coordinator");
-    }
+    const writer = new DatabaseSync(database.path);
+    writer.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     const run = vi.fn(async () => undefined);
     try {
       await expect(
@@ -226,11 +262,12 @@ it("records unavailable storage when a lifecycle writer prevents observing a hel
         ),
       ).rejects.toMatchObject({
         code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-        outcome: { kind: "store-unavailable", reason: "lifecycle-busy" },
+        outcome: { kind: "store-unavailable", reason: "sqlite-busy" },
       });
       expect(run).not.toHaveBeenCalled();
     } finally {
-      writer.release();
+      writer.exec("ROLLBACK");
+      writer.close();
     }
     expect(
       openOpenClawStateDatabase({ env: state.env })
@@ -357,21 +394,14 @@ it("restores the cached connection timeout after preparation fails during schema
       UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}
       WHERE meta_key = 'primary';
     `);
-    const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-      databasePath: database.path,
-      runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-      uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-    });
     closeOpenClawStateDatabaseForTest();
-    let writer: ReturnType<typeof tryAcquireExclusiveSqliteCoordinator> | undefined;
+    let writer: DatabaseSync | undefined;
     let preparedBusyTimeoutMs: number | undefined;
     const unregister = registerOpenClawStateDatabaseLifecycleListener((event) => {
       if (event.kind === "opened" && event.database.path === database.path) {
         preparedBusyTimeoutMs = readSqliteBusyTimeout(event.database.db);
-        writer = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, { busyTimeoutMs: 0 });
-        if (!writer) {
-          throw new Error("independent writer did not acquire its coordinator");
-        }
+        writer = new DatabaseSync(database.path);
+        writer.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
       }
     });
     const sleep = vi.spyOn(backoff, "sleepWithAbort");
@@ -382,17 +412,23 @@ it("restores the cached connection timeout after preparation fails during schema
         }),
       ).rejects.toMatchObject({
         code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-        outcome: { kind: "store-unavailable", reason: "lifecycle-busy" },
+        outcome: { kind: "store-unavailable", reason: "sqlite-busy" },
       });
       expect(preparedBusyTimeoutMs).toBe(0);
       expect(sleep).not.toHaveBeenCalled();
-      writer?.release();
+      if (writer?.isOpen) {
+        writer.exec("ROLLBACK");
+        writer.close();
+      }
       expect(readSqliteBusyTimeout(openOpenClawStateDatabase({ env: state.env }).db)).toBe(
         OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
       );
     } finally {
       unregister();
-      writer?.release();
+      if (writer?.isOpen) {
+        writer.exec("ROLLBACK");
+        writer.close();
+      }
     }
   });
 });

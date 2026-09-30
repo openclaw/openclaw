@@ -97,7 +97,16 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Gateway and nodes       | Inspect Gateway state or paired target devices                                               | `gateway`, `nodes`                                                                                                  | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                              |
 | Plugin lifecycle        | Inspect, install, enable, disable, remove, or reload plugins                                 | `plugins`                                                                                                           | [Agent plugin management](/plugins/manage-plugins#manage-plugins-from-an-agent-conversation)                                  |
 | Media                   | Analyze, generate, or speak media                                                            | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                           | [Media overview](/tools/media-overview)                                                                                       |
-| Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search_code`, `tool_search`, `tool_describe`                                                  | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                              |
+| Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search`, `tool_describe`, `tool_call`                                                         | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                              |
+
+Session tools and `sessions_spawn` accept `user` (the requester's verified `requester_profile.id`) and
+act with that person's authority. It is required when several people have steered
+the turn. See [Session tools](/concepts/session-tool) and [Sub-agent tool reference](/tools/subagents/tool-reference).
+
+On multi-user Gateways, `personal_instructions` reads and updates
+the authenticated requester’s personal `USER.md` through the Gateway, even when
+the chat uses a project worktree. It is included in the coding and messaging
+profiles; it does not widen general file-tool access. See [User model](/concepts/user-model#personal-user-files-on-a-shared-gateway).
 
 The `edit` tool supports targeted formatting changes, including removing trailing
 spaces or replacing Unicode quotes, dashes, and spaces. These changes are applied
@@ -203,7 +212,7 @@ the current turn:
 ## Related
 
 - [Automation](/automation) for cron, tasks, heartbeat, hooks,
-  standing orders, and Task Flow
+  standing orders, and workflows
 - [Agents](/concepts/agent) for the agent model, sessions, memory, and
   multi-agent coordination
 - [Tools and custom providers](/gateway/config-tools) for the canonical tool

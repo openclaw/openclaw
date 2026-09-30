@@ -6,6 +6,7 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
@@ -15,16 +16,23 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { measureUpdateStateFiles, withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
+  readUpdateCandidatePluginCodeLinks,
+  type UpdateCandidatePluginCodeLink,
+} from "./update-candidate-plugin-code-links.js";
+import { createUpdateStateInspectionDiagnostics } from "./update-candidate-state.diagnostics.js";
+import {
   collectStateDatabasePaths,
   UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import {
   UpdateSnapshotCapacityError,
   type UpdateSnapshotCapacity,
 } from "./update-snapshot-capacity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 type SnapshotSize = { bytes: number; largest: number; pluginBytes: number | null };
 
@@ -230,16 +238,24 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
 }): Promise<{
   stateDir: string;
   pluginPaths: Record<string, string>;
+  pluginCodeLinks: UpdateCandidatePluginCodeLink[];
   snapshotCapacity: UpdateSnapshotCapacity;
+  snapshotDiagnostics: string[];
   cleanupDirectories: string[];
 }> {
   let { capacity } = await measureInitialUpdateSnapshotState(params);
+  params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   let directory = await allocateSnapshotRoot(capacity);
   let selectedRoot = capacity.selection!;
   const inventoryDirectory = directory;
+  const snapshotDiagnostics: string[] = [];
+  const startedAtMs = Date.now();
   const cleanupDirectories = () => [...new Set([directory, inventoryDirectory])];
   const run = async (
     request:
@@ -251,7 +267,72 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         },
   ) => {
     const workerEnv = params.workerEnv(directory);
-    return await withUpdateCandidateIoBudget(
+    const outputController = new AbortController();
+    let progressPending = Promise.resolve();
+    let progressFailure: { error: unknown } | undefined;
+    const failProgress = (error: unknown) => {
+      if (!progressFailure) {
+        progressFailure = { error };
+      } else if (
+        !hasCommandProcessCleanupError(progressFailure.error) &&
+        hasCommandProcessCleanupError(error)
+      ) {
+        progressFailure = {
+          error: new AggregateError(
+            [progressFailure.error, error],
+            "Update snapshot progress recording failed",
+            { cause: progressFailure.error },
+          ),
+        };
+      }
+      outputController.abort(error);
+    };
+    let stderrOutputExceeded = false;
+    const diagnostics = createUpdateStateInspectionDiagnostics({
+      operation: "State snapshot",
+      phase: request.mode,
+      paths: [params.stateDir],
+      stderrLimit: {
+        bytes: 20_000,
+        onExceeded: () => {
+          stderrOutputExceeded = true;
+          outputController.abort(new Error("Update snapshot diagnostic output exceeded its limit"));
+        },
+      },
+      onProgress: ({ phase, path: database, snapshot }) => {
+        if (!snapshot) {
+          return;
+        }
+        const detail = redactSupportString(
+          `${phase} ${database}: ${snapshot.status}, attempt 1, ${snapshot.copiedPages}/${snapshot.totalPages} pages${snapshot.copiedBytes === undefined ? "" : `, ${snapshot.copiedBytes.toLocaleString("en-US")} bytes`}, ${(snapshot.elapsedMs / 1000).toFixed(3)} seconds.`,
+          { env: params.env, stateDir: params.stateDir },
+          { maxLength: UPDATE_RUN_TEXT_LIMIT },
+        );
+        try {
+          // Invoke at emission so the writer captures this source before it yields.
+          const recording = Promise.resolve(
+            params.onProgress?.({
+              step: "candidate-state-snapshot",
+              status: "in_progress",
+              startedAtMs,
+              detail,
+            }),
+          ).catch(failProgress);
+          progressPending = Promise.all([progressPending, recording]).then(() => {});
+        } catch (error) {
+          failProgress(error);
+        }
+        if (
+          snapshot.status === "completed" &&
+          snapshotDiagnostics.length < UPDATE_RUN_DIAGNOSTIC_LIMIT
+        ) {
+          snapshotDiagnostics.push(detail);
+        }
+      },
+    });
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    const outcome = await withUpdateCandidateIoBudget(
       {
         directory,
         bytes: capacity.sqliteBytes + (capacity.pluginBytes ?? 0),
@@ -262,6 +343,8 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         env: workerEnv,
       },
       async (signal) => {
+        signal.throwIfAborted();
+        params.assertCurrent?.();
         const result = await runUtf8CommandWithTimeout(
           [
             params.nodeRunner ?? process.execPath,
@@ -273,6 +356,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           {
             input: JSON.stringify({
               ...request,
+              streamProgress: true,
               stateDir: params.stateDir,
               config: params.config,
               targetStateDir: directory,
@@ -288,12 +372,14 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
               },
             }),
             baseEnv: workerEnv,
-            signal,
+            signal: AbortSignal.any([signal, outputController.signal]),
             killGraceMs: 500,
             killProcessTree: true,
             requireProcessTreeExtinction: true,
             maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-            terminateOnOutputLimit: true,
+            outputCapture: { stdout: "head", stderr: "discard" },
+            terminateOnOutputLimit: { stdout: true },
+            onOutputChunk: diagnostics.onOutputChunk,
           },
         );
         if (result.cleanup === "uncertain") {
@@ -302,14 +388,53 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           });
         }
         signal.throwIfAborted();
-        if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
+        if (progressFailure) {
+          throw progressFailure.error;
+        }
+        if (
+          result.code !== 0 ||
+          result.termination !== "exit" ||
+          result.outputLimitExceeded ||
+          stderrOutputExceeded
+        ) {
+          const termination =
+            result.outputLimitExceeded || stderrOutputExceeded
+              ? "output-limit"
+              : result.termination;
           throw new Error(
-            `Update state snapshot failed (${result.outputLimitExceeded ? "output-limit" : result.termination}): ${redactSupportString(result.stderr, { env: params.env, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
+            `Update state snapshot failed (${termination}): ${redactSupportString(
+              diagnostics.failure(diagnostics.stderr() || result.stderr, termination).message,
+              { env: params.env, stateDir: params.stateDir },
+              { maxLength: 20_000 },
+            )}`,
           );
         }
         return JSON.parse(result.stdout) as unknown;
       },
+    ).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
     );
+    await progressPending;
+    if (progressFailure && hasCommandProcessCleanupError(progressFailure.error)) {
+      if ("error" in outcome && outcome.error !== progressFailure.error) {
+        throw new AggregateError(
+          [outcome.error, progressFailure.error],
+          "Update snapshot and progress recording failed",
+          { cause: outcome.error },
+        );
+      }
+      throw progressFailure.error;
+    }
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    if (progressFailure) {
+      throw progressFailure.error;
+    }
+    return outcome.value;
   };
   try {
     const inventory = UpdateCandidateSnapshotInventorySchema.parse(
@@ -322,23 +447,33 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
       pluginBytes: inventory.pluginBytes,
     };
     capacity = measureSnapshotCapacity(params.stateDir, size, params.env, capacity);
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     directory = await allocateSnapshotRoot(capacity, { root: selectedRoot.directory, directory });
     selectedRoot = capacity.selection!;
-    const { pluginPaths } = UpdateCandidateStateSnapshotSchema.parse(
+    const pluginPlanPath = path.join(inventoryDirectory, inventory.pluginPlan);
+    const { pluginPaths, pluginCodeLinks } = UpdateCandidateStateSnapshotSchema.parse(
       await run({
         mode: "snapshot",
-        pluginPlanPath: path.join(inventoryDirectory, inventory.pluginPlan),
+        pluginPlanPath,
         databaseInventory: [...inventory.databases.keys()],
       }),
     );
     return {
       stateDir: directory,
       pluginPaths,
+      pluginCodeLinks: pluginCodeLinks
+        ? await readUpdateCandidatePluginCodeLinks(pluginPlanPath, pluginCodeLinks)
+        : [],
       snapshotCapacity: { ...capacity, selection: { ...selectedRoot, directory } },
+      snapshotDiagnostics,
       cleanupDirectories: cleanupDirectories(),
     };
   } catch (error) {
-    if (isRecord(error) && error.cleanup === "uncertain") {
+    if (
+      hasCommandProcessCleanupError(error) ||
+      (isRecord(error) && error.cleanup === "uncertain")
+    ) {
       throw Object.assign(
         new Error(
           `Update snapshot cleanup could not be confirmed; retained scratch: ${cleanupDirectories().join(", ")}`,

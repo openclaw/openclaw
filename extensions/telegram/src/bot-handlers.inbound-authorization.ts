@@ -4,12 +4,11 @@ import type {
   DmPolicy,
   OpenClawConfig,
   TelegramAccountConfig,
-  TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
+import { resolveTelegramDmAllow } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import {
   normalizeDmAllowFromWithStore,
@@ -31,7 +30,6 @@ import {
 } from "./group-access.js";
 import {
   createTelegramIngressResolver,
-  createTelegramIngressSubject,
   resolveTelegramCommandIngressAuthorization,
   resolveTelegramNativeCommandAdmission,
   resolveTelegramEventIngressAuthorization,
@@ -66,7 +64,6 @@ export interface TelegramHandlerAuthorization {
     chatId: number;
     isGroup: boolean;
     senderId: string;
-    senderUsername: string;
     context: TelegramEventAuthorizationContext;
   }) => Promise<boolean>;
   authorizeInboundMessage: (params: {
@@ -94,7 +91,6 @@ export function createTelegramHandlerAuthorization({
   const shouldSkipGroupMessage = (params: Parameters<typeof shouldSkipTelegramGroupMessage>[0]) =>
     shouldSkipTelegramGroupMessage(params, { logger, resolveGroupPolicy });
 
-  type TelegramEventAuthorizationContextValue = TelegramEventAuthorizationContext;
   const TELEGRAM_EVENT_AUTH_RULES: Record<
     TelegramEventAuthorizationMode,
     {
@@ -134,14 +130,9 @@ export function createTelegramHandlerAuthorization({
 
   // Authorization owns one ingress snapshot. The agent turn intentionally
   // captures again after batching so reloads during debounce apply to execution.
-  const resolveTelegramEventAuthorizationContext = async (params: {
-    cfg: OpenClawConfig;
-    chatId: number;
-    isGroup: boolean;
-    senderId?: string;
-    threadSpec: TelegramThreadSpec;
-    msg?: Message;
-  }): Promise<TelegramEventAuthorizationContextValue> => {
+  const resolveTelegramEventAuthorizationContext = async (
+    params: Parameters<TelegramHandlerAuthorization["resolveTelegramEventAuthorizationContext"]>[0],
+  ): Promise<TelegramEventAuthorizationContext> => {
     const authorizationCfg = params.cfg;
     const authorizationTelegramCfg = resolveTelegramAccount({
       cfg: authorizationCfg,
@@ -195,15 +186,9 @@ export function createTelegramHandlerAuthorization({
     };
   };
 
-  const authorizeTelegramEventSender = async (params: {
-    chatId: number;
-    chatTitle?: string;
-    isGroup: boolean;
-    senderId: string;
-    senderUsername: string;
-    mode: TelegramEventAuthorizationMode;
-    context: TelegramEventAuthorizationContextValue;
-  }): Promise<boolean> => {
+  const authorizeTelegramEventSender = async (
+    params: Parameters<TelegramHandlerAuthorization["authorizeTelegramEventSender"]>[0],
+  ): Promise<boolean> => {
     const { chatId, chatTitle, isGroup, senderId, senderUsername, mode, context } = params;
     const {
       dmPolicy,
@@ -246,15 +231,11 @@ export function createTelegramHandlerAuthorization({
 
     if (!isGroup && enforceDirectAuthorization) {
       // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom.
-      const dmAllowFrom = groupAllowOverride ?? authorizationAllowFrom;
-      const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+      const { effectiveAllow: effectiveDmAllow } = await resolveTelegramDmAllow({
         cfg: authorizationCfg,
-        allowFrom: dmAllowFrom,
+        allowFrom: groupAllowOverride ?? authorizationAllowFrom,
         accountId,
         senderId,
-      });
-      const effectiveDmAllow = normalizeDmAllowFromWithStore({
-        allowFrom: expandedDmAllowFrom,
         storeAllowFrom,
         dmPolicy,
       });
@@ -302,24 +283,16 @@ export function createTelegramHandlerAuthorization({
     return true;
   };
 
-  const isTelegramModelCallbackAuthorized = async (params: {
-    chatId: number;
-    isGroup: boolean;
-    senderId: string;
-    senderUsername: string;
-    context: TelegramEventAuthorizationContextValue;
-  }): Promise<boolean> => {
+  const isTelegramModelCallbackAuthorized = async (
+    params: Parameters<TelegramHandlerAuthorization["isTelegramModelCallbackAuthorized"]>[0],
+  ): Promise<boolean> => {
     const { chatId, isGroup, senderId, context } = params;
     const cfgLocal = context.cfg;
-    const dmAllowFrom = context.groupAllowOverride ?? context.allowFrom;
-    const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+    const { effectiveAllow: dmAllow } = await resolveTelegramDmAllow({
       cfg: cfgLocal,
-      allowFrom: dmAllowFrom,
+      allowFrom: context.groupAllowOverride ?? context.allowFrom,
       accountId,
       senderId,
-    });
-    const dmAllow = normalizeDmAllowFromWithStore({
-      allowFrom: expandedDmAllowFrom,
       storeAllowFrom: isGroup ? [] : context.storeAllowFrom,
       dmPolicy: context.dmPolicy,
     });
@@ -343,16 +316,9 @@ export function createTelegramHandlerAuthorization({
   // before any cache/dedupe side effect so blocked content is never recorded.
   // dmAccess "challenge" may send a pairing reply; "silent" only decides (edits
   // must never reply).
-  const authorizeInboundMessage = async (params: {
-    msg: Message;
-    chatId: number;
-    isGroup: boolean;
-    isForum: boolean;
-    senderId: string;
-    senderUsername: string;
-    requireConfiguredGroup: boolean;
-    dmAccess: "challenge" | "silent";
-  }): Promise<TelegramInboundGate> => {
+  const authorizeInboundMessage = async (
+    params: Parameters<TelegramHandlerAuthorization["authorizeInboundMessage"]>[0],
+  ): Promise<TelegramInboundGate> => {
     const authorizationCfg = telegramDeps.getRuntimeConfig();
     const context = await resolveTelegramEventAuthorizationContext({
       cfg: authorizationCfg,
@@ -376,14 +342,11 @@ export function createTelegramHandlerAuthorization({
       allowFrom: authorizationAllowFrom,
     } = context;
     // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
-    const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+    const { effectiveAllow: effectiveDmAllow } = await resolveTelegramDmAllow({
       cfg: authorizationCfg,
       allowFrom: groupAllowOverride ?? authorizationAllowFrom,
       accountId,
       senderId: params.senderId,
-    });
-    const effectiveDmAllow = normalizeDmAllowFromWithStore({
-      allowFrom: expandedDmAllowFrom,
       storeAllowFrom,
       dmPolicy,
     });
@@ -467,7 +430,7 @@ export function createTelegramHandlerAuthorization({
               command: { commandOwnerAllowFrom: [params.senderId] },
             }
           : {}),
-        subject: createTelegramIngressSubject(params.senderId),
+        subject: { stableId: params.senderId },
         conversation: {
           kind: params.isGroup ? "group" : "direct",
           id: String(params.chatId),
@@ -493,21 +456,14 @@ export function createTelegramHandlerAuthorization({
   };
 }
 
-type TelegramEventAuthorizationContext = {
+type TelegramEventAuthorizationContext = Awaited<
+  ReturnType<typeof resolveTelegramGroupAllowFromContext>
+> & {
   commandAuthorizedByConfig: boolean;
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   allowFrom?: Array<string | number>;
   dmPolicy: DmPolicy;
-  threadSpec: TelegramThreadSpec;
-  resolvedThreadId?: number;
-  dmThreadId?: number;
-  storeAllowFrom: string[];
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-  groupAllowOverride?: Array<string | number>;
-  effectiveGroupAllow: NormalizedAllowFrom;
-  hasGroupAllowOverride: boolean;
 };
 
 type TelegramInboundGate =

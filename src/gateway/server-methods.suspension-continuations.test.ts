@@ -10,6 +10,10 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
@@ -141,6 +145,7 @@ async function dispatch(params: {
 
 async function createLifecycleInvoke() {
   const client = createClient("node");
+  const send = vi.spyOn(client.socket, "send");
   client.connect.client.id = GATEWAY_CLIENT_IDS.NODE_HOST;
   client.connect.commands = [NODE_WORKER_ENVIRONMENT_STOP_COMMAND];
   let generation = "generation-live";
@@ -186,6 +191,7 @@ async function createLifecycleInvoke() {
   const context = createContext({ nodeRegistry: registry });
   return {
     client,
+    send,
     context,
     invokeId,
     registry,
@@ -286,7 +292,7 @@ describe("draining Gateway completion ownership", () => {
   it.each(completionDrainModes)(
     "admits exact question inspection and resolution during %s without admitting unrelated roots",
     async (mode) => {
-      const manager = new QuestionManager();
+      const manager = new QuestionManager(createTestGatewayScheduler());
       managerCleanups.push(() => manager.close());
       const client = createClient("operator");
       const context = createContext({ questionManager: manager });
@@ -391,6 +397,85 @@ describe("draining Gateway completion ownership", () => {
       expect(newWork).not.toHaveBeenCalled();
       if (suspension) {
         expect(suspension.release()).toBe(true);
+      }
+    },
+  );
+
+  it.each(
+    completionDrainModes.flatMap((mode) =>
+      ["question.get", "question.resolve"].map((method) => ({ mode, method })),
+    ),
+  )(
+    "does not borrow a replacement question root for $method during $mode after synchronous expiry",
+    async ({ mode, method }) => {
+      const clock = createGatewaySchedulerClock(Date.now());
+      const manager = new QuestionManager(createTestGatewayScheduler(clock.clock));
+      managerCleanups.push(() => manager.close());
+      const originalRoot = tryBeginGatewayRootWorkAdmission();
+      const replacementRoot = tryBeginGatewayRootWorkAdmission();
+      if (!originalRoot || !replacementRoot) {
+        throw new Error("expected both admitted question producers");
+      }
+      const request = {
+        id: "question-reused",
+        questions: [
+          {
+            questionId: "choice",
+            header: "Choice",
+            question: "Continue?",
+            options: [],
+            isOther: true,
+          },
+        ],
+        timeoutMs: 60_000,
+      };
+      let replacement: Promise<void> | undefined;
+      const original = await originalRoot.run(async () =>
+        manager.request({
+          ...request,
+          onResolved: () => {
+            manager.reset();
+            // The second producer was admitted before drain, independently of the old question.
+            replacement = replacementRoot.run(async () => {
+              manager.request(request);
+            });
+          },
+        }),
+      );
+      originalRoot.release();
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      const suspension = closeAdmission(mode);
+      clock.setTime(original.expiresAtMs + 1);
+      const handler = vi.fn<GatewayRequestHandler>();
+      try {
+        const response = await dispatch({
+          method,
+          requestParams: { id: request.id },
+          context: createContext({ questionManager: manager }),
+          client: createClient("operator"),
+          handler,
+        });
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+        expect(handler).not.toHaveBeenCalled();
+        await replacement;
+        expect(manager.get(request.id)).toMatchObject({
+          status: "pending",
+          createdAtMs: original.expiresAtMs + 1,
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+      } finally {
+        await replacement;
+        originalRoot.release();
+        replacementRoot.release();
+        manager.close();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        if (suspension) {
+          expect(suspension.release()).toBe(true);
+        }
       }
     },
   );
@@ -629,6 +714,17 @@ describe("restart lifecycle completion ownership", () => {
           undefined,
           expect.objectContaining({ code: "UNAVAILABLE" }),
         );
+        if (changed === "owner" || changed === "pairing") {
+          expect(invoke.send).toHaveBeenCalledWith(
+            expect.stringContaining('"event":"node.invoke.cancel"'),
+          );
+          await expect(invoke.result).resolves.toMatchObject({
+            ok: false,
+            error: {
+              code: changed === "owner" ? "APPROVAL_AUTHORITY_CLOSED" : "PAIRING_CHANGED",
+            },
+          });
+        }
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       } finally {
         await invoke.finish();
@@ -677,6 +773,15 @@ describe("restart lifecycle completion ownership", () => {
         }
         resumeHandler.resolve();
         expect(await response).toHaveBeenCalledWith(true, { ok: true, ignored: true }, undefined);
+        expect(invoke.send).toHaveBeenCalledWith(
+          expect.stringContaining('"event":"node.invoke.cancel"'),
+        );
+        await expect(invoke.result).resolves.toMatchObject({
+          ok: false,
+          error: {
+            code: changed === "owner" ? "APPROVAL_AUTHORITY_CLOSED" : "PAIRING_CHANGED",
+          },
+        });
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       } finally {
         resumeHandler.resolve();

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
@@ -62,13 +63,7 @@ function parseRecord<T>(value: string, schema: z.ZodType<T>): T {
   if (Buffer.byteLength(value, "utf8") > SECRET_STORE_VALUE_MAX_BYTES) {
     throw invalidAccounts();
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw invalidAccounts();
-  }
-  const result = schema.safeParse(parsed);
+  const result = schema.safeParse(safeParseJson(value));
   if (!result.success) {
     throw invalidAccounts();
   }
@@ -256,13 +251,12 @@ function accountSummary(
   links: UserModelLinks,
 ): UserModelAccount {
   const { credential } = parseRecord(value, profileSchema);
+  const identity = [credential.email?.trim(), credential.displayName?.trim()].filter(Boolean);
   return {
     authProfileId,
     provider: credential.provider,
     label: truncateUtf16Safe(
-      toUSVString(
-        credential.displayName?.trim() || credential.email?.trim() || credential.provider,
-      ),
+      toUSVString([...new Set(identity)].join(" · ") || credential.provider),
       256,
     ),
     authType: credential.type,

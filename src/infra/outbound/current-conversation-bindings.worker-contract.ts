@@ -16,6 +16,14 @@ export type CurrentConversationBindingTouch = {
 };
 
 export type CurrentConversationBindingWorkerOperations = {
+  "conversationBindings.listBySession": {
+    input: { targetSessionKey: string; scope?: { channel: string; accountId: string } };
+    output: SessionBindingRecord[];
+  };
+  "conversationBindings.readSelection": {
+    input: readonly ConversationRef[];
+    output: ReadonlyArray<SessionBindingRecord | null>;
+  };
   "conversationBindings.resolve": { input: ConversationRef; output: SessionBindingRecord | null };
   "conversationBindings.touch": {
     input: CurrentConversationBindingTouch;

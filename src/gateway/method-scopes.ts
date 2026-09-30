@@ -1,6 +1,5 @@
-// Gateway method authorization scope resolver.
-// Maps static and plugin-defined gateway methods to operator scopes.
-import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
@@ -27,7 +26,6 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
-  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -40,7 +38,6 @@ export {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
-  TALK_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
 };
@@ -73,7 +70,6 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   return pluginScope === "node" || pluginScope === "dynamic" ? undefined : pluginScope;
 }
 
-/** Returns true when a method requires the approvals operator scope. */
 export function isApprovalMethod(method: string): boolean {
   return resolveScopedMethod(method) === APPROVALS_SCOPE;
 }
@@ -84,11 +80,12 @@ export function isNodeRoleMethod(method: string): boolean {
 }
 
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
+  const record = asOptionalRecord(params);
+  if (!record) {
     return undefined;
   }
-  const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
-  const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+  const pluginId = normalizeOptionalString(record.pluginId);
+  const actionId = normalizeOptionalString(record.actionId);
   if (!pluginId || !actionId) {
     return undefined;
   }
@@ -109,9 +106,10 @@ function resolveSessionActionLeastPrivilegeScopes(params: unknown): OperatorScop
   if (registeredScopes) {
     return registeredScopes;
   }
-  if (params && typeof params === "object" && !Array.isArray(params)) {
-    const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
-    const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+  const record = asOptionalRecord(params);
+  if (record) {
+    const pluginId = normalizeOptionalString(record.pluginId);
+    const actionId = normalizeOptionalString(record.actionId);
     if (pluginId && actionId) {
       // A standalone CLI/tool caller may be talking to a gateway whose live
       // plugin registry is not present in this local process. Avoid under-scoping
@@ -132,18 +130,11 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "plugins.sessionAction") {
     return resolveSessionActionLeastPrivilegeScopes(params);
   }
+  const record = asOptionalRecord(params);
   if (method === "agent") {
-    const message =
-      params && typeof params === "object" && !Array.isArray(params)
-        ? (params as { message?: unknown }).message
-        : undefined;
-    return isAgentSessionResetCommand(message) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
+    return isAgentSessionResetCommand(record?.message) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
   }
   if (method === "node.invoke") {
-    const record =
-      params && typeof params === "object" && !Array.isArray(params)
-        ? (params as { command?: unknown; params?: unknown })
-        : undefined;
     const command = record?.command;
     // Invalid persistent-profile mutations must reach the handler's precise fail-closed
     // rejection instead of being disguised as an admin-scope failure.
@@ -156,48 +147,27 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     return isAdminOnlyNodeInvokeCommand(command) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
   }
   if (method === "talk.config") {
-    const includeSecrets =
-      params && typeof params === "object" && !Array.isArray(params)
-        ? (params as { includeSecrets?: unknown }).includeSecrets
-        : undefined;
-    return includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
+    return record?.includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
   }
   if (method === "environments.list") {
-    const runtimeId =
-      params && typeof params === "object" && !Array.isArray(params) && "runtimeId" in params
-        ? params.runtimeId
-        : undefined;
+    const runtimeId = record && "runtimeId" in record ? record.runtimeId : undefined;
     // Match the handler: every nonempty runtime ID needs command eligibility access.
     return typeof runtimeId === "string" && runtimeId ? [WRITE_SCOPE] : [READ_SCOPE];
   }
   if (method === "channels.pairing.approve") {
-    const bootstrapCommandOwner =
-      params && typeof params === "object" && !Array.isArray(params)
-        ? (params as { bootstrapCommandOwner?: unknown }).bootstrapCommandOwner
-        : undefined;
-    return bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
+    return record?.bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
   }
   if (method === "fs.listDir") {
-    const targetsNode =
-      params !== null &&
-      typeof params === "object" &&
-      !Array.isArray(params) &&
-      Object.hasOwn(params, "nodeId");
+    const targetsNode = record && Object.hasOwn(record, "nodeId");
     return [targetsNode ? ADMIN_SCOPE : WRITE_SCOPE];
   }
-  if (method === "sessions.patch") {
-    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
-  }
-  if (method === "sessions.patchMany") {
-    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
-  }
-  if (method === "sessions.create") {
-    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
-  }
-  if (method === "sessions.dispatch") {
-    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
-  }
-  if (method === "sessions.move") {
+  if (
+    method === "sessions.patch" ||
+    method === "sessions.patchMany" ||
+    method === "sessions.create" ||
+    method === "sessions.dispatch" ||
+    method === "sessions.move"
+  ) {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
   }
   if (method === "sessions.delete") {
@@ -236,11 +206,13 @@ export function projectOperatorScopesForMethod(params: {
   requestedScopes: readonly string[];
   allowedScopes: readonly string[];
   requiredScope?: OperatorScope;
+  sessionScope?: SessionOperatorScope;
 }): string[] {
   const requiredScopes = params.requiredScope
     ? [params.requiredScope]
     : resolveLeastPrivilegeOperatorScopesForMethod(params.method, params.requestParams);
-  const sessionScope = resolveSessionMethodScope(params.method, params.requestParams);
+  const sessionScope =
+    params.sessionScope ?? resolveSessionMethodScope(params.method, params.requestParams);
   return params.requestedScopes.flatMap((requestedScope) => {
     if (
       roleScopesAllow({
@@ -260,6 +232,7 @@ export function projectOperatorScopesForMethod(params: {
       requestedScope,
       params.allowedScopes,
       sessionScope,
+      params.method,
     );
     return authorization.allowed && authorization.sessionScope ? [authorization.sessionScope] : [];
   });
@@ -279,9 +252,10 @@ export function authorizeOperatorScopesForMethod(
   if (isDynamicOperatorGatewayMethod(method)) {
     if (method === "plugins.sessionAction") {
       const registeredScopes = resolveSessionActionRegisteredScopes(params);
-      if (!registeredScopes && params && typeof params === "object" && !Array.isArray(params)) {
-        const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
-        const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+      const record = asOptionalRecord(params);
+      if (!registeredScopes && record) {
+        const pluginId = normalizeOptionalString(record.pluginId);
+        const actionId = normalizeOptionalString(record.actionId);
         if (!pluginId || !actionId) {
           // Malformed dynamic params cannot be matched to a plugin action. Any valid operator scope
           // may proceed so the handler can return the precise validation error.
@@ -302,6 +276,7 @@ export function authorizeOperatorScopesForMethod(
           missingScope,
           scopes,
           resolveSessionMethodScope(method, params),
+          method,
         )
       : { allowed: true };
   }
@@ -310,6 +285,7 @@ export function authorizeOperatorScopesForMethod(
     requiredScope,
     scopes,
     resolveSessionMethodScope(method, params),
+    method,
   );
 }
 
@@ -318,6 +294,7 @@ export function authorizeOperatorScopesForRequiredScope(
   requiredScope: OperatorScope,
   scopes: readonly string[],
   sessionScope?: SessionOperatorScope,
+  method?: string,
 ):
   | { allowed: true; sessionScope?: SessionOperatorScope }
   | { allowed: false; missingScope: OperatorScope } {
@@ -326,7 +303,9 @@ export function authorizeOperatorScopesForRequiredScope(
   }
   if (
     ((requiredScope === READ_SCOPE && sessionScope === "operator.sessions.read") ||
-      (requiredScope === WRITE_SCOPE && sessionScope === "operator.sessions.write")) &&
+      ((requiredScope === WRITE_SCOPE ||
+        (requiredScope === QUESTIONS_SCOPE && method?.startsWith("question."))) &&
+        sessionScope === "operator.sessions.write")) &&
     operatorScopeSatisfied(sessionScope, scopes)
   ) {
     return { allowed: true, sessionScope };

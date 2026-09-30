@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createChromeExtensionSetupResult } from "../test-helpers/chrome-extension-setup.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
@@ -30,35 +31,104 @@ function publish(detail: unknown) {
 }
 
 describe("native device settings wire contract", () => {
-  it.each([
-    ["chromeExtensionStatus", "chrome-extension-status"],
-    ["installChromeExtension", "install-chrome-extension"],
-  ] as const)("validates %s results and forwards its exact native action", async (method, type) => {
-    const post = installBridge();
-    const result = {
-      nativeHostRegistered: true,
-      installRequested: true,
-      installedProfiles: 1,
-      discoveredProfiles: 0,
-    };
-    post.mockResolvedValueOnce(result);
-    await expect(capability![method]()).resolves.toEqual(result);
-    expect(post).toHaveBeenLastCalledWith({ type });
-    post.mockResolvedValueOnce({ ...result, installedProfiles: -1 });
-    await expect(capability![method]()).rejects.toThrow("invalid result");
-    post.mockRejectedValueOnce(new Error("CLI unavailable"));
-    await expect(capability![method]()).rejects.toThrow("CLI unavailable");
-    const shippedReply = {
-      nativeHostRegistered: true,
-      installRequested: false,
-      discoveredProfiles: 1,
-    };
-    post.mockResolvedValueOnce(shippedReply);
-    if (method === "installChromeExtension") {
-      await expect(capability![method]()).resolves.toEqual(shippedReply);
-    } else {
-      await expect(capability![method]()).rejects.toThrow("invalid result");
+  it("uses the shipped installation projection on an older native host without offering new actions", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    delete snapshot.browser.chromeSetupActions;
+    const post = installBridge(snapshot);
+    const legacy = { nativeHostRegistered: true, installRequested: true, discoveredProfiles: 0 };
+    post.mockResolvedValueOnce({ ...legacy, privatePath: "not forwarded" });
+    await expect(capability!.installChromeExtension!()).resolves.toEqual(legacy);
+    expect(post).toHaveBeenLastCalledWith({ type: "install-chrome-extension" });
+    post.mockClear();
+    for (const action of ["inspect", "install", "verify"] as const) {
+      await expect(capability!.setupChromeExtension(action)).rejects.toThrow("does not advertise");
     }
+    expect(post).not.toHaveBeenCalled();
+    const status = { ...legacy, installedProfiles: 1 };
+    post.mockResolvedValueOnce(status);
+    await expect(capability!.chromeExtensionStatus!()).resolves.toEqual(status);
+    expect(post).toHaveBeenLastCalledWith({ type: "chrome-extension-status" });
+    post.mockResolvedValueOnce(legacy);
+    await expect(capability!.chromeExtensionStatus!()).rejects.toThrow("invalid result");
+  });
+  it.each(["installChromeExtension", "chromeExtensionStatus"] as const)(
+    "rejects legacy %s completion after document retirement",
+    async (operation) => {
+      const post = installBridge();
+      const pending = createDeferred<unknown>();
+      post.mockReturnValueOnce(pending.promise);
+      const response = capability![operation]!();
+      const rejected = expect(response).rejects.toThrow("invalid result");
+      capability!.dispose();
+      pending.resolve({
+        nativeHostRegistered: true,
+        installRequested: true,
+        installedProfiles: 0,
+        discoveredProfiles: 0,
+      });
+      await rejected;
+    },
+  );
+
+  it.each(["inspect", "install", "verify"] as const)(
+    "forwards only the explicit %s action and validates its host-bound result",
+    async (action) => {
+      const post = installBridge();
+      const result = createChromeExtensionSetupResult({ action });
+      post.mockResolvedValueOnce({ ...result, privatePath: "not forwarded" });
+      await expect(capability!.setupChromeExtension(action)).resolves.toEqual(result);
+      expect(post).toHaveBeenLastCalledWith({ type: "chrome-extension-setup", action });
+      for (const invalid of [
+        { ...result, action: "other" },
+        { ...result, target: { ...result.target, kind: "remote-host" } },
+        { ...result, target: { ...result.target, platform: "linux" } },
+        { ...result, target: { ...result.target, relayPort: 0 } },
+        { ...result, installation: { ...result.installation, installedProfiles: -1 } },
+        { ...result, installation: { ...result.installation, discoveredProfiles: -1 } },
+        { ...result, reason: "raw failure with private details" },
+      ]) {
+        post.mockResolvedValueOnce(invalid);
+        await expect(capability!.setupChromeExtension(action)).rejects.toThrow("invalid result");
+      }
+      post.mockRejectedValueOnce(new Error("CLI unavailable"));
+      await expect(capability!.setupChromeExtension(action)).rejects.toThrow("CLI unavailable");
+    },
+  );
+
+  it.each(["linux", "windows"] as const)(
+    "uses the %s device-settings transport without publishing setup as a settings snapshot",
+    async (platform) => {
+      const snapshot = createTauriDeviceSettingsSnapshot(platform);
+      const post = installBridge(snapshot);
+      const listener = vi.fn();
+      capability!.subscribe(listener);
+      const result = createChromeExtensionSetupResult({
+        action: "inspect",
+        target: {
+          kind: "local-host",
+          platform: platform === "linux" ? "linux" : "win32",
+          hostname: "Example desktop",
+          profile: "chrome",
+          relayPort: 18792,
+        },
+      });
+      post.mockResolvedValueOnce(result);
+      await expect(capability!.setupChromeExtension("inspect")).resolves.toEqual(result);
+      expect(post).toHaveBeenLastCalledWith({ type: "chrome-extension-setup", action: "inspect" });
+      expect(capability!.snapshot).toEqual(snapshot);
+      expect(listener).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects setup completion after the document capability is disposed", async () => {
+    const post = installBridge();
+    const pending = createDeferred<unknown>();
+    post.mockReturnValueOnce(pending.promise);
+    const response = capability!.setupChromeExtension("verify");
+    const rejected = expect(response).rejects.toThrow("invalid result");
+    capability!.dispose();
+    pending.resolve(createChromeExtensionSetupResult({ action: "verify" }));
+    await rejected;
   });
   it("exists only with the native message handler and reads the document-start snapshot", () => {
     vi.stubGlobal("webkit", undefined);
@@ -372,7 +442,7 @@ describe("native device settings wire contract", () => {
     capability!.set("browser.cookieSync.targetProfile", pending, settled);
     const observed: string[] = [];
     capability!.subscribe(() =>
-      observed.push(pending || capability!.snapshot!.browser!.cookieSync.targetProfile),
+      observed.push(pending || capability!.snapshot!.browser!.cookieSync!.targetProfile),
     );
     reply.resolve(createNativeDeviceSettingsSnapshot());
     await vi.waitFor(() => expect(observed).toEqual(["default"]));

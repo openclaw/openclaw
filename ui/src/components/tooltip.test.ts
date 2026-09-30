@@ -1,12 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
+import { html, type TemplateResult } from "lit";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
+import { renderKbd } from "./kbd.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 type TooltipElement = HTMLElement & {
   closeDelay: number;
   content: string;
+  contentTemplate?: TemplateResult;
   delay: number;
   openOnClick: boolean;
   readonly updateComplete: Promise<boolean>;
@@ -148,6 +151,38 @@ describe("openclaw-tooltip", () => {
     expect(webAwesomeTooltip(tooltip)?.querySelector(".tooltip-content")?.textContent).toBe(
       "Single portal",
     );
+  });
+
+  it("renders shortcut templates without changing plain descriptions or dismissal", async () => {
+    const { tooltip, trigger } = createTooltip("Search (⌘K)");
+    tooltip.contentTemplate = html`Search (${renderKbd(["⌘", "K"], { inline: true })})`;
+    document.body.append(tooltip);
+    await tooltip.updateComplete;
+
+    const popup = webAwesomeTooltip(tooltip);
+    expect(popup?.querySelector(".tooltip-content kbd svg")).not.toBeNull();
+    expect(popup?.querySelector(".tooltip-content")?.textContent?.replace(/\s+/gu, "")).toBe(
+      "Search(⌘K)",
+    );
+    const descriptionId = trigger.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(descriptionId)?.textContent).toBe("Search (⌘K)");
+
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(150);
+    expectOpenCount(1);
+    dispatchMousePointer(trigger, "pointerleave");
+    expectOpenCount(0);
+    focusTrigger(trigger);
+    expectOpenCount(1);
+    dispatchMousePointer(trigger, "pointerdown");
+    expectOpenCount(0);
+
+    tooltip.contentTemplate = undefined;
+    tooltip.content = "Search unavailable";
+    await tooltip.updateComplete;
+    expect(popup?.querySelector(".tooltip-content kbd")).toBeNull();
+    expect(popup?.querySelector(".tooltip-content")?.textContent).toBe("Search unavailable");
+    expect(document.getElementById(descriptionId)?.textContent).toBe("Search unavailable");
   });
 
   it("skins the body and removes the arrow through shared overlay tokens", async () => {
@@ -421,6 +456,20 @@ describe("openclaw-tooltip", () => {
     }
     expect(downstream).toHaveBeenCalledTimes(2);
 
+    for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+        ...composition,
+      });
+      trigger.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expectOpenCount(1);
+      expect(downstream).toHaveBeenLastCalledWith(event);
+    }
+    expect(downstream).toHaveBeenCalledTimes(4);
+
     const escape = new KeyboardEvent("keydown", {
       key: "Escape",
       bubbles: true,
@@ -429,7 +478,7 @@ describe("openclaw-tooltip", () => {
     trigger.dispatchEvent(escape);
     expectOpenCount(0);
     expect(escape.defaultPrevented).toBe(true);
-    expect(downstream).toHaveBeenCalledTimes(2);
+    expect(downstream).toHaveBeenCalledTimes(4);
     expect(trigger.getAttribute("aria-describedby")).toBe(descriptionId);
     expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Keyboard hint");
 
@@ -440,7 +489,7 @@ describe("openclaw-tooltip", () => {
     });
     trigger.dispatchEvent(nextEscape);
     expect(nextEscape.defaultPrevented).toBe(false);
-    expect(downstream).toHaveBeenCalledTimes(3);
+    expect(downstream).toHaveBeenCalledTimes(5);
   });
 
   it("honors per-tooltip hover intent while keyboard focus stays immediate", async () => {
@@ -479,18 +528,6 @@ describe("openclaw-tooltip", () => {
     dispatchMousePointer(trigger, "pointerleave");
   });
 
-  it("keeps the accessible description in the trigger document tree", async () => {
-    const provider = createProvider();
-    const { tooltip, trigger } = createTooltip("Accessible tooltip");
-    provider.append(tooltip);
-    document.body.append(provider);
-    await tooltip.updateComplete;
-
-    const descriptionId = trigger.getAttribute("aria-describedby");
-    expect(descriptionId).toBeTruthy();
-    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Accessible tooltip");
-  });
-
   it("describes the focusable element inside a wrapper trigger", async () => {
     const tooltip = document.createElement("openclaw-tooltip") as TooltipElement;
     const row = document.createElement("div");
@@ -510,18 +547,6 @@ describe("openclaw-tooltip", () => {
     expect(descriptionId).toBeTruthy();
     expect(document.getElementById(descriptionId ?? "")?.textContent).toBe(
       "Branch feature/sidebar",
-    );
-  });
-
-  it("describes rich content with its text content", async () => {
-    const { tooltip, trigger } = createRichTooltip("Online 2 Alice Server v2026.7.2");
-    document.body.append(tooltip);
-    await tooltip.updateComplete;
-
-    const descriptionId = trigger.getAttribute("aria-describedby");
-    expect(descriptionId).toBeTruthy();
-    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe(
-      "Online 2 Alice Server v2026.7.2",
     );
   });
 

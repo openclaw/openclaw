@@ -707,7 +707,13 @@ suite.define(() => {
   });
 
   it("keeps overlay motion anchored to its owning interaction", async () => {
-    const page = await openPage({ nativeNav: false });
+    let popupModule!: Awaited<ReturnType<typeof holdModuleResponse>>;
+    const page = await openPage({
+      nativeNav: false,
+      beforeNavigate: async (nextPage) => {
+        popupModule = await holdModuleResponse(nextPage, /\/assets\/tooltip-[^/?]+\.js(?:\?.*)?$/u);
+      },
+    });
 
     await page.keyboard.press("ControlOrMeta+K");
     // The loading dialog is replaced during handoff; measure the full palette.
@@ -726,13 +732,22 @@ suite.define(() => {
 
     const sidebar = page.locator("openclaw-app-sidebar");
     await sidebar.locator(".sidebar-identity-card").click();
-    const buildLink = sidebar.getByRole("link", {
+    const buildLink = sidebar.getByRole("menuitem", {
       name: "Control UI build details",
       exact: true,
     });
     await page.clock.install();
     await buildLink.hover();
     await page.clock.runFor(600);
+    // The hover delay starts the lazy popup load; it does not finish its upgrade
+    // or positioning. Keep that load pending until after the timer has elapsed.
+    await popupModule.request;
+    popupModule.release();
+    await sidebar
+      .locator(
+        'openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip[open] wa-popup[data-current-placement] [part~="popup"]',
+      )
+      .waitFor({ state: "visible" });
     const hoverCardMotion = await sidebar
       .locator("openclaw-sidebar-build-chip openclaw-tooltip")
       .evaluate((tooltip) => {

@@ -1,7 +1,7 @@
 // Plugin install enablement tests cover child policy, slot selection, and required config.
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExclusiveSlotSelectionMock,
   buildPluginDiagnosticsReportMock,
@@ -12,7 +12,9 @@ import {
   resetPluginsCliTestState,
   setInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+  readConfigFileSnapshotForWriteMock,
 } from "../cli/plugins-cli-test-helpers.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -64,6 +66,14 @@ const installWriteOptions = {
   ownedConfigPathForWrite: "/tmp/openclaw.json",
 };
 
+function installSnapshot(config: OpenClawConfig) {
+  readConfigFileSnapshotForWriteMock.mockResolvedValue({
+    snapshot: { ...createTestConfigSnapshot(config), hash: "config-1" },
+    writeOptions: installWriteOptions,
+  });
+  return { config, baseHash: "config-1", writeOptions: installWriteOptions };
+}
+
 describe("persistPluginInstall enablement", () => {
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
@@ -87,11 +97,7 @@ describe("persistPluginInstall enablement", () => {
     });
 
     const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "demo-package",
       install: {
         source: "npm",
@@ -105,158 +111,60 @@ describe("persistPluginInstall enablement", () => {
     expect(enablePluginInConfigMock).toHaveBeenCalledTimes(1);
   });
 
-  it("scopes runtime kind lookup to the selected plugin when metadata omits kind", async () => {
+  it.each([
+    { pluginId: "legacy-memory", kind: undefined },
+    { pluginId: "memory-b", kind: "memory" as const },
+  ])("selects the $pluginId memory slot with scoped kind discovery", async ({ pluginId, kind }) => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const baseConfig = {
+    const baseConfig: OpenClawConfig = {
+      plugins: { entries: { "legacy-memory-a": { enabled: true } } },
+    };
+    const enabledConfig: OpenClawConfig = {
       plugins: {
-        entries: {
-          "legacy-memory-a": { enabled: true },
-        },
+        entries: { "legacy-memory-a": { enabled: true }, [pluginId]: { enabled: true } },
       },
-    } as OpenClawConfig;
-    const enabledConfig = {
-      plugins: {
-        entries: {
-          "legacy-memory-a": { enabled: true },
-          "legacy-memory": { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
+    };
     enablePluginInConfigMock.mockReturnValue({ config: enabledConfig, enabled: true });
     loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [createManifestRecord("legacy-memory")],
+      plugins: [createManifestRecord(pluginId, kind ? { kind } : {})],
       diagnostics: [],
     });
-    buildPluginDiagnosticsReportMock.mockReturnValueOnce({
-      plugins: [{ id: "legacy-memory", kind: "memory" }],
-      diagnostics: [],
-    });
-    applyExclusiveSlotSelectionMock.mockImplementation(((params: {
-      config: OpenClawConfig;
-      selectedId: string;
-      selectedKind?: string;
-      registry?: { plugins: Array<{ id: string; kind?: string }> };
-    }) => {
-      expect(params.selectedId).toBe("legacy-memory");
-      expect(params.selectedKind).toBe("memory");
-      expect(params.registry?.plugins.map(({ id, kind }) => ({ id, kind }))).toEqual([
-        { id: "legacy-memory", kind: "memory" },
-      ]);
-      return {
-        config: {
-          ...params.config,
-          plugins: {
-            ...params.config.plugins,
-            slots: {
-              ...params.config.plugins?.slots,
-              memory: "legacy-memory",
-            },
-          },
-        },
-        warnings: [],
-        changed: true,
-      };
-    }) as (...args: unknown[]) => unknown);
-
-    const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
-      pluginId: "legacy-memory",
-      install: {
-        source: "path",
-        sourcePath: "/tmp/legacy-memory",
-        installPath: "/tmp/legacy-memory",
-      },
-    });
-
-    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledTimes(1);
-    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: enabledConfig,
-        onlyPluginIds: ["legacy-memory"],
-      }),
+    if (!kind) {
+      buildPluginDiagnosticsReportMock.mockReturnValueOnce({
+        plugins: [{ id: pluginId, kind: "memory" }],
+        diagnostics: [],
+      });
+    }
+    const { applyExclusiveSlotSelection } =
+      await vi.importActual<typeof import("./slots.js")>("./slots.js");
+    applyExclusiveSlotSelectionMock.mockImplementation((params) =>
+      applyExclusiveSlotSelection(params as Parameters<typeof applyExclusiveSlotSelection>[0]),
     );
-    expect(
-      requireMockCallArg(loadPluginManifestRegistryMock, "loadPluginManifestRegistryMock", 1)
-        .config,
-    ).toBe(enabledConfig);
-    expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
-    expect(next.plugins?.slots?.memory).toBe("legacy-memory");
-  });
-
-  it("uses cold metadata for manifest-kind slot selection without loading runtime siblings", async () => {
-    const { persistPluginInstall } = await import("./install-persistence.js");
-    const baseConfig = {
-      plugins: {
-        entries: {
-          "legacy-memory-a": { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    const enabledConfig = {
-      plugins: {
-        entries: {
-          "legacy-memory-a": { enabled: true },
-          "memory-b": { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig, enabled: true });
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [createManifestRecord("memory-b", { kind: "memory" })],
-      diagnostics: [],
-    });
-    applyExclusiveSlotSelectionMock.mockImplementation(((params: {
-      config: OpenClawConfig;
-      selectedId: string;
-      selectedKind?: string;
-      registry?: { plugins: Array<{ id: string; kind?: string }> };
-    }) => {
-      expect(params.selectedId).toBe("memory-b");
-      expect(params.selectedKind).toBe("memory");
-      expect(params.registry?.plugins.map(({ id, kind }) => ({ id, kind }))).toEqual([
-        { id: "memory-b", kind: "memory" },
-      ]);
-      return {
-        config: {
-          ...params.config,
-          plugins: {
-            ...params.config.plugins,
-            slots: {
-              ...params.config.plugins?.slots,
-              memory: "memory-b",
-            },
-          },
-        },
-        warnings: [],
-        changed: true,
-      };
-    }) as (...args: unknown[]) => unknown);
 
     const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
-      pluginId: "memory-b",
+      snapshot: installSnapshot(baseConfig),
+      pluginId,
       install: {
         source: "path",
-        sourcePath: "/tmp/memory-b",
-        installPath: "/tmp/memory-b",
+        sourcePath: `/tmp/${pluginId}`,
+        installPath: `/tmp/${pluginId}`,
       },
     });
 
-    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+    if (kind) {
+      expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+    } else {
+      expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledTimes(1);
+      expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledWith(
+        expect.objectContaining({ config: enabledConfig, onlyPluginIds: [pluginId] }),
+      );
+    }
     expect(
       requireMockCallArg(loadPluginManifestRegistryMock, "loadPluginManifestRegistryMock", 1)
         .config,
     ).toBe(enabledConfig);
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
-    expect(next.plugins?.slots?.memory).toBe("memory-b");
+    expect(next.plugins?.slots?.memory).toBe(pluginId);
   });
 
   it("does not load every plugin runtime for non-slot installs without manifest kind", async () => {
@@ -289,11 +197,7 @@ describe("persistPluginInstall enablement", () => {
     });
 
     const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "plain",
       install: {
         source: "path",
@@ -341,11 +245,7 @@ describe("persistPluginInstall enablement", () => {
     });
 
     const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "needs-config",
       install: {
         source: "npm",
@@ -397,11 +297,7 @@ describe("persistPluginInstall enablement", () => {
 
     await expect(
       persistPluginInstall({
-        snapshot: {
-          config: baseConfig,
-          baseHash: "config-1",
-          writeOptions: installWriteOptions,
-        },
+        snapshot: installSnapshot(baseConfig),
         pluginId: "broken-schema",
         install: {
           source: "npm",
@@ -444,11 +340,7 @@ describe("persistPluginInstall enablement", () => {
 
     await expect(
       persistPluginInstall({
-        snapshot: {
-          config: baseConfig,
-          baseHash: "config-1",
-          writeOptions: installWriteOptions,
-        },
+        snapshot: installSnapshot(baseConfig),
         pluginId: "needs-config",
         enable: false,
         install: {
@@ -473,11 +365,7 @@ describe("persistPluginInstall enablement", () => {
     } as OpenClawConfig;
 
     const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "memory-lancedb",
       enable: false,
       install: {
@@ -515,11 +403,7 @@ describe("persistPluginInstall enablement", () => {
     } as OpenClawConfig;
 
     const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "memory-lancedb",
       enable: false,
       install: {

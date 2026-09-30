@@ -13,7 +13,9 @@ describe("Code Mode model matrix options", () => {
       tasks: ["read", "dependent-read-write"],
       repetitions: 3,
       timeoutSeconds: 180,
-      thinking: "off",
+      thinking: "low",
+      concurrency: 2,
+      maxCells: 36,
       repoRoot: "/repo",
     });
   });
@@ -68,7 +70,7 @@ describe("Code Mode model matrix options", () => {
         "--task",
         "partial-failure",
       ]),
-    ).toThrow("OpenAI models");
+    ).toThrow("OpenAI, Anthropic, or Google");
   });
 
   it.each([
@@ -89,10 +91,56 @@ describe("Code Mode model matrix options", () => {
     ).toThrow(error);
   });
 
-  it("rejects an explicit executor when the default tasks inherit ambient config", () => {
+  it("rejects a Gateway executor selector for embedded tasks", () => {
     expect(() =>
       parseCodeModeMatrixOptions(["--model", "openai/fixture", "--executor", "node"]),
     ).toThrow("only Gateway-backed tasks");
+  });
+
+  it("admits neutral direct/code pairs for all supported providers with bounded root concurrency", () => {
+    expect(
+      parseCodeModeMatrixOptions(
+        [
+          "--model",
+          "anthropic/fixture",
+          "--model",
+          "google/fixture",
+          "--task",
+          "invoice-reconciliation",
+          "--concurrency",
+          "3",
+          "--max-known-cost-usd",
+          "0.5",
+          "--schedule",
+          "waves.json",
+        ],
+        "/harness",
+      ),
+    ).toMatchObject({
+      modes: ["direct", "code"],
+      concurrency: 3,
+      maxKnownCostUsd: 0.5,
+      schedulePath: "/harness/waves.json",
+    });
+    for (const args of [
+      ["--concurrency", "4"],
+      ["--max-tokens", "0"],
+      ["--max-known-cost-usd", "NaN"],
+    ]) {
+      expect(() => parseCodeModeMatrixOptions(["--model", "openai/fixture", ...args])).toThrow();
+    }
+    for (const mode of ["auto", "direct", "code"]) {
+      expect(() =>
+        parseCodeModeMatrixOptions([
+          "--model",
+          "openai/fixture",
+          "--task",
+          "invoice-reconciliation",
+          "--mode",
+          mode,
+        ]),
+      ).toThrow("both explicit direct/code");
+    }
   });
 
   it("rejects ambiguous selectors and output paths", () => {

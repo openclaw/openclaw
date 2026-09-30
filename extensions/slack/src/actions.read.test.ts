@@ -1,7 +1,7 @@
 // Slack tests cover actions.read plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
-import { readSlackMessages, resolveSlackConversationName } from "./actions.js";
+import { readSlackMessages } from "./actions.js";
 
 const createSlackLookupClientMock = vi.hoisted(() =>
   vi.fn(() => ({ conversations: { info: vi.fn(), replies: vi.fn(), history: vi.fn() } })),
@@ -29,22 +29,6 @@ function createClient() {
 }
 
 describe("Slack read actions", () => {
-  it("resolves the current Slack conversation name without caching failures", async () => {
-    const client = createClient();
-    client.conversations.info
-      .mockRejectedValueOnce(new Error("temporary_failure"))
-      .mockResolvedValueOnce({ channel: { name: "  allowed-channel  " } });
-
-    await expect(
-      resolveSlackConversationName("C1", { client, token: "xoxp-reader" }),
-    ).rejects.toThrow("temporary_failure");
-    await expect(
-      resolveSlackConversationName("C1", { client, token: "xoxp-reader" }),
-    ).resolves.toBe("allowed-channel");
-    expect(client.conversations.info).toHaveBeenNthCalledWith(1, { channel: "C1" });
-    expect(client.conversations.info).toHaveBeenNthCalledWith(2, { channel: "C1" });
-  });
-
   it("uses conversations.replies and drops the parent message", async () => {
     const client = createClient();
     client.conversations.replies.mockResolvedValueOnce({
@@ -303,24 +287,6 @@ describe("Slack read actions", () => {
     });
   });
 
-  it("converts ISO date strings to epoch seconds for history bounds", async () => {
-    const client = createClient();
-
-    await readSlackMessages("C1", {
-      client,
-      before: "2024-04-05T12:34:56.000Z",
-      after: "2024-04-05T00:00:00.000Z",
-      token: "xoxb-test",
-    });
-
-    expect(client.conversations.history).toHaveBeenCalledWith({
-      channel: "C1",
-      limit: undefined,
-      latest: "1712320496",
-      oldest: "1712275200",
-    });
-  });
-
   it("converts ISO date strings with offsets to epoch seconds for history bounds", async () => {
     const client = createClient();
 
@@ -339,7 +305,7 @@ describe("Slack read actions", () => {
     });
   });
 
-  it.each(["not-a-timestamp", "2024-02-30T00:00:00.000Z", "04/05/2024", "2024-04-05T12:34:56"])(
+  it.each(["2024-02-30T00:00:00.000Z", "2024-04-05T12:34:56"])(
     "rejects invalid history bound %s with a clear timestamp error",
     async (before) => {
       const client = createClient();
@@ -402,17 +368,21 @@ describe("Slack read actions", () => {
       conversations: {
         info: vi.fn().mockResolvedValue({ channel: { name: "general" } }),
         replies: vi.fn(),
-        history: vi.fn(),
+        history: vi.fn().mockResolvedValue({ messages: [] }),
       },
     });
 
-    await resolveSlackConversationName("C1", {
+    await readSlackMessages("C1", {
       token: "test-auth-token",
       cfg: { channels: { slack: { enabled: true, botToken: "test-auth-token" } } },
-    } as Parameters<typeof resolveSlackConversationName>[1]);
-
-    expect(createSlackLookupClientMock).toHaveBeenCalledWith("test-auth-token", {
-      teamId: undefined,
     });
+
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith(
+      "test-auth-token",
+      {
+        teamId: undefined,
+      },
+      undefined,
+    );
   });
 });

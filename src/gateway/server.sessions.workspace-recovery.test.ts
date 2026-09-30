@@ -2,10 +2,9 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { writeSessionStore } from "./test-helpers.js";
@@ -26,9 +25,10 @@ import type { WorkerPlacementDispatchContract } from "./worker-environments/serv
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 type RecoveryScenario =
@@ -54,8 +54,8 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
     nodeDeviceId: "runner-1",
   };
   writePlacementEnvironmentFixture(database, environment);
-  seedActivePlacement(placements, environment);
-  const claim = placements.claimTurn({
+  await seedActivePlacement(placements, environment);
+  const claim = await placements.claimTurn({
     sessionId,
     sessionKey,
     agentId,

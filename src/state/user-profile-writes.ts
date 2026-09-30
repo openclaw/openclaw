@@ -18,7 +18,11 @@ import type {
   UserProfileWriteOperations,
   UserProfileWriteResult,
 } from "./user-profile-writes.worker.js";
-import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
+import {
+  UserProfileMergeError,
+  UserProfileNotFoundError,
+  UserProfileOwnerError,
+} from "./user-profiles-schema.js";
 
 type ProfileWriteOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
   assertCurrent?: () => void;
@@ -31,6 +35,9 @@ function unwrap<T>(result: UserProfileWriteResult<T>): T {
   if (result.kind === "not-found") {
     throw new UserProfileNotFoundError(result.profileId);
   }
+  if (result.kind === "merge") {
+    throw new UserProfileMergeError(result.message);
+  }
   throw new UserProfileOwnerError(result.code);
 }
 
@@ -38,6 +45,7 @@ async function write<Key extends keyof UserProfileWriteOperations>(
   type: Key,
   input: UserProfileWriteOperations[Key]["input"],
   options: ProfileWriteOptions,
+  onCommitted?: (publication: UserProfileMutationPublication) => void,
 ): Promise<UserProfileWriteOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = options.assertCurrent;
@@ -93,6 +101,7 @@ async function write<Key extends keyof UserProfileWriteOperations>(
                 }
                 entry.published = true;
                 entry.fence.settle(true);
+                onCommitted?.(facts);
               });
               if (
                 facts.changes.profiles.length &&
@@ -180,9 +189,17 @@ async function write<Key extends keyof UserProfileWriteOperations>(
 export async function setCanonicalUserProfileRole(
   profileId: string,
   role: string | null,
-  options: ProfileWriteOptions = {},
+  options: ProfileWriteOptions & { onCommitted?: (profileId: string) => void } = {},
 ) {
-  return unwrap(await write("userProfiles.setRole", { profileId, role }, options));
+  const onCommitted = options.onCommitted;
+  return unwrap(
+    await write("userProfiles.setRole", { profileId, role }, options, (publication) => {
+      // The validated receipt names the canonical profile even when the caller used an alias.
+      for (const [id] of publication.after) {
+        onCommitted?.(id);
+      }
+    }),
+  );
 }
 export async function linkCanonicalUserProfileEmail(
   email: string,
@@ -191,11 +208,32 @@ export async function linkCanonicalUserProfileEmail(
 ) {
   return unwrap(await write("userProfiles.linkEmail", { email, targetProfileId }, options));
 }
+export async function mergeCanonicalUserProfiles(
+  sourceProfileId: string,
+  targetProfileId: string,
+  options: ProfileWriteOptions & { onCommitted?: (profileIds: string[]) => void } = {},
+) {
+  return unwrap(
+    await write(
+      "userProfiles.merge",
+      { sourceProfileId, targetProfileId },
+      options,
+      (publication) => {
+        if (publication.changes.profiles.length) {
+          options.onCommitted?.(publication.changes.profiles);
+        }
+      },
+    ),
+  );
+}
 export async function ensureCanonicalUserProfileForEmail(
   email: string,
-  options: ProfileWriteOptions = {},
+  options: ProfileWriteOptions & { expectedGitHubAccountId?: number } = {},
 ) {
-  return unwrap(await write("userProfiles.ensureEmail", { email }, options));
+  const { expectedGitHubAccountId, ...writeOptions } = options;
+  return unwrap(
+    await write("userProfiles.ensureEmail", { email, expectedGitHubAccountId }, writeOptions),
+  );
 }
 export async function ensureCanonicalUserProfileForTailscaleIdentity(
   identity: UserProfileWriteOperations["userProfiles.ensureTailscale"]["input"],

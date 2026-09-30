@@ -132,7 +132,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       });
       const { sidebar, gateway } = await mountExpanded(request);
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       const issuedBeforeHide = heldStage === "base" ? 4 : 5;
       expect(request).toHaveBeenCalledTimes(issuedBeforeHide);
 
@@ -153,7 +153,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       const callsBeforeShow = request.mock.calls.length;
       setVisibility("visible");
       globalThis.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await settle(sidebar);
       expect(request.mock.calls.filter(([, params]) => !params.cursors)).toHaveLength(
         baseCallsBeforeShow + 1,
@@ -176,7 +176,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       .mockResolvedValueOnce(page(3, "Refreshed"));
     const { sidebar, gateway } = await mountExpanded(request);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     await settle(sidebar);
     expect(request).toHaveBeenCalledTimes(6);
     expect(sidebar.textContent).toContain("Refreshed 3");
@@ -225,7 +225,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       .mockReturnValueOnce(pending.promise);
     const { sidebar, provider, gateway } = await mountExpanded(request);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(4);
     provider.remove();
     pending.resolve(page(1, "Retired"));
@@ -305,7 +305,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       .mockReturnValueOnce(pending.promise);
     const { sidebar, gateway } = await mountExpanded(request);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     setVisibility("hidden");
     pending.resolve(page(1, "Only remaining", ""));
     await settle(sidebar);

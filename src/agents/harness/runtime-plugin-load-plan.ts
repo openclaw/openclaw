@@ -1,4 +1,5 @@
 /** Builds deterministic plugin load plans for selected harness, memory, and context-engine owners. */
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
@@ -9,10 +10,7 @@ import {
   resolveSelectedContextEnginePluginId,
 } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
-import {
-  addConfiguredSlotPluginIds,
-  normalizePluginsConfigForInstalledIndex,
-} from "../../plugins/gateway-startup-plugin-config.js";
+import { addConfiguredSlotPluginIds } from "../../plugins/gateway-startup-plugin-config.js";
 import { hashJson } from "../../plugins/installed-plugin-index-hash.js";
 import { createInstalledPluginIndexScopeLookup } from "../../plugins/installed-plugin-index-scope-lookup.js";
 import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
@@ -42,17 +40,6 @@ export type AgentHarnessPluginSelection = {
 };
 
 export type RuntimePluginLoadPurpose = "agent" | "model-catalog";
-
-function dedupePluginIds(values: readonly string[]): string[] {
-  const result: string[] = [];
-  for (const value of values) {
-    const pluginId = value.trim();
-    if (pluginId && !result.includes(pluginId)) {
-      result.push(pluginId);
-    }
-  }
-  return result;
-}
 
 function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, pluginId: string) {
   const allow = config?.plugins?.allow ?? [];
@@ -119,7 +106,10 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
   index: InstalledPluginIndex;
 }): string[] | undefined {
   const lookup = createInstalledPluginIndexScopeLookup(params.index);
-  const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config?.plugins, lookup);
+  const pluginsConfig = normalizePluginsConfigWithResolverCore(
+    params.config?.plugins,
+    lookup.normalizePluginId,
+  );
   if (!pluginsConfig.enabled) {
     return [];
   }
@@ -131,7 +121,9 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
   }
   lookup.addShorthandModelOwners(pluginIds, params.shorthandModelIds ?? []);
   const selections = resolveAgentRuntimePluginSelections(params.config, params.selections);
-  const providerIds = dedupePluginIds(selections.map((selection) => selection.provider));
+  const providerIds = normalizeUniqueStringEntries(
+    selections.map((selection) => selection.provider),
+  );
   for (const providerId of providerIds) {
     const providerPluginIds = new Set<string>();
     lookup.addDirectProviderOwners(providerPluginIds, [providerId]);
@@ -145,7 +137,7 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
       pluginIds.add(pluginId);
     }
   }
-  const runtimeIds = dedupePluginIds(
+  const runtimeIds = normalizeUniqueStringEntries(
     selections
       .map((selection) => resolveSelectedAgentHarnessRuntime(selection, params.config))
       .filter(
@@ -200,13 +192,13 @@ function resolveSelectedProviderOwnerPluginIds(params: {
   workspaceDir: string;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): string[] {
-  const providerOwnerPluginIds = dedupePluginIds(
+  const providerOwnerPluginIds = normalizeUniqueStringEntries(
     resolveOwningPluginIdsForProviderRef(params) ?? [],
   );
   if (providerOwnerPluginIds.length === 0) {
     return [];
   }
-  const safeProviderOwnerPluginIds = dedupePluginIds([
+  const safeProviderOwnerPluginIds = normalizeUniqueStringEntries([
     ...resolveBundledProviderCompatPluginIds({
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -257,7 +249,7 @@ export function resolveAgentHarnessOwnerPluginIds(params: {
   if (providerOwnerPluginIds.length === 0) {
     return harnessPluginIds;
   }
-  return dedupePluginIds([
+  return normalizeUniqueStringEntries([
     ...harnessPluginIds,
     ...providerOwnerPluginIds.filter((pluginId) => pluginId !== "codex"),
   ]);
@@ -272,7 +264,7 @@ function withRuntimePluginIdsAllowed(
   if (pluginIds.length === 0 || (!materializeAllowlist && existingAllowlist.length === 0)) {
     return config;
   }
-  const allow = dedupePluginIds([...existingAllowlist, ...pluginIds]);
+  const allow = normalizeUniqueStringEntries([...existingAllowlist, ...pluginIds]);
   if (
     allow.length === existingAllowlist.length &&
     allow.every((pluginId, index) => pluginId === existingAllowlist[index])
@@ -320,6 +312,51 @@ export function requiresAgentHarnessPluginSelection(
   );
 }
 
+/** Resolves model provider and harness owners independently of configured shared capabilities. */
+export function resolveAgentRuntimePluginSelectionOwners(params: {
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  selections: readonly AgentHarnessPluginSelection[];
+  metadataSnapshot: PluginMetadataSnapshot;
+}): { pluginIds: string[]; forceActivatedPluginIds: string[] } {
+  const config = params.config;
+  const pluginIds: string[] = [];
+  const forceActivatedPluginIds: string[] = [];
+  for (const selection of params.selections) {
+    const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
+    const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({
+      provider: selection.provider,
+      config,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
+    });
+    pluginIds.push(...providerOwnerPluginIds);
+    forceActivatedPluginIds.push(...providerOwnerPluginIds);
+    if (!requiresAgentHarnessPluginSelection(selection, config)) {
+      continue;
+    }
+    const harnessPluginIds = resolveAgentHarnessOwnerPluginIds({
+      runtime,
+      provider: selection.provider,
+      config,
+      workspaceDir: params.workspaceDir,
+      providerOwnerPluginIds,
+      metadataSnapshot: params.metadataSnapshot,
+    });
+    pluginIds.push(...harnessPluginIds);
+    const allowedHarnessPluginIds =
+      runtime === "codex"
+        ? restrictiveAllowlistOmitsPlugin(params.config, "codex")
+          ? []
+          : harnessPluginIds
+        : harnessPluginIds.filter(
+            (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
+          );
+    forceActivatedPluginIds.push(...allowedHarnessPluginIds);
+  }
+  return { pluginIds, forceActivatedPluginIds };
+}
+
 /** Folds selected harness, memory, and context-engine owners into one deterministic load plan. */
 export function resolveAgentRuntimePluginLoadPlan(params: {
   config?: OpenClawConfig;
@@ -360,40 +397,12 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
         forceActivatedPluginIds.push(...owners);
       }
     }
+  } else {
+    const selection = resolveAgentRuntimePluginSelectionOwners(params);
+    pluginIds.push(...selection.pluginIds);
+    forceActivatedPluginIds.push(...selection.forceActivatedPluginIds);
   }
-  for (const selection of includeAgentOwners ? params.selections : []) {
-    const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
-    const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({
-      provider: selection.provider,
-      config,
-      workspaceDir: params.workspaceDir,
-      metadataSnapshot: params.metadataSnapshot,
-    });
-    pluginIds.push(...providerOwnerPluginIds);
-    forceActivatedPluginIds.push(...providerOwnerPluginIds);
-    if (!requiresAgentHarnessPluginSelection(selection, config)) {
-      continue;
-    }
-    const harnessPluginIds = resolveAgentHarnessOwnerPluginIds({
-      runtime,
-      provider: selection.provider,
-      config,
-      workspaceDir: params.workspaceDir,
-      providerOwnerPluginIds,
-      metadataSnapshot: params.metadataSnapshot,
-    });
-    pluginIds.push(...harnessPluginIds);
-    const allowedHarnessPluginIds =
-      runtime === "codex"
-        ? restrictiveAllowlistOmitsPlugin(params.config, "codex")
-          ? []
-          : harnessPluginIds
-        : harnessPluginIds.filter(
-            (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
-          );
-    forceActivatedPluginIds.push(...allowedHarnessPluginIds);
-  }
-  const scopedPluginIds = dedupePluginIds(pluginIds).toSorted((left, right) =>
+  const scopedPluginIds = normalizeUniqueStringEntries(pluginIds).toSorted((left, right) =>
     left.localeCompare(right),
   );
   config = withRuntimePluginIdsAllowed(

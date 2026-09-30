@@ -1,33 +1,31 @@
-import path from "node:path";
-
-export function sqliteLifecycleFixtureFiles(repoRoot: string): Record<string, string> {
-  const source = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
+// Literal resolver calls keep generated imports visible to CI's dependency graph.
+export function sqliteLifecycleFixtureFiles(): Record<string, string> {
   const readPoolFixture = `
+import { startAwaitedReadMock } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-mock.test-support.ts"))};
 const readPool = vi.hoisted(() => ({ close: vi.fn(async () => {}) }));
-vi.mock(${source("infra/runtime-process-url.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.ts"))}, () => ({
   resolveRuntimeProcessEntrypointUrl: () => new URL("file:///synthetic/state-read.worker.js"),
 }));
-vi.mock(${source("infra/worker-task-pool.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts"))}, () => ({
   WorkerTaskError: class extends Error {},
   createOwnedWorkerTaskPool: () => ({
-    runTask: () => ({
-      result: Promise.resolve({ ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] }),
-      close: async () => {},
+    startTask: () => ({
+      ...startAwaitedReadMock(async () => ({ ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] })),
+      release: () => startAwaitedReadMock(async () => {}),
     }),
     close: readPool.close,
     closeResources: async () => {},
   }),
 }));
-import { createOpenClawStateReadTransport } from ${source("state/openclaw-state-read-worker.ts")};
-import { closeOpenClawStateDatabaseAsync } from ${source("state/openclaw-state-db-cache.ts")};
+import { captureOpenClawStateReadSource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-worker.ts"))};
+import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
 async function useReadPool() {
-  const transport = createOpenClawStateReadTransport({ type: "fleet.list" });
+  const transport = captureOpenClawStateReadSource().createTransport({ type: "fleet.list" });
   const authority = { signal: new AbortController().signal, assertCurrent() {} };
   try {
-    expect(await transport.read({
+    expect(await transport.startRead({
       context: {
         environment: {},
-        coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: false },
         admission: {
           databasePath: "/synthetic/state.sqlite",
           identity: { key: "file:synthetic-state", canonicalPath: "/synthetic/state.sqlite" },
@@ -36,25 +34,28 @@ async function useReadPool() {
       },
       location: "/synthetic/state.sqlite",
       checkFreshAdmission: false,
-    }, authority)).toMatchObject({ value: { ok: true, type: "fleet.list" } });
+    }, authority).result).toMatchObject({ value: { ok: true, type: "fleet.list" } });
   } finally {
-    await transport.close();
+    await transport.startClose().result;
   }
 }
 `;
   return {
-    ...stateReadPoolFixtureFiles(repoRoot),
-    ...failedDrainFixtureFiles(repoRoot, readPoolFixture),
+    ...sharedStateOwnerFixtureFiles(),
+    ...scheduledCloseFixtureFiles(),
+    ...subagentRetirementFixtureFiles(),
+    ...stateReadPoolFixtureFiles(),
+    ...failedDrainFixtureFiles(readPoolFixture),
     "11-a-sqlite-owner.test.ts": `
 import { afterAll, expect, it, vi } from "vitest";
 import path from "node:path";
-vi.mock(${source("infra/runtime-worker-url.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
-import { isSqliteWorkerStoreAvailable } from ${source("infra/sqlite-worker-store.ts")};
-import { registerOpenClawStateDatabaseAsyncResource } from ${source("state/openclaw-state-db-cache.ts")};
-import { openOpenClawStateWorkerCleanupStore } from ${source("state/openclaw-state-worker-store.ts")};
-import { openOpenClawAgentDatabase } from ${source("state/openclaw-agent-db.ts")};
+import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
+import { registerOpenClawStateDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
+import { openOpenClawStateWorkerCleanupStore } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-store.ts"))};
+import { openOpenClawAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
 ${readPoolFixture}
 const drainKey = Symbol.for("fixture.sqliteDrain");
 it("retains a real shared-state owner after host admission is refused", async () => {
@@ -62,7 +63,6 @@ it("retains a real shared-state owner after host admission is refused", async ()
   expect(isSqliteWorkerStoreAvailable({})).toBe(false);
   await expect(openOpenClawStateWorkerCleanupStore("/synthetic/state.sqlite", {
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: false },
   }, () => {})).rejects.toMatchObject({ code: "unavailable" });
   const database = openOpenClawAgentDatabase({
     agentId: "fixture",
@@ -87,18 +87,18 @@ afterAll(() => {
 `,
     "11-b-sqlite-cleanup.test.ts": `
 import { afterEach, expect, it, vi } from "vitest";
-import type { SqliteWorkerStore } from ${source("infra/sqlite-worker-contract.ts")};
+import type { SqliteWorkerStore } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-contract.ts"))};
 import {
   runWithSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
-} from ${source("infra/sqlite-worker-state-context.ts")};
-import { cleanupRetiredAgentDatabaseLease } from ${source("state/openclaw-agent-execution-cleanup.ts")};
+} from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-state-context.ts"))};
+import { cleanupRetiredAgentDatabaseLease } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-execution-cleanup.ts"))};
 import {
   assertOpenClawStateSchemaRepairAllowed,
   getExistingOpenClawStateSchemaPath,
-} from ${source("state/openclaw-state-db-schema-policy.ts")};
-import type { OpenClawStateWorkerContext } from ${source("state/openclaw-state-worker-context.types.ts")};
-import type { OpenClawStateWorkerCleanupOperations } from ${source("state/openclaw-state-worker-contract.ts")};
+} from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-schema-policy.ts"))};
+import type { OpenClawStateWorkerContext } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-context.types.ts"))};
+import type { OpenClawStateWorkerCleanupOperations } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-contract.ts"))};
 ${readPoolFixture}
 
 // Keep the real shared-state owner in this cross-file proof; another test's mocks
@@ -118,17 +118,20 @@ const edge = vi.hoisted(() => ({
 }));
 
 vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
-vi.mock("node:worker_threads", () => ({ Worker: edge.forbidden }));
-vi.mock(${source("infra/runtime-worker-url.ts")}, () => ({
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:worker_threads")>(),
+  Worker: edge.forbidden,
+}));
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
-vi.mock(${source("infra/sqlite-worker-identity.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-identity.ts"))}, () => ({
   readDatabasePathIdentity: async (canonicalPath: string) => ({
     key: "file:synthetic-state",
     canonicalPath,
   }),
 }));
-vi.mock(${source("infra/sqlite-worker-store.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => ({
   openSharedStateSqliteWorkerStore: async (
     options: { databasePath: string },
     context: SqliteWorkerStateContext,
@@ -171,7 +174,6 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
   const databasePath = "/synthetic/state/openclaw.sqlite";
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: true },
     existingSchemaPath: databasePath,
     admission: {
       databasePath,
@@ -213,24 +215,93 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
   };
 }
 
-function failedDrainFixtureFiles(
-  repoRoot: string,
-  readPoolFixture: string,
-): Record<string, string> {
-  const source = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
+function scheduledCloseFixtureFiles(): Record<string, string> {
+  return {
+    "10-a-scheduled-close.test.ts": `
+import { afterEach, expect, it } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
+import { hasOpenClawAgentDatabaseAsyncResources, registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
+const events: string[] = [];
+// The synchronous test closer only schedules asynchronous Worker retirement.
+afterEach(() => closeOpenClawAgentDatabasesForTest());
+function registerClose(agentId: string) {
+  registerOpenClawAgentDatabaseAsyncResource({
+    agentId,
+    path: "/synthetic/" + agentId + ".sqlite",
+    revoke() {},
+    // Worker retirement crosses threads, so it settles on a later event-loop turn. The
+    // path from one test's teardown to the next test's start is promise-only, so without
+    // the runner's join this close is still pending when the next test begins.
+    close: () => new Promise<void>((resolve) => setImmediate(() => {
+      events.push(agentId + " close settled");
+      resolve();
+    })),
+  });
+}
+it("schedules a Worker close that its teardown does not await", () => {
+  registerClose("scheduled");
+});
+it("starts only after that close settled", () => {
+  events.push("next test started");
+  expect(events).toEqual(["scheduled close settled", "next test started"]);
+  expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+});
+it("schedules a Worker close and then skips itself", (context) => {
+  registerClose("skipped");
+  context.skip();
+});
+it("starts only after the skipped test's close settled", () => {
+  events.push("test after skip started");
+  expect(events.slice(2)).toEqual(["skipped close settled", "test after skip started"]);
+  expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+});
+`,
+    "10-b-around-each-close.test.ts": `
+import { aroundEach, expect, it } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
+import { hasOpenClawAgentDatabaseAsyncResources, registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
+const events: string[] = [];
+// aroundEach setup and teardown both run outside the runner's per-attempt hook.
+aroundEach(async (runTest) => {
+  events.push(hasOpenClawAgentDatabaseAsyncResources() ? "setup saw a pending close" : "setup");
+  await runTest();
+  closeOpenClawAgentDatabasesForTest();
+});
+it("schedules a Worker close from aroundEach teardown", () => {
+  registerOpenClawAgentDatabaseAsyncResource({
+    agentId: "around",
+    path: "/synthetic/around.sqlite",
+    revoke() {},
+    // Settles on a later event-loop turn, like the scheduled close in 10-a.
+    close: () => new Promise<void>((resolve) => setImmediate(() => {
+      events.push("around close settled");
+      resolve();
+    })),
+  });
+});
+it("starts only after the aroundEach close settled", () => {
+  events.push("next test started");
+  expect(events).toEqual(["setup", "around close settled", "setup", "next test started"]);
+  expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+});
+`,
+  };
+}
+
+function failedDrainFixtureFiles(readPoolFixture: string): Record<string, string> {
   return {
     "13-a-retained-lease.test.ts": `
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
-vi.mock(${source("infra/runtime-worker-url.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
-import { resolveGlobalSingleton } from ${source("shared/global-singleton.ts")};
-import { openOpenClawAgentDatabase } from ${source("state/openclaw-agent-db.ts")};
-import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync } from ${source("state/openclaw-agent-db-lifecycle.ts")};
-import { registerOpenClawAgentDatabaseAsyncResource } from ${source("state/openclaw-agent-db-resources.ts")};
-import { openOpenClawStateWorkerCleanupStore } from ${source("state/openclaw-state-worker-store.ts")};
-import { isSqliteWorkerStoreAvailable } from ${source("infra/sqlite-worker-store.ts")};
+import { resolveGlobalSingleton } from ${JSON.stringify(import.meta.resolve("../src/shared/global-singleton.ts"))};
+import { openOpenClawAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
+import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
+import { registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
+import { openOpenClawStateWorkerCleanupStore } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-store.ts"))};
+import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
 ${readPoolFixture}
 const probeKey = Symbol.for("fixture.retainedAgentLease");
 it("retains its native handle and lease when resource teardown refuses cleanup", async () => {
@@ -238,7 +309,6 @@ it("retains its native handle and lease when resource teardown refuses cleanup",
   expect(isSqliteWorkerStoreAvailable({})).toBe(false);
   await expect(openOpenClawStateWorkerCleanupStore("/synthetic/state.sqlite", {
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: false },
   }, () => {})).rejects.toMatchObject({ code: "unavailable" });
   const root = path.join(import.meta.dirname, "retained-agent-state");
   const database = openOpenClawAgentDatabase({ agentId: "retained", env: { OPENCLAW_STATE_DIR: root } });
@@ -289,10 +359,10 @@ afterAll(() => {
 `,
     "13-b-retained-lease-observer.test.ts": `
 import { expect, it, vi } from "vitest";
-vi.mock(${source("infra/runtime-process-url.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.ts"))}, () => ({
   resolveRuntimeProcessEntrypointUrl: () => new URL("file:///synthetic/observer-process.js"),
 }));
-import { resolveRuntimeProcessEntrypointUrl } from ${source("infra/runtime-process-url.ts")};
+import { resolveRuntimeProcessEntrypointUrl } from ${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.ts"))};
 it("preserves failed custody while independent cleanup and the next file still run", async () => {
   const probeKey = Symbol.for("fixture.retainedAgentLease");
   const probe = Reflect.get(globalThis, probeKey);
@@ -326,8 +396,7 @@ it("preserves failed custody while independent cleanup and the next file still r
   };
 }
 
-function stateReadPoolFixtureFiles(repoRoot: string): Record<string, string> {
-  const source = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
+function stateReadPoolFixtureFiles(): Record<string, string> {
   return Object.fromEntries(
     ["a", "b", "c"].map((generation) => [
       `12-${generation}-state-read-pool.test.ts`,
@@ -335,29 +404,30 @@ function stateReadPoolFixtureFiles(repoRoot: string): Record<string, string> {
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
-import { executeExistingOpenClawStateRead } from ${source("state/openclaw-state-db-readonly.ts")};
-import { readWorkspaceStateSnapshot } from ${source("agents/workspace-state-store.ts")};
-import { createWorkspaceStateIdentity } from ${source("agents/workspace-state-identity.ts")};
+import { startAwaitedReadMock } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-mock.test-support.ts"))};
+import { executeExistingOpenClawStateRead } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-readonly.ts"))};
+import { readWorkspaceStateSnapshot } from ${JSON.stringify(import.meta.resolve("../src/agents/workspace-state-store.ts"))};
+import { createWorkspaceStateIdentity } from ${JSON.stringify(import.meta.resolve("../src/agents/workspace-state-identity.ts"))};
 
 const generation = ${JSON.stringify(generation)};
 const probeKey = Symbol.for("fixture.stateReadPoolGenerations");
 const probe = Reflect.get(globalThis, probeKey) ?? { closes: [] as string[], reads: [] as string[] };
 Reflect.set(globalThis, probeKey, probe);
 const edge = vi.hoisted(() => ({ create: vi.fn(), close: vi.fn(async () => {}) }));
-vi.mock(${source("infra/worker-task-pool.ts")}, async (importOriginal) => ({
-  ...await importOriginal<typeof import(${source("infra/worker-task-pool.ts")})>(),
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts"))}, async (importOriginal) => ({
+  ...await importOriginal<typeof import(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts"))})>(),
   createOwnedWorkerTaskPool: edge.create,
 }));
 edge.close.mockImplementation(async () => { probe.closes.push(generation); });
 edge.create.mockImplementation(() => ({
-  runTask: () => {
+  startTask: () => {
     probe.reads.push(generation);
     return {
-      result: Promise.resolve(generation === "c" ? {
+      ...startAwaitedReadMock(async () => generation === "c" ? {
         ok: true, type: "workspace.snapshot", sourceAdmitted: true,
         snapshot: { identity: createWorkspaceStateIdentity("/fixture/workspace"), setupExists: false, setup: { version: 1 } },
       } : { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] }),
-      close: async () => {},
+      release: () => startAwaitedReadMock(async () => {}),
     };
   },
   close: edge.close,
@@ -387,4 +457,110 @@ afterAll(() => {
 `,
     ]),
   );
+}
+
+function sharedStateOwnerFixtureFiles(): Record<string, string> {
+  return Object.fromEntries(
+    ["a", "b"].map((generation) => [
+      `09-${generation}-shared-state-owner.test.ts`,
+      `
+import fs from "node:fs";
+import path from "node:path";
+import { expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
+import { captureOpenClawStateWorkerContext } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-context.ts"))};
+import { getOpenClawStateWorkerOwner } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-owner.ts"))};
+
+const generation = ${JSON.stringify(generation)};
+const probeKey = Symbol.for("fixture.sharedStateOwnerGenerations");
+const probe = Reflect.get(globalThis, probeKey) ?? { closes: [] as string[] };
+Reflect.set(globalThis, probeKey, probe);
+const edge = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(async () => {}) }));
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => ({
+  openSharedStateSqliteWorkerStore: edge.open,
+  closeUnclaimedSharedStateSqliteWorkers: async () => {},
+  hasUnclaimedSharedStateSqliteCleanup: () => false,
+  isSqliteWorkerStoreAvailable: () => true,
+  getSqliteWorkerActorIdentity: (store) => store.actor,
+  retireSqliteWorkerActor: async () => {},
+  runSqliteWorkerStoreOperation: async (store, run) => run(store),
+}));
+edge.close.mockImplementation(async () => { probe.closes.push(generation); });
+edge.open.mockImplementation(async (options, context) => ({
+  close: edge.close,
+  actor: { databasePath: options.databasePath, key: context.admission.identity.key },
+}));
+
+it("binds shared-state retirement to the current file's database lifecycle " + generation, async () => {
+  const pathname = path.join(import.meta.dirname, "shared-" + generation + ".sqlite");
+  // Only the transport is controlled; the real owner retains file identity and close custody.
+  fs.writeFileSync(pathname, "synthetic shared-state source");
+  const context = captureOpenClawStateWorkerContext({
+    path: pathname, env: { OPENCLAW_STATE_DIR: import.meta.dirname },
+  });
+  const owner = getOpenClawStateWorkerOwner();
+  try {
+    expect(await owner.open(context)).toBeDefined();
+    if (generation === "a") {
+      expect(probe.closes).toEqual([]);
+      // The file drain retires this resource before the next file is evaluated.
+    } else {
+      expect(probe.closes).toEqual(["a"]);
+      await closeOpenClawStateDatabaseAsync();
+      expect(probe.closes).toEqual(["a", "b"]);
+    }
+  } finally {
+    if (generation === "b") {
+      // A failed regression must still release the old owner's retained resource.
+      await owner.close();
+      Reflect.deleteProperty(globalThis, probeKey);
+    }
+  }
+});
+`,
+    ]),
+  );
+}
+
+function subagentRetirementFixtureFiles(): Record<string, string> {
+  return {
+    "10-c-subagent-registry.test.ts": `
+import { expect, it, vi } from "vitest";
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
+  resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
+}));
+import ${JSON.stringify(import.meta.resolve("../src/agents/subagents/registry/subagent-registry.ts"))};
+import { subagentRuns } from ${JSON.stringify(import.meta.resolve("../src/agents/subagents/registry/subagent-registry-memory.ts"))};
+import { createSubagentRunRecord } from ${JSON.stringify(import.meta.resolve("../src/agents/subagent-test-fixtures.test-helpers.ts"))};
+it("leaves a retired-store delivery in its original registry generation", () => {
+  const entry = createSubagentRunRecord({
+    runId: "retired-registry-delivery", endedAt: 1, outcome: { status: "ok" },
+    delivery: { status: "pending" },
+  });
+  subagentRuns.set(entry.runId, entry);
+  subagentRuns.retireCompletionAuthority(entry);
+  const api = Reflect.get(globalThis, Symbol.for("openclaw.subagentRegistryTestApi"));
+  Reflect.set(globalThis, Symbol.for("fixture.retiredSubagentRegistry"), {
+    runs: subagentRuns, tick: api.testing.runSweeperTickForTests,
+  });
+  expect(subagentRuns.size).toBe(1);
+});
+`,
+    "10-d-subagent-registry-observer.test.ts": `
+import { expect, it } from "vitest";
+import ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
+it("prevents an old registry tick from recreating a worker against a retired cache", async () => {
+  const key = Symbol.for("fixture.retiredSubagentRegistry");
+  const previous = Reflect.get(globalThis, key);
+  try {
+    await previous.tick();
+    expect(Reflect.has(globalThis, Symbol.for("openclaw.sharedStateWorkerOwner")),
+      "retired registry recreated a shared-state worker owner").toBe(false);
+    expect(previous.runs.size).toBe(0);
+  } finally {
+    Reflect.deleteProperty(globalThis, key);
+  }
+});
+`,
+  };
 }

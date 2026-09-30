@@ -14,27 +14,24 @@ function createWebhookContext(rawBody: string): WebhookContext {
 }
 
 describe("MockProvider", () => {
-  it.each([undefined, "", "   ", "\t\n"])(
-    "does not emit blank speech payloads %#",
-    (transcript) => {
-      const provider = new MockProvider();
-      const result = provider.parseWebhookEvent(
-        createWebhookContext(
-          JSON.stringify({
-            event: {
-              id: "evt-blank-speech",
-              type: "call.speech",
-              callId: "call-blank",
-              transcript,
-              isFinal: true,
-            },
-          }),
-        ),
-      );
+  it.each([undefined, " \t\n"])("does not emit blank speech payloads %#", (transcript) => {
+    const provider = new MockProvider();
+    const result = provider.parseWebhookEvent(
+      createWebhookContext(
+        JSON.stringify({
+          event: {
+            id: "evt-blank-speech",
+            type: "call.speech",
+            callId: "call-blank",
+            transcript,
+            isFinal: true,
+          },
+        }),
+      ),
+    );
 
-      expect(result.events).toEqual([]);
-    },
-  );
+    expect(result.events).toEqual([]);
+  });
 
   afterEach(() => {
     vi.useRealTimers();

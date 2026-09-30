@@ -4,6 +4,7 @@ import type {
   SessionOwner,
   SessionsAssignOwnerParams,
   SessionsDeleteResult,
+  SessionsDescribeParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
   SessionsRecoverResult,
@@ -81,6 +82,7 @@ export type SessionListOptions = {
   excludeSystem?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  includeOwnerSessionCounts?: boolean;
   archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
@@ -118,7 +120,14 @@ export type SessionRowObservation = {
 
 export type SessionRowEventListener = (
   event: GatewayEventFrame,
-  result: SessionChangedRowResult,
+  /** Rejected generations can wake recovery but cannot mutate transcript or lifecycle state. */
+  result: SessionChangedRowResult & { generationRejected?: true },
+) => void;
+
+export type SessionRowListener = (
+  row: GatewaySessionRow | null,
+  /** This retiring registration still owns delivery of the captured frame. */
+  notification?: { eventPending: true },
 ) => void;
 
 export type SessionDeleteOptions = {
@@ -198,6 +207,8 @@ export type SessionCapability = {
     ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;
+  /** Advances for every publication, including pending facts outside state. */
+  readonly revision: number;
   /** Memory-only roster presentation; never authority for mutations or live row observations. */
   readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
   /** Advances only when a canonical sessions.list result is published. */
@@ -207,6 +218,11 @@ export type SessionCapability = {
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */
   isConnectionScopeCurrent: (scope: SessionConnectionScope) => boolean;
+  /** Shares descriptor reads, including agent-implied scopes, until the session changes; refresh supersedes earlier reads. */
+  describe: (
+    params: SessionsDescribeParams,
+    options?: { refresh?: boolean; timeoutMs?: number; client?: SessionRequestClient },
+  ) => Promise<{ session?: GatewaySessionRow | null }>;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   listSnapshot: (scope: SessionListScope) => SessionListSnapshot;
   subscribeList: (
@@ -233,7 +249,7 @@ export type SessionCapability = {
   /** Owns a routed descriptor through reads and events until its consumer retires. */
   observeRow: (
     target: SessionRowTarget,
-    listener: (row: GatewaySessionRow | null) => void,
+    listener: SessionRowListener,
     /** Matching events can omit descriptor-only fields; re-read those without watching roster revisions. */
     options?: {
       onInvalidate?: (reason?: string) => void;
@@ -279,6 +295,13 @@ export type SessionCapability = {
   ) => Promise<SessionOwner | null>;
   retireModelOverride: (key: string) => void;
   think: (key: string, agentId?: string | null) => string | undefined;
+  /** Pending settings may render before roster membership or physical identity exists. */
+  settingsPreview: (
+    key: string,
+    agentId?: string,
+  ) =>
+    | Pick<GatewaySessionRow, "thinkingLevel" | "fastMode" | "effectiveFastMode" | "contextWindow">
+    | undefined;
   /** Local previews update the primary snapshot; explicit targets also update held incarnations. */
   patchRowLocal: (
     key: string,
@@ -320,7 +343,7 @@ export type SessionCapability = {
   ) => Promise<SessionWorkspaceSetResult | null>;
   subscribeMessages: (
     key: string,
-    options?: { agentId?: string | null; includeApprovals?: boolean },
+    options?: { agentId?: string | null; includeApprovals?: boolean; mode?: "narration" },
   ) => Promise<SessionMessageSubscription>;
   unsubscribeMessages: (subscription: SessionMessageSubscription) => Promise<void>;
   rewind: (

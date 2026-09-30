@@ -99,19 +99,12 @@ export function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(pa
       attempt.provider === winnerProvider &&
       attempt.model === winnerModel,
   );
-  const attempts = [
-    ...outerAttempts,
-    ...innerAttempts,
-    ...(winnerProvider && winnerModel
-      ? [
-          winnerAttempt ?? {
-            provider: winnerProvider,
-            model: winnerModel,
-            result: "success" as const,
-          },
-        ]
-      : []),
-  ];
+  const attempts = [...outerAttempts, ...innerAttempts];
+  if (winnerProvider && winnerModel) {
+    attempts.push(
+      winnerAttempt ?? { provider: winnerProvider, model: winnerModel, result: "success" },
+    );
+  }
   const terminalReceipt = params.result.meta.agentMeta?.terminalReceipt;
   const requested = { provider: params.requestedProvider, model: params.requestedModel };
   const agentMeta = terminalReceipt
@@ -199,10 +192,7 @@ export function buildRunEntryTerminal(params: {
     normalizedTerminalReceipt?.runId === params.runId
       ? {
           ...normalizedTerminalReceipt,
-          terminalDisposition:
-            terminalReply.disposition === "visible"
-              ? ("visible" as const)
-              : ("not-visible" as const),
+          terminalDisposition: terminalReply.disposition === "visible" ? "visible" : "not-visible",
         }
       : undefined;
   const modelRouteChange = formatAgentRunRouteChange(terminalReceipt, params.runId);

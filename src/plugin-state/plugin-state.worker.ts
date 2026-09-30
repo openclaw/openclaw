@@ -1,6 +1,6 @@
 import { err, ok } from "@openclaw/normalization-core/result";
+import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
   OpenClawStateDatabase,
@@ -48,6 +48,23 @@ export function executePluginStateCommand(
   hasRetainedDatabase: boolean,
 ): PluginStateWorkerOperations[keyof PluginStateWorkerOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
+  const admit = (stage: "transaction" | "commit") =>
+    requestSessionEntryCurrentAdmission(command.input?.sessionEntryCurrentSource, {
+      stage,
+      facts: undefined,
+    });
+  const failure = (error: unknown) =>
+    err(
+      capturePluginStateWorkerFailure(
+        wrapPluginStateError(
+          error,
+          description.operation,
+          description.code,
+          description.message,
+          options.path,
+        ),
+      ),
+    );
   if (
     command.type === "pluginState.lookup" ||
     command.type === "pluginState.lookupMany" ||
@@ -106,17 +123,7 @@ export function executePluginStateCommand(
           );
       }
     } catch (error) {
-      return err(
-        capturePluginStateWorkerFailure(
-          wrapPluginStateError(
-            error,
-            description.operation,
-            description.code,
-            description.message,
-            options.path,
-          ),
-        ),
-      );
+      return failure(error);
     }
   }
   let database: OpenClawStateDatabase;
@@ -139,7 +146,7 @@ export function executePluginStateCommand(
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          admit("transaction");
           const result = (() => {
             switch (command.type) {
               case "pluginState.appendJournal":
@@ -177,23 +184,13 @@ export function executePluginStateCommand(
                 throw new Error("Plugin-state read command entered its write path");
             }
           })();
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          admit("commit");
           return result;
         },
         { ...options, database },
       ),
     );
   } catch (error) {
-    return err(
-      capturePluginStateWorkerFailure(
-        wrapPluginStateError(
-          error,
-          description.operation,
-          description.code,
-          description.message,
-          options.path,
-        ),
-      ),
-    );
+    return failure(error);
   }
 }

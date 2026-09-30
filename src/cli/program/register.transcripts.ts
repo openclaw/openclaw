@@ -158,18 +158,14 @@ export function registerTranscriptsCli(program: Command): void {
     .command("list")
     .description("List stored transcript sessions")
     .option("--json", "Print JSON")
-    .action(async (options: TranscriptsCliOptions) => {
-      await listCommand(options);
-    });
+    .action(listCommand);
 
   transcripts
     .command("show")
     .description("Print and materialize a transcript summary")
     .argument("<session>", "Transcripts session id or YYYY-MM-DD/session selector")
     .option("--json", "Print JSON")
-    .action(async (sessionId: string, options: TranscriptsCliOptions) => {
-      await showCommand(sessionId, options);
-    });
+    .action(showCommand);
 
   transcripts
     .command("path")
@@ -179,7 +175,5 @@ export function registerTranscriptsCli(program: Command): void {
     .option("--metadata", "Materialize and print metadata.json")
     .option("--transcript", "Materialize and print transcript.jsonl")
     .option("--json", "Print JSON")
-    .action(async (sessionId: string, options: TranscriptsPathOptions) => {
-      await pathCommand(sessionId, options);
-    });
+    .action(pathCommand);
 }

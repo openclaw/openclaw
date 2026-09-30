@@ -98,13 +98,20 @@ function cfg(actions?: Record<string, boolean | undefined>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function imsgOptions(chatGuid = "") {
+function mockAvailableBridge(selectors: Record<string, boolean> = {}) {
+  probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+    available: true,
+    v2Ready: true,
+    selectors,
+  });
+}
+
+function imsgOptions() {
   return {
     cliPath: "imsg",
     dbPath: "/tmp/messages.db",
     remoteHost: undefined,
     timeoutMs: undefined,
-    chatGuid,
   };
 }
 
@@ -134,26 +141,15 @@ describe("imessage message actions", () => {
     loggerMock.warn.mockReset();
   });
 
-  it.each([
-    "react",
-    "edit",
-    "unsend",
-    "renameGroup",
-    "setGroupIcon",
-    "addParticipant",
-    "removeParticipant",
-    "leaveGroup",
-  ] as const)("resolves %s chat aliases to the canonical delivery target", (action) => {
-    const aliasSpec = imessageMessageActions.messageActionTargetAliases?.[action];
+  it("resolves reaction chat aliases to the canonical delivery target", () => {
+    const aliasSpec = imessageMessageActions.messageActionTargetAliases?.react;
 
     expect(aliasSpec?.deliveryTargetAliases).toStrictEqual([
       "chatGuid",
       "chatIdentifier",
       "chatId",
     ]);
-    if (action === "react") {
-      expect(aliasSpec?.aliases).toContain("messageId");
-    }
+    expect(aliasSpec?.aliases).toContain("messageId");
     expect(aliasSpec?.resolveDeliveryTarget?.({ args: { chatGuid: "iMessage;+;chat0000" } })).toBe(
       "chat_guid:iMessage;+;chat0000",
     );
@@ -161,21 +157,6 @@ describe("imessage message actions", () => {
       "chat_identifier:team-thread",
     );
     expect(aliasSpec?.resolveDeliveryTarget?.({ args: { chatId: 42 } })).toBe("chat_id:42");
-  });
-
-  it("does not advertise private API actions when the bridge is known unavailable", () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: false,
-      v2Ready: false,
-      selectors: {},
-    });
-
-    const described = imessageMessageActions.describeMessageTool({
-      cfg: cfg(),
-      currentChannelId: "chat_guid:iMessage;+;chat0000",
-    } as never);
-
-    expect(described?.actions).toStrictEqual([]);
   });
 
   it("advertises private API actions while private API status is unknown", () => {
@@ -233,11 +214,7 @@ describe("imessage message actions", () => {
   });
 
   it("advertises poll only when the pollPayloadMessage selector is present", () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: { editMessage: true, retractMessagePart: true },
-    });
+    mockAvailableBridge({ editMessage: true, retractMessagePart: true });
     expect(
       imessageMessageActions.describeMessageTool({
         cfg: cfg(),
@@ -260,11 +237,7 @@ describe("imessage message actions", () => {
   });
 
   it("hides poll when the polls gate is disabled in config", () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: { pollPayloadMessage: true },
-    });
+    mockAvailableBridge({ pollPayloadMessage: true });
     expect(
       imessageMessageActions.describeMessageTool({
         cfg: cfg({ polls: false }),
@@ -274,11 +247,7 @@ describe("imessage message actions", () => {
   });
 
   it("dispatches a poll send through the bridge runtime", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: { pollPayloadMessage: true },
-    });
+    mockAvailableBridge({ pollPayloadMessage: true });
     runtimeMock.sendPoll.mockResolvedValue({ messageId: "poll-guid" });
 
     const result = await imessageMessageActions.handleAction?.({
@@ -297,7 +266,7 @@ describe("imessage message actions", () => {
           chatGuid: "iMessage;+;chat0000",
           question: "Lunch?",
           choices: ["Pizza", "Sushi"],
-          options: imsgOptions("iMessage;+;chat0000"),
+          options: imsgOptions(),
         },
       ],
     ]);
@@ -305,11 +274,7 @@ describe("imessage message actions", () => {
   });
 
   it("dispatches a current-conversation poll without a model-supplied target", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: { pollPayloadMessage: true },
-    });
+    mockAvailableBridge({ pollPayloadMessage: true });
     runtimeMock.sendPoll.mockResolvedValue({ messageId: "poll-guid" });
 
     await imessageMessageActions.handleAction?.({
@@ -330,11 +295,7 @@ describe("imessage message actions", () => {
   it.each(["target", "to", "chatGuid", "chatIdentifier"])(
     "rejects a redacted %s with current-conversation remediation",
     async (targetAlias) => {
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: { pollPayloadMessage: true },
-      });
+      mockAvailableBridge({ pollPayloadMessage: true });
 
       await expect(
         imessageMessageActions.handleAction?.({
@@ -411,11 +372,7 @@ describe("imessage message actions", () => {
   });
 
   it("rejects a poll with fewer than two options before hitting the bridge", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: { pollPayloadMessage: true },
-    });
+    mockAvailableBridge({ pollPayloadMessage: true });
 
     await expect(
       imessageMessageActions.handleAction?.({
@@ -460,7 +417,7 @@ describe("imessage message actions", () => {
           optionIndex: 2,
           optionId: undefined,
           optionText: undefined,
-          options: imsgOptions("iMessage;+;chat0000"),
+          options: imsgOptions(),
         },
       ],
     ]);
@@ -696,11 +653,7 @@ describe("imessage message actions", () => {
   ] as const)(
     "rejects %s from non-owner non-admin callers before native mutation",
     async (action, params, runtimeAction) => {
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-      });
+      mockAvailableBridge();
       await expect(
         imessageMessageActions.handleAction?.({
           action,
@@ -716,11 +669,7 @@ describe("imessage message actions", () => {
 
   it("routes a wrapper-only private action through the detected remote transport", async () => {
     const text = "spaces ; $(touch /tmp/nope) `whoami` & |";
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: { editMessage: true },
-    });
+    mockAvailableBridge({ editMessage: true });
     remoteHostMock.resolve.mockResolvedValue("bot@messages-mac");
     runtimeMock.editMessage.mockResolvedValue(undefined);
 
@@ -785,11 +734,7 @@ describe("imessage message actions", () => {
   });
 
   it("allows owner and operator.admin group management", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
     runtimeMock.renameGroup.mockResolvedValue(undefined);
     runtimeMock.leaveGroup.mockResolvedValue(undefined);
 
@@ -810,11 +755,11 @@ describe("imessage message actions", () => {
     expect(runtimeMock.renameGroup).toHaveBeenCalledWith({
       chatGuid: "iMessage;+;chat0000",
       displayName: "Renamed group",
-      options: imsgOptions("iMessage;+;chat0000"),
+      options: imsgOptions(),
     });
     expect(runtimeMock.leaveGroup).toHaveBeenCalledWith({
       chatGuid: "iMessage;+;chat0000",
-      options: imsgOptions("iMessage;+;chat0000"),
+      options: imsgOptions(),
     });
   });
 
@@ -846,11 +791,7 @@ describe("imessage message actions", () => {
   });
 
   it("rejects configured-off actions at execution time", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
 
     await expect(
       imessageMessageActions.handleAction?.({
@@ -868,11 +809,7 @@ describe("imessage message actions", () => {
   });
 
   it("maps message tool reactions to imsg tapback kinds", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
     runtimeMock.sendReaction.mockResolvedValue(undefined);
 
     await imessageMessageActions.handleAction?.({
@@ -894,7 +831,7 @@ describe("imessage message actions", () => {
           reaction: "like",
           remove: undefined,
           partIndex: undefined,
-          options: imsgOptions("iMessage;+;chat0000"),
+          options: imsgOptions(),
         },
       ],
     ]);
@@ -913,11 +850,7 @@ describe("imessage message actions", () => {
   });
 
   it("rejects an unbound message before invoking the bridge", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
     runtimeMock.authorizeMessageReference.mockImplementationOnce(() => {
       throw new Error("iMessage message reference does not belong to the selected conversation.");
     });
@@ -939,11 +872,7 @@ describe("imessage message actions", () => {
   });
 
   it("rejects before resolving provider metadata for an unbound target alias", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
     runtimeMock.authorizeMessageReference.mockImplementationOnce(() => {
       throw new Error("iMessage message reference belongs to a different conversation.");
     });
@@ -966,11 +895,7 @@ describe("imessage message actions", () => {
   });
 
   it("authorizes a provider-resolved GUID independently of its input alias", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
     runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;foreign");
     runtimeMock.authorizeMessageReference.mockImplementation(({ chatContext }) => {
       if (chatContext.chatGuid) {
@@ -999,11 +924,7 @@ describe("imessage message actions", () => {
   });
 
   it("uses one canonical selector when explicit and fallback targets disagree", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
     runtimeMock.sendReaction.mockResolvedValue(undefined);
 
     await imessageMessageActions.handleAction?.({
@@ -1025,11 +946,7 @@ describe("imessage message actions", () => {
   });
 
   it("rejects conflicting explicit chat aliases before provider reads", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
 
     await expect(
       imessageMessageActions.handleAction?.({
@@ -1055,11 +972,7 @@ describe("imessage message actions", () => {
   ] as const)(
     "authorizes %s references before native mutation",
     async (action, params, mutation) => {
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: { editMessage: true, retractMessagePart: true },
-      });
+      mockAvailableBridge({ editMessage: true, retractMessagePart: true });
       mutation.mockResolvedValue(undefined);
 
       await imessageMessageActions.handleAction?.({
@@ -1090,11 +1003,7 @@ describe("imessage message actions", () => {
   );
 
   it("resolves chat_id targets before invoking bridge actions", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
     runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved");
     runtimeMock.sendReaction.mockResolvedValue(undefined);
 
@@ -1125,18 +1034,14 @@ describe("imessage message actions", () => {
           reaction: "like",
           remove: undefined,
           partIndex: undefined,
-          options: imsgOptions("iMessage;+;resolved"),
+          options: imsgOptions(),
         },
       ],
     ]);
   });
 
   it("rejects fractional chatId params before resolving chat GUIDs", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
 
     await expect(
       imessageMessageActions.handleAction?.({
@@ -1155,11 +1060,7 @@ describe("imessage message actions", () => {
   });
 
   it("rejects fractional partIndex values before invoking bridge actions", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
 
     await expect(
       imessageMessageActions.handleAction?.({
@@ -1178,11 +1079,7 @@ describe("imessage message actions", () => {
   });
 
   it("resolves short message ids before invoking bridge actions", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
     runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("full-guid");
     runtimeMock.sendReaction.mockResolvedValue(undefined);
 
@@ -1210,18 +1107,14 @@ describe("imessage message actions", () => {
           reaction: "like",
           remove: undefined,
           partIndex: undefined,
-          options: imsgOptions("iMessage;+;chat0000"),
+          options: imsgOptions(),
         },
       ],
     ]);
   });
 
   it("resolves chat_identifier targets before invoking bridge actions", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
     runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
     runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
 
@@ -1253,7 +1146,7 @@ describe("imessage message actions", () => {
           replyToMessageId: "message-guid",
           partIndex: undefined,
           attachment: undefined,
-          options: imsgOptions("iMessage;+;resolved-ident"),
+          options: imsgOptions(),
         },
       ],
     ]);
@@ -1358,7 +1251,7 @@ describe("imessage message actions", () => {
               buffer: Uint8Array.from(Buffer.from("PNGDATA")),
               filename: "card.png",
             },
-            options: imsgOptions("iMessage;+;resolved-ident"),
+            options: imsgOptions(),
           },
         ],
       ]);
@@ -1456,11 +1349,7 @@ describe("imessage message actions", () => {
       // `iMessage;-;+12069106512` and asks the runtime to look it up. The
       // runtime returns the real chat guid. sendReaction must receive the
       // resolved guid, not the synthesized stand-in.
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-      });
+      mockAvailableBridge();
       runtimeMock.resolveChatGuidForTarget.mockResolvedValue("any;-;+12069106512");
       runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("full-guid");
       runtimeMock.sendReaction.mockResolvedValue(undefined);
@@ -1512,7 +1401,7 @@ describe("imessage message actions", () => {
             reaction: "like",
             remove: undefined,
             partIndex: undefined,
-            options: imsgOptions("any;-;+12069106512"),
+            options: imsgOptions(),
           },
         ],
       ]);
@@ -1523,11 +1412,7 @@ describe("imessage message actions", () => {
       // chat has never been touched yet. We refuse rather than fabricate the
       // identifier and let it fail downstream — there's no message to react
       // to in a chat that doesn't exist yet.
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-      });
+      mockAvailableBridge();
       runtimeMock.resolveChatGuidForTarget.mockResolvedValue(null);
       runtimeMock.sendReaction.mockResolvedValue(undefined);
 
@@ -1550,11 +1435,7 @@ describe("imessage message actions", () => {
       // new phone-number chat is fine — Messages will register the chat as a
       // side effect of the send. Only the mutate-existing-message actions
       // need a registered chat.
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-      });
+      mockAvailableBridge();
       runtimeMock.resolveChatGuidForTarget.mockResolvedValue(null);
       runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "ok" });
       runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("parent-guid");
@@ -1577,7 +1458,7 @@ describe("imessage message actions", () => {
             replyToMessageId: "parent-guid",
             partIndex: undefined,
             attachment: undefined,
-            options: imsgOptions("iMessage;-;+18001234567"),
+            options: imsgOptions(),
           },
         ],
       ]);
@@ -1588,11 +1469,7 @@ describe("imessage message actions", () => {
       // forgot which emoji was originally added (or used a non-mapped emoji
       // like 🦞). We fan a remove out to every known kind; the bridge no-ops
       // kinds that weren't there.
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-      });
+      mockAvailableBridge();
       runtimeMock.sendReaction.mockResolvedValue(undefined);
 
       await imessageMessageActions.handleAction?.({
@@ -1623,11 +1500,7 @@ describe("imessage message actions", () => {
       // Scenario from the audit: agent passes a typo like `invisible_ink`
       // (note underscore vs `invisibleink` alias). We refuse rather than
       // forwarding gibberish to the bridge for an opaque CLI failure.
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-      });
+      mockAvailableBridge();
       runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "ok" });
 
       await expect(
@@ -1645,11 +1518,7 @@ describe("imessage message actions", () => {
     });
 
     it("accepts known effect aliases like 'slam' and 'invisibleink'", async () => {
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-      });
+      mockAvailableBridge();
       runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "ok" });
 
       await imessageMessageActions.handleAction?.({
@@ -1668,7 +1537,7 @@ describe("imessage message actions", () => {
             chatGuid: "iMessage;+;chat0000",
             text: "boom",
             effectId: "com.apple.MobileSMS.expressivesend.impact",
-            options: imsgOptions("iMessage;+;chat0000"),
+            options: imsgOptions(),
           },
         ],
       ]);
@@ -1687,11 +1556,7 @@ describe("imessage message actions", () => {
         // listed echo / happybirthday / shootingstar / sparkles / spotlight
         // as valid aliases, but they were missing from the alias map. Agents
         // following our own guidance got "unknown effect" thrown back.
-        probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-          available: true,
-          v2Ready: true,
-          selectors: {},
-        });
+        mockAvailableBridge();
         runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "ok" });
 
         await imessageMessageActions.handleAction?.({
@@ -1710,7 +1575,7 @@ describe("imessage message actions", () => {
               chatGuid: "iMessage;+;chat0000",
               text: "boom",
               effectId: canonical,
-              options: imsgOptions("iMessage;+;chat0000"),
+              options: imsgOptions(),
             },
           ],
         ]);
@@ -1721,11 +1586,7 @@ describe("imessage message actions", () => {
       // Scenario from the audit: a whitespace-only currentChannelId would
       // hit parseIMessageTarget which throws on empty input, aborting the
       // whole action with a confusing "target is required" message.
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-      });
+      mockAvailableBridge();
 
       await expect(
         imessageMessageActions.handleAction?.({
@@ -1744,11 +1605,7 @@ describe("imessage message actions", () => {
   ])(
     "routes upload-file through the private API attachment bridge with %s",
     async (_label, voiceParam) => {
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-      });
+      mockAvailableBridge();
       runtimeMock.sendAttachment.mockResolvedValue({ messageId: "sent-guid" });
 
       const result = await imessageMessageActions.handleAction?.({
@@ -1769,7 +1626,7 @@ describe("imessage message actions", () => {
             buffer: Uint8Array.from(Buffer.from("image")),
             filename: "photo.jpg",
             asVoice: true,
-            options: imsgOptions("iMessage;+;chat0000"),
+            options: imsgOptions(),
           },
         ],
       ]);
@@ -1779,10 +1636,7 @@ describe("imessage message actions", () => {
 
   it.each([
     ["upload-file", "-_8="],
-    ["upload-file", "-_8"],
-    ["setGroupIcon", "-_8="],
     ["setGroupIcon", "-_8"],
-    ["reply", "-_8="],
     ["reply", "-_8"],
   ])("preserves URL-safe base64 for %s (%s)", async (action, buffer) => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
@@ -1824,11 +1678,7 @@ describe("imessage message actions", () => {
   });
 
   it("rejects a malformed base64 buffer for upload-file instead of sending garbage bytes", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
 
     await expect(
       imessageMessageActions.handleAction?.({
@@ -1845,11 +1695,7 @@ describe("imessage message actions", () => {
   });
 
   it("rejects a malformed base64 buffer for setGroupIcon instead of setting a garbage icon", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
+    mockAvailableBridge();
 
     await expect(
       imessageMessageActions.handleAction?.({

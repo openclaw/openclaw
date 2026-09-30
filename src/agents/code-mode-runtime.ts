@@ -24,6 +24,10 @@ const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 50;
 export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "./code-mode-worker-types.js";
+export const CODE_MODE_RESUME_MARGIN_MS = 250;
+// Reserve the resume floor plus dispatch/settlement slack so a call that runs
+// to its yield still leaves enough budget to resume the guest inline.
+export const CODE_MODE_EXEC_YIELD_MARGIN_MS = 2 * CODE_MODE_RESUME_MARGIN_MS;
 export const DEFAULT_HEADLESS_WALL_CLOCK_MS = 30_000;
 // Cron script payloads persist caps of 900 seconds and 200 tool calls.
 // The shared executor must not silently lower those accepted job limits.
@@ -86,7 +90,7 @@ function readCodeModeRawConfig(
   model?: { provider: string; modelId: string },
 ): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
-  const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? {};
+  const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? { enabled: "auto" };
   const agent = config && agentId ? resolveAgentConfig(config, agentId) : undefined;
   const agentRaw = normalizeCodeModeRawConfig(agent?.tools?.codeMode);
   const key = model
@@ -106,8 +110,7 @@ function readCodeModeRawConfig(
 }
 
 function readEnabled(value: unknown): boolean | "auto" {
-  // Stable option-bearing objects made `enabled` optional and defaulted it off.
-  // Automatic activation therefore requires an explicit `"auto"` selection.
+  // Authored option-bearing objects keep their historical opt-in behavior.
   return typeof value === "boolean" || value === "auto" ? value : false;
 }
 
@@ -201,7 +204,6 @@ export function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
   return {
     enabled: true,
     mode: "tools",
-    codeTimeoutMs: config.timeoutMs,
     searchDefaultLimit: config.searchDefaultLimit,
     maxSearchLimit: config.maxSearchLimit,
   };

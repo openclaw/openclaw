@@ -18,7 +18,7 @@ import {
 } from "../../cron/active-jobs.js";
 import { prepareCronPromptRunAdmission } from "../../cron/isolated-agent/run-admission.js";
 import { registerActiveCronTaskRun } from "../../cron/service/active-run-cancellation.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import type {
   GatewayRequestContext,
@@ -46,173 +46,46 @@ import {
 } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
-type ScheduledLifetimeCase = {
-  cause: string;
-  revokeAt:
-    | "provider"
-    | "target"
-    | "action"
-    | "unconfirmed-action"
-    | "retry"
-    | "poll-retry"
-    | "generic-retry"
-    | "poll-provider"
-    | "multipart"
-    | "unbound"
-    | "partial-action"
-    | "config"
-    | "poll-partial";
-  action: "send" | "poll" | "reply" | "set-presence";
-  retire: (jobId: string) => void;
-  accepted: boolean;
-  partial?: boolean;
-  laterError?: string | undefined;
-  deliveryMode: "direct" | "gateway";
-};
-
-function scheduledLifetimeCase(
-  input: Pick<ScheduledLifetimeCase, "cause" | "revokeAt" | "accepted"> &
-    Partial<Omit<ScheduledLifetimeCase, "cause" | "revokeAt" | "accepted">>,
-): ScheduledLifetimeCase {
-  return {
-    action: "send",
-    retire: noteActiveCronJobMessageActionAuthorityMutation,
-    laterError: "cron message action authority is no longer active",
-    deliveryMode: "direct",
-    ...input,
-  };
-}
-
-it.each<ScheduledLifetimeCase>([
-  scheduledLifetimeCase({
-    cause: "message authority is durably revoked",
-    revokeAt: "provider" as const,
-    accepted: true,
-  }),
-  scheduledLifetimeCase({
-    cause: "the active job is cancelled",
-    revokeAt: "provider" as const,
-    retire: (jobId: string) =>
-      requestActiveCronJobCancellation(jobId, "Cron job removed by operator."),
-    accepted: true,
-    laterError: "Message send aborted",
-  }),
-  scheduledLifetimeCase({
-    cause: "message authority closes during provider target lookup",
-    revokeAt: "target" as const,
-    accepted: false,
-  }),
-  scheduledLifetimeCase({
-    cause: "the active job is cancelled after a generic mutation is accepted",
-    revokeAt: "action" as const,
-    action: "set-presence" as const,
-    retire: (jobId: string) =>
-      requestActiveCronJobCancellation(jobId, "Cron job removed by operator."),
-    accepted: true,
-    laterError: "Message send aborted",
-  }),
-  ...(["direct", "gateway"] as const).map((deliveryMode) =>
-    scheduledLifetimeCase({
-      cause: `message authority closes during a ${deliveryMode} unconfirmed mutation result`,
-      revokeAt: "unconfirmed-action" as const,
-      action: "set-presence" as const,
-      accepted: false,
-      deliveryMode,
-    }),
-  ),
-  scheduledLifetimeCase({
-    cause: "message authority closes before a refused write retry",
-    revokeAt: "retry" as const,
-    accepted: false,
-  }),
-  scheduledLifetimeCase({
-    cause: "message authority closes before a poll provider retry",
-    revokeAt: "poll-retry" as const,
-    action: "poll" as const,
-    accepted: false,
-  }),
-  scheduledLifetimeCase({
-    cause: "message authority closes before a bound Gateway write retry",
-    revokeAt: "retry" as const,
-    accepted: false,
-    deliveryMode: "gateway" as const,
-  }),
-  scheduledLifetimeCase({
-    cause: "same-host Gateway fields are removed from an existing job",
-    revokeAt: "provider" as const,
-    accepted: true,
-    deliveryMode: "gateway" as const,
-  }),
-  ...(["direct", "gateway"] as const).map((deliveryMode) =>
-    scheduledLifetimeCase({
-      cause: `message authority closes before a ${deliveryMode} generic durable retry`,
-      revokeAt: "generic-retry" as const,
-      action: "reply" as const,
-      accepted: false,
-      deliveryMode,
-    }),
-  ),
-  scheduledLifetimeCase({
-    cause: "message authority closes before a bound Gateway poll retry",
-    revokeAt: "poll-retry" as const,
-    action: "poll" as const,
-    accepted: false,
-    deliveryMode: "gateway" as const,
-  }),
-  scheduledLifetimeCase({
-    cause: "message authority closes after a bound Gateway poll is accepted",
-    revokeAt: "poll-provider" as const,
-    action: "poll" as const,
-    accepted: true,
-    laterError: undefined,
-    deliveryMode: "gateway" as const,
-  }),
-  scheduledLifetimeCase({
-    cause: "message authority closes after the first multipart send",
-    revokeAt: "multipart" as const,
-    accepted: true,
-    partial: true,
-  }),
-  scheduledLifetimeCase({
-    cause: "a configured remote Gateway has no active bound host",
-    revokeAt: "unbound" as const,
-    accepted: false,
-    deliveryMode: "gateway" as const,
-  }),
-  ...(["direct", "gateway"] as const).map((deliveryMode) =>
-    scheduledLifetimeCase({
-      cause: `message authority closes after a ${deliveryMode} plugin partial mutation`,
-      revokeAt: "partial-action" as const,
-      action: "set-presence" as const,
-      accepted: true,
-      partial: true,
-      deliveryMode,
-    }),
-  ),
-  scheduledLifetimeCase({
-    cause: "a bound Gateway publishes replacement account config during preparation",
-    revokeAt: "config" as const,
-    accepted: true,
-    deliveryMode: "gateway" as const,
-  }),
-  ...(["direct", "gateway"] as const).map((deliveryMode) =>
-    scheduledLifetimeCase({
-      cause: `message authority closes after a ${deliveryMode} partial poll`,
-      revokeAt: "poll-partial" as const,
-      action: "poll" as const,
-      accepted: true,
-      partial: true,
-      deliveryMode,
-    }),
-  ),
-])(
-  "owns scheduled message lifetime when $cause",
-  async ({ cause, revokeAt, action, retire, accepted, partial, laterError, deliveryMode }) => {
+it.each([
+  ["provider", "send", "direct", "accepted"],
+  ["target", "send", "direct", "rejected"],
+  ["action", "set-presence", "direct", "accepted"],
+  ["unconfirmed-action", "set-presence", "gateway", "rejected"],
+  ["retry", "send", "direct", "rejected"],
+  ["retry", "send", "gateway", "rejected"],
+  ["provider", "send", "gateway", "accepted"],
+  ["generic-retry", "reply", "direct", "rejected"],
+  ["generic-retry", "reply", "gateway", "rejected"],
+  ["poll-retry", "poll", "gateway", "rejected"],
+  ["poll-provider", "poll", "gateway", "accepted"],
+  ["multipart", "send", "direct", "partial"],
+  ["unbound", "send", "gateway", "rejected"],
+  ["partial-action", "set-presence", "direct", "partial"],
+  ["partial-action", "set-presence", "gateway", "partial"],
+  ["config", "send", "gateway", "accepted"],
+  ["poll-partial", "poll", "direct", "partial"],
+  ["poll-partial", "poll", "gateway", "partial"],
+] as const)(
+  "settles %s revocation during %s via %s as %s",
+  async (revokeAt, action, deliveryMode, outcome) => {
+    const accepted = outcome !== "rejected";
+    const partial = outcome === "partial";
+    const existingGatewayJob = revokeAt === "provider" && deliveryMode === "gateway";
+    const laterError =
+      revokeAt === "poll-provider"
+        ? undefined
+        : revokeAt === "action"
+          ? "Message send aborted"
+          : "cron message action authority is no longer active";
     const registry = captureActivePluginRegistrySnapshot();
     const state = await createOpenClawTestState();
     const source = new AbortController();
     const boundaryEntered = createDeferred();
     const releaseBoundary = createDeferred();
+    const pauseAtBoundary = async () => {
+      boundaryEntered.resolve();
+      await releaseBoundary.promise;
+    };
     const jobId = "scheduled-message-lifetime";
     const runId = "scheduled-message-lifetime-run";
     const sessionKey = `agent:main:cron:${jobId}:run:${runId}`;
@@ -261,17 +134,15 @@ it.each<ScheduledLifetimeCase>([
           providerAccounts.push(accountId ?? undefined);
           sends.push(text);
           queueIds.push(deliveryQueueId);
-          if (revokeAt === "provider") {
-            boundaryEntered.resolve();
-            await releaseBoundary.promise;
-          }
-          if (revokeAt === "multipart" && sends.length === 1) {
-            boundaryEntered.resolve();
-            await releaseBoundary.promise;
+          if (
+            revokeAt === "provider" ||
+            (revokeAt === "multipart" && sends.length === 1) ||
+            revokeAt === "retry" ||
+            revokeAt === "generic-retry"
+          ) {
+            await pauseAtBoundary();
           }
           if (revokeAt === "retry" || revokeAt === "generic-retry") {
-            boundaryEntered.resolve();
-            await releaseBoundary.promise;
             await onPlatformSendDispatch?.();
           }
           return { channel: "discord", messageId: `message-${sends.length}` };
@@ -279,20 +150,20 @@ it.each<ScheduledLifetimeCase>([
       );
       const listTargetsLive = async () => {
         if (revokeAt === "target") {
-          boundaryEntered.resolve();
-          await releaseBoundary.promise;
+          await pauseAtBoundary();
         }
         return [{ kind: "group" as const, id: "channel:100000000000000001", name: "alerts" }];
       };
       const sendPoll = vi.fn(async ({ assertDirectAdapterHandoff }: ChannelPollContext) => {
         pollRequests.push("initial");
-        if (revokeAt === "poll-provider") {
-          boundaryEntered.resolve();
-          await releaseBoundary.promise;
+        if (
+          revokeAt === "poll-provider" ||
+          revokeAt === "poll-retry" ||
+          revokeAt === "poll-partial"
+        ) {
+          await pauseAtBoundary();
         }
         if (revokeAt === "poll-retry" || revokeAt === "poll-partial") {
-          boundaryEntered.resolve();
-          await releaseBoundary.promise;
           try {
             assertDirectAdapterHandoff?.();
           } catch (error) {
@@ -362,7 +233,7 @@ it.each<ScheduledLifetimeCase>([
             if (requestedAction !== "set-presence") {
               throw new Error(`Unexpected plugin action: ${requestedAction}`);
             }
-            if (cause === "the active job is cancelled after a generic mutation is accepted") {
+            if (revokeAt === "action") {
               localActionGatewayFields.push({
                 gatewayUrl: actionParams.gatewayUrl,
                 gatewayToken: actionParams.gatewayToken,
@@ -376,8 +247,7 @@ it.each<ScheduledLifetimeCase>([
               revokeAt === "unconfirmed-action" ||
               revokeAt === "partial-action"
             ) {
-              boundaryEntered.resolve();
-              await releaseBoundary.promise;
+              await pauseAtBoundary();
             }
             if (revokeAt === "partial-action") {
               try {
@@ -484,8 +354,7 @@ it.each<ScheduledLifetimeCase>([
         admitScheduledInvocation: invocationPolicy.admit,
         resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => {
           if (revokeAt === "config") {
-            boundaryEntered.resolve();
-            await releaseBoundary.promise;
+            await pauseAtBoundary();
           }
           return {
             resolvedConfig,
@@ -498,73 +367,52 @@ it.each<ScheduledLifetimeCase>([
       catalog.push(tool);
       const invoke = <T>(run: () => Promise<T>) =>
         gatewayCaller ? withGatewayToolCallerIdentity(gatewayCaller, run) : run();
-      const send = (
-        callId: string,
-        message: string,
-        gatewayConnection?: { gatewayUrl?: string; gatewayToken?: string },
-      ) =>
+      const sameHostConnection = {
+        gatewayUrl: "ws://127.0.0.1:18789",
+        gatewayToken: "redundant-same-host-token",
+      };
+      const defaultConnection =
+        revokeAt === "action"
+          ? {
+              gatewayUrl: "wss://legacy.example.invalid/discarded-path",
+              gatewayToken: "legacy-provider-local-token",
+            }
+          : revokeAt === "provider" && deliveryMode === "direct"
+            ? sameHostConnection
+            : undefined;
+      const execute = (callId: string, gatewayConnection = defaultConnection) =>
         invoke(() =>
           tool.execute(
             callId,
             {
-              action: "send",
+              action,
               channel: "discord",
+              ...(action === "set-presence"
+                ? {}
+                : {
+                    target: revokeAt === "target" ? "alerts" : "channel:100000000000000001",
+                  }),
+              ...(action === "poll"
+                ? { pollQuestion: "Ship?", pollOption: ["Yes", "No"] }
+                : action === "set-presence"
+                  ? {}
+                  : {
+                      message:
+                        action === "reply"
+                          ? "generic"
+                          : revokeAt === "multipart"
+                            ? "first second"
+                            : "first",
+                    }),
               ...(revokeAt === "config" ? { accountId: "admitted" } : {}),
-              target: revokeAt === "target" ? "alerts" : "channel:100000000000000001",
-              message: revokeAt === "multipart" ? "first second" : message,
               ...gatewayConnection,
             },
             source.signal,
           ),
         );
-      const execute = (callId: string) =>
-        action === "send"
-          ? send(
-              callId,
-              "first",
-              cause === "message authority is durably revoked" && deliveryMode === "direct"
-                ? {
-                    gatewayUrl: "ws://127.0.0.1:18789",
-                    gatewayToken: "redundant-same-host-token",
-                  }
-                : undefined,
-            )
-          : invoke(() =>
-              tool.execute(
-                callId,
-                {
-                  action,
-                  channel: "discord",
-                  ...(action === "poll"
-                    ? {
-                        target: "channel:100000000000000001",
-                        pollQuestion: "Ship?",
-                        pollOption: ["Yes", "No"],
-                      }
-                    : action === "reply"
-                      ? {
-                          target: "channel:100000000000000001",
-                          message: "generic",
-                        }
-                      : {}),
-                  ...(cause === "the active job is cancelled after a generic mutation is accepted"
-                    ? {
-                        gatewayUrl: "wss://legacy.example.invalid/discarded-path",
-                        gatewayToken: "legacy-provider-local-token",
-                      }
-                    : {}),
-                },
-                source.signal,
-              ),
-            );
 
-      if (cause === "same-host Gateway fields are removed from an existing job") {
-        await expect(
-          send("existing-job-message", "first", {
-            gatewayUrl: "ws://127.0.0.1:18789",
-            gatewayToken: "redundant-same-host-token",
-          }),
-        ).rejects.toThrow(
+      if (existingGatewayJob) {
+        await expect(execute("existing-job-message", sameHostConnection)).rejects.toThrow(
           "Scheduled message actions require the active bound Gateway. Remove per-call gatewayUrl and gatewayToken fields and retry.",
         );
         expect(gatewayDispatch).not.toHaveBeenCalled();
@@ -577,11 +425,7 @@ it.each<ScheduledLifetimeCase>([
         return;
       }
 
-      pending = execute(
-        cause === "same-host Gateway fields are removed from an existing job"
-          ? "existing-job-message"
-          : "accepted-before-revocation",
-      );
+      pending = execute(existingGatewayJob ? "existing-job-message" : "accepted-before-revocation");
       void pending.catch(() => undefined);
       await withTestTimeout(
         Promise.race([
@@ -615,7 +459,11 @@ it.each<ScheduledLifetimeCase>([
         expect(providerAccounts).toEqual(["admitted"]);
         return;
       }
-      retire(jobId);
+      if (revokeAt === "action") {
+        requestActiveCronJobCancellation(jobId, "Cron job removed by operator.");
+      } else {
+        noteActiveCronJobMessageActionAuthorityMutation(jobId);
+      }
       releaseBoundary.resolve();
 
       if (accepted) {
@@ -677,7 +525,7 @@ it.each<ScheduledLifetimeCase>([
           : [],
       );
       expect(localActionGatewayFields).toEqual(
-        cause === "the active job is cancelled after a generic mutation is accepted"
+        revokeAt === "action"
           ? [
               {
                 gatewayUrl: undefined,

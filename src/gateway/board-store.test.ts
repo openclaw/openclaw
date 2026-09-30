@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -9,11 +10,14 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { boardStore } from "./board-store.js";
 import { progressCardStore } from "./progress-card-store.js";
 import { createBoardHarness } from "./server-methods/board.test-support.js";
@@ -106,18 +110,28 @@ it("keeps global boards and progress under each owner's canonical row across reo
         }),
       );
     }
-    const progress = await invoke("progressCard.get", { sessionKey: "global", agentId });
-    expect(progress).toHaveBeenCalledWith(
-      true,
-      {
-        card: expect.objectContaining({
-          sessionKey: `agent:${agentId}:global`,
-          revision: 1,
-          steps: [{ step: `${agentId} done`, status: "completed" }],
-        }),
-      },
-      undefined,
-    );
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    const parentSql = observeMainThreadSql();
+    try {
+      const progress = await invoke("progressCard.get", { sessionKey: "global", agentId });
+      expect(progress).toHaveBeenCalledWith(
+        true,
+        {
+          card: expect.objectContaining({
+            sessionKey: `agent:${agentId}:global`,
+            revision: 1,
+            steps: [{ step: `${agentId} done`, status: "completed" }],
+          }),
+        },
+        undefined,
+      );
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      parentSql.expectIdle();
+    } finally {
+      parentSql.restore();
+    }
   }
   await invoke("progressCard.put", { sessionKey: "agent:work:main", expectedRevision: 2 });
   expect((await progressCardStore.get("global", "work"))?.revision).toBe(1);
@@ -262,4 +276,48 @@ it("reopens separate boards and progress cards in a shared database owned by ano
       revision: 1,
     });
   }
+});
+
+it("keeps missing progress-card storage absent and reports unreadable stored cards", async () => {
+  const stateDir = tempDirs.make("openclaw-gateway-progress-reader-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
+  setRuntimeConfigSnapshot(cfg, cfg);
+  const key = "agent:main:main";
+  expect(await progressCardStore.get(key)).toBeNull();
+  expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).toBe(false);
+  expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey: key, storePath: database.path },
+    { sessionId: "reader-card", updatedAt: 1 },
+  );
+  expect(await progressCardStore.get(key)).toBeNull();
+  await progressCardStore.put(key, { markdown: "card" });
+  database.db
+    .prepare("UPDATE session_progress_cards SET steps_json = ? WHERE session_key = ?")
+    .run("invalid JSON", key);
+  await expect(progressCardStore.get(key)).rejects.toThrow(/JSON/);
+});
+
+it("reads incognito progress only from its process-held owner", async () => {
+  const stateDir = tempDirs.make("openclaw-gateway-incognito-progress-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+  const cfg = {
+    agents: { ownership: "explicit" as const, entries: { main: {} } },
+    session: { store: storePath },
+  };
+  setRuntimeConfigSnapshot(cfg, cfg);
+  const key = "agent:main:main";
+  expect(await progressCardStore.get(key)).toBeNull();
+  const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey: key, storePath },
+    { sessionId: "incognito-card", updatedAt: 1 },
+  );
+  await progressCardStore.put(key, { markdown: "private card" });
+  expect(await progressCardStore.get(key)).toMatchObject({ markdown: "private card", revision: 1 });
+  expect(fs.existsSync(storePath)).toBe(false);
+  expect(database.db.isOpen).toBe(true);
 });

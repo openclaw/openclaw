@@ -114,8 +114,14 @@ struct OpenClawApp: App {
                 }
             }
             SidebarCommands()
-            if !self.state.nativeExperienceEnabled {
-                CommandMenu("Navigate") {
+            CommandMenu("Navigate") {
+                if self.state.nativeExperienceEnabled {
+                    Button("Command Palette…") {
+                        WebChatManager.shared.showCommandPalette()
+                    }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .disabled(!WebChatManager.shared.canShowCommandPalette)
+                } else {
                     Button("Back") {
                         DashboardManager.shared.navigateBack()
                     }
@@ -293,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
         // singleton check so a short-lived handoff process cannot orphan that child.
         GatewayEndpointStore.admitPrimaryAppLaunch()
+        ChromeExtensionSetup.shared.start(plan: launchPlan)
         GatewayConnectivityCoordinator.shared.start()
         self.state = AppStateStore.shared
         if let state {
@@ -336,6 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TerminationSignalWatcher.shared.start()
         MacNodeModeCoordinator.shared.start()
         if launchPlan.allowsInteractiveServices {
+            GatewayBrowserSignInCoordinator.shared.start()
             GatewaysMainMenu.shared.install()
             BackgroundSessionNotifications.shared.start()
             NodePairingApprovalPrompter.shared.start()
@@ -382,6 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        ChromeExtensionSetup.shared.stop()
         BackgroundSessionNotifications.shared.stop()
         self.statusMenuController?.stop()
         QuickChatController.shared.stop()
@@ -441,10 +450,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sender.reply(toApplicationShouldTerminate: true)
     }
 
-    static func shouldPresentScheduledFirstRunOnboarding(onboardingSeen: Bool) -> Bool {
-        !onboardingSeen
-    }
-
     private func scheduleFirstRunOnboardingIfNeeded() async {
         let connectionMode = AppStateStore.shared.connectionMode
         let onboardingSeen = AppStateStore.shared.onboardingSeen
@@ -460,9 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            guard Self.shouldPresentScheduledFirstRunOnboarding(
-                onboardingSeen: AppStateStore.shared.onboardingSeen)
-            else { return }
+            guard !AppStateStore.shared.onboardingSeen else { return }
             OnboardingController.shared.show()
         }
     }

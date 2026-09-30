@@ -2,6 +2,10 @@ import { cpus } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayEventLoopHealthMonitor } from "./event-loop-health.js";
 
 vi.mock("node:os", async (importOriginal) => ({
@@ -16,6 +20,7 @@ vi.mock("../../infra/worker-cpu.js", () => ({ getTrackedWorkerCpuSources: vi.fn(
 
 const monitors: ReturnType<typeof createGatewayEventLoopHealthMonitor>[] = [];
 let now = 10_000;
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let revision = 0;
 let workers: ReturnType<typeof getTrackedWorkerCpuSources>["workers"];
 const workerUsage = vi.fn<() => Promise<NodeJS.CpuUsage | undefined>>();
@@ -26,8 +31,8 @@ function hostCpu(user: number, idle: number) {
 }
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
   now = 10_000;
+  clock = createGatewaySchedulerClock(now);
   revision = 0;
   workers = [{ cpuUsage: workerUsage }];
   workerUsage.mockReset().mockImplementation(async () => ({ user: now * 500, system: 0 }));
@@ -44,23 +49,23 @@ afterEach(() => {
   }
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  vi.useRealTimers();
 });
 
 async function createMonitor() {
   const monitor = createGatewayEventLoopHealthMonitor({
+    scheduler: createTestGatewayScheduler(clock.clock),
     now: () => now,
     cpuUsage: (previous) => ({ user: now * 2_000 - (previous?.user ?? 0), system: 0 }),
     eventLoopUtilization: () => ({ idle: now, active: 0, utilization: 0.05 }),
   });
   monitors.push(monitor);
-  await vi.advanceTimersByTimeAsync(0);
+  await clock.wake();
   return monitor;
 }
 
 async function sample(elapsedMs = 1_000) {
   now += elapsedMs;
-  await vi.advanceTimersByTimeAsync(20);
+  await clock.advanceTo(now);
 }
 
 describe("CPU breakdown sampling", () => {
@@ -164,9 +169,10 @@ describe("CPU breakdown sampling", () => {
     const health = monitor.snapshot();
     expect(health?.cpuCoreRatio).toBe(2);
     expect(health?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(101);
+    now += 101;
+    await clock.advanceTo(now);
     slow.resolve({ user: now * 500, system: 0 });
-    await vi.advanceTimersByTimeAsync(0);
+    await clock.wake();
     expect(monitor.snapshot()).toBe(health);
     await sample();
     expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
@@ -183,10 +189,10 @@ describe("CPU breakdown sampling", () => {
       await sample();
       monitor[action]();
       slow.resolve({ user: now * 500, system: 0 });
-      await vi.advanceTimersByTimeAsync(0);
+      await clock.wake();
       expect(monitor.snapshot()).toBeUndefined();
       if (action === "stop") {
-        expect(vi.getTimerCount()).toBe(0);
+        expect(clock.armedAtMs).toBeNull();
       } else {
         await sample();
         expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBe(0.5);

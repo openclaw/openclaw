@@ -12,6 +12,7 @@ import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
+import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
@@ -22,6 +23,7 @@ import type { TrustedSessionCreation } from "./server-methods/session-creation-p
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   GatewayAgentRunTaskOwner,
+  GatewayNodeInvokeStream,
   GatewayRequestOptions,
   TrustedAgentToolCaller,
 } from "./server-methods/types.js";
@@ -115,6 +117,37 @@ export function createSyntheticPluginRuntimeClient(params?: {
         : {}),
     },
   };
+}
+
+export function projectPluginRuntimeClientExecution(params: {
+  client: RuntimeClient;
+  streamClient?: RuntimeClient | null;
+  identity?: AgentRuntimeIdentity;
+  nodeInvokeStream?: GatewayNodeInvokeStream;
+}): RuntimeClient {
+  const identity = params.streamClient?.internal?.agentRuntimeIdentity ?? params.identity;
+  return identity || params.nodeInvokeStream
+    ? {
+        ...(params.streamClient ?? params.client),
+        ...(identity && !params.streamClient
+          ? { connId: `agent-runtime:${identity.operationalRunInstance.instanceId}` }
+          : {}),
+        ...(params.streamClient
+          ? {
+              connect: {
+                ...params.streamClient.connect,
+                scopes: params.client.connect.scopes,
+              },
+            }
+          : {}),
+        internal: {
+          ...params.streamClient?.internal,
+          ...params.client.internal,
+          ...(identity ? { agentRuntimeIdentity: identity } : {}),
+          ...(params.nodeInvokeStream ? { nodeInvokeStream: params.nodeInvokeStream } : {}),
+        },
+      }
+    : params.client;
 }
 
 export function mergePluginRuntimeClientInternal(

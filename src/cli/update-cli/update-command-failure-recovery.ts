@@ -4,13 +4,19 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { getUpdateRun, recordUpdateRunDiagnostics } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import type {
+  ManagedGatewayUpdateVerdict,
+  PreManagedServiceStop,
+} from "./update-command-service-context-types.js";
 import {
   readManagedGatewayServiceForUpdate,
   resolveUpdatedGatewayRestartPort,
@@ -20,6 +26,22 @@ import {
   verifyUpdatedGateway,
 } from "./update-command-verification.js";
 
+/** Preserve startup observation after activation, stop, rebind, or rollback. */
+export function shouldWaitForRecovery(
+  params: FinishUpdateParams,
+  service: PreManagedServiceStop | undefined,
+  rollbackAttempted: boolean,
+): boolean {
+  return (
+    params.result.status !== "error" ||
+    params.mutationStarted ||
+    params.preManagedServiceStop?.stopped === true ||
+    service?.stopped === true ||
+    Boolean(params.originalManagedServiceRuntime?.definition.rebound) ||
+    rollbackAttempted
+  );
+}
+
 /** Observe recovery after writers settle; this never starts or stops a Gateway. */
 export async function verifyUpdateFailureRecovery(params: {
   result: UpdateRunResult;
@@ -28,6 +50,8 @@ export async function verifyUpdateFailureRecovery(params: {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   serviceStopped?: boolean;
+  serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
+  waitForStartup?: boolean;
   assertCurrent?: () => void;
 }): Promise<UpdateRunResult> {
   params.assertCurrent?.();
@@ -68,6 +92,21 @@ export async function verifyUpdateFailureRecovery(params: {
   const rollback = previousRecovery?.packageRollbackVerified;
   try {
     await withCommandProcessScope(async () => {
+      // Package rollback restores files even on a headless install. Its original
+      // service observation cannot become a request to wait for a new Gateway.
+      if (params.serviceUpdateVerdict?.kind === "absent") {
+        result.steps.push({
+          name: "gateway recovery observation",
+          command: "gateway verification",
+          cwd: root,
+          durationMs: 0,
+          exitCode: 0,
+          diagnostics: [
+            "Gateway readiness was not checked: no Gateway service or listener was present before maintenance.",
+          ],
+        });
+        return;
+      }
       if (params.serviceStopped) {
         try {
           result.verification = {
@@ -115,6 +154,7 @@ export async function verifyUpdateFailureRecovery(params: {
         expectedVersion: version,
         expectedBuildId: buildId ?? undefined,
         timeoutMs: params.timeoutMs,
+        waitForStartup: params.waitForStartup,
         assertCurrent: params.assertCurrent,
       });
       params.assertCurrent?.();

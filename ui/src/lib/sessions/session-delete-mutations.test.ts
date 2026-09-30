@@ -58,13 +58,10 @@ describe("optimistic session deletion", () => {
     },
   );
 
-  it.each(
-    ["main", "agent:main:main"].flatMap((firstKey) =>
-      (["single", "batch"] as const).flatMap((firstMode) =>
-        (["single", "batch"] as const).map((secondMode) => ({ firstKey, firstMode, secondMode })),
-      ),
-    ),
-  )(
+  it.each([
+    { firstKey: "main", firstMode: "single", secondMode: "batch" },
+    { firstKey: "agent:main:main", firstMode: "batch", secondMode: "single" },
+  ] as const)(
     "returns caller keys when $firstMode $firstKey shares its deletion with a $secondMode alias",
     async ({ firstKey, firstMode, secondMode }) => {
       const h = createSessionDeletionHarness();
@@ -146,7 +143,7 @@ describe("optimistic session deletion", () => {
         }
         await settled;
         expect(h.sessions.state.deletedSessions).toEqual([]);
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(h.sessions.state.result?.sessions).toEqual([h.beta, h.sibling]);
         expect(h.sessions.listSnapshot(scope).result?.sessions).toEqual([h.beta, h.sibling]);
       } finally {

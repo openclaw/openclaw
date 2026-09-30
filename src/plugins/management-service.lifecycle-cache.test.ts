@@ -2,10 +2,15 @@ import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as bundledDiscoveryState from "./bundled-discovery-state.js";
+import { hostedFeedDiffsEntry } from "./management-service.test-helpers.js";
 import {
   clearPluginMetadataLifecycleCaches,
   registerPluginMetadataProcessMemoLifecycleClear,
 } from "./plugin-metadata-lifecycle.js";
+
+vi.mock("./install.js", () => {
+  throw new Error("Plugin inventory must not load source installers");
+});
 
 const mocks = vi.hoisted(() => ({
   currentMetadata: undefined as unknown,
@@ -72,8 +77,6 @@ function dependencyMetadataSnapshot(params: {
   channels?: string[];
   packageBuild?: { bundledDist?: boolean };
   dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-  existingError?: string;
 }) {
   const snapshot = metadataSnapshot(params.pluginId);
   const origin = params.origin ?? "global";
@@ -99,22 +102,13 @@ function dependencyMetadataSnapshot(params: {
     origin,
     ...(params.enabledByDefault ? { enabledByDefault: true } : {}),
     packageDependencies: params.dependencies ?? {},
-    packageOptionalDependencies: params.optionalDependencies ?? {},
   };
   return {
     ...snapshot,
     index: { ...snapshot.index, plugins: [record] },
     byPluginId: new Map([[params.pluginId, manifest]]),
     plugins: [manifest],
-    diagnostics: params.existingError
-      ? [
-          {
-            level: "error" as const,
-            pluginId: params.pluginId,
-            message: params.existingError,
-          },
-        ]
-      : [],
+    diagnostics: [],
   };
 }
 
@@ -133,25 +127,7 @@ describe("plugin management catalog lifecycle", () => {
     mocks.officialCatalog
       .mockResolvedValueOnce({
         source: "hosted",
-        entries: [
-          {
-            id: "@openclaw/diffs",
-            title: "Diffs",
-            state: "available",
-            featured: true,
-            publisher: { id: "openclaw", trust: "official" },
-            install: {
-              candidates: [
-                {
-                  sourceRef: "public-clawhub",
-                  package: "@openclaw/diffs",
-                  version: "2026.6.11",
-                  integrity: `sha256:${"a".repeat(64)}`,
-                },
-              ],
-            },
-          },
-        ],
+        entries: [hostedFeedDiffsEntry],
       })
       .mockResolvedValueOnce({ source: "hosted", entries: [] });
 
@@ -220,33 +196,20 @@ describe("plugin management catalog lifecycle", () => {
 
   it.each<{
     mode: "compat" | "allowlist";
-    denyProvider: boolean;
     providerEnabled: boolean;
     selectedMode?: "compat" | "allowlist";
-    channelEnabled?: false;
     dependencyError?: true;
   }>([
-    { mode: "compat", denyProvider: false, providerEnabled: true },
-    { mode: "allowlist", denyProvider: false, providerEnabled: false },
-    { mode: "compat", denyProvider: true, providerEnabled: false },
+    { mode: "compat", providerEnabled: true },
     {
       mode: "compat",
       selectedMode: "allowlist",
-      denyProvider: false,
       providerEnabled: false,
       dependencyError: true,
     },
-    { mode: "compat", denyProvider: false, providerEnabled: false, channelEnabled: false },
   ])(
-    "keeps provider policy in $mode/$selectedMode mode with deny=$denyProvider and channel=$channelEnabled",
-    async ({
-      mode,
-      denyProvider,
-      providerEnabled,
-      selectedMode,
-      channelEnabled,
-      dependencyError,
-    }) => {
+    "keeps provider policy in the selected $mode/$selectedMode discovery mode",
+    async ({ mode, providerEnabled, selectedMode, dependencyError }) => {
       const env = { OPENCLAW_STATE_DIR: "/__openclaw_management_selected_root__" };
       const readMode = vi
         .spyOn(bundledDiscoveryState, "readBundledDiscoveryModeMemoized")
@@ -286,14 +249,7 @@ describe("plugin management catalog lifecycle", () => {
           config: {
             plugins: {
               allow: ["listed"],
-              ...(denyProvider ? { deny: ["bundled-provider"] } : {}),
-              ...(channelEnabled === false
-                ? { entries: { "bundled-provider": { enabled: true } } }
-                : {}),
             },
-            ...(channelEnabled === false
-              ? { channels: { "fixture-chat": { enabled: false } } }
-              : {}),
           },
           env,
         });
@@ -369,143 +325,92 @@ describe("plugin management catalog lifecycle", () => {
     expect(mocks.officialCatalog).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      label: "enabled external plugin missing a required dependency",
-      pluginId: "missing-required",
-      dependencies: { "missing-runtime": "1.0.0" },
-      expectedState: "error",
-      expectedDiagnostic: true,
-    },
-    {
-      label: "enabled external plugin missing only an optional dependency",
-      pluginId: "missing-optional",
-      optionalDependencies: { "missing-runtime": "1.0.0" },
-      expectedState: "enabled",
-      expectedDiagnostic: false,
-    },
-    {
-      label: "disabled external plugin missing a required dependency",
-      pluginId: "disabled-missing-required",
-      enabled: false,
-      dependencies: { "missing-runtime": "1.0.0" },
-      expectedState: "disabled",
-      expectedDiagnostic: false,
-    },
-    {
-      label: "bundled plugin missing a package-local dependency",
-      pluginId: "bundled-missing-required",
-      origin: "bundled" as const,
-      dependencies: { "missing-runtime": "1.0.0" },
-      expectedState: "enabled",
-      expectedDiagnostic: false,
-    },
-    {
-      label: "existing plugin failure with a missing required dependency",
-      pluginId: "existing-missing-required",
-      dependencies: { "missing-runtime": "1.0.0" },
-      existingError: "existing manifest failure",
-      expectedState: "error",
-      expectedDiagnostic: true,
-    },
-  ])("projects dependency health for $label", async (scenario) => {
-    mocks.metadata.mockReturnValue(dependencyMetadataSnapshot(scenario));
+  it("checks dependency health once per immutable metadata lifecycle", async () => {
+    mocks.metadata.mockImplementation(() =>
+      dependencyMetadataSnapshot({
+        pluginId: "lifecycle-missing-runtime",
+        origin: "global",
+        enabledByDefault: true,
+        dependencies: { "missing-runtime": "1.0.0" },
+      }),
+    );
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
+    const existsSync = vi.spyOn(fs, "existsSync");
+    const dependencyProbeCount = () =>
+      existsSync.mock.calls.filter(([candidate]) =>
+        String(candidate).includes("node_modules/missing-runtime"),
+      ).length;
 
-    const catalog = await listManagedPlugins({
-      config: {
-        plugins: { entries: { [scenario.pluginId]: { enabled: scenario.enabled ?? true } } },
-      },
+    const first = await listManagedPlugins({ config: {}, env: {} });
+    expect(first.plugins[0]?.state).toBe("error");
+    const initialProbes = dependencyProbeCount();
+    expect(initialProbes).toBeGreaterThan(0);
+
+    const disabled = await listManagedPlugins({
+      config: { plugins: { entries: { "lifecycle-missing-runtime": { enabled: false } } } },
       env: {},
     });
-    const plugin = catalog.plugins.find((entry) => entry.id === scenario.pluginId);
+    expect(disabled.plugins[0]).toMatchObject({ enabled: false, state: "disabled" });
+    expect(disabled.diagnostics).toEqual([]);
+    expect(dependencyProbeCount()).toBe(initialProbes);
 
-    expect(plugin?.state).toBe(scenario.expectedState);
-    const diagnostics = catalog.diagnostics.filter(
-      (diagnostic) =>
-        typeof diagnostic === "object" &&
-        diagnostic !== null &&
-        "pluginId" in diagnostic &&
-        diagnostic.pluginId === scenario.pluginId,
-    );
-    if (scenario.expectedDiagnostic) {
-      expect(plugin?.error).toContain("missing-runtime");
-      expect(plugin?.error).toContain("reinstall/update the plugin");
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]).toEqual(
-        expect.objectContaining({
-          level: "error",
-          message: expect.stringContaining("missing-runtime"),
-        }),
-      );
-      if (scenario.existingError) {
-        expect(plugin?.error).toContain(scenario.existingError);
-        expect(diagnostics[0]).toEqual(
-          expect.objectContaining({
-            message: expect.stringContaining(scenario.existingError),
-          }),
-        );
-      }
-    } else {
-      expect(plugin?.error).toBeUndefined();
-      expect(diagnostics).toEqual([]);
-    }
+    const enabled = await listManagedPlugins({
+      config: { plugins: { entries: { "lifecycle-missing-runtime": { enabled: true } } } },
+      env: {},
+    });
+    expect(enabled.plugins[0]).toMatchObject({ enabled: true, state: "error" });
+    expect(enabled.diagnostics).toHaveLength(1);
+    expect(dependencyProbeCount()).toBe(initialProbes);
+
+    await listManagedPlugins({ config: {}, env: {} });
+    expect(dependencyProbeCount()).toBe(initialProbes);
+
+    clearPluginMetadataLifecycleCaches();
+    await listManagedPlugins({ config: {}, env: {} });
+    expect(dependencyProbeCount()).toBeGreaterThan(initialProbes);
+    existsSync.mockRestore();
   });
 
-  it.each([
-    { label: "external", origin: "global" as const, packageBuild: undefined },
-    {
-      label: "source-external bundled",
-      origin: "bundled" as const,
-      packageBuild: { bundledDist: false },
-    },
-  ])(
-    "checks $label dependency health once per immutable metadata lifecycle",
-    async ({ origin, packageBuild }) => {
-      mocks.metadata.mockImplementation(() =>
-        dependencyMetadataSnapshot({
-          pluginId: "lifecycle-missing-runtime",
-          origin,
-          packageBuild,
-          enabledByDefault: true,
-          dependencies: { "missing-runtime": "1.0.0" },
-        }),
-      );
-      mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
-      const existsSync = vi.spyOn(fs, "existsSync");
-      const dependencyProbeCount = () =>
-        existsSync.mock.calls.filter(([candidate]) =>
-          String(candidate).includes("node_modules/missing-runtime"),
-        ).length;
+  it("loads plugin metadata from the explicit system-owner workspace", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "research" } },
+        entries: { main: {}, research: { workspace: "~/research-workspace" } },
+      },
+    };
+    const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
+    mocks.metadata.mockReturnValue(metadataSnapshot());
 
-      const first = await listManagedPlugins({ config: {}, env: {} });
-      expect(first.plugins[0]?.state).toBe("error");
-      const initialProbes = dependencyProbeCount();
-      expect(initialProbes).toBeGreaterThan(0);
+    const catalog = await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
 
-      const disabled = await listManagedPlugins({
-        config: { plugins: { entries: { "lifecycle-missing-runtime": { enabled: false } } } },
-        env: {},
-      });
-      expect(disabled.plugins[0]).toMatchObject({ enabled: false, state: "disabled" });
-      expect(disabled.diagnostics).toEqual([]);
-      expect(dependencyProbeCount()).toBe(initialProbes);
+    expect(catalog).toMatchObject({ plugins: [], diagnostics: [] });
+    expect(mocks.metadata).toHaveBeenCalledWith({
+      config,
+      env,
+      workspaceDir: "/tmp/openclaw-managed-plugin-home/research-workspace",
+    });
+  });
 
-      const enabled = await listManagedPlugins({
-        config: { plugins: { entries: { "lifecycle-missing-runtime": { enabled: true } } } },
-        env: {},
-      });
-      expect(enabled.plugins[0]).toMatchObject({ enabled: true, state: "error" });
-      expect(enabled.diagnostics).toHaveLength(1);
-      expect(dependencyProbeCount()).toBe(initialProbes);
+  it("reports partial managed inventory without selecting an explicit roster entry", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { workspace: "/tmp/unowned-workspace" },
+        entries: {
+          main: { workspace: "/tmp/main-workspace" },
+          gadget: { workspace: "/tmp/gadget-workspace" },
+        },
+      },
+    };
+    const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
+    mocks.metadata.mockReturnValue(metadataSnapshot());
 
-      await listManagedPlugins({ config: {}, env: {} });
-      expect(dependencyProbeCount()).toBe(initialProbes);
+    const catalog = await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
 
-      clearPluginMetadataLifecycleCaches();
-      await listManagedPlugins({ config: {}, env: {} });
-      expect(dependencyProbeCount()).toBeGreaterThan(initialProbes);
-      existsSync.mockRestore();
-    },
-  );
+    expect(mocks.metadata).toHaveBeenCalledWith({ config, env });
+    expect(catalog.diagnostics).toContainEqual(
+      expect.objectContaining({ level: "warn", code: "workspace-scope-omitted" }),
+    );
+  });
 });

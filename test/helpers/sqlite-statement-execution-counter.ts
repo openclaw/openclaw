@@ -1,13 +1,12 @@
-import { realpathSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { vi, type Mock } from "vitest";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../src/infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../src/infra/node-sqlite.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  resolveStateDatabaseCoordinatorPath,
-} from "../../src/infra/state-database-coordinator.js";
-import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
+
+/** Full node reads may add cold snapshot projections beside the node's columns. */
+export function isSessionNodePayloadSelect(sql: string): boolean {
+  return /^select \*(?:, [\s\S]+)? from "session_nodes"(?:\s|$)/i.test(sql);
+}
 
 /** Capture SQL during execution; closing a connection invalidates its statement getters. */
 export function observeSqliteReadSql(prototype: StatementSync): {
@@ -126,32 +125,20 @@ export function trackSqliteStatementExecutions<Key extends string>(
   };
 }
 
-/** Observe host data SQL while allowing only the captured state's lifecycle control database. */
-export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
+/** Observe all host data SQL, including statements prepared before observation began. */
+export function observeHostDataSql(onQuery?: (sql: string) => void): {
   calls: Mock[];
+  queries: string[];
   restore: () => void;
 } {
   // Validate the real runtime once before measurement. The owner's capability
   // probes are setup, not an exemption for arbitrary in-memory database SQL.
   const native = requireNodeSqlite();
-  const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-    databasePath: resolveOpenClawStateSqlitePath(env),
-    runtimeDirectory: captureStateDatabaseCoordinatorRuntime().directory,
-    uid: process.getuid?.(),
-  });
-  const isControl = (database: DatabaseSync | undefined) => {
-    const location = database?.location();
-    if (!location) {
-      return false;
-    }
-    try {
-      return realpathSync(location) === realpathSync(coordinatorPath);
-    } catch {
-      // Missing or unknown locations must never hide data SQL.
-      return false;
-    }
+  const queries: string[] = [];
+  const recordQuery = (sql: string) => {
+    queries.push(sql);
+    onQuery?.(sql);
   };
-  const databases = new WeakMap<StatementSync, DatabaseSync>();
   const prepare = vi.fn();
   const exec = vi.fn();
   // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted database receiver.
@@ -159,24 +146,22 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
   // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted database receiver.
   const originalExec = native.DatabaseSync.prototype.exec;
   const spies = [
-    vi
-      .spyOn(native.DatabaseSync.prototype, "prepare")
-      .mockImplementation(function (this: DatabaseSync, sql) {
-        if (!isControl(this)) {
-          prepare(sql);
-        }
-        const statement = originalPrepare.call(this, sql);
-        databases.set(statement, this);
-        return statement;
-      }),
-    vi
-      .spyOn(native.DatabaseSync.prototype, "exec")
-      .mockImplementation(function (this: DatabaseSync, sql) {
-        if (!isControl(this)) {
-          exec(sql);
-        }
-        return originalExec.call(this, sql);
-      }),
+    vi.spyOn(native.DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql,
+    ) {
+      prepare(sql);
+      recordQuery(sql);
+      return originalPrepare.call(this, sql);
+    }),
+    vi.spyOn(native.DatabaseSync.prototype, "exec").mockImplementation(function (
+      this: DatabaseSync,
+      sql,
+    ) {
+      exec(sql);
+      recordQuery(sql);
+      return originalExec.call(this, sql);
+    }),
   ];
   const statements = (["get", "all", "run", "iterate"] as const).map((method) => {
     const called = vi.fn();
@@ -184,9 +169,8 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
     const spy = vi.spyOn(native.StatementSync.prototype, method).mockImplementation(
       new Proxy(original, {
         apply(target, receiver: StatementSync, args) {
-          if (!isControl(databases.get(receiver))) {
-            called(...args);
-          }
+          called(...args);
+          recordQuery(receiver.sourceSQL);
           return Reflect.apply(target, receiver, args);
         },
       }),
@@ -195,6 +179,7 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
   });
   return {
     calls: [prepare, exec, ...statements.map(({ called }) => called)],
+    queries,
     restore: () => {
       spies.forEach((spy) => spy.mockRestore());
       statements.forEach(({ spy }) => spy.mockRestore());

@@ -231,13 +231,6 @@ export async function startMinimalRealGateway(options: {
             path: gateway.state.statePath(`device-${label}.sqlite`),
           });
         }),
-      restart: () =>
-        lifetime.run(async () => {
-          cancellation.signal.throwIfAborted();
-          await gateway.stopGateway();
-          cancellation.signal.throwIfAborted();
-          await gateway.startGateway();
-        }),
       connectBootstrap: (mismatched = false) =>
         lifetime.run(async () => {
           const helpers = await import("./test-helpers.js");

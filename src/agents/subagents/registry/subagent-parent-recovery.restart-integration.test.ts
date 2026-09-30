@@ -1,5 +1,11 @@
 // Requester continuation and child-batch ownership across Gateway replacement.
 import { describe, expect, it, vi } from "vitest";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  makeRestartRecoveryRun as makeRunRecord,
+  useSubagentRestartRecoveryFixture,
+} from "./subagent-restart-recovery.test-support.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -23,14 +29,12 @@ import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
 } from "../../main-session-recovery/main-session-restart-recovery-marking.js";
-import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
+import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
+import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
-import {
-  createSubagentRegistryTestDeps,
-  writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
@@ -41,10 +45,6 @@ import {
   testing,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  makeRestartRecoveryRun as makeRunRecord,
-  useSubagentRestartRecoveryFixture,
-} from "./subagent-restart-recovery.test-support.js";
 
 vi.mock("../../../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
@@ -92,7 +92,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     } as GatewayRequestContext;
     bindGatewayContextResolver(predecessor, previousContext.resolveGatewayContext);
     addSubagentRunForTests(predecessor);
-    activateSubagentRegistry(() => previousContext);
+    await activateSubagentRegistry(() => previousContext);
     previousOpen = false;
     rotateAgentEventLifecycleGeneration();
 
@@ -103,7 +103,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       resolveGatewayContext: () => (replacementOpen ? replacementContext : undefined),
     } as GatewayRequestContext;
     bindGatewayContextResolver(replacementRuntime, replacementContext.resolveGatewayContext);
-    activateSubagentRegistry(() => replacementContext);
+    await activateSubagentRegistry(() => replacementContext);
     await testing.sweepOnceForTests();
 
     expect(dispatchAgent).not.toHaveBeenCalled();
@@ -180,14 +180,14 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     });
     addSubagentRunForTests(child);
     expect(
-      settleRequesterTurnAfterSessionSpawns({
+      await settleRequesterTurnAfterSessionSpawns({
         requesterSessionKey: parentKey,
         requesterAgentId,
         requesterTurnRunId: parentRunId,
         requesterYielded: true,
         acceptedSessionSpawns: [{ runId: child.runId, childSessionKey: childKey }],
         runs: subagentRuns,
-        persistOrThrow: (...runIds) => persistSubagentRunsToDiskOrThrow(subagentRuns, runIds),
+        transfer: createRequesterInitialTransferFixture(subagentRuns),
         schedule: vi.fn(),
       }),
     ).toBe(true);
@@ -301,24 +301,25 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       if (scenario === "settled batch") {
         persistSubagentRunsToDiskOrThrow(subagentRuns, [child.runId]);
         // Settle through the lifecycle's exact batch callback, not by deleting a flag.
-        const deliverBatch = vi.fn<
-          SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]
-        >(async (params) => {
-          params.completeBatch(
-            [params.settledEntry],
-            params.settledEntry.requesterSettleWake?.rearmGeneration,
-            { delivered: true, requesterVisibleFinalDelivered: true, path: "direct" },
-          );
-          return true;
-        });
-        testing.setDepsForTest({
-          ...createSubagentRegistryTestDeps(),
-          maybeWakeRequesterAfterAllChildrenSettled: deliverBatch,
-        });
+        const deliverBatch = vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(
+          async (params) => {
+            await params.completeBatch(
+              [params.settledEntry],
+              params.settledEntry.requesterSettleWake?.rearmGeneration,
+              { delivered: true, requesterVisibleFinalDelivered: true, path: "direct" },
+            );
+            return true;
+          },
+        );
+        vi.spyOn(
+          await import("../announce/subagent-announce.requester-settle-wake.js"),
+          "maybeWakeRequesterAfterAllChildrenSettled",
+        ).mockImplementation(deliverBatch);
         // Activation alone keeps wake admission closed until the registry inventory is hydrated.
-        initSubagentRegistry();
+        await initSubagentRegistry();
         await testing.sweepOnceForTests();
         await vi.waitFor(() => expect(deliverBatch).toHaveBeenCalledOnce());
+        await expect(deliverBatch.mock.results[0]?.value).resolves.toBe(true);
         expect(child.requesterSettleWake).toBeUndefined();
       }
     }
@@ -421,7 +422,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         children.push(child);
       }
       expect(
-        settleRequesterTurnAfterSessionSpawns({
+        await settleRequesterTurnAfterSessionSpawns({
           requesterSessionKey,
           requesterTurnRunId,
           requesterYielded: true,
@@ -430,23 +431,21 @@ describe("subagent parent recovery — durable yielded continuation", () => {
             childSessionKey: child.childSessionKey,
           })),
           runs: subagentRuns,
-          persistOrThrow: (...runIds) => persistSubagentRunsToDiskOrThrow(subagentRuns, runIds),
+          transfer: createRequesterInitialTransferFixture(subagentRuns),
           schedule: vi.fn(),
         }),
       ).toBe(true);
       resetSubagentRegistryForTests({ persist: false });
       rotateAgentEventLifecycleGeneration();
-      const wakeRequester = vi.fn<
-        SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]
-      >(async () => false);
-      testing.setDepsForTest({
-        ...createSubagentRegistryTestDeps(),
-        runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
-        maybeWakeRequesterAfterAllChildrenSettled: wakeRequester,
-        onAgentEvent: vi.fn(() => () => undefined),
-      });
-      initSubagentRegistry();
-      activateGatewayRuntime();
+      const wakeRequester = vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(
+        async () => false,
+      );
+      vi.spyOn(
+        await import("../announce/subagent-announce.requester-settle-wake.js"),
+        "maybeWakeRequesterAfterAllChildrenSettled",
+      ).mockImplementation(wakeRequester);
+      await initSubagentRegistry();
+      await activateGatewayRuntime();
       await testing.sweepOnceForTests();
       await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalled());
       expect(dispatchAgent).not.toHaveBeenCalled();
@@ -456,11 +455,18 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           childSessionKey: child.childSessionKey,
           execution: {
             status: "terminal",
+            interruptionReason: "gateway-restart",
             outcome: { status: "error", error: expect.stringContaining("Gateway restart") },
           },
           requesterSettleWake: { requesterYieldBatch: true },
         });
         expect(getSubagentRunByChildSessionKey(child.childSessionKey)?.runId).toBe(child.runId);
+        const recoveredSession = loadSessionEntryReadOnly({
+          agentId: "main",
+          sessionKey: child.childSessionKey,
+        });
+        expect(recoveredSession).toMatchObject({ status: "interrupted" });
+        expect(recoveredSession?.lastRunError).toBeUndefined();
         expect(
           await loadTranscriptEvents({
             agentId: "main",

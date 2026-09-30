@@ -76,7 +76,7 @@ describe("memory forget phase-signal failures", () => {
         { key, lightHits: 2, remHits: 1, lastLightAt: observedAt, lastRemAt: observedAt },
       ]),
     );
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: keys.map((entryKey) => ({
         entryKey,

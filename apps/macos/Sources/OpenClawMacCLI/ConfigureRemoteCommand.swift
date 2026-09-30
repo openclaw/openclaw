@@ -412,12 +412,7 @@ private func isPrivateIPv6Literal(_ value: String) -> Bool {
 
 private func setDefaultStringIfProvided(_ defaults: UserDefaults, key: String, value: String?) {
     guard let value else { return }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty {
-        defaults.removeObject(forKey: key)
-    } else {
-        defaults.set(trimmed, forKey: key)
-    }
+    setDefaultString(defaults, key: key, value: value)
 }
 
 private func setDefaultString(_ defaults: UserDefaults, key: String, value: String) {
@@ -498,13 +493,7 @@ private func isValidSSHTarget(_ raw: String) -> Bool {
 
 private func printConfigureRemoteOutput(_ output: ConfigureRemoteOutput, json: Bool) {
     if json {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(output),
-           let text = String(data: data, encoding: .utf8)
-        {
-            print(text)
-        }
+        printCLIJSON(output)
         return
     }
     print("OpenClaw macOS Remote Config")

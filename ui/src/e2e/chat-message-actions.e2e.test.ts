@@ -230,7 +230,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await screenshot(page, `${viewport.name}-subagent-actions.png`);
       expect(await page.locator(".agent-chat__composer-combobox textarea").count()).toBe(0);
       expect.soft(await page.getByRole("button", { name: "Reply to message" }).count()).toBe(0);
-      const copy = page.getByRole("button", { name: "Copy as markdown", exact: true });
+      const copy = activePane.locator(".chat-group.assistant .chat-copy-btn");
       await copy.click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(message);
       await bubble.click({ button: "right" });
@@ -400,11 +400,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({ message: text, replyToId: sourceId });
-        const sentPreview = page.locator(".chat-reply-preview--message");
-        await expect
-          .poll(() => sentPreview.locator(".chat-reply-preview__text").textContent())
-          .toBe(fileName);
-        await sentPreview.click();
+        const sentPreview = page.locator(".chat-reply-attribution--inline");
+        await expect.poll(() => sentPreview.getByRole("button").count()).toBe(1);
+        await sentPreview.getByRole("button").click();
         await expect
           .poll(() =>
             bubble.evaluate((element) => element.classList.contains("chat-bubble--reply-target")),

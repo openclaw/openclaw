@@ -27,8 +27,10 @@ vi.mock("./operator-run-cancellation.js", async () => {
   );
   return {
     ...actual,
-    retainGatewayOperatorRun: (params: Parameters<typeof actual.retainGatewayOperatorRun>[0]) => {
-      const retained = actual.retainGatewayOperatorRun(params);
+    retainGatewayOperatorRun: async (
+      params: Parameters<typeof actual.retainGatewayOperatorRun>[0],
+    ) => {
+      const retained = await actual.retainGatewayOperatorRun(params);
       operatorRunCaptures.set(params.runId, retained);
       return retained;
     },
@@ -232,7 +234,7 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
   ).resolves.toEqual(transcriptBefore);
   expect(operatorRunCaptures.size).toBe(0);
 
-  addSessionMember(successorScope, {
+  await addSessionMember(successorScope, {
     identityId: sourceOwner.authenticatedUserProfile!.profileId,
     addedBy: broadWriter.authenticatedUserProfile!.profileId,
     expectedSessionId: successorSessionId,

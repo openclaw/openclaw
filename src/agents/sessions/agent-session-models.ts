@@ -3,6 +3,7 @@ import {
   getSupportedThinkingLevels,
   modelsAreEqual,
 } from "@openclaw/ai/internal/runtime";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withSessionMetadataPublication,
@@ -217,13 +218,7 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
     const isBound = () => {
       const current = manager.getSessionTarget();
       return (
-        manager.getSessionId() === sessionId &&
-        (target
-          ? current !== undefined &&
-            (["agentId", "sessionId", "sessionKey", "storePath"] as const).every(
-              (key) => current[key] === target[key],
-            )
-          : current === undefined)
+        manager.getSessionId() === sessionId && sameSessionTranscriptTargetBinding(target, current)
       );
     };
     const assertCurrent = () => {
@@ -255,17 +250,6 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
           ? withSessionTranscriptWriteAssertion(target, assertCurrent, operation)
           : operation(),
     };
-  }
-
-  /**
-   * Get available thinking levels for current model.
-   * The provider will clamp to what the specific model supports internally.
-   */
-  getAvailableThinkingLevels(): ThinkingLevel[] {
-    if (!this.model) {
-      return THINKING_LEVELS;
-    }
-    return getSupportedThinkingLevels(this.model) as ThinkingLevel[];
   }
 
   /**

@@ -32,6 +32,10 @@ export class SessionProgressCardController implements ReactiveController {
     return this.target ? (this.store?.get(this.target) ?? null) : null;
   }
 
+  get lifetime(): object | undefined {
+    return this.target ? this.store?.getLifetime(this.target) : undefined;
+  }
+
   get loading(): boolean {
     return !this.target || this.store?.get(this.target) === undefined;
   }

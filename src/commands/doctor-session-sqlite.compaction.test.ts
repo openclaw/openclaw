@@ -9,10 +9,8 @@ import {
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
-import {
-  readOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "../state/openclaw-quarantine-store.js";
+import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { readPersistedQuarantineRow } from "../state/openclaw-quarantine-store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -53,8 +51,10 @@ describe("runDoctorSessionSqlite", () => {
       expect(imported.totals.issues).toBe(0);
       const cleanup = expectDefined(imported.targets[0]?.compact, "import cleanup");
       expect(cleanup.freelistAfterPages).toBe(0);
+      expect(cleanup.skipped).toBe(false);
       if (autoVacuum !== "FULL") {
         expect(freelistBefore).toBeGreaterThan(0);
+        expect(cleanup.freelistBeforePages).toBeGreaterThan(0);
         expect(cleanup.reclaimedBytes).toBeGreaterThan(0);
       }
       const compacted = await runDoctorSessionSqlite({
@@ -64,10 +64,12 @@ describe("runDoctorSessionSqlite", () => {
       });
       expect(compacted.totals.issues).toBe(0);
       const packed = expectDefined(compacted.targets[0]?.compact, "explicit compaction");
+      expect(packed).toMatchObject({ freelistAfterPages: 0, skipped: false });
       if (autoVacuum === "NONE") {
         expect(packed.dbSizeAfterBytes).toBe(cleanup.dbSizeAfterBytes);
       } else {
         expect(packed.dbSizeAfterBytes).toBeLessThan(cleanup.dbSizeAfterBytes);
+        expect(compacted.totals.reclaimedBytes).toBeGreaterThan(0);
       }
       const after = nodeSqlite.openNodeSqliteDatabase(sqlitePath, { readOnly: true });
       try {
@@ -82,48 +84,6 @@ describe("runDoctorSessionSqlite", () => {
       }
     },
   );
-
-  it("compacts migrated agent SQLite databases and reports reclaimed pages", async () => {
-    const store = createLegacyStore({
-      transcriptLines: [
-        '{"type":"session","sessionId":"session-1"}',
-        ...Array.from({ length: 240 }, (_, index) =>
-          JSON.stringify({
-            id: `evt-${index}`,
-            message: { content: "x".repeat(2_000), role: "user" },
-            type: "message",
-          }),
-        ),
-      ],
-    });
-    const importReport = await importLegacyStore(store);
-    const sqlitePath = importReport.targets[0]?.sqlitePath;
-    expect(sqlitePath).toBeTruthy();
-    const sqlite = nodeSqlite.requireNodeSqlite();
-    const db = new sqlite.DatabaseSync(sqlitePath ?? "");
-    try {
-      db.exec("DELETE FROM transcript_events;");
-    } finally {
-      db.close();
-    }
-
-    const compact = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "compact",
-      store: store.storePath,
-    });
-
-    expect(compact.totals.issues).toBe(0);
-    expect(compact.totals.reclaimedBytes).toBeGreaterThan(0);
-    expect(compact.targets[0]?.compact).toMatchObject({
-      freelistAfterPages: 0,
-      skipped: false,
-    });
-    expect(compact.targets[0]?.compact?.freelistBeforePages).toBeGreaterThan(0);
-    expect(compact.targets[0]?.compact?.dbSizeAfterBytes).toBeLessThan(
-      compact.targets[0]?.compact?.dbSizeBeforeBytes ?? 0,
-    );
-  });
 
   it.skipIf(process.platform === "win32")(
     "allows hard-linked legacy stores during SQLite compaction",
@@ -153,10 +113,11 @@ describe("runDoctorSessionSqlite", () => {
     closeOpenClawStateDatabaseForTest();
     const openDatabase = nodeSqlite.openNodeSqliteDatabase;
     const sharedPath = resolveOpenClawStateSqlitePath(store.env);
+    const sharedFileUri = nodeSqlite.resolveExistingSqliteFileUri(sharedPath);
     const spy = vi
       .spyOn(nodeSqlite, "openNodeSqliteDatabase")
       .mockImplementation((file, options) => {
-        if (file === sharedPath && !options?.readOnly) {
+        if ((file === sharedPath || file === sharedFileUri) && !options?.readOnly) {
           throw Object.assign(new Error("fixture lease storage failure"), { code: "SQLITE_IOERR" });
         }
         return openDatabase(file, options);
@@ -299,7 +260,7 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(report.totals.issues).toBe(0);
-    expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
+    expect(readPersistedQuarantineRow(sqlitePath, { env: store.env })).toBeUndefined();
     expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
   });
 });

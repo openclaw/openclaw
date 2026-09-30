@@ -5,6 +5,11 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../entry",
     distWorkerPath: "entry.js",
   },
+  daemon: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "daemon-cli",
+    distWorkerPath: "cli/daemon-cli.js",
+  },
   sessionAccessor: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../config/sessions/session-accessor",
@@ -37,6 +42,25 @@ export const cliRecoveryEntrypoints = {
   },
 } as const;
 
+// Keep the message action and its native command stub in the same prepared graph.
+export const cliMessageExitEntrypoints = {
+  helpers: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "program/message/helpers",
+    distWorkerPath: "cli/program/message/helpers.js",
+  },
+  command: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../commands/message",
+    distWorkerPath: "commands/message.js",
+  },
+  oneShotExit: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "one-shot-exit",
+    distWorkerPath: "cli/one-shot-exit.js",
+  },
+} as const;
+
 // Report producers remain hookable inside the prepared CLI graph.
 export const doctorOutputEntrypoints = {
   maintenance: {
@@ -48,6 +72,25 @@ export const doctorOutputEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "one-shot-exit",
     distWorkerPath: "legacy-finalizer/src/cli/one-shot-exit.js",
+  },
+} as const;
+
+// Import guards need physical module boundaries in the prepared fixture graph.
+export const mcpImportBoundaryEntrypoints = {
+  cli: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "mcp-cli",
+    distWorkerPath: "legacy-finalizer/src/cli/mcp-cli.js",
+  },
+  catalog: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../agents/agent-bundle-mcp-materialize",
+    distWorkerPath: "legacy-finalizer/src/agents/agent-bundle-mcp-materialize.js",
+  },
+  metadata: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../plugins/tool-metadata",
+    distWorkerPath: "legacy-finalizer/src/plugins/tool-metadata.js",
   },
 } as const;
 

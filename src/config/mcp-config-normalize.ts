@@ -12,6 +12,14 @@ const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTranspor
   stdio: "stdio",
 };
 
+/** Explicit runtime transport takes precedence over a legacy CLI type alias. */
+export function resolveConfiguredMcpTransport(server: unknown): string | undefined {
+  if (!isRecord(server)) {
+    return undefined;
+  }
+  return normalizeMcpString(server.transport) || resolveOpenClawMcpTransportAlias(server.type);
+}
+
 /** Maps CLI-native MCP type aliases to OpenClaw HTTP transport names. */
 export function resolveOpenClawMcpTransportAlias(
   value: unknown,
@@ -43,29 +51,18 @@ export function canonicalizeConfiguredMcpServer(
   if (isKnownCliMcpTypeAlias(next.type)) {
     delete next.type;
   }
-  if (typeof next.cwd !== "string" && typeof next.workingDirectory === "string") {
-    next.cwd = next.workingDirectory;
+  for (const [legacy, canonical, type] of [
+    ["workingDirectory", "cwd", "string"],
+    ["supports_parallel_tool_calls", "supportsParallelToolCalls", "boolean"],
+    ["ssl_verify", "sslVerify", "boolean"],
+    ["client_cert", "clientCert", "string"],
+    ["client_key", "clientKey", "string"],
+  ] as const) {
+    if (typeof next[legacy] === type && typeof next[canonical] !== type) {
+      next[canonical] = next[legacy];
+    }
+    delete next[legacy];
   }
-  delete next.workingDirectory;
-  if (
-    typeof next.supports_parallel_tool_calls === "boolean" &&
-    typeof next.supportsParallelToolCalls !== "boolean"
-  ) {
-    next.supportsParallelToolCalls = next.supports_parallel_tool_calls;
-  }
-  delete next.supports_parallel_tool_calls;
-  if (typeof next.ssl_verify === "boolean" && typeof next.sslVerify !== "boolean") {
-    next.sslVerify = next.ssl_verify;
-  }
-  delete next.ssl_verify;
-  if (typeof next.client_cert === "string" && typeof next.clientCert !== "string") {
-    next.clientCert = next.client_cert;
-  }
-  delete next.client_cert;
-  if (typeof next.client_key === "string" && typeof next.clientKey !== "string") {
-    next.clientKey = next.client_key;
-  }
-  delete next.client_key;
   const codex = isRecord(next.codex) ? { ...next.codex } : undefined;
   if (codex) {
     if (
@@ -86,8 +83,8 @@ export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers 
     return {};
   }
   return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, server]) => isRecord(server))
-      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
+    Object.entries(value).flatMap(([name, server]) =>
+      isRecord(server) ? [[name, { ...server }]] : [],
+    ),
   );
 }

@@ -11,10 +11,8 @@ import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import {
-  openOpenClawStateDatabase,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
@@ -40,7 +38,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 const roots: string[] = [];
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   lookup.value = undefined;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -62,6 +60,8 @@ async function scenario(
   roots.push(root);
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database, now: () => 1000 });
+  const readProjection = placements.readProjection.bind(placements);
+  const projectionReads = pendingMove ? vi.spyOn(placements, "readProjection") : undefined;
   const storePath = path.join(root, "sessions.sqlite");
   const worktreePath = path.join(root, "workspace");
   await fs.mkdir(worktreePath);
@@ -179,7 +179,7 @@ async function scenario(
             baseManifestRaw: raw,
             currentManifestRaw: raw,
           });
-          stagedResult.record(stagedResult.ref);
+          await stagedResult.record(stagedResult.ref);
           journal.commit(ref);
 
           return { ...result, manifestRef: ref, changed: false };
@@ -267,13 +267,21 @@ async function scenario(
   }
   const inspectionEntered = createDeferred();
   const releaseInspection = createDeferred();
-  if (blockedInspection) {
+  if (blockedInspection && projectionReads) {
+    projectionReads.mockImplementationOnce(async (...args) => {
+      inspectionEntered.resolve();
+      await releaseInspection.promise;
+      return await readProjection(...args);
+    });
+  } else if (blockedInspection) {
     vi.mocked(harness.environments.reconcileOnce).mockImplementationOnce(async () => {
       inspectionEntered.resolve();
       await releaseInspection.promise;
     });
   }
-  const sweep = blockedInspection ? coordinated.reconcileActive() : undefined;
+  const sweep = blockedInspection
+    ? coordinated.reconcileActive(pendingMove ? harness.ready.environmentId : undefined)
+    : undefined;
   if (sweep) {
     await inspectionEntered.promise;
   }
@@ -570,7 +578,7 @@ it("an idempotent failed-cleanup result does not cancel work already on the loca
   expect(cancel).not.toHaveBeenCalled();
 });
 
-it("Stop preserves RPC cancellation and buffered output while Move waits behind inspection", async () => {
+it("Stop preserves RPC cancellation and buffered output while Move waits behind same-session recovery", async () => {
   const r = await scenario("queued-move-partial", { blockedInspection: true, pendingMove: true });
   expect(r.cancellationLoadEntered).toBe(true);
   expect(r.abortedBeforeCancellationLoad).toBe(false);
@@ -597,7 +605,7 @@ it("Stop preserves RPC cancellation and buffered output while Move waits behind 
 });
 
 it.each(["missing", "local"] as const)(
-  "Stop records RPC cancellation for local chat while dispatch waits at a %s placement",
+  "Stop records RPC cancellation for local chat before unrelated inspection completes (%s placement)",
   async (state) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-local-"));
     roots.push(root);
@@ -618,8 +626,8 @@ it.each(["missing", "local"] as const)(
       entry,
     );
     if (state === "local") {
-      placements.releaseTurn(
-        placements.claimTurn({
+      await placements.releaseTurn(
+        await placements.claimTurn({
           ...REQUEST,
           owner: { kind: "local" },
           claimId: "seed",
@@ -691,15 +699,7 @@ it.each(["missing", "local"] as const)(
       .finally(() => {
         dispatchSettled = true;
       });
-    let stopped = false;
-    const stopping = coordinated.reclaim(REQUEST).then(
-      () => {
-        stopped = true;
-      },
-      () => {
-        stopped = true;
-      },
-    );
+    const stopping = coordinated.reclaim(REQUEST).catch(() => undefined);
     try {
       await setImmediate();
       await setImmediate();
@@ -712,9 +712,8 @@ it.each(["missing", "local"] as const)(
       await aborted.promise;
       expect(controller.abortStopReason).toBe("rpc");
       expect(cancelApprovals).toHaveBeenCalledWith(runId);
-      await setImmediate();
+      await stopping;
       expect(dispatchSettled).toBe(true);
-      expect(stopped).toBe(false);
       expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     } finally {
       cancellationLoad.resolve();

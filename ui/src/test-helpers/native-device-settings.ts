@@ -9,7 +9,9 @@ type NativeDeviceSettingsWithLocation = NativeDeviceSettingsSnapshot & {
 type MacDeviceSettingsSnapshot = NativeDeviceSettingsWithLocation & {
   app: NonNullable<NativeDeviceSettingsSnapshot["app"]>;
   capabilities: NonNullable<NativeDeviceSettingsSnapshot["capabilities"]>;
-  browser: NonNullable<NativeDeviceSettingsSnapshot["browser"]>;
+  browser: NonNullable<NativeDeviceSettingsSnapshot["browser"]> & {
+    cookieSync: NonNullable<NonNullable<NativeDeviceSettingsSnapshot["browser"]>["cookieSync"]>;
+  };
   voice: NativeDeviceSettingsSnapshot["voice"] &
     Required<Pick<NativeDeviceSettingsSnapshot["voice"], "microphone" | "locale">>;
   updates: NonNullable<NativeDeviceSettingsSnapshot["updates"]>;
@@ -53,6 +55,7 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
     },
     desktopAvailability: { state: "unlocked" },
     browser: {
+      chromeSetupActions: ["inspect", "install", "verify"],
       importAvailable: true,
       cookieSync: {
         available: true,
@@ -153,6 +156,7 @@ export function createTauriDeviceSettingsSnapshot(platform: "linux" | "windows" 
       appBuild: "42",
       profileName: null,
     },
+    browser: { chromeSetupActions: ["inspect", "install", "verify"] },
     capabilities: { desktopSharingEnabled: true },
     desktopSharing: { state: "running" },
     permissions: { entries: [] },

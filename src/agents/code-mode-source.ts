@@ -1,39 +1,10 @@
 /** Validate guest JavaScript before execution. */
-import { tokenizer } from "acorn";
 import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
 import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
 import { ToolInputError } from "./tool-input-error.js";
-
-function maskCodeLiteralsAndComments(code: string): string {
-  // Parser and tokenizer offsets are UTF-16 code units, not Unicode points.
-  const masked = code.split("");
-  const maskRange = (start: number, end: number) => {
-    for (let index = start; index < Math.min(end, masked.length); index += 1) {
-      if (masked[index] !== "\n" && masked[index] !== "\r") {
-        masked[index] = " ";
-      }
-    }
-  };
-  // Malformed JavaScript needs a conservative lexical pass: never trust a
-  // context-free regexp token to hide executable module access.
-  try {
-    for (const token of tokenizer(code, {
-      ecmaVersion: "latest",
-      onComment: (_isBlock, _text, start, end) => maskRange(start, end),
-    })) {
-      if (token.type.label === "string" || token.type.label === "template") {
-        maskRange(token.start, token.end);
-      }
-    }
-    return masked.join("");
-  } catch {
-    // Never inspect partially masked input after a tokenizer failure.
-    return code;
-  }
-}
 
 function isModuleLoaderCallee(callee: import("acorn").Expression | import("acorn").Super): boolean {
   if (callee.type === "ParenthesizedExpression") {
@@ -51,9 +22,7 @@ function isModuleLoaderCallee(callee: import("acorn").Expression | import("acorn
 
 function containsModuleAccess(node: import("acorn").AnyNode): boolean {
   if (
-    node.type === "ImportDeclaration" ||
     node.type === "ImportExpression" ||
-    (node.type === "MetaProperty" && node.meta.name === "import") ||
     (node.type === "CallExpression" && isModuleLoaderCallee(node.callee))
   ) {
     return true;
@@ -89,28 +58,8 @@ function containsModuleAccess(node: import("acorn").AnyNode): boolean {
   return false;
 }
 
-function rejectsModuleAccess(
-  code: string,
-  parsed: ReturnType<typeof parseCodeModeScriptSyntax>,
-): boolean {
-  // Unicode escapes can spell a loader identifier without its literal name.
-  if (!code.includes("import") && !code.includes("require") && !code.includes("\\u")) {
-    return false;
-  }
-  if (parsed.ok) {
-    // The WASI guest has no host module loader. Only executable module syntax
-    // belongs in this early check; ordinary guest methods are not capabilities.
-    return containsModuleAccess(parsed.program);
-  }
-  const source = maskCodeLiteralsAndComments(code);
-  return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
-}
-
 export function prepareSource(code: string): string {
   const parsed = parseCodeModeScriptSyntax(code);
-  if (rejectsModuleAccess(code, parsed)) {
-    throw new ToolInputError("code mode module access is disabled.");
-  }
   if (isShellLikeCodeModeSource(code)) {
     throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
   }
@@ -120,6 +69,13 @@ export function prepareSource(code: string): string {
     throw new ToolInputError(
       `SyntaxError at openclaw-code-mode:user.js:${parsed.line}:${parsed.column + 1}: ${message}. No tools were dispatched; correct the JavaScript source and submit it again.`,
     );
+  }
+  // Unicode escapes can spell a loader identifier without its literal name.
+  if (
+    (code.includes("import") || code.includes("require") || code.includes("\\u")) &&
+    containsModuleAccess(parsed.program)
+  ) {
+    throw new ToolInputError("code mode module access is disabled.");
   }
   return code;
 }

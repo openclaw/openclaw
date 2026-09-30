@@ -10,6 +10,7 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
@@ -17,6 +18,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("CLI fork recovery process", () => {
@@ -66,6 +68,12 @@ describe("CLI fork recovery process", () => {
       }),
     );
 
+    const env = {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
     const entry: InternalSessionEntry = {
       sessionId: "openclaw-process-session",
       lifecycleRevision: "process-lifecycle",
@@ -78,7 +86,7 @@ describe("CLI fork recovery process", () => {
       forkNextResume: true,
       resumeCheckpointId: checkpointId,
     });
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    await replaceSessionEntry({ sessionKey, storePath, env }, entry);
     closeOpenClawAgentDatabasesForTest();
 
     const result = await runCliProcessChild({
@@ -95,18 +103,15 @@ describe("CLI fork recovery process", () => {
         "--json",
       ],
       env: {
-        ...process.env,
-        HOME: root,
+        ...env,
         USERPROFILE: root,
         TMPDIR: tmpDir,
         NODE_DISABLE_COMPILE_CACHE: "1",
         NODE_ENV: undefined,
         NODE_OPTIONS: undefined,
-        OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_HOME: root,
         OPENCLAW_NO_RESPAWN: "1",
-        OPENCLAW_STATE_DIR: stateDir,
         PR135168_BACKEND_SCRIPT: backendScript,
         PR135168_NEWER_CLI_SESSION_ID: newerCliSessionId,
         PR135168_REBIND_SCRIPT: rebindScript,
@@ -124,7 +129,7 @@ describe("CLI fork recovery process", () => {
     );
     closeOpenClawAgentDatabasesForTest();
     expect(
-      loadSessionEntryReadOnly({ sessionKey, storePath })?.cliSessionBindings?.["proof-cli"]
+      loadSessionEntryReadOnly({ sessionKey, storePath, env })?.cliSessionBindings?.["proof-cli"]
         ?.sessionId,
     ).toBe(newerCliSessionId);
     const spawn = JSON.parse((await fs.readFile(spawnLog, "utf8")).trim()) as {

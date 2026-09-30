@@ -25,10 +25,10 @@ registerCodexEventProjectorTestLifecycle();
 // while core/src/context_manager/history.rs separately truncates its history copy.
 // Compare the next HTTP request, rather than assuming every raw event is model input.
 describe("native Codex tool response fidelity", () => {
-  it.for([24_000, 64])(
-    "preserves the native exec response with max_output_tokens=%i",
+  it(
+    "preserves the complete native exec response through the next provider request",
     { timeout: 75_000 },
-    async (maxOutputTokens, context) => {
+    async (context) => {
       const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
       const root = await fs.realpath(tempDirs.make("codex-output-fidelity-"));
       const native = await createCodexNativeTestState(root);
@@ -77,7 +77,7 @@ describe("native Codex tool response fidelity", () => {
                       cmd: "cat source.txt",
                       shell: "/bin/sh",
                       login: false,
-                      max_output_tokens: maxOutputTokens,
+                      max_output_tokens: 24_000,
                     }),
                   }
                 : {
@@ -136,7 +136,14 @@ describe("native Codex tool response fidelity", () => {
           'cli_auth_credentials_store="ephemeral"',
           'web_search="disabled"',
           'approval_policy="never"',
-          'sandbox_mode="read-only"',
+          // The proof covers exec output fidelity, not sandboxing. Bubblewrap is
+          // the only Linux sandbox since Codex 0.154 and needs user plus network
+          // namespaces; namespace-restricted CI hosts fail with
+          // `bwrap: loopback: Failed RTM_NEWADDR` before `cat` runs, and the
+          // app-server then reports no commandExecution item for the call.
+          // Product launches pass `--sandbox` from the resolved exec policy, so
+          // this direct app-server dial mirrors that instead of a config default.
+          'sandbox_mode="danger-full-access"',
           "allow_login_shell=false",
           // The synthetic model uses fallback metadata; give the full-result case
           // an explicit history budget instead of relying on a model catalog default.
@@ -245,7 +252,14 @@ describe("native Codex tool response fidelity", () => {
             ),
           )
           .find((item) => item.type === "commandExecution" && item.id === callId),
-        "native command execution",
+        `native command execution; output=${JSON.stringify(output.slice(0, 500))} events=${JSON.stringify(
+          notifications.map((notification) => {
+            const item = isJsonObject(notification.params) ? notification.params.item : undefined;
+            return isJsonObject(item)
+              ? [notification.method, item.type, item.id, item.status]
+              : [notification.method];
+          }),
+        )}`,
       );
       // Completion aggregates use a late streaming subscriber and can be null.
       // Check the independently buffered response against the next request below.
@@ -253,15 +267,8 @@ describe("native Codex tool response fidelity", () => {
       expect(output).not.toBe(source);
       expect(output).toContain("Process exited with code 0\n");
       expect(output).toContain("Output:\n");
-      if (maxOutputTokens === 24_000) {
-        expect(output).toContain(source);
-        expect(output).not.toContain("truncated");
-      } else {
-        expect(output).toContain("Warning: truncated output (original token count:");
-        expect(output).toMatch(/…[0-9]+ (?:chars|tokens) truncated…/u);
-        expect(output).not.toContain(source);
-        expect(output.length).toBeLessThan(source.length);
-      }
+      expect(output).toContain(source);
+      expect(output).not.toContain("truncated");
 
       const nextInput = requireArray(requests[1]?.input, "next provider request input");
       const nextResult = requireRecord(

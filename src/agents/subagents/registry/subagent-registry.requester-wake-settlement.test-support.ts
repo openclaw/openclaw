@@ -2,6 +2,8 @@ import { expect, it, vi } from "vitest";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { countActiveDescendantRunsFromRuns } from "./subagent-registry-queries.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
@@ -9,6 +11,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
   requesterSessionKey,
   spawnVisibleChild,
   emitCompleted,
+  flushOwnedWork,
   waitForDeliveredCleanup,
   getRequesterWakeCalls,
   useGlobalSessionScope,
@@ -20,6 +23,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     requesterTurnRunId: string;
   }) => Promise<void>;
   emitCompleted: (runId: string, childSessionKey: string, text: string) => void;
+  flushOwnedWork: () => Promise<void>;
   waitForDeliveredCleanup: (runId: string) => Promise<void>;
   getRequesterWakeCalls: () => GatewayRequest[];
   useGlobalSessionScope: () => void;
@@ -66,12 +70,12 @@ export function registerRequesterWakeSettlementBoundaryTests({
     await spawnVisibleChild({ ...child, requesterTurnRunId });
     await createSessionsYieldTool({
       sessionId: "sess-main",
-      claimYield: () =>
-        registry.markRequesterTurnYielded({
+      claimYield: async () =>
+        (await registry.markRequesterTurnYielded({
           requesterSessionKey,
           requesterAgentId: "main",
           requesterTurnRunId,
-        }) > 0,
+        })) > 0,
       onYield: () => {},
     }).execute("yield-current-result", {});
     const { withLocalSessionPlacementTurnSettlement } =
@@ -93,6 +97,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
       }),
     );
     emitCompleted(child.runId, child.childSessionKey, "current counting result");
+    await flushOwnedWork();
     await waitForDeliveredCleanup(child.runId);
 
     expect(getRequesterWakeCalls()).toHaveLength(1);
@@ -132,7 +137,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     registry.addSubagentRunForTests({
       runId: "run-main-stale",
       childSessionKey: "agent:main:subagent:stale",
-      requesterSessionKey,
+      requesterSessionKey: "agent:main:subagent:batch",
       requesterDisplayKey: "main",
       requesterAgentId: "main",
       task: "main stale settle blocker",
@@ -162,6 +167,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     const completions: Array<{ delivered: boolean; error?: string }> = [];
     const runWake = () =>
       maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry: batch,
         transitionBatch: (_runIds, state) => {
@@ -195,7 +201,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
       },
     ]);
     expect(batch.requesterSettleWake).toBeUndefined();
-    expect(registry.countActiveDescendantRuns(requesterSessionKey)).toBe(1);
-    expect(registry.countActiveDescendantRuns(requesterSessionKey, "main")).toBe(0);
+    expect(countActiveDescendantRunsFromRuns(subagentRuns, requesterSessionKey)).toBe(1);
+    expect(countActiveDescendantRunsFromRuns(subagentRuns, requesterSessionKey, "main")).toBe(0);
   });
 }

@@ -5,7 +5,10 @@ import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { readUpdateStateDatabaseSizes } from "../../infra/update-candidate-state.sizes.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
+import {
+  DoctorMaintenanceRefusalError,
+  UpdateDoctorError,
+} from "../../infra/update-doctor-result.js";
 import {
   createUpdateFailureFact,
   type UpdateFailureFact,
@@ -39,6 +42,7 @@ import {
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
 } from "./update-command-result.js";
+import type { ManagedGatewayUpdateVerdict } from "./update-command-service-context-types.js";
 import { UpdateFinalizationOutput } from "./update-finalization-output.js";
 import { inspectUpdateFinalizationChildren } from "./update-finalization-processes.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
@@ -68,6 +72,7 @@ export class UpdateFinalizationLifecycle {
     outcome: Outcome;
   }[] = [];
   root?: string;
+  serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
   private runId?: string;
   private driver?: UpdateRunDriver;
   private ledgerOptions?: { env: NodeJS.ProcessEnv };
@@ -140,7 +145,7 @@ export class UpdateFinalizationLifecycle {
 
   private record(
     active: { phase: Phase; step: string },
-    status: "in_progress" | "completed" | "failed",
+    status: "in_progress" | "completed" | "failed" | "skipped",
     at: number,
     detail?: string,
     failureFacts?: UpdateFailureFact[],
@@ -258,7 +263,7 @@ export class UpdateFinalizationLifecycle {
       });
       this.record(
         active,
-        result === "failed" ? "failed" : "completed",
+        result === "failed" ? "failed" : result === "deferred" ? "skipped" : "completed",
         Date.now(),
         detail,
         failureFacts,
@@ -377,16 +382,20 @@ export class UpdateFinalizationLifecycle {
                 message: formatErrorMessage(error),
               }),
             ];
+      const deferred =
+        !failure &&
+        error instanceof DoctorMaintenanceRefusalError &&
+        error.refusal.kind === "deferred";
       end(
-        "failed",
+        deferred ? "deferred" : "failed",
         doctorOutput
           ? formatDoctorOutputDetail(doctorOutput)
           : redactSupportDiagnosticLine(formatErrorMessage(error), {
               env: process.env,
               stateDir: resolveStateDir(process.env),
             }),
-        facts,
-        error instanceof UpdateDoctorError ? error.exitCode : undefined,
+        deferred ? undefined : facts,
+        !deferred && error instanceof UpdateDoctorError ? error.exitCode : undefined,
       );
       throw error;
     } finally {
@@ -419,6 +428,9 @@ export class UpdateFinalizationLifecycle {
         opts: { json: this.json, run: { runId: this.runId, env } },
         env,
         timeoutMs: this.timeoutMs,
+        serviceUpdateVerdict: this.serviceUpdateVerdict,
+        // Source preparation cannot start a Gateway; only Doctor enters service custody.
+        waitForStartup: this.phaseTimings.some(({ phase }) => phase === "doctor"),
       });
       return this.failureObservation;
     } catch (recoveryError) {

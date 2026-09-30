@@ -16,6 +16,7 @@ import {
   type ControlUiAssetManifestEntry,
 } from "../src/gateway/control-ui-asset-manifest.ts";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../src/gateway/control-ui-root-assets.ts";
+import { controlUiBootPreloadsPlugin } from "./config/control-ui-boot-preloads.ts";
 import {
   controlUiCodeSplitting,
   controlUiLocaleConfigHintsChunkPrefix,
@@ -24,6 +25,7 @@ import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
+import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -374,6 +376,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
+    sourcePackageAlias("normalization-core", "uuid"),
     sourcePackageAlias("normalization-core"),
     sourcePackageAlias("session-url-contract", "parse"),
     sourcePackageAlias("session-url-contract", "session-key-normalization"),
@@ -605,6 +608,21 @@ export default function controlUiViteConfig(
     options.command === "serve"
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
       : undefined;
+  const staticImports = new Map<string, readonly string[]>();
+  const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
+    filename,
+    deps,
+    context,
+  ) => {
+    const pending = resolveControlUiModulePreloadDependencies(filename, deps, context);
+    if (context.hostType !== "js") {
+      return pending;
+    }
+    // The executing importer has already loaded its direct static JS imports.
+    // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
+    const loaded = staticImports.get(context.hostId);
+    return loaded ? pending.filter((dep) => !loaded.includes(dep)) : pending;
+  };
   return {
     base,
     define: {
@@ -616,16 +634,11 @@ export default function controlUiViteConfig(
     publicDir: path.resolve(here, "public"),
     css: {
       postcss: {
-        plugins: [controlUiHoverGuardPlugin()],
+        plugins: [controlUiHoverGuardPlugin(), controlUiWebAwesomePageRulePlugin()],
       },
     },
     optimizeDeps: {
-      include: [
-        "ipaddr.js",
-        "lit/directives/repeat.js",
-        "markdown-it-task-lists",
-        ...commonJsOptimizeDeps,
-      ],
+      include: ["ipaddr.js", "lit/directives/repeat.js", ...commonJsOptimizeDeps],
     },
     resolve: {
       alias: [
@@ -643,7 +656,7 @@ export default function controlUiViteConfig(
       sourcemap: buildInfo.release ? "hidden" : true,
       modulePreload: {
         polyfill: true,
-        resolveDependencies: resolveControlUiModulePreloadDependencies,
+        resolveDependencies: resolveModulePreloadDependencies,
       },
       rolldownOptions: {
         // Explicit groups do not absorb each other's dependencies. These settings
@@ -664,9 +677,21 @@ export default function controlUiViteConfig(
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
+      {
+        name: "control-ui-static-import-preloads",
+        generateBundle(_options, bundle) {
+          staticImports.clear();
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type === "chunk") {
+              staticImports.set(chunk.fileName, chunk.imports);
+            }
+          }
+        },
+      },
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
+      controlUiBootPreloadsPlugin(),
       controlUiBuildOutputPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",

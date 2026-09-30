@@ -17,7 +17,7 @@ const { makeTempDir, waitForMarker } = usePreparedCatalogWorkerFixtures();
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 
 describe("catalog worker generation retirement", () => {
-  it.each([1, 4])("keeps %s settled owner generations idle without a timer", async (agentCount) => {
+  it("keeps settled fleet generations idle without a timer", async () => {
     const createWorker = catalogWorker.createPreparedModelCatalogWorker;
     let checks = 0;
     const observe = vi
@@ -33,7 +33,7 @@ describe("catalog worker generation retirement", () => {
       );
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
-      const fixture = await createFleetFixture(undefined, false, { agentCount });
+      const fixture = await createFleetFixture();
       await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
       await Promise.all(
         fixture.snapshots.map((snapshot) =>

@@ -1,4 +1,3 @@
-// Minimax plugin module implements oauth behavior.
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   MAX_DATE_TIMESTAMP_MS,
@@ -64,11 +63,9 @@ type MiniMaxOAuthToken = {
   notification_message?: string;
 };
 
-type TokenPending = { status: "pending"; message?: string };
-
 type TokenResult =
   | { status: "success"; token: MiniMaxOAuthToken }
-  | TokenPending
+  | { status: "pending"; message?: string }
   | { status: "error"; message: string };
 
 /**
@@ -81,10 +78,6 @@ function normalizeOAuthExpires(expiredIn: unknown, now = Date.now()): number | u
     relativeSecondsThreshold: MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD,
     absoluteMillisecondsThreshold: MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD,
   });
-}
-
-function normalizeOAuthAuthorizationExpires(expiredIn: unknown): number | undefined {
-  return asSafeIntegerInRange(expiredIn, { min: 1, max: MAX_DATE_TIMESTAMP_MS });
 }
 
 function generatePkce(): { verifier: string; challenge: string; state: string } {
@@ -131,10 +124,10 @@ async function requestOAuthCode(params: {
       throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
     }
 
-    const payload = (await readProviderJsonResponse(
+    const payload = await readProviderJsonResponse<MiniMaxOAuthAuthorization & { error?: string }>(
       response,
       "minimax.oauth-code",
-    )) as MiniMaxOAuthAuthorization & { error?: string };
+    );
     if (!payload.user_code || !payload.verification_uri) {
       throw new Error(
         payload.error ??
@@ -144,7 +137,10 @@ async function requestOAuthCode(params: {
     if (payload.state !== params.state) {
       throw new Error("MiniMax OAuth state mismatch: possible CSRF attack or session corruption.");
     }
-    const expiredIn = normalizeOAuthAuthorizationExpires(payload.expired_in);
+    const expiredIn = asSafeIntegerInRange(payload.expired_in, {
+      min: 1,
+      max: MAX_DATE_TIMESTAMP_MS,
+    });
     if (expiredIn === undefined) {
       throw new Error("MiniMax OAuth authorization returned invalid expired_in.");
     }
@@ -196,6 +192,11 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
     | {
         status?: string;
         base_resp?: { status_code?: number; status_msg?: string };
+        access_token?: string | null;
+        refresh_token?: string | null;
+        expired_in?: unknown;
+        resource_url?: string;
+        notification_message?: string;
       }
     | undefined;
   if (text) {
@@ -218,28 +219,18 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
     return { status: "error", message: "MiniMax OAuth failed to parse response." };
   }
 
-  const tokenPayload = payload as {
-    status: string;
-    access_token?: string | null;
-    refresh_token?: string | null;
-    expired_in?: unknown;
-    token_type?: string;
-    resource_url?: string;
-    notification_message?: string;
-  };
-
-  if (tokenPayload.status === "error") {
+  if (payload.status === "error") {
     return { status: "error", message: "An error occurred. Please try again later" };
   }
 
-  if (tokenPayload.status !== "success") {
+  if (payload.status !== "success") {
     return { status: "pending", message: "current user code is not authorized" };
   }
 
-  if (!tokenPayload.access_token || !tokenPayload.refresh_token || !tokenPayload.expired_in) {
+  if (!payload.access_token || !payload.refresh_token || !payload.expired_in) {
     return { status: "error", message: "MiniMax OAuth returned incomplete token payload." };
   }
-  const expires = normalizeOAuthExpires(tokenPayload.expired_in);
+  const expires = normalizeOAuthExpires(payload.expired_in);
   if (expires === undefined) {
     return { status: "error", message: "MiniMax OAuth returned invalid token expiry." };
   }
@@ -247,11 +238,11 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
   return {
     status: "success",
     token: {
-      access: tokenPayload.access_token,
-      refresh: tokenPayload.refresh_token,
+      access: payload.access_token,
+      refresh: payload.refresh_token,
       expires,
-      resourceUrl: tokenPayload.resource_url,
-      notification_message: tokenPayload.notification_message,
+      resourceUrl: payload.resource_url,
+      notification_message: payload.notification_message,
     },
   };
 }

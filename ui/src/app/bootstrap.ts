@@ -25,7 +25,6 @@ import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capa
 import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { createLiveActivity } from "../pages/activity/live-activity.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
 import {
@@ -60,9 +59,11 @@ import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts"
 import type { ApplicationNavigationOptions, ApplicationContext } from "./context.ts";
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
+import { startGatewayPresenceActivity } from "./gateway-presence-activity.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
+import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
@@ -102,7 +103,6 @@ export type ApplicationRuntime = {
 };
 
 type PendingRouterStartNavigation = {
-  routeId: RouteId;
   location: RouteLocation;
   mode: "push" | "replace";
 };
@@ -131,11 +131,7 @@ export function bootstrapApplication(): ApplicationRuntime {
         selectedAgentId: startupTargetSelection.selectedAgentId,
       }
     : startup.settings;
-  if (
-    startup.location.pathname !== startupLocation.pathname ||
-    startup.location.search !== startupLocation.search ||
-    startup.location.hash !== startupLocation.hash
-  ) {
+  if (!sameRouteLocation(startup.location, startupLocation)) {
     // Remove URL credentials before deferred routing or Gateway authentication can expose them.
     history.replace(startup.location);
   }
@@ -182,7 +178,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       ? getGatewayAuth()
       : {},
   );
-  const liveActivity = createLiveActivity(gateway);
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   const chatSubmissions = createChatSubmissions();
   const router = createApplicationRouter();
@@ -316,10 +311,14 @@ export function bootstrapApplication(): ApplicationRuntime {
     connectionBootstrap,
   });
   const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);
-  const navigation = createApplicationNavigationPreferences(settings);
+  const navigation = createApplicationNavigationPreferences(theme);
   const nativeChatDrafts = createNativeChatDrafts();
-  const linkReaderRouting = startLinkReaderRouting(() => gateway.snapshot);
+  const shouldOpenExternally = () => theme.settings.openLinksExternally === true;
+  const linkReaderRouting = startLinkReaderRouting(() => gateway.snapshot, {
+    shouldOpenExternally,
+  });
   const nativeLinkRouting = startNativeLinkRouting({
+    shouldOpenExternally,
     signal: startupLifecycle.signal,
     canPresentBrowserPanel: () => {
       const shell = document.querySelector<HTMLElement & { routeState: ShellRouteState }>(
@@ -351,7 +350,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     sessions,
     chatSubmissions,
   });
-  const chatAttachmentHandoff = createChatAttachmentHandoff();
+  const chatAttachmentHandoff = createChatAttachmentHandoff(gateway);
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
@@ -467,7 +466,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     const location = routeLocation(routeId, options);
     // Preserve pre-start navigation exactly as the fire-and-forget entry point does.
     if (!routerStarted) {
-      pendingRouterStartNavigation = { routeId, location, mode: requested };
+      pendingRouterStartNavigation = { location, mode: requested };
     }
     // Re-clicking the active nav item must not stack identical history
     // entries: Back would appear dead until every duplicate is popped.
@@ -482,6 +481,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const navigateAndWait = (routeId: RouteId, options?: ApplicationNavigationOptions) =>
     navigateWithMode(routeId, options, "push");
   const plugins = new ControlUiPluginRuntime(() => context);
+  let nativeConversation: NativeConversationBridge | null = null;
   const context: ApplicationContext = {
     basePath,
     resourceBasePath,
@@ -499,13 +499,15 @@ export function bootstrapApplication(): ApplicationRuntime {
     sidebarAttention,
     runtimeConfig,
     sessions,
-    liveActivity,
     placementStartup,
     plugins,
     overlays,
     navigation,
     theme,
     nativeChatDrafts,
+    get nativeConversation() {
+      return nativeConversation;
+    },
     get nativeDeviceSettings() {
       return nativeDeviceSettings;
     },
@@ -547,6 +549,7 @@ export function bootstrapApplication(): ApplicationRuntime {
           return () => gateway.stop();
         },
         () => startGatewayPageActivation(gateway, document, window),
+        () => startGatewayPresenceActivity(gateway, document),
         () => {
           plugins.start();
           return () => plugins.dispose();
@@ -563,7 +566,8 @@ export function bootstrapApplication(): ApplicationRuntime {
       if (nativeWindow.webkit?.messageHandlers) {
         steps.unshift(async () => {
           const { startNativeCapabilities } = await import("./native-startup.runtime.ts");
-          return startNativeCapabilities(gateway, startupLifecycle, (capabilities) => {
+          return startNativeCapabilities(context, startupLifecycle, (capabilities) => {
+            nativeConversation = capabilities.conversation;
             nativeDeviceSettings = capabilities.deviceSettings;
             nativeNotifications = capabilities.notifications;
           });
@@ -654,7 +658,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       sidebarAttention.dispose();
       placementStartup.dispose();
       sessions.dispose();
-      liveActivity.dispose();
       stopConfigWriteSuspension();
       runtimeConfig.dispose();
       overlays.dispose();

@@ -1,10 +1,7 @@
-// QA Lab Slack Web API and stored-message observations.
 import { isDeepStrictEqual } from "node:util";
-import {
-  asPlainRecord,
-  countSlackNativeDataBlocks,
-  instrumentSlackPostMessage,
-} from "./slack-live.config.js";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { countSlackNativeDataBlocks, instrumentSlackPostMessage } from "./slack-live.config.js";
 import {
   SLACK_QA_NATIVE_CHART,
   SLACK_QA_NATIVE_TABLE,
@@ -19,6 +16,7 @@ import {
   slackAuthTestSchema,
   slackPostMessageSchema,
   type SlackMessage,
+  type SlackObservedMessage,
   slackHistorySchema,
   slackRepliesSchema,
   type SlackQaWebClient as WebClient,
@@ -126,6 +124,32 @@ export function collectSlackBlockText(blocks?: unknown[]) {
 
 export function collectSlackActionValues(blocks?: unknown[]) {
   return collectSlackBlockStringFields(blocks ?? [], "value");
+}
+
+export function recordSlackObservedMessage(params: {
+  channelId: string;
+  matchedScenario: boolean;
+  message: SlackMessage;
+  observedMessages: SlackObservedMessage[];
+  scenarioId: string;
+  scenarioTitle: string;
+}) {
+  if (!params.message.ts) {
+    return;
+  }
+  params.observedMessages.push({
+    actionValues: collectSlackActionValues(params.message.blocks),
+    blockText: collectSlackBlockText(params.message.blocks),
+    botId: params.message.bot_id,
+    channelId: params.channelId,
+    matchedScenario: params.matchedScenario,
+    scenarioId: params.scenarioId,
+    scenarioTitle: params.scenarioTitle,
+    text: params.message.text ?? "",
+    threadTs: params.message.thread_ts,
+    ts: params.message.ts,
+    userId: params.message.user,
+  });
 }
 
 export function parseSlackNativeApprovalAction(value: string) {
@@ -243,7 +267,7 @@ export function isExpectedSlackNativeChartMessage(
     return false;
   }
   return (message.blocks ?? []).some((value) => {
-    const block = asPlainRecord(value);
+    const block = asNonArrayRecord(value);
     return isDeepStrictEqual(
       { type: block.type, title: block.title, chart: block.chart },
       SLACK_QA_NATIVE_CHART,
@@ -286,9 +310,7 @@ export async function waitForSlackStoredMessage(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(1_000, remainingMs));
-    });
+    await sleep(Math.min(1_000, remainingMs));
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
 }
@@ -321,9 +343,7 @@ async function waitForSlackStoredMessages(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(1_000, remainingMs));
-    });
+    await sleep(Math.min(1_000, remainingMs));
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
 }
@@ -339,7 +359,7 @@ export function isExpectedSlackNativeTableMessage(
     return false;
   }
   return (message.blocks ?? []).some((value) => {
-    const block = asPlainRecord(value);
+    const block = asNonArrayRecord(value);
     return isDeepStrictEqual(
       {
         type: block.type,
