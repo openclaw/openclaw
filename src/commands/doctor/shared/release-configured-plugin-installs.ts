@@ -137,7 +137,7 @@ function collectWebSearchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv):
       : undefined;
   return [
     ...(entry?.pluginId ? [entry.pluginId] : []),
-    ...resolveWebSearchInstallCatalogEntriesForEnv(env).map((entry) => entry.pluginId),
+    ...resolveWebSearchInstallCatalogEntriesForEnv(env).map((candidate) => candidate.pluginId),
   ];
 }
 

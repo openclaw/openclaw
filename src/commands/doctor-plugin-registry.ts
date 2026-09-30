@@ -413,14 +413,14 @@ export function pluginRegistryIssueToHealthFinding(
 ): HealthFinding {
   const finding = (
     message: string,
-    path: string,
+    findingPath: string,
     fixHint: string,
     target?: string,
   ): HealthFinding => ({
     checkId: PLUGIN_REGISTRY_CHECK_ID,
     severity: "warning",
     message,
-    path,
+    path: findingPath,
     ...(target === undefined ? {} : { target }),
     fixHint,
   });
