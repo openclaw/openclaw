@@ -17,8 +17,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
-import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
+import {
+  resolveDatabasePath,
+  resolveOpenClawStateDirForDatabasePath,
+} from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";

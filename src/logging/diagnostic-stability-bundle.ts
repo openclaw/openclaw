@@ -545,9 +545,9 @@ function readOptionalMemorySummary(
     memory.latest === undefined
       ? undefined
       : readMemoryUsage(memory.latest, "snapshot.summary.memory.latest");
-  const result: Partial<NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]>> = {
-    ...(latest ? { latest } : {}),
-  };
+  const result: Partial<NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]>> = latest
+    ? { latest }
+    : {};
   assignOptionalFields(
     result,
     memory,

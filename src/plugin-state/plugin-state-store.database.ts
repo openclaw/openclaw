@@ -9,8 +9,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  resolveDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "../state/openclaw-state-db.paths.js";
 import { createPluginStateError, type PluginStateDatabase } from "./plugin-state-store.kernel.js";
 import {
   PluginStateStoreError,
