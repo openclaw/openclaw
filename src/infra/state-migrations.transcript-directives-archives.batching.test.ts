@@ -540,6 +540,42 @@ describe("canonical transcript archive batch transactions", () => {
     }
   });
 
+  it("carries a missing-file receipt through another transform of the pending blob", async () => {
+    const f = fixture(1);
+    try {
+      const archivePath = path.join(f.archiveDirectory, "archive-0.jsonl");
+      await f.migrate({
+        transformContent: (content) => ({
+          changed: content.includes("old"),
+          content: content.replace("old", "middle"),
+        }),
+      });
+      await f.migrate({
+        transformContent: (content) => ({
+          changed: content.includes("middle"),
+          content: content.replace("middle", "new"),
+        }),
+      });
+      expect(archiveBlob(f.database, "s00000").toString()).toContain("new");
+      expect(
+        f.database.prepare("SELECT published_at FROM session_transcript_archives").get()
+          ?.published_at,
+      ).toBeNull();
+
+      fs.mkdirSync(f.archiveDirectory, { recursive: true });
+      fs.writeFileSync(archivePath, originalContent);
+      await f.migrate();
+      expect(
+        f.database.prepare("SELECT published_at FROM session_transcript_archives").get()
+          ?.published_at,
+      ).toBe(123);
+      expect(fs.readFileSync(archivePath)).toEqual(archiveBlob(f.database, "s00000"));
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
+    } finally {
+      f.close();
+    }
+  });
+
   it("recovers surviving rows after deletion, insertion, and another rewrite", async () => {
     const f = fixture();
     try {

@@ -299,6 +299,10 @@ export function transcriptDirectiveArchivesNeedMigration(
   }
 }
 
+export function transcriptDirectiveArchiveRecoveryPending(database: DatabaseSync): boolean {
+  return readArchiveRecoveryJournal(database, ARCHIVE_RECOVERY_KEY) !== undefined;
+}
+
 function assertArchiveSourceUnchanged(database: DatabaseSync, planned: ArchiveRowPlan): boolean {
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
   const current = executeSqliteQueryTakeFirstSync(
@@ -523,6 +527,21 @@ function recoverArchivePublication(params: {
   );
 }
 
+export function recoverPendingTranscriptArchivePublication(params: {
+  agentId: string;
+  database: DatabaseSync;
+  pathname: string;
+}): void {
+  recoverArchivePublication({
+    ...params,
+    archiveDirectory: resolveSqliteTranscriptArchiveDirectory({
+      agentId: params.agentId,
+      path: params.pathname,
+    }),
+    recoveryKey: ARCHIVE_RECOVERY_KEY,
+  });
+}
+
 /** Repairs canonical blobs before their reconstructible files under maintenance authority. */
 export async function migrateCanonicalTranscriptArchives(
   params: ArchiveMigrationOptions & {
@@ -587,29 +606,35 @@ export async function migrateCanonicalTranscriptArchives(
       params.database,
       () => {
         assertAgentDatabaseMaintenanceAuthority();
-        const result = batch.map((planned) => rewriteArchiveRow(params.database, planned));
-        const rows = batch.flatMap((planned, index) =>
-          result[index] && planned.changed && planned.publishedAt !== null
-            ? [
-                {
-                  generation: planned.generation,
-                  nextSha256: planned.nextSha256,
-                  publishedAt: planned.publishedAt,
-                  sessionId: planned.sessionId,
-                },
-              ]
-            : [],
+        const pending = new Map(
+          (readArchiveRecoveryJournal(params.database, recoveryKey)?.rows ?? []).map((row) => [
+            archiveRecoveryRowKey(row),
+            row,
+          ]),
         );
-        if (rows.length > 0) {
-          const pending = new Map(
-            (readArchiveRecoveryJournal(params.database, recoveryKey)?.rows ?? []).map((row) => [
-              archiveRecoveryRowKey(row),
-              row,
-            ]),
-          );
-          for (const row of rows) {
-            pending.set(archiveRecoveryRowKey(row), row);
+        const result = batch.map((planned) => rewriteArchiveRow(params.database, planned));
+        let receiptsChanged = false;
+        for (const [index, planned] of batch.entries()) {
+          if (!result[index] || !planned.changed) {
+            continue;
           }
+          const key = archiveRecoveryRowKey(planned);
+          const prior = pending.get(key);
+          const publishedAt =
+            planned.publishedAt ??
+            (prior?.nextSha256 === planned.archiveSha256 ? prior.publishedAt : null);
+          if (publishedAt === null) {
+            continue;
+          }
+          pending.set(key, {
+            generation: planned.generation,
+            nextSha256: planned.nextSha256,
+            publishedAt,
+            sessionId: planned.sessionId,
+          });
+          receiptsChanged = true;
+        }
+        if (receiptsChanged) {
           writeArchiveRecoveryJournal(params.database, params.agentId, recoveryKey, {
             rows: [...pending.values()],
           });
