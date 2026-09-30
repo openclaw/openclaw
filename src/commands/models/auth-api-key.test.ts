@@ -10,6 +10,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   resolveApiKeyForProfile,
   replaceRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import * as authProfiles from "../../agents/auth-profiles.js";
@@ -193,6 +194,37 @@ describe("shared API-key editing and removal", () => {
         agentDir: reader,
       }),
     ).resolves.toMatchObject({ apiKey: "synthetic-new-key" });
+  });
+
+  it("clears the replaced key's cooldown so the next request can use the new key", async () => {
+    const profileId = "sample:manual";
+    saveAuthProfileStore({
+      version: 1,
+      profiles: { [profileId]: { type: "api_key", provider: "sample", key: "old-key" } },
+      usageStats: {
+        [profileId]: {
+          lastUsed: 1_700_000_000_000,
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "rate_limit",
+          errorCount: 3,
+          failureCounts: { rate_limit: 3 },
+        },
+      },
+    });
+    writeConfig({
+      plugins: { allow: [] },
+      auth: { profiles: { [profileId]: { provider: "sample", mode: "api_key" } } },
+      models: { providers: { sample: { ...connection, apiKey: profileId } } },
+    });
+
+    expect(await save()).toEqual({ profileId });
+
+    const persisted = loadPersistedAuthProfileStore();
+    expect(persisted?.profiles[profileId]).toMatchObject({ key: "synthetic-new-key" });
+    expect(persisted?.usageStats?.[profileId]).toEqual({
+      lastUsed: 1_700_000_000_000,
+      errorCount: 0,
+    });
   });
 
   it("uses stored key order and preserves the unselected sibling", async () => {

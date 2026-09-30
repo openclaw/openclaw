@@ -146,6 +146,8 @@ export async function saveModelProviderApiKey(params: {
     credential: { type: "api_key", provider, key },
     agentDir,
     preserveApiKeyMetadata: true,
+    // A replacement key must not inherit the old key's rate-limit or billing cooldown.
+    resetFailureState: true,
     validateCurrentCredential: validateReplacement,
   });
   const application = createRuntimeConfigWriteApplication(
