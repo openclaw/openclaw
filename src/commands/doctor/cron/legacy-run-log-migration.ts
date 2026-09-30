@@ -1,5 +1,6 @@
 // Legacy cron JSONL run-log migration into the cron-owned history store.
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseCronRunLogEntryObject } from "../../../cron/run-history-detail.js";
@@ -48,7 +49,7 @@ export async function migrateLegacyCronRunLogsToSqlite(
 
   for (const filePath of jsonlFiles) {
     const jobId = path.basename(filePath, ".jsonl");
-    const raw = await fs.readFile(filePath);
+    const raw = fsSync.readFileSync(filePath);
     const sourceSha256 = createHash("sha256").update(raw).digest("hex");
     const entries = parseCronRunLogEntriesFromJsonl(raw.toString("utf-8"), {
       jobId,
