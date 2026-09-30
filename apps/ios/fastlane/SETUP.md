@@ -214,8 +214,8 @@ These diagnostics produce `native-build`/`built` or `gateway-probe`/`probe-passe
 proofs, respectively. Neither is release qualification. Gateway runtime preparation
 continues to use the existing build owner's cache in every mode.
 
-The stock gate runs in **iOS Store Release** after native tool setup and before signing
-assets are accessed. It qualifies the checked-out `main` commit used for release
+The stock gate runs for both upload destinations in **iOS Store Release** after
+native tool setup and before signing assets are accessed. It qualifies the checked-out `main` commit used for release
 preparation and records the installed Xcode version and build without requiring
 a specific Xcode version. Manual CI also requires the stock gate when
 `validation_tier=full` and its checkout revision equals the workflow run's SHA.
@@ -254,14 +254,44 @@ and prevent native test execution.
 
 ## GitHub Actions
 
-Run **iOS Store Release** from `main` using the `ios-store-release` environment.
-The workflow has no input parameters and uses the same
-`pnpm ios:release:upload` entry point. It installs the pinned build tools, uses
-readonly encrypted signing assets and a job-owned temporary keychain, and
-uploads screenshots, the App Review PDF attachment, and the IPA. After Apple
-processing it stages the saved release notes and selects the exact build.
-App Review submission remains manual. For a failure after upload, use
-[staging recovery](../VERSIONING.md#staging-recovery); do not repeat the upload.
+Run **iOS Store Release** from `main` with one of these operations:
+
+| Operation | Environment | Outcome |
+| --- | --- | --- |
+| `release` (default) | `ios-store-release` | Upload screenshots, the App Review attachment, and the IPA; stage saved notes and select the processed build for manual App Review. |
+| `testflight` | `ios-testflight` | Upload the IPA, assign the external group, and submit for TestFlight review when required; automatically notify testers after approval. |
+| `screenshots` | None | Capture screenshots without signing or upload; candidate branches are allowed. |
+
+Both upload operations use `pnpm ios:release:upload`, the pinned build tools,
+readonly encrypted signing assets, a job-owned temporary keychain, and the shared
+`ios-release` concurrency lock. TestFlight does not stage the App Store listing.
+For a failure after upload, use [staging recovery](../VERSIONING.md#staging-recovery)
+with the saved destination; do not repeat the upload.
+
+Create `ios-testflight` as a GitHub environment restricted to `main` with no
+required reviewers, and make the secrets below available to it. Keep the
+`ios-store-release` environment's existing approval policy.
+
+Set `OPENCLAW_TESTFLIGHT_GROUP_ID` as an `ios-testflight` environment variable to
+the existing **External Testing** group's App Store Connect ID. Populate the
+app's required TestFlight beta metadata in App Store Connect before the first
+run, including feedback email, review contact, and reviewer access instructions.
+The pipeline validates these values and never copies or stages App Store listing
+metadata for a TestFlight run.
+
+Daily TestFlight runs are scheduled at **7:00 AM America/Los_Angeles**, with
+daylight saving time handled by GitHub. Initially leave the repository variable
+`IOS_TESTFLIGHT_ENABLED` unset or `false`. Run one manual distribution:
+
+```bash
+gh workflow run ios-store-release.yml --ref main -f operation=testflight
+```
+
+Inspect `testflight-result.json` in the recovery artifact and the matching build
+and group in App Store Connect. Once the manual flow is verified, set repository
+variable `IOS_TESTFLIGHT_ENABLED` to `true` to enable scheduled runs. Manual
+TestFlight dispatch is available regardless of that activation variable. Set it
+back to `false` to stop future scheduled jobs without disabling manual releases.
 
 Repository/environment secrets required by name:
 
@@ -272,8 +302,9 @@ Repository/environment secrets required by name:
 - `APP_STORE_CONNECT_KEY_ID`
 - `APP_STORE_CONNECT_KEY_CONTENT`
 
-App Store Connect supplies the revision and next build number. No TestFlight
-group ID or manually prepared mobile release branch is required.
+App Store Connect supplies the revision and next build number. The TestFlight
+destination requires the external group variable; App Store staging does not.
+Neither destination requires a prepared mobile release branch.
 
 Local authentication setup for a fresh clone on the same Mac:
 
@@ -323,5 +354,5 @@ Versioning rules:
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched
 - App Store release uses `OpenClawPushMode=appStore`, which derives the canonical production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.
 - The exported IPA is validated before upload by inspecting its push mode, signed entitlements, and embedded App Store profile.
-- `pnpm ios:release:upload` stages screenshots and the App Review PDF attachment before uploading the IPA, waits for processing, then stages saved notes and selects the build. It does not submit for App Review or upload the App Store Connect `Notes` field
+- The default `pnpm ios:release:upload` destination stages screenshots and the App Review PDF attachment before uploading the IPA, waits for processing, then stages saved notes and selects the build. It does not submit for App Review or upload the App Store Connect `Notes` field
 - See `apps/ios/VERSIONING.md` for the detailed workflow

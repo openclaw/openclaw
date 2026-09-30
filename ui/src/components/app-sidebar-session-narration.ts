@@ -10,13 +10,8 @@ import {
   SessionObserverDigestSchema,
   type SessionObserverDigest,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import {
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
-} from "../../../src/agents/internal-runtime-context.js";
 import { extractAssistantPhaseText } from "../../../src/shared/chat-message-content.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import { t } from "../i18n/index.ts";
 import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
@@ -25,8 +20,12 @@ import {
   normalizeAgentId,
 } from "../lib/sessions/session-key.ts";
 import { stripThinkingTags } from "../lib/strip-thinking-tags.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
+import type { SidebarRecentSession, SidebarToolActivity } from "./app-sidebar-session-types.ts";
+import {
+  deriveSidebarNarrationLine,
+  stripSidebarInternalRuntimeFragment,
+} from "./sidebar-narration-line.ts";
+import { readSidebarToolActivity } from "./sidebar-tool-activity.ts";
 
 const SIDEBAR_NARRATION_SUBSCRIPTION_LIMIT = 6;
 const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
@@ -57,7 +56,7 @@ function createNarrationRetry(): NarrationRetry {
   return { retryWindowMs: SIDEBAR_NARRATION_RETRY_INITIAL_MS, retryAt: 0, timer: null };
 }
 
-type NarrationActivity = { kind: "text"; text: string } | { kind: "line"; line: string };
+type NarrationActivity = { text: string };
 
 type ThrottledLine = {
   lastPublishedAt: number;
@@ -82,21 +81,6 @@ export type SidebarNarrationSyncInput = {
   openSessionKey: string;
   agentId: string;
 };
-
-function trailingInternalDelimiterPrefix(text: string): string {
-  const tokens = [INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END];
-  for (
-    let length = Math.min(text.length, ...tokens.map((token) => token.length - 1));
-    length >= 1;
-    length -= 1
-  ) {
-    const suffix = text.slice(-length);
-    if (tokens.some((token) => token.startsWith(suffix))) {
-      return suffix;
-    }
-  }
-  return "";
-}
 
 function rowRecency(row: SidebarRecentSession): number {
   return row.startedAt ?? row.updatedAt ?? 0;
@@ -133,11 +117,15 @@ export class SidebarSessionNarrationController {
   private throttles = new Map<string, ThrottledLine>();
   private lines = new Map<string, string>();
   private observerDigests = new Map<string, SessionObserverDigest>();
+  private tools = new Map<string, SidebarToolActivity>();
 
   constructor(
     private readonly onLinesChanged: (lines: ReadonlyMap<string, string>) => void,
     private readonly onObserverDigestsChanged: (
       digests: ReadonlyMap<string, SessionObserverDigest>,
+    ) => void = () => undefined,
+    private readonly onToolsChanged: (
+      tools: ReadonlyMap<string, SidebarToolActivity>,
     ) => void = () => undefined,
   ) {}
 
@@ -515,7 +503,7 @@ export class SidebarSessionNarrationController {
     // The Gateway bounds already-sanitized text and owns digest pacing. Retire
     // any full-owner stream and pending tool line before publishing its snapshot.
     this.streams.delete(key);
-    this.publishImmediate(key, { kind: "text", text: payload.text });
+    this.publishImmediate(key, { text: payload.text });
   }
 
   private publishText(
@@ -526,7 +514,7 @@ export class SidebarSessionNarrationController {
       if (update.reset) {
         // An empty replacement retracts prior content; a stale line must not
         // outlive it (the draft it showed may have been withdrawn).
-        this.clearLine(key);
+        this.clearNarration(key);
       }
       return;
     }
@@ -549,7 +537,7 @@ export class SidebarSessionNarrationController {
         throttle.pending = null;
       }
     }
-    const visibleFragment = this.stripInternalRuntimeFragment(stream, update.fragment);
+    const visibleFragment = stripSidebarInternalRuntimeFragment(stream, update.fragment);
     const nextVisibleText = `${stream.visibleText}${visibleFragment}`;
     if (!nextVisibleText) {
       if (update.reset && this.lines.delete(key)) {
@@ -561,61 +549,12 @@ export class SidebarSessionNarrationController {
       nextVisibleText.length > SIDEBAR_NARRATION_BUFFER_CHARS
         ? sliceUtf16Safe(nextVisibleText, -SIDEBAR_NARRATION_BUFFER_CHARS)
         : nextVisibleText;
-    const activity: NarrationActivity = { kind: "text", text: stream.visibleText };
+    const activity: NarrationActivity = { text: stream.visibleText };
     if (update.immediate) {
       this.publishImmediate(key, activity);
     } else {
       this.publishThrottled(key, activity);
     }
-  }
-
-  private stripInternalRuntimeFragment(stream: NarrationStream, fragment: string): string {
-    const text = `${stream.delimiterTail}${fragment}`;
-    stream.delimiterTail = "";
-    let depth = stream.internalDepth;
-    let cursor = 0;
-    let visible = "";
-
-    while (cursor < text.length) {
-      const nextBegin = text.indexOf(INTERNAL_RUNTIME_CONTEXT_BEGIN, cursor);
-      const nextEnd = text.indexOf(INTERNAL_RUNTIME_CONTEXT_END, cursor);
-      if (depth === 0) {
-        if (nextBegin === -1 && nextEnd === -1) {
-          visible += text.slice(cursor);
-          break;
-        }
-        if (nextEnd !== -1 && (nextBegin === -1 || nextEnd < nextBegin)) {
-          // A stray closing delimiter means this fragment may start inside an
-          // already-trimmed block. Fail closed until that boundary passes.
-          cursor = nextEnd + INTERNAL_RUNTIME_CONTEXT_END.length;
-          continue;
-        }
-        visible += text.slice(cursor, nextBegin);
-        depth = 1;
-        cursor = nextBegin + INTERNAL_RUNTIME_CONTEXT_BEGIN.length;
-        continue;
-      }
-      if (nextBegin === -1 && nextEnd === -1) {
-        break;
-      }
-      if (nextBegin !== -1 && (nextEnd === -1 || nextBegin < nextEnd)) {
-        depth += 1;
-        cursor = nextBegin + INTERNAL_RUNTIME_CONTEXT_BEGIN.length;
-        continue;
-      }
-      depth -= 1;
-      cursor = nextEnd + INTERNAL_RUNTIME_CONTEXT_END.length;
-    }
-
-    const delimiterPrefix = trailingInternalDelimiterPrefix(text);
-    if (delimiterPrefix) {
-      stream.delimiterTail = delimiterPrefix;
-      if (depth === 0 && visible.endsWith(delimiterPrefix)) {
-        visible = visible.slice(0, -delimiterPrefix.length);
-      }
-    }
-    stream.internalDepth = depth;
-    return visible;
   }
 
   private handleAgentEvent(payload: unknown): void {
@@ -627,17 +566,37 @@ export class SidebarSessionNarrationController {
     if (!key) {
       return;
     }
-    this.observeRun(key, record.runId);
-    if (record.stream !== "tool" || this.observerDigests.has(key)) {
+    if (record.stream === "lifecycle") {
+      this.observeRun(key, record.runId);
       return;
     }
-    const data = record.data as Record<string, unknown> | undefined;
-    const name = typeof data?.name === "string" ? data.name.trim() : "";
-    if (name) {
-      this.publishThrottled(key, {
-        kind: "line",
-        line: t("chat.sidebar.toolActivity", { tool: name }),
-      });
+    const runId = typeof record.runId === "string" ? record.runId.trim() : "";
+    const sameRun = runId !== "" && this.runIds.get(key) === runId;
+    const activity = readSidebarToolActivity(
+      record.stream,
+      record.data,
+      !runId || sameRun ? this.tools.get(key) : undefined,
+    );
+    if (activity === null) {
+      // A visibility change withdraws only the identified call in the current run.
+      if (sameRun && this.tools.delete(key)) {
+        this.onToolsChanged(new Map(this.tools));
+      }
+      return;
+    }
+    if (!activity) {
+      return;
+    }
+    this.observeRun(key, runId);
+    const previous = this.tools.get(key);
+    if (
+      previous?.name !== activity.name ||
+      previous.itemId !== activity.itemId ||
+      previous.toolCallId !== activity.toolCallId ||
+      previous.text !== activity.text
+    ) {
+      this.tools.set(key, activity);
+      this.onToolsChanged(new Map(this.tools));
     }
   }
 
@@ -713,8 +672,7 @@ export class SidebarSessionNarrationController {
   }
 
   private publishActivity(key: string, activity: NarrationActivity): void {
-    const line =
-      activity.kind === "text" ? deriveSidebarNarrationLine(activity.text) : activity.line;
+    const line = deriveSidebarNarrationLine(activity.text);
     if (line) {
       if (this.lines.get(key) !== line) {
         this.lines.set(key, line);
@@ -725,7 +683,7 @@ export class SidebarSessionNarrationController {
     // The activity text is the full visible buffer: normalizing it to nothing
     // means only suppressed content remains (e.g. a replacement that reduced
     // to REPLY_SKIP or a heartbeat), so retract any previously shown line.
-    if (activity.kind === "text" && this.lines.delete(key)) {
+    if (this.lines.delete(key)) {
       this.onLinesChanged(new Map(this.lines));
     }
   }
@@ -733,6 +691,9 @@ export class SidebarSessionNarrationController {
   private clearLine(key: string): void {
     this.clearNarration(key);
     this.runIds.delete(key);
+    if (this.tools.delete(key)) {
+      this.onToolsChanged(new Map(this.tools));
+    }
     if (this.observerDigests.delete(key)) {
       this.onObserverDigestsChanged(new Map(this.observerDigests));
     }
@@ -759,6 +720,10 @@ export class SidebarSessionNarrationController {
     this.streams.clear();
     this.runIds.clear();
     this.throttles.clear();
+    if (this.tools.size > 0) {
+      this.tools.clear();
+      this.onToolsChanged(new Map());
+    }
     if (this.lines.size > 0) {
       this.lines.clear();
       this.onLinesChanged(new Map());

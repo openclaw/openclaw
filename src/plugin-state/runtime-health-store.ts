@@ -3,7 +3,10 @@
 // per-process cleanup. Domain modules own record fields and display keys.
 import { randomUUID } from "node:crypto";
 import { getProcessStartTime } from "../shared/pid-alive.js";
-import { createCorePluginStateSyncKeyedStore } from "./plugin-state-store.js";
+import {
+  createCorePluginStateKeyedStore,
+  createCorePluginStateSyncKeyedStore,
+} from "./plugin-state-store.js";
 
 /** Envelope persisted with every cross-process runtime health record. */
 export type RuntimeHealthRecordEnvelope = {
@@ -37,7 +40,7 @@ type RuntimeHealthStore<T extends RuntimeHealthRecordEnvelope> = {
   /** Persists a record under the key, overwriting any prior value. */
   register(key: string, record: T): void;
   /** One record per display group, restricted to live recorder processes. */
-  list(): T[];
+  list(): Promise<T[]>;
   /** Removes records recorded by the process, optionally narrowed by predicate. */
   clearForProcess(processId: number, matches?: (record: T) => boolean): void;
 };
@@ -94,25 +97,24 @@ export function createRuntimeHealthStore<T extends RuntimeHealthRecordEnvelope>(
 ): RuntimeHealthStore<T> {
   // The keyed store is opened per operation so records follow the state dir
   // active at call time (tests and embedded runtimes swap OPENCLAW_STATE_DIR).
-  const openStore = () =>
-    createCorePluginStateSyncKeyedStore<T>({
-      ownerId: options.ownerId,
-      namespace: options.namespace,
-      maxEntries: options.maxEntries,
-      ...(options.ttlMs != null ? { defaultTtlMs: options.ttlMs } : {}),
-    });
+  const storeOptions = () => ({
+    ownerId: options.ownerId,
+    namespace: options.namespace,
+    maxEntries: options.maxEntries,
+    ...(options.ttlMs != null ? { defaultTtlMs: options.ttlMs } : {}),
+  });
 
   const normalize = (value: unknown): T | undefined =>
     hasValidEnvelope(value) ? options.normalizeRecord(value) : undefined;
 
   return {
     register(key, record) {
-      openStore().register(key, record);
+      createCorePluginStateSyncKeyedStore<T>(storeOptions()).register(key, record);
     },
-    list() {
+    async list() {
       try {
         const byGroup = new Map<string, T>();
-        for (const entry of openStore().entries()) {
+        for (const entry of await createCorePluginStateKeyedStore<T>(storeOptions()).entries()) {
           const record = normalize(entry.value);
           if (!record || !processLooksLive(record)) {
             continue;
@@ -135,7 +137,7 @@ export function createRuntimeHealthStore<T extends RuntimeHealthRecordEnvelope>(
     },
     clearForProcess(processId, matches) {
       try {
-        const store = openStore();
+        const store = createCorePluginStateSyncKeyedStore<T>(storeOptions());
         for (const entry of store.entries()) {
           const record = normalize(entry.value);
           if (record?.processId === processId && (!matches || matches(record))) {

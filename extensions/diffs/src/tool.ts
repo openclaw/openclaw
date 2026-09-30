@@ -9,6 +9,7 @@ import {
   asNonArrayRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { Static } from "typebox";
 import type { DiffScreenshotter } from "./browser.runtime.js";
@@ -144,18 +145,10 @@ export function createDiffsTool(params: {
       const artifactContext = buildArtifactContext(params.context);
       const input = normalizeDiffInput(toolParams);
       if (input.kind === "before_after" && input.before === input.after) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Before and after are identical — no changes to render.",
-            },
-          ],
-          details: {
-            changed: false,
-            ...(artifactContext ? { context: artifactContext } : {}),
-          },
-        };
+        return textResult("Before and after are identical — no changes to render.", {
+          changed: false,
+          ...(artifactContext ? { context: artifactContext } : {}),
+        });
       }
       const mode = DIFF_MODES.find((value) => value === toolParams.mode) ?? params.defaults.mode;
       const theme =
@@ -231,15 +224,7 @@ export function createDiffsTool(params: {
         : undefined;
 
       if (mode === "view") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Diff viewer ready.\n${viewerUrl}`,
-            },
-          ],
-          details: viewerDetails,
-        };
+        return textResult(`Diff viewer ready.\n${viewerUrl}`, viewerDetails);
       }
 
       try {
@@ -254,19 +239,14 @@ export function createDiffsTool(params: {
           context: artifactContext,
         });
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: buildFileArtifactMessage({
-                format: image.format,
-                filePath: artifactFile.path,
-                viewerUrl,
-              }),
-            },
-          ],
-          details: buildArtifactDetails({
-            baseDetails: viewerDetails ?? {
+        return textResult(
+          buildFileArtifactMessage({
+            format: image.format,
+            filePath: artifactFile.path,
+            viewerUrl,
+          }),
+          {
+            ...(viewerDetails ?? {
               changed: true,
               ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
               ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
@@ -275,26 +255,27 @@ export function createDiffsTool(params: {
               fileCount: rendered.fileCount,
               mode,
               ...(artifactContext ? { context: artifactContext } : {}),
-            },
-            artifactFile,
-            image,
-          }),
-        };
+            }),
+            filePath: artifactFile.path,
+            // `path` mirrors filePath so the message tool can send the artifact directly.
+            path: artifactFile.path,
+            fileBytes: artifactFile.bytes,
+            fileFormat: image.format,
+            fileQuality: image.qualityPreset,
+            fileScale: image.scale,
+            fileMaxWidth: image.maxWidth,
+          },
+        );
       } catch (error) {
         if (mode === "both") {
           const errorMessage = formatErrorMessage(error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Diff viewer ready.\n${viewerUrl}\nFile rendering failed: ${errorMessage}`,
-              },
-            ],
-            details: {
+          return textResult(
+            `Diff viewer ready.\n${viewerUrl}\nFile rendering failed: ${errorMessage}`,
+            {
               ...viewerDetails,
               fileError: errorMessage,
             },
-          };
+          );
         }
         throw error;
       }
@@ -321,24 +302,6 @@ function requireRenderedHtml(html: string | undefined, target: DiffRenderTarget)
     return html;
   }
   throw new Error(`Missing ${target} render output.`);
-}
-
-function buildArtifactDetails(params: {
-  baseDetails: Record<string, unknown>;
-  artifactFile: { path: string; bytes: number };
-  image: DiffRenderOptions["image"];
-}) {
-  return {
-    ...params.baseDetails,
-    filePath: params.artifactFile.path,
-    // `path` mirrors filePath so the message tool can send the artifact directly.
-    path: params.artifactFile.path,
-    fileBytes: params.artifactFile.bytes,
-    fileFormat: params.image.format,
-    fileQuality: params.image.qualityPreset,
-    fileScale: params.image.scale,
-    fileMaxWidth: params.image.maxWidth,
-  };
 }
 
 function buildFileArtifactMessage(params: {

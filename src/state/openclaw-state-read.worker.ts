@@ -22,6 +22,7 @@ import {
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
+import { readCronScratchSnapshotInDatabase } from "../cron/scratch-read.kernel.js";
 import { readCronJobNamesInDatabase } from "../cron/store/job-name.js";
 import { resolveCronJobsStorePath } from "../cron/store/paths.js";
 import { readActiveCronRunReceiptOwnersInDatabase } from "../cron/store/run-receipt-read.js";
@@ -336,6 +337,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 observation: observeCronRunRecoveryInDatabase(db, command),
+              };
+            }
+            if (command.type === "cron.scratch") {
+              return {
+                type: command.type,
+                snapshot: readCronScratchSnapshotInDatabase(db, command),
               };
             }
             if (command.type === "cron.jobNames") {

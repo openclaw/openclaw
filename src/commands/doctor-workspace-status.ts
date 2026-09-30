@@ -1,4 +1,3 @@
-/** Doctor status summary for workspace skills and plugins. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentIds,
@@ -325,7 +324,6 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
   );
 }
 
-/** Emits plugin recovery problem notes for doctor. */
 export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceStatusOptions = {}) {
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const scopes = visitWorkspacePluginStatus(

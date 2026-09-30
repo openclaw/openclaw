@@ -6,7 +6,8 @@ import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
-import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
+import { readCronScratchSnapshot } from "../scratch-read.js";
+import { writeCronJobScratch } from "../scratch-store.js";
 import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
 import { CronJobsStoreChangedError } from "../store/save-error.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
@@ -92,15 +93,39 @@ export async function readJob(state: CronServiceState, id: string) {
 }
 
 /** Reads one job's private scratch state after proving the job exists in this store. */
-export async function readScratch(state: CronServiceState, id: string) {
+export async function readScratch(
+  state: CronServiceState,
+  id: string,
+  options?: { assertCurrent?: () => void; signal?: AbortSignal },
+) {
+  const source = captureCronJobMutationSource(state);
+  const callerCurrent = options?.assertCurrent;
+  const signal = options?.signal;
+  const assertCurrent = () => {
+    source.assertCurrent();
+    signal?.throwIfAborted();
+    callerCurrent?.();
+    source.assertCurrent();
+  };
   return await locked(state, async () => {
+    assertCurrent();
     await ensureLoaded(state);
-    findJobOrThrow(state, id);
-    // Scratch intentionally opens the process-global state DB, matching every
-    // other cron store write in this service (see saveCronJobsStore); threading
-    // injected state-db options through CronServiceState is a service-wide
-    // refactor that must move jobs and scratch together, not scratch alone.
-    return readCronJobScratchState(state.deps.storePath, id);
+    assertCurrent();
+    const job = findJobOrThrow(state, id);
+    const revision = resolveCronJobConfigRevision(job);
+    const snapshot = await readCronScratchSnapshot(
+      state.deps.storePath,
+      { kind: "job", jobId: id, createdAtMsFallback: job.createdAtMs },
+      {},
+      { context: source.context, assertCurrent, signal },
+    );
+    assertCurrent();
+    if (!snapshot || snapshot.configRevision !== revision) {
+      // A foreign owner change cannot lend private content to the earlier authorized job.
+      noteCronJobsStoreCommit(source.storeKey);
+      throw new CronJobsStoreChangedError(source.storeKey);
+    }
+    return snapshot.state;
   });
 }
 
@@ -120,7 +145,8 @@ export async function writeScratch(
     source.assertCurrent();
     await ensureLoaded(state);
     source.assertCurrent();
-    const expectedRevision = resolveCronJobConfigRevision(findJobOrThrow(state, id));
+    const job = findJobOrThrow(state, id);
+    const expectedRevision = resolveCronJobConfigRevision(job);
     return await writeCronJobScratch(
       {
         storePath: state.deps.storePath,
@@ -132,6 +158,7 @@ export async function writeScratch(
       },
       {
         context: source.context,
+        createdAtMsFallback: job.createdAtMs,
         assertCurrent() {
           source.assertCurrent();
           params.commitGuard?.();

@@ -265,58 +265,42 @@ function describeXaiOAuthTokenFailure(params: {
   };
 }
 
-async function exchangeXaiOAuthToken(
-  params: {
-    tokenEndpoint: string;
-    body: Record<string, string>;
-    context: string;
-    requireRefreshToken?: boolean;
-  } & XaiOAuthFetchOptions,
+async function requestXaiOAuthRefresh(
+  tokenEndpoint: string,
+  refreshToken: string,
+  options: XaiOAuthFetchOptions,
 ): Promise<XaiOAuthTokenResponse> {
-  const endpoint = requireTrustedXaiOAuthEndpoint(params.tokenEndpoint, "token endpoint");
-  const maxAttempts =
-    params.body.grant_type === "refresh_token" ? XAI_OAUTH_REFRESH_MAX_ATTEMPTS : 1;
-  let lastMessage = `${params.context} failed`;
+  const endpoint = requireTrustedXaiOAuthEndpoint(tokenEndpoint, "token endpoint");
+  const context = "xAI OAuth refresh";
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    let result: Awaited<ReturnType<typeof fetchXaiOAuth>>;
-    try {
-      result = await fetchXaiOAuth(endpoint, params, params.body);
-    } catch (err) {
-      // Transport failures are not safe to retry for refresh grants: xAI rotates
-      // refresh tokens, so a response lost after xAI consumed the token would burn
-      // it on resend. Only Cloudflare challenge responses are retried below.
-      throw new Error(`${params.context} failed: ${formatErrorMessage(err)}`, { cause: err });
-    }
-    const { response } = result;
-    // A 2xx token response becomes a stored credential, so it must decode strictly:
-    // lossy decoding repairs corrupted bytes into U+FFFD and yields tokens that
-    // parse and persist but never authenticate, and the refresh grant rotates the
-    // refresh token, so that repaired value replaces a working one. Error bodies
-    // stay lossy so a mangled Cloudflare challenge is still reported as itself.
+  for (let attempt = 1; ; attempt += 1) {
+    let response: Response;
     let body: XaiOAuthResponseBody;
     try {
+      const result = await fetchXaiOAuth(endpoint, options, {
+        grant_type: "refresh_token",
+        client_id: XAI_OAUTH_CLIENT_ID,
+        refresh_token: refreshToken,
+      });
+      response = result.response;
+      // Successful refresh responses rotate stored credentials. Reject corrupted
+      // UTF-8 rather than persisting replacement characters as token bytes.
       body = await readResponseBody(result, { fatalUtf8: response.ok });
     } catch (err) {
-      // Not retryable, for the same reason as the transport failure above: xAI
-      // answered the grant, so it has already consumed and rotated the token.
-      throw new Error(`${params.context} failed: ${formatErrorMessage(err)}`, { cause: err });
+      // A lost or unreadable response may already have consumed the refresh token.
+      // Only a Cloudflare challenge response is safe to retry below.
+      throw new Error(`${context} failed: ${formatErrorMessage(err)}`, { cause: err });
     }
     if (response.ok) {
-      return parseXaiOAuthTokenResponse(body.json, params.now ?? Date.now, {
-        requireRefreshToken: params.requireRefreshToken,
-      });
+      return parseXaiOAuthTokenResponse(body.json, options.now ?? Date.now);
     }
 
-    const failure = describeXaiOAuthTokenFailure({ context: params.context, response, body });
-    lastMessage = failure.message;
-    if (attempt >= maxAttempts || !failure.retryable) {
-      throw new Error(lastMessage);
+    const failure = describeXaiOAuthTokenFailure({ context, response, body });
+    if (attempt >= XAI_OAUTH_REFRESH_MAX_ATTEMPTS || !failure.retryable) {
+      throw new Error(failure.message);
     }
     await sleep(XAI_OAUTH_REFRESH_RETRY_DELAY_MS);
   }
-
-  throw new Error(lastMessage);
 }
 
 async function requestXaiDeviceCode(
@@ -617,16 +601,7 @@ export async function refreshXaiOAuthCredential(
     throw new Error("xAI OAuth credential is missing refresh token");
   }
   const tokenEndpoint = await resolveXaiOAuthRefreshTokenEndpoint(credential, options);
-  const tokens = await exchangeXaiOAuthToken({
-    ...options,
-    tokenEndpoint,
-    context: "xAI OAuth refresh",
-    body: {
-      grant_type: "refresh_token",
-      client_id: XAI_OAUTH_CLIENT_ID,
-      refresh_token: refreshToken,
-    },
-  });
+  const tokens = await requestXaiOAuthRefresh(tokenEndpoint, refreshToken, options);
   const identity = resolveXaiOAuthIdentity(tokens);
   return {
     ...credential,

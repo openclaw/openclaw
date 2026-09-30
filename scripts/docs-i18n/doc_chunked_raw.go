@@ -509,10 +509,7 @@ func extractMarkdownLinkDestinations(text string) []string {
 	source := []byte(normalizeDocComponentsForMarkdownParse(text))
 	doc := parseDocsMarkdown(source)
 	destinations := make([]string, 0)
-	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
+	visitMarkdownNodes(doc, func(node ast.Node) {
 		switch link := node.(type) {
 		case *ast.Link:
 			if link.Reference == nil {
@@ -523,7 +520,6 @@ func extractMarkdownLinkDestinations(text string) []string {
 				destinations = append(destinations, "image:"+string(link.Destination))
 			}
 		}
-		return ast.WalkContinue, nil
 	})
 	return destinations
 }
@@ -532,10 +528,7 @@ func extractProtectedMarkdownLinkLabels(text string) []string {
 	source := []byte(normalizeDocComponentsForMarkdownParse(text))
 	doc := parseDocsMarkdown(source)
 	labels := make([]string, 0)
-	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
+	visitMarkdownNodes(doc, func(node ast.Node) {
 		kind := ""
 		destination := ""
 		switch link := node.(type) {
@@ -546,13 +539,12 @@ func extractProtectedMarkdownLinkLabels(text string) []string {
 			kind = "image"
 			destination = string(link.Destination)
 		default:
-			return ast.WalkContinue, nil
+			return
 		}
 		label := strings.TrimSpace(string(node.Text(source)))
 		if isProtectedProductLinkLabel(label, destination) {
 			labels = append(labels, kind+":"+destination+":"+label)
 		}
-		return ast.WalkContinue, nil
 	})
 	return labels
 }

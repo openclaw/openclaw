@@ -626,6 +626,14 @@ merge_outcome_stable() {
     fi
     break
   done
+  # Cancelling auto does not admit a merge. Keep its identity, request and policy
+  # facts pinned while GitHub recalculates these read-only merge projections.
+  if [ "${3:-}" = cancel-auto ] && printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" '
+    del(.pr.mergeable,.pr.mergeStateStatus) == ($observed | del(.pr.mergeable,.pr.mergeStateStatus))
+  ' >/dev/null; then
+    MERGE_OBSERVATION="$reread"
+    return 0
+  fi
   [ "$reread" = "$MERGE_OBSERVATION" ] && return 0
   # Both APIs bind the same PR/main facts. Compare REST policy evidence whenever
   # both reads support it; GraphQL admission relies on GitHub's policy enforcement.
@@ -756,7 +764,7 @@ merge_outcome_cancel_auto() {
       [ -f "$capture" ] && [ ! -L "$capture" ] || { merge_outcome_stop "cannot retain non-regular capture $capture"; return 1; }
       captures+=("$capture")
     done
-    merge_outcome_stable "$pr" || return 1
+    merge_outcome_stable "$pr" false cancel-auto || return 1
     # Retain retirement intent without rewriting the original acknowledgment.
     # A lost cancellation reply remains observation-only on retry.
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c --arg actor "$actor" --arg outcome "$expected_oid" \
@@ -780,7 +788,7 @@ merge_outcome_cancel_auto() {
   ' >/dev/null; then
     merge_outcome_stop "auto cancellation unresolved; preserve the retained attempt, do not replace the head or repeat cancellation"; return 1
   fi
-  merge_outcome_stable "$pr" || return 1
+  merge_outcome_stable "$pr" false cancel-auto || return 1
   if [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .cancellation.state)" != confirmed ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.cancellation.state="confirmed"')" || return 1
   fi

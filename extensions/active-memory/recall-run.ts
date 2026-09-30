@@ -164,6 +164,18 @@ export async function runRecallSubagent(params: {
   let transcriptArtifactPersisted = false;
   let runtimeSessionCreated = false;
   let resultStatus: RecallSubagentResult["resultStatus"];
+  const readRecallEvidence = async () => {
+    const state = await readMergedActiveMemoryTranscriptState({
+      sources: transcriptSources,
+      toolsAllow: params.config.toolsAllow,
+    });
+    return {
+      ...state,
+      hasUsableMemoryResult: state.hasUsableMemoryResult || harnessHasUsableMemoryResult,
+      hasUnavailableMemorySearchResult:
+        state.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
+    };
+  };
   const cleanupRecallResources = async () => {
     try {
       if (runtimeSessionCreated) {
@@ -329,35 +341,19 @@ export async function runRecallSubagent(params: {
       });
       transcriptArtifactPersisted = true;
     }
-    const transcriptState = await readMergedActiveMemoryTranscriptState({
-      sources: transcriptSources,
-      toolsAllow: params.config.toolsAllow,
-    });
     return {
       rawReply: rawReply || "NONE",
       resultStatus,
       transcriptPath: artifactSessionFile,
-      searchDebug: transcriptState.searchDebug,
-      hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
-      hasUnavailableMemorySearchResult:
-        transcriptState.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
+      ...(await readRecallEvidence()),
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
       const partialReply = await readPartialAssistantTextFromSources(transcriptSources);
-      const transcriptState = await readMergedActiveMemoryTranscriptState({
-        sources: transcriptSources,
-        toolsAllow: params.config.toolsAllow,
-      });
       attachPartialTimeoutData(error, {
         rawReply: partialReply ?? undefined,
         resultStatus,
-        searchDebug: transcriptState.searchDebug,
-        hasUnavailableMemorySearchResult:
-          transcriptState.hasUnavailableMemorySearchResult ||
-          harnessHasUnavailableMemorySearchResult,
-        hasUsableMemoryResult:
-          transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
+        ...(await readRecallEvidence()),
       });
     }
     if (

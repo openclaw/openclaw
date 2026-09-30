@@ -24,7 +24,7 @@ private final class DashboardCookieNavigationObserver: NSObject, WKNavigationDel
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardBrowserSessionTests {
     private func session(
@@ -52,9 +52,8 @@ struct DashboardBrowserSessionTests {
         controller.webView.navigationDelegate = observer
 
         controller.show(url: url, auth: controller.auth)
-        let deadline = ContinuousClock.now + .seconds(5)
-        while observer.cookiesAtNavigation == nil, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        try await DashboardTestWait.state("navigation cookies") {
+            observer.cookiesAtNavigation != nil
         }
         let cookies = try #require(observer.cookiesAtNavigation)
         let cookie = try #require(cookies.first { $0.name == "CF_Authorization" })
@@ -265,11 +264,8 @@ struct DashboardBrowserSessionTests {
                 })
                 let other = try #require(windows.first { $0.target != target }?.controller)
                 #expect(other.webView.configuration.websiteDataStore === primaryStore)
-                let readyDeadline = ContinuousClock.now + .seconds(5)
-                while await (try? opened.webView.evaluateJavaScript("document.body.innerText")) as? String != "Ready",
-                      ContinuousClock.now < readyDeadline
-                {
-                    try await Task.sleep(for: .milliseconds(10))
+                try await DashboardTestWait.state("profile page content") {
+                    await (try? opened.webView.evaluateJavaScript("document.body.innerText")) as? String == "Ready"
                 }
                 _ = try await opened.webView.evaluateJavaScript(
                     "document.body.innerText = 'Before save'; localStorage.setItem('ui-theme', 'dark')")
@@ -278,11 +274,8 @@ struct DashboardBrowserSessionTests {
                     name: MacGatewayProfileStore.didChangeNotification,
                     object: nil,
                     userInfo: [MacGatewayProfileStore.changedProfileIDKey: "first-open"])
-                let refreshedDeadline = ContinuousClock.now + .seconds(5)
-                while opened.gatewaySnapshot?.gateways.first(where: { $0.id == target.bridgeID })?.name != "Renamed",
-                      ContinuousClock.now < refreshedDeadline
-                {
-                    try await Task.sleep(for: .milliseconds(10))
+                try await DashboardTestWait.state("renamed profile snapshot") {
+                    opened.gatewaySnapshot?.gateways.first(where: { $0.id == target.bridgeID })?.name == "Renamed"
                 }
                 #expect(opened.gatewaySnapshot?.gateways.first { $0.id == target.bridgeID }?.name == "Renamed")
                 #expect(try await opened.webView
@@ -554,10 +547,9 @@ struct DashboardBrowserSessionTests {
         #expect(!controller.hasCurrentBrowserSession)
         controller.invalidateBrowserSession(error: .expired)
         var text = ""
-        let deadline = ContinuousClock.now + .seconds(5)
-        while !text.contains("Connection"), ContinuousClock.now < deadline {
+        try await DashboardTestWait.state("expired session message") {
             text = await (try? controller.webView.evaluateJavaScript("document.body.innerText")) as? String ?? ""
-            try await Task.sleep(for: .milliseconds(10))
+            return text.contains("Connection")
         }
         #expect(text.contains("expired"))
         #expect(text.contains("Connection"))

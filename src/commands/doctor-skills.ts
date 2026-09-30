@@ -1,4 +1,3 @@
-/** Doctor checks and repair prompts for unavailable configured skills. */
 import { existsSync } from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -19,7 +18,6 @@ import {
   disableUnavailableSkillsInConfig,
 } from "./doctor-skills-core.js";
 
-/** Builds a GitHub CLI config-dir hint for eligible GitHub skill setups. */
 function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   const discoveryInput: GhConfigDiscoveryInput = {
     platform: process.platform,
@@ -42,7 +40,6 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   return formatGhConfigDirMismatchHint(result);
 }
 
-/** Formats doctor note lines for skills that are allowed but unavailable. */
 function formatUnavailableSkillDoctorLines(
   skills: SkillStatusEntry[],
   includeDisableHint = true,

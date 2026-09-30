@@ -43,7 +43,7 @@ type ResolvedMcpOAuthConfig = McpOAuthConfig & {
   authProfileId?: unknown;
 };
 
-type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
+export type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   kind: "http";
   transportType: HttpMcpTransportType;
   url: string;

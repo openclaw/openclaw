@@ -323,7 +323,7 @@ export async function initializeAndRunUpdate(
                           applyUpdateCandidateAdmission({
                             target,
                             opts,
-                            result: initialization.candidateAdmission,
+                            result: initialization.candidateAdmission.result,
                           });
                         } catch (error) {
                           if (!(error instanceof UpdatePreMutationError)) {
@@ -363,8 +363,8 @@ export async function initializeAndRunUpdate(
                 const timeoutMs = prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
                 const selectedStoredChannel = target.storedChannel;
                 const candidateAdmissionChecks =
-                  initialization.candidateAdmission?.verdict?.verdict === "admit"
-                    ? initialization.candidateAdmission.verdict.facts.checks.map(
+                  initialization.candidateAdmission?.result.verdict?.verdict === "admit"
+                    ? initialization.candidateAdmission.result.verdict.facts.checks.map(
                         (check) => check.name,
                       )
                     : undefined;

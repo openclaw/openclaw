@@ -167,13 +167,7 @@ function normalizeBinding(
     sdkSessionId: value.sdkSessionId.trim(),
     compatKey: value.compatKey,
     compactKey: value.compactKey,
-    authMode: value.authMode,
-    ...(value.authMode === "gitHubToken" || value.authMode === "byok"
-      ? {
-          authProfileId: value.authProfileId,
-          authProfileVersion: value.authProfileVersion,
-        }
-      : {}),
+    ...sessionAuthFields(value),
     updatedAt: value.updatedAt,
   };
 }
@@ -222,18 +216,15 @@ async function registerStoredBinding(
   store: CopilotSessionBindingStore | undefined,
   key: string,
   binding: CopilotSessionBinding,
-): Promise<boolean> {
+): Promise<void> {
   try {
     await store?.register(key, binding);
-    return true;
   } catch {
     try {
       await store?.delete(key);
     } catch {
       // A failed invalidation just degrades to in-memory reuse for this process.
     }
-    // The in-memory binding still keeps this process warm; persistence is an optimization.
-    return false;
   }
 }
 
@@ -343,12 +334,15 @@ function computeSessionKey(
   let resolvedAgentId = "";
   let resolvedCopilotHome = "";
   try {
+    const authContext = {
+      agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
+      agentDir: input.params.agentDir,
+      workspaceDir: input.params.workspaceDir,
+      copilotHome: input.params.copilotHome,
+    };
     const resolved = !options.includeAuth
       ? resolveCopilotAuth({
-          agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
-          agentDir: input.params.agentDir,
-          workspaceDir: input.params.workspaceDir,
-          copilotHome: input.params.copilotHome,
+          ...authContext,
           auth: { useLoggedInUser: true },
         })
       : (() => {
@@ -375,18 +369,12 @@ function computeSessionKey(
           });
           return modelProvider.mode === "byok"
             ? createCopilotByokAuth({
-                agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
-                agentDir: input.params.agentDir,
-                workspaceDir: input.params.workspaceDir,
-                copilotHome: input.params.copilotHome,
+                ...authContext,
                 authProfileId: modelProvider.authProfileId,
                 authProfileVersion: modelProvider.authProfileVersion,
               })
             : resolveCopilotAuth({
-                agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
-                agentDir: input.params.agentDir,
-                workspaceDir: input.params.workspaceDir,
-                copilotHome: input.params.copilotHome,
+                ...authContext,
                 auth: input.params.auth,
                 resolvedApiKey: input.params.resolvedApiKey,
                 authProfileId: input.params.authProfileId,
@@ -400,9 +388,6 @@ function computeSessionKey(
       `auth.profileId=${resolved.authProfileId ?? ""}`,
       `auth.profileVersion=${resolved.authProfileVersion ?? ""}`,
     ];
-    if (!options.includeAuth) {
-      authParts = [];
-    }
   } catch {
     authParts = ["auth=unresolvable"];
   }

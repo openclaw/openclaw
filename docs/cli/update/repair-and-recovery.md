@@ -58,6 +58,16 @@ openclaw triage --agent codex
 Use `openclaw triage --non-interactive` to collect diagnostics without starting
 an agent. Add `--update-result <path>` to include a saved update-failure artifact.
 
+When another process saves configuration during database admission, OpenClaw
+warns and reads the current configuration again. It validates and uses that
+configuration before continuing, retaining concurrent changes when applying
+the requested update. If the root config or an included file changes after
+candidate checks, it repeats those checks against the current configuration
+before activation. A candidate that cannot accept the current configuration
+still fails validation; a concurrent save alone is not a refusal.
+If the save changes an implicitly selected update channel, OpenClaw resolves
+the target again before execution. An explicit `--channel` keeps its selection.
+
 Validation failures leave the serving Gateway untouched. If stopping the managed
 service unloads it and then fails before activation, OpenClaw attempts to restore
 the verified original runtime after rechecking service ownership. After activation, a
@@ -376,8 +386,13 @@ remain visible; the original update history is preserved.
 
 After post-update or finalization work fails and its child processes settle,
 OpenClaw probes the installed Gateway using the normal startup and readiness
-budget. Update history and failure reports record the observed serving version
-and readiness, including for a foreground Gateway. A failed finalization step
+budget. If maintenance found no Gateway service or listener, recovery records
+that readiness observation was skipped instead of waiting for a Gateway to appear.
+Package and database restoration checks still apply, and the original failure
+remains recorded. Update history and failure reports record the observed serving version
+and readiness. A standalone repair failure before Doctor maintenance begins uses
+one bounded observation because that repair has not requested Gateway startup.
+Observations also cover foreground Gateways. A failed finalization step
 can therefore report **verified serving** while retaining its original failure
 and repair guidance. The observation does not restart the Gateway or grant
 maintenance authority. Failed probes retain their specific diagnostic; a

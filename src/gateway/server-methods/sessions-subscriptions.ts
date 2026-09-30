@@ -1,4 +1,3 @@
-// Session and transcript event subscription handlers.
 import {
   ErrorCodes,
   errorShape,

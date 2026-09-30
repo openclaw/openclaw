@@ -69,11 +69,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
   for (const item of input) {
     if (item.type === "message") {
       const content = extractTextContent(item.content).trim();
-      // Substitute a placeholder for an image-only or file-only active user turn
-      // so the turn is not dropped and the downstream agent command (which requires
-      // non-empty message text) still runs with the attached image or file context,
-      // matching /v1/chat/completions. Historical media-only turns stay skipped
-      // because their bytes are not replayed.
+      // Preserve media-only active turns; historical media bytes are not replayed.
       const body =
         content || (item === activeUserMessage ? placeholderForActiveTurn(item.content) : "");
       if (!body) {

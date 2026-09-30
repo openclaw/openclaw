@@ -14,17 +14,6 @@ import { asBoolean } from "../../utils/boolean.js";
 const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
 
-const redactIMessageProbeErrorMessage = (message: string): string => {
-  const trimmed = message.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replaceAll(
-    /\/Users\/[^/\s]+\/Library\/Messages\/chat\.db/g,
-    "~/Library/Messages/chat.db",
-  );
-};
-
 export function buildNonSensitiveProbeFailure(
   channelId: string,
   probe: unknown,
@@ -39,7 +28,9 @@ export function buildNonSensitiveProbeFailure(
 
   // Preserve the actionable Full Disk Access failure while stripping the local
   // username path before health leaves the gateway.
-  const error = redactIMessageProbeErrorMessage(record.error);
+  const error = record.error
+    .trim()
+    .replaceAll(/\/Users\/[^/\s]+\/Library\/Messages\/chat\.db/g, "~/Library/Messages/chat.db");
   if (
     !/\bimsg\b/i.test(error) ||
     !error.includes("~/Library/Messages/chat.db") ||

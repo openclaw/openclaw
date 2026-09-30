@@ -8,7 +8,6 @@ import {
   buildLaunchAgentPlist,
   readLaunchAgentProgramArgumentsFromFile,
 } from "../../daemon/launchd-plist.js";
-import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
 import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import * as gatewayServices from "../../daemon/service.js";
@@ -51,7 +50,7 @@ it.each([
       command,
     };
     vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
-      { profile: "selected", env, scope: "user", windowsStartupEntry: startup },
+      { env, scope: "user", windowsStartupEntry: startup },
     ]);
     vi.spyOn(gatewayServices, "readGatewayServiceState").mockImplementation(
       async (_service, args) => ({
@@ -107,6 +106,92 @@ it.each([
   }),
 );
 
+it.each(
+  (["before-stop", "publication"] as const).flatMap((phase) =>
+    [
+      "no declared profile",
+      "declared selected",
+      "changed declared profile",
+      "other native unit",
+    ].map((scenario) => ({ phase, scenario })),
+  ),
+)("keeps selected Linux correspondence at $phase: $scenario", ({ phase, scenario }) =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    const root = process.cwd();
+    const unit = "custom-selected.service";
+    const observedUnit = scenario === "other native unit" ? "custom-sibling.service" : unit;
+    const selectedEnv = { HOME: home, OPENCLAW_PROFILE: "selected", OPENCLAW_SYSTEMD_UNIT: unit };
+    const environment: Record<string, string> = { HOME: home };
+    if (scenario !== "no declared profile") {
+      environment.OPENCLAW_PROFILE = "selected";
+    }
+    const command = {
+      programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
+      environment,
+      sourcePath: path.join(home, "shared-template.service"),
+    };
+    const observedCommand =
+      scenario === "changed declared profile"
+        ? { ...command, environment: { ...environment, OPENCLAW_PROFILE: "changed" } }
+        : command;
+    const state: GatewayServiceState = {
+      installed: true,
+      loadState: { status: "loaded" },
+      running: true,
+      env: {
+        HOME: home,
+        OPENCLAW_SYSTEMD_UNIT: observedUnit,
+        OPENCLAW_PROFILE: observedCommand.environment.OPENCLAW_PROFILE,
+      },
+      command: observedCommand,
+      runtime: {
+        status: "running",
+        pid: process.pid,
+        systemd: { scope: "user", unit: observedUnit, managerUid: 501 },
+      },
+    };
+    vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
+      {
+        env: { HOME: home, OPENCLAW_SYSTEMD_UNIT: observedUnit },
+        scope: "user",
+        systemdReadTarget: { scope: "user", unitName: observedUnit, unitPath: command.sourcePath },
+      },
+    ]);
+    vi.spyOn(gatewayServices, "readGatewayServiceState").mockResolvedValue(state);
+    const admission = assertManagedGatewayArtifactPublication({
+      roots: [root],
+      env: selectedEnv,
+      timeoutMs: 30_000,
+      assertCurrent: () => {},
+      updateInstallKind: "package",
+      phase,
+      shouldRestart: phase === "before-stop",
+      selected: {
+        inspected: true,
+        runtimeInspected: true,
+        running: true,
+        stopped: false,
+        serviceEnv: selectedEnv,
+        serviceManagerUid: 501,
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root,
+          fingerprint: sha256Hex(stableStringify(command)),
+          refreshDefinition: false,
+        },
+      },
+    });
+    if (scenario === "changed declared profile" || scenario === "other native unit") {
+      await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
+    } else {
+      await expect(admission).resolves.toBeUndefined();
+    }
+    expect(state.env.OPENCLAW_SYSTEMD_UNIT).toBe(observedUnit);
+    expect(state.env.OPENCLAW_PROFILE).toBe(observedCommand.environment.OPENCLAW_PROFILE);
+  }),
+);
+
 it.each(["unjoined native read", "authority revoked during read"])(
   "preserves the update fence after %s",
   (scenario) =>
@@ -118,9 +203,7 @@ it.each(["unjoined native read", "authority revoked during read"])(
         scenario === "unjoined native read"
           ? new CommandProcessCleanupError()
           : new Error("Original update authority was revoked");
-      vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
-        { profile: "other", env },
-      ]);
+      vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([{ env }]);
       vi.spyOn(gatewayServices, "readGatewayServiceState").mockImplementation(async () => {
         await Promise.resolve();
         if (scenario === "unjoined native read") {
@@ -146,7 +229,7 @@ it.each(["unjoined native read", "authority revoked during read"])(
     }),
 );
 
-it.each(["inventory", "profile metadata", "effective command"])(
+it.each(["inventory", "effective command"])(
   "retains uncertain native plist cleanup through %s",
   (phase) =>
     withServiceHome(async (home) => {
@@ -174,18 +257,9 @@ it.each(["inventory", "profile metadata", "effective command"])(
         params.dir === directory ? collect(params) : Promise.resolve([]),
       );
       const failure = new CommandProcessCleanupError();
-      let nativeReads = 0;
-      vi.spyOn(nativeExec, "runExec").mockImplementation(async (bin, args, options) => {
+      vi.spyOn(nativeExec, "runExec").mockImplementation(async (bin) => {
         expect(bin).toBe("/usr/bin/plutil");
-        // Inventory first converts XML then reads JSON; the profile reread is a
-        // separate admitted native command whose cleanup must also be retained.
-        if (++nativeReads > (phase === "profile metadata" ? 2 : 0)) {
-          throw failure;
-        }
-        if (typeof options !== "object" || options.input === undefined) {
-          throw new Error("Fixture decoder requires captured plist bytes");
-        }
-        return decodeLaunchAgentPlistFixture(options.input, args[1]);
+        throw failure;
       });
       const observed =
         phase === "effective command"

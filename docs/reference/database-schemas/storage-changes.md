@@ -595,8 +595,15 @@ writes also bind the current job definition and retain live caller authority at
 transaction and commit admission. Only an actual scratch write marks its business
 completion receipt. Unset tombstones, byte limits, source provenance and uncertain
 outcome handling are unchanged. Doctor's migration and compensation keep the same
-synchronous kernel; ordinary scratch reads remain separate migration work. This
-changes no schema, retention policy, public API or installed-updater contract.
+synchronous kernel. Ordinary scratch reads use the shared-state reader, with job
+definition and scratch in one native snapshot. The service rejects a changed
+definition, and the Gateway rechecks the caller before returning private content.
+Scratch reads and writes reuse the original projection's creation-time fallback
+for legacy rows missing that metadata; finite persisted values always win.
+Heartbeat preflight awaits scratch before selecting its session and pending events.
+First-use schema opening still belongs to the canonical mutable worker; Doctor's
+named maintenance readers remain synchronous. This changes no schema, retention
+policy, public API or installed-updater contract.
 
 Cron recovery observes each batch in one shared-state read-worker snapshot. Healthy
 live receipts need no writer admission. A missing receipt table uses its existing

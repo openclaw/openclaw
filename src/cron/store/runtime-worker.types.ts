@@ -36,7 +36,7 @@ export type CronJobMutationRefusal =
   | { kind: "receipt-conflict"; receipt: CronRunReceipt };
 
 export type CronRuntimeMutationInputs = {
-  "cron.writeScratch": CronJobScratchWriteInput;
+  "cron.writeScratch": CronJobScratchWriteInput & { createdAtMsFallback?: number };
   "cron.mutateJobs": {
     storeKey: string;
     changes: PreparedCronStoreChanges;

@@ -114,7 +114,7 @@ export async function captureTargetDatabaseSchemaContext(
   // a caller's plan must not authorize a different managed service's config.
   const planned = options?.legacyConfigPlan;
   const before = planned?.snapshot;
-  const legacyConfigPlan =
+  let legacyConfigPlan =
     before &&
     before.path === snapshot.path &&
     before.exists === snapshot.exists &&
@@ -134,10 +134,13 @@ export async function captureTargetDatabaseSchemaContext(
       ? planned
       : undefined;
   if (before?.path === snapshot.path && !legacyConfigPlan) {
-    throw new UpdatePreMutationError(
-      "database-schema-preflight",
-      `Update refused: planned configuration changed at ${snapshot.path}. Retry against the current source.`,
-    );
+    // This is read-only admission. A concurrent save needs a fresh projection,
+    // never reuse of the old source's plan or refusal merely because it changed.
+    if (!snapshot.valid) {
+      const { planLegacyConfigForUpdateChannel } =
+        await import("../../commands/doctor/legacy-config-repair.js");
+      legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
+    }
   }
   if (
     (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||

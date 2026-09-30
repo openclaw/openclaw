@@ -13,7 +13,11 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
-import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
+import {
+  missingRequiredParamLabels,
+  REQUIRED_PARAM_GROUPS,
+  type RequiredParamGroup,
+} from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
@@ -73,20 +77,7 @@ function collectMissingRequiredParamLabels(toolName: string, args: unknown): str
     return [];
   }
   const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
-  if (!record) {
-    return groups.map((group) => group.label ?? group.keys.join(" or "));
-  }
-  return groups
-    .filter((group) => {
-      const satisfied =
-        group.validator?.(record) ??
-        group.keys.some((key) => {
-          const value = record[key];
-          return typeof value === "string" && (group.allowEmpty || value.trim().length > 0);
-        });
-      return !satisfied;
-    })
-    .map((group) => group.label ?? group.keys.join(" or "));
+  return missingRequiredParamLabels(record, groups);
 }
 
 function buildToolExecutionStartTraceMeta(params: {

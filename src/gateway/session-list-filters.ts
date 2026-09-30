@@ -495,10 +495,7 @@ export function* filterSessionEntries(
     entries.push(pair);
   }
 
-  const { people: visiblePeople, overflow } = projectSessionPeopleFacet(
-    people.values(),
-    selectedProfileId,
-  );
+  const { people: visiblePeople, overflow } = projectSessionPeopleFacet(people, selectedProfileId);
   if (activityPulse && pulsePeople) {
     activityPulse.people = pulsePeople.size;
   }
