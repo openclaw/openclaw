@@ -6,6 +6,7 @@ import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harn
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import {
   createWorkspaceAttachmentPreparer,
+  declareAgentWorkspaceAccess,
   prepareAgentWorkspaceAttachments,
   registerAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
@@ -557,28 +558,38 @@ describe("Agents API attempt environment selection", () => {
     }
   });
 
-  it("keeps text-only transcript recorders usable without attachments", async () => {
-    const fixture = await workspaceAttachmentFixture();
-    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
-    const recorder = createRecorder({
-      target: () => undefined,
-      resolveInput: async () => ({ text: "Text-only request" }),
-    });
-    try {
-      const { result } = await attempt(
-        "self_hosted",
-        undefined,
-        fixture.gatewayRoot,
-        undefined,
-        undefined,
-        "Text-only request",
-        recorder,
-      );
-      expect(result.terminal).toEqual({ kind: "ok" });
-    } finally {
-      fixture.release();
-    }
-  });
+  it.each(["ready", "not-ready", "stopped"])(
+    "keeps text-only transcript recorders usable with a %s workspace",
+    async (state) => {
+      const fixture = await workspaceAttachmentFixture();
+      const workspaceDir =
+        state === "not-ready" ? path.join(fixture.gatewayRoot, "pending") : fixture.gatewayRoot;
+      if (state === "not-ready") {
+        declareAgentWorkspaceAccess(workspaceDir);
+      } else if (state === "stopped") {
+        fixture.release();
+      }
+      const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+      const recorder = createRecorder({
+        target: () => undefined,
+        resolveInput: async () => ({ text: "Text-only request" }),
+      });
+      try {
+        const { result } = await attempt(
+          "self_hosted",
+          undefined,
+          workspaceDir,
+          undefined,
+          undefined,
+          "Text-only request",
+          recorder,
+        );
+        expect(result.terminal).toEqual({ kind: "ok" });
+      } finally {
+        fixture.release();
+      }
+    },
+  );
 
   it("explains the missing self-hosted attachment provider", async () => {
     const { result } = await attempt("self_hosted", undefined, undefined, [

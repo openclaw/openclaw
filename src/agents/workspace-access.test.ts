@@ -522,6 +522,31 @@ describe("workspace attachment preparation", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("rejects a replacement workspace while resolving required attachment facts", async () => {
+    const root = workspace();
+    const host = { ...provider(), prepareTurnAttachments: async () => "prepared path" };
+    const release = bindWorkspace(root, host);
+    const recorder = createDeferredRecorder({ text: "Read the attachment", media: turn.media });
+    await expect(
+      prepareAgentWorkspaceAttachments({
+        workspaceDir: root,
+        turn: {
+          timeoutMs: turn.timeoutMs,
+          userTurnTranscriptRecorder: {
+            ...recorder,
+            async resolveMessage() {
+              release();
+              bindWorkspace(root, host);
+              return await recorder.resolveMessage();
+            },
+          },
+        },
+        assertCurrent: () => {},
+        requirePreparation: true,
+      }),
+    ).rejects.toThrow("Workspace access changed during attachment preparation");
+  });
+
   it.each(["not-ready", "stopped"])(
     "rejects attachment input for a %s workspace",
     async (state) => {

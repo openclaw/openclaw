@@ -422,15 +422,16 @@ export async function prepareAgentWorkspaceAttachments(params: {
     return undefined;
   }
   // Local preparation never substitutes for any registered remote workspace owner.
-  const remoteOwned = bindings.has(path.resolve(params.workspaceDir));
+  const workspaceKey = path.resolve(params.workspaceDir);
+  const binding = bindings.get(workspaceKey);
+  const remoteOwned = binding !== undefined;
   if (params.localExecution && remoteOwned && !params.requirePreparation) {
     return undefined;
   }
   const localExecution = remoteOwned ? undefined : params.localExecution;
-  const access = getAgentWorkspaceAccess(
-    params.workspaceDir,
-    params.requirePreparation ? undefined : "prepareTurnAttachments",
-  );
+  const access = params.requirePreparation
+    ? binding?.access
+    : getAgentWorkspaceAccess(params.workspaceDir, "prepareTurnAttachments");
   if (!access?.prepareTurnAttachments && !localExecution && !params.requirePreparation) {
     return undefined;
   }
@@ -441,23 +442,33 @@ export async function prepareAgentWorkspaceAttachments(params: {
       ])
     : params.turn.abortSignal;
   const deadline = performance.now() + params.turn.timeoutMs;
-  const assertCurrent = () => {
+  const assertTurnCurrent = () => {
     signal?.throwIfAborted();
     params.assertCurrent();
-    if (getAgentWorkspaceAccess(params.workspaceDir) !== access) {
+  };
+  const assertCurrent = () => {
+    assertTurnCurrent();
+    if (
+      (params.requirePreparation && bindings.get(workspaceKey) !== binding) ||
+      getAgentWorkspaceAccess(params.workspaceDir) !== access
+    ) {
       throw new Error("Workspace access changed during attachment preparation");
     }
   };
-  assertCurrent();
+  // Required preparation must first distinguish text-only turns from deferred files.
+  // Capture the binding above so resolving those facts cannot adopt a replacement.
+  const assertFactsCurrent = params.requirePreparation ? assertTurnCurrent : assertCurrent;
+  assertFactsCurrent();
   const recorder = params.turn.userTurnTranscriptRecorder;
   const message = (await recorder?.resolveMessage()) ?? recorder?.message;
-  assertCurrent();
+  assertFactsCurrent();
   // Deferred originals can differ from both the initial snapshot and runtime media.
   const facts = (message ? readPersistedMediaFacts(message) : undefined) ?? params.turn.media ?? [];
   const attachments = facts.filter((fact) => fact.path?.trim() || fact.url?.trim());
   if (!attachments.length) {
     return undefined;
   }
+  assertCurrent();
   if (params.requirePreparation && !access?.prepareTurnAttachments && !localExecution) {
     throw new Error(
       "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
