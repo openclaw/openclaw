@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { expect, it, vi } from "vitest";
+import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setupDoctorAdmissionFixture } from "./doctor-maintenance.admission.test-support.js";
 
 const fixture = setupDoctorAdmissionFixture();
@@ -73,3 +77,73 @@ it("refuses new quarantine even when the admitted ledger bytes are unchanged", (
     assertIsolation();
   }
 });
+
+it("reads current warm maintenance rows without hashing the shared database", async () => {
+  const { database, admission, assertIsolation } = fixture(true);
+  const resources = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent() {},
+    assertDatabaseAccess() {},
+  });
+  const version = vi.spyOn(sqliteSnapshotSource, "readSqliteSourceContentVersionSync");
+  try {
+    resources.run(() => {
+      admission();
+      admission();
+      expect(version).not.toHaveBeenCalled();
+      const foreign = new DatabaseSync(database);
+      try {
+        const row = foreign.prepare("SELECT run_id FROM update_runs LIMIT 1").get();
+        foreign.exec(
+          "UPDATE update_runs SET status = 'running', phase = 'requested', finished_at_ms = NULL",
+        );
+        expect(() => admission()).toThrow(String(row?.run_id));
+        expect(version).not.toHaveBeenCalled();
+      } finally {
+        foreign.close();
+      }
+    });
+  } finally {
+    await resources.close();
+    assertIsolation();
+  }
+});
+
+it.runIf(process.platform !== "win32")(
+  "invalidates a warm admission owner after source replacement",
+  async () => {
+    const { env, database, admission, createStateDir, assertIsolation } = fixture(true);
+    const original = openOpenClawStateDatabase({ env });
+    original.db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE");
+    const replacement = createStateDir();
+    const competing = createUpdateRun(
+      { trigger: "cli" },
+      { env: { ...env, OPENCLAW_STATE_DIR: replacement } },
+    );
+    const successor = openOpenClawStateDatabase({
+      env: { ...env, OPENCLAW_STATE_DIR: replacement },
+    });
+    successor.db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE");
+    const resources = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent() {},
+      assertDatabaseAccess() {},
+    });
+    const previous = `${database}.previous`;
+    try {
+      resources.run(() => {
+        admission();
+        fs.renameSync(database, previous);
+        fs.renameSync(path.join(replacement, "state", "openclaw.sqlite"), database);
+        expect(() => admission()).toThrow(competing.runId);
+      });
+    } finally {
+      if (fs.existsSync(previous)) {
+        fs.renameSync(database, path.join(replacement, "state", "openclaw.sqlite"));
+        fs.renameSync(previous, database);
+      }
+      await resources.close();
+      assertIsolation();
+    }
+  },
+);

@@ -50,7 +50,7 @@ export function withCachedOpenClawStateDatabaseReadOnly<T>(
 
 /** A native read borrow can avoid copying only while its original physical path still matches. */
 export function canReadWarmNativeSourceIndependently(
-  database: OpenClawStateDatabase,
+  database: Pick<OpenClawStateDatabase, "db" | "path">,
   pathname: string,
   admittedIdentity: string,
 ): boolean {

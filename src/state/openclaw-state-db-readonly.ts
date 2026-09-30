@@ -16,9 +16,11 @@ import {
 } from "../infra/sqlite-snapshot-source.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
+  requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
 import { readAdmittedStateContentVersion } from "./openclaw-state-db-content-version.js";
 import type {
@@ -32,6 +34,7 @@ import {
 } from "./openclaw-state-db-read-connection.js";
 import {
   withCachedOpenClawStateDatabaseReadOnly,
+  canReadWarmNativeSourceIndependently,
   type ReusedOpenClawStateReadOnlyDatabase,
 } from "./openclaw-state-db-readonly-reuse.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
@@ -500,6 +503,39 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   return withArtifactPreservingStateReads(() =>
     withExistingOpenClawStateDatabaseReadOnly(operation, options),
   );
+}
+
+/** Stopped maintenance can read its admitted native owner without copying source bytes. */
+export function withWarmOpenClawStateMaintenanceCurrentReadOnly<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): ReusedOpenClawStateReadOnlyDatabase<T> {
+  const pathname = resolveReadOnlyPath(options);
+  return stateSnapshotReads.exit(() => {
+    if (!getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance) {
+      return { reused: false };
+    }
+    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+      pathname,
+      options.env ?? process.env,
+    );
+    const result = withCachedOpenClawStateDatabaseReadOnly(
+      (database) => {
+        const identity = requireOpenClawStateDatabaseIdentity(database);
+        if (!canReadWarmNativeSourceIndependently(database, pathname, identity.key)) {
+          return { reused: false } as const;
+        }
+        const value = operation(database);
+        if (isPromiseLike(value)) {
+          throw new SqliteCoordinatorError("SQLite current-authority read must remain synchronous");
+        }
+        return { reused: true, value } as const;
+      },
+      pathname,
+      true,
+    );
+    return result.reused ? result.value : result;
+  });
 }
 
 /** Publication guards need current rows, never an inherited discovery snapshot. */

@@ -7,6 +7,7 @@ import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
   readCurrentOpenClawStateDatabaseContentVersion,
+  withWarmOpenClawStateMaintenanceCurrentReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -119,6 +120,16 @@ export function createUpdateRunAdmissionReader(
   const query = { ...input };
   let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
   return () => {
+    // The maintenance owner already admitted this native schema. Read current
+    // rows at every boundary; do not retain an authority verdict or discovery snapshot.
+    const warm = withWarmOpenClawStateMaintenanceCurrentReadOnly(
+      ({ db }) => readUpdateRuns(db, query),
+      options,
+    );
+    if (warm.reused) {
+      previous = undefined;
+      return warm.value;
+    }
     const version = readCurrentOpenClawStateDatabaseContentVersion(options);
     if (version !== undefined && previous?.version === version) {
       return structuredClone(previous.runs);
