@@ -867,7 +867,7 @@ extensions/signal/src/send.ts	1
 extensions/signal/src/signal-ingress.ts	2
 extensions/slack/src/accounts.ts	6
 extensions/slack/src/action-runtime.ts	1
-extensions/slack/src/actions.ts	5
+extensions/slack/src/actions.ts	3
 extensions/slack/src/approval-actions.ts	1
 extensions/slack/src/approval-handler.runtime.ts	1
 extensions/slack/src/approval-native-gates.ts	1
@@ -2676,7 +2676,7 @@ src/plugins/hook-types.ts	2
 src/plugins/hooks.ts	9
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
-src/plugins/host-hook-scheduled-turns.ts	6
+src/plugins/host-hook-scheduled-turns.ts	4
 src/plugins/host-hook-state.ts	6
 src/plugins/install-managed-npm-state.ts	2
 src/plugins/install-npm-metadata.ts	1
@@ -3042,7 +3042,6 @@ ui/src/lib/chat/tool-call-patch.ts	1
 ui/src/lib/chat/tool-cards.ts	2
 ui/src/lib/config-form-utils.ts	3
 ui/src/lib/config/config-draft-model.ts	3
-ui/src/lib/cron/index.ts	2
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	2
