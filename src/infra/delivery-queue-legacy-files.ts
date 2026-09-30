@@ -1,5 +1,6 @@
 import path from "node:path";
 import { safeReadDir } from "./state-migrations.fs.js";
+import { resolveLegacyMigrationSourcePath } from "./state-migrations.source-path.js";
 
 export const LEGACY_DELIVERY_QUEUE_DIRS = [
   { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
@@ -7,6 +8,7 @@ export const LEGACY_DELIVERY_QUEUE_DIRS = [
 ] as const;
 type LegacyDeliveryQueueFile = {
   sourcePath: string;
+  claimPaths: string[];
   status: "pending" | "failed";
 };
 
@@ -15,16 +17,33 @@ export function resolveLegacyDeliveryQueuePath(stateDir: string, dirName: string
 }
 
 export function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQueueFile[] {
-  const pending = safeReadDir(queueDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => ({ sourcePath: path.join(queueDir, entry.name), status: "pending" as const }));
+  const files = (directory: string) => {
+    const sources = new Map<string, { sourcePath: string; claimPaths: string[] }>();
+    for (const entry of safeReadDir(directory)) {
+      const name = resolveLegacyMigrationSourcePath(entry.name);
+      if (!entry.isFile() || !name.endsWith(".json")) {
+        continue;
+      }
+      const source = sources.get(name) ?? {
+        sourcePath: path.join(directory, name),
+        claimPaths: [],
+      };
+      if (entry.name !== name) {
+        source.claimPaths.push(path.join(directory, entry.name));
+      }
+      sources.set(name, source);
+    }
+    return [...sources.values()];
+  };
+  const pending = files(queueDir).map((source) => ({
+    ...source,
+    status: "pending" as const,
+  }));
   const failedDir = path.join(queueDir, "failed");
-  const failed = safeReadDir(failedDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => ({
-      sourcePath: path.join(failedDir, entry.name),
-      status: "failed" as const,
-    }));
+  const failed = files(failedDir).map((source) => ({
+    ...source,
+    status: "failed" as const,
+  }));
   return [...pending, ...failed];
 }
 
