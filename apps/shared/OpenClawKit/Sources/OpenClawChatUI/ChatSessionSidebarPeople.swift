@@ -107,12 +107,17 @@ public final class OpenClawChatSidebarPeople {
 
     // ui/src/components/sidebar-owner-session-counts.ts:8: never inherit the roster's agent, paging, or owner filters.
     public static var ownerCountsRequest: OpenClawChatGatewayRequest {
-        OpenClawChatGatewayRequest(method: "sessions.list", params: [
-            "includeOwnerSessionCounts": AnyCodable(true), "configuredAgentsOnly": AnyCodable(true),
-            "limit": AnyCodable(1), "includeDerivedTitles": AnyCodable(false), "includeLastMessage": AnyCodable(false),
-            "includeGlobal": AnyCodable(false), "includeUnknown": AnyCodable(false),
-            "excludeSubagents": AnyCodable(true), "excludeCron": AnyCodable(true), "excludeSystem": AnyCodable(true),
-        ], timeoutMs: 15000)
+        OpenClawChatGatewayRequest(
+            method: "sessions.list",
+            params: [
+                "includeOwnerSessionCounts": AnyCodable(true), "configuredAgentsOnly": AnyCodable(true),
+                "limit": AnyCodable(1), "includeDerivedTitles": AnyCodable(false),
+                "includeLastMessage": AnyCodable(false),
+                "includeGlobal": AnyCodable(false), "includeUnknown": AnyCodable(false),
+                "excludeSubagents": AnyCodable(true), "excludeCron": AnyCodable(true),
+                "excludeSystem": AnyCodable(true),
+            ],
+            timeoutMs: 15000)
     }
 
     public init() {}
@@ -194,17 +199,20 @@ public final class OpenClawChatSidebarPeople {
         self.people = Dictionary(grouping: identified, by: { $0.1.key }).sorted { $0.key < $1.key }.map { _, group in
             let first = group[0].1
             let user = User(
-                id: first.id, identity: first.identity,
-                name: Self.firstText(group.map(\.1.name)), email: Self.firstText(group.map(\.1.email)),
+                id: first.id,
+                identity: first.identity,
+                name: Self.firstText(group.map(\.1.name)),
+                email: Self.firstText(group.map(\.1.email)),
                 avatarUrl: Self.firstText(group.map(\.1.avatarUrl)))
             return Person(
-                user: user, entries: group.map(\.0),
+                user: user,
+                entries: group.map(\.0),
                 watchedSessions: Set(group.flatMap { $0.0.watchedsessions ?? [] }))
         }
     }
 
     private static func firstText(_ values: [String?]) -> String? {
-        values.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.sorted().first
+        values.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.min()
     }
 
     public func refreshCounts(load: () async throws -> [SessionOwnerSessionCount]?) async {
