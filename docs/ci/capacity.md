@@ -279,12 +279,13 @@ siblings sharing its serial bin retain their two-worker group caps. The CLI
 inventory, split policies, timing weights, and admission budgets are unchanged.
 
 The `agentic-gateway-server-isolated` family, including its database-worker
-config, is capped at eight workers on Blacksmith and hybrid profiles and
-additionally requires 28 GiB total memory. Its historical 20.70 GiB peak fits
-within 75% of that floor, leaving at
-least 7.30 GiB for the runner, operating system, and variation. Smaller hosts,
-hosted retries, frozen targets, and overlapping plans retain its two-worker
-fallback; the independently planned GitHub profile is unchanged.
+config, keeps two workers on Blacksmith and hybrid profiles. Current-source
+first-sign-in CI exceeded its unchanged 90-second deadline under the eight-worker
+allocation; an eight-worker baseline control completed in 85.4 seconds, leaving
+little margin. The two-worker budget restores cold-startup headroom without
+changing test deadlines, assertions, inventory, or cleanup. Existing host admission
+and fallback rules, the independently planned GitHub profile, and the separate
+four-worker Gateway methods policy remain unchanged.
 
 The historical [September 20 paired probe](https://github.com/openclaw/openclaw/actions/runs/35543209292)
 at source `39b3aa10677c99af54e3bffb43cadf3bb6c89eb8` used the same eight-CPU,

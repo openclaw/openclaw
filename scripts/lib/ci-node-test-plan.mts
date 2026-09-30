@@ -1107,7 +1107,8 @@ function applyCompactGroupWorkerPins(
       ...timedGroup,
       ...(MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(timedGroup.shard_name)
         ? {
-            env: { ...timedGroup.env, OPENCLAW_VITEST_MAX_WORKERS: "8" },
+            // Leave cold Gateway startup room within the existing test deadlines.
+            env: { ...timedGroup.env, OPENCLAW_VITEST_MAX_WORKERS: "2" },
             minTotalMemoryBytes: 28 * 1024 ** 3,
           }
         : {}),
@@ -3850,8 +3851,24 @@ function splitOversizedCompactGroup(
         stripes,
       })
     : undefined;
+  // Former eight-worker Gateway measurements remain floors, not two-worker samples.
+  const previousGatewayWorkerGeneration =
+    previousWorkerEnv && MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(group.shard_name)
+      ? createCompactSplitTimingGeneration({
+          configs: group.configs,
+          env: { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: "8" },
+          parentShardName: splitTimingParent,
+          stripes,
+        })
+      : undefined;
   const selectors = (
-    isTooling ? [] : [timingGeneration.selectorKey, previousWorkerGeneration?.selectorKey]
+    isTooling
+      ? []
+      : [
+          timingGeneration.selectorKey,
+          previousWorkerGeneration?.selectorKey,
+          previousGatewayWorkerGeneration?.selectorKey,
+        ]
   ).filter((selector): selector is string => selector !== undefined);
   const completeBlacksmithSeconds = Math.max(
     splitParentSeconds.blacksmith,

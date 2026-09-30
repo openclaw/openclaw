@@ -219,9 +219,9 @@ jobs or Blacksmith registrations and falls back to fresh work on a miss.
 
 Auto-reply reply tests run files in parallel with two workers per compact group. Their planner uses separate parallel timing identities; until those have measurements, serial group costs are divided by the effective worker count, with single-file groups retaining their full cost.
 
-The measured Gateway isolated/database-worker cohort uses at most eight workers
-on those hosts with at least 28 GiB total memory; other packed groups retain
-their existing caps.
+The Gateway isolated/database-worker cohort keeps its two-worker budget, including
+roomy serial Blacksmith and hybrid jobs, to leave cold startup headroom within
+existing test deadlines. Other packed groups retain their existing caps.
 
 Commands tests share the existing worker budget across independent files. The
 Doctor session SQLite cases are split by operation while preserving the complete
