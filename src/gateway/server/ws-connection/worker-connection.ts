@@ -376,12 +376,14 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       return;
     }
     const diagnostics = createWorkerRpcDiagnostics(parsed.method, timing);
+    const canSend = () =>
+      !disposed && !params.isClosed() && params.getClient() === client && !client.invalidated;
     const respond = (
       ok: boolean,
       payload?: unknown,
       error?: Parameters<Parameters<typeof dispatchWorkerRequest>[0]["respond"]>[2],
     ) => {
-      if (disposed || params.isClosed() || params.getClient() !== client || client.invalidated) {
+      if (!canSend()) {
         diagnostics?.response("suppressed");
         return;
       }
@@ -400,12 +402,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           connectionId: params.connId,
           service: params.service,
           send: (frame) => {
-            if (
-              !disposed &&
-              !params.isClosed() &&
-              params.getClient() === client &&
-              !client.invalidated
-            ) {
+            if (canSend()) {
               params.send(frame);
             }
           },
@@ -435,13 +432,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       // survives response-transport loss. Neither may block the heartbeat queue.
       void params.connectionWork.track(() =>
         runWithGatewayIndependentRootWorkContinuation(
-          () =>
-            dispatch(
-              parsed.method === "worker.computer" ||
-                parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke
-                ? connectionToolLifetime.signal
-                : undefined,
-            ),
+          () => dispatch(connectionToolLifetime.signal),
           "worker:dispatch",
         )
           .catch(() => {

@@ -313,7 +313,7 @@ export async function withUpdateCommandExecutor<T>(
               found.lease.executor.pid === process.pid
             ) {
               const { isCurrentManagedServiceUpdateHandoffProcess } =
-                await import("../../infra/update-managed-service-handoff.js");
+                await import("../../infra/update-managed-service-handoff-current.js");
               const handoff = { root: key, runId, store };
               const handedOff = await isCurrentManagedServiceUpdateHandoffProcess(handoff);
               // Retain the exact row observed before the await. Matching the run in

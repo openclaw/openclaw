@@ -1428,7 +1428,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/tools/gateway-tool.assembly.test.ts",
   "src/agents/tools/gateway-tool.test.ts",
   "src/agents/tools/gateway.hosted-routing.test.ts",
-  "src/agents/tools/gateway.runtime-identity.test.ts",
   "src/agents/tools/image-generate-tool.test.ts",
   "src/agents/tools/image-tool.test.ts",
   "src/agents/tools/media-generate-background-shared.test.ts",

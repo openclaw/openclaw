@@ -686,6 +686,16 @@ Failed worker retirement or snapshot removal remains registered with the existin
 state lifecycle owner, so canonical cleanup can retry that same resource without
 replaying the read or releasing its pins prematurely.
 
+Direct Cron execution checks await the same read worker before dispatching a
+payload, sending a webhook, or publishing a script result. The worker reads the
+active receipt, current job, and requested agent-deletion facts in one read
+transaction. Each check retains the run's original database context, bypasses
+inherited discovery snapshots, and rechecks cancellation and the active marker
+before the effect. A reopened database cannot replace a retired run context.
+Missing receipt storage refuses execution without creating tables. Synchronous
+message-action and message-source guards retain their existing current-read
+owner; these finite awaited checks do not replace those later effect guards.
+
 iMessage outbound receipt recovery reads the external Messages SQLite database
 through the shared worker broker. Its plugin owns the read-only GUID queries;
 each recovery operation retains its read-only connection through polling and

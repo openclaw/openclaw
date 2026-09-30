@@ -94,10 +94,10 @@ function isValidPid(pid: number): boolean {
 }
 
 /**
- * Check if every thread has exited by reading Linux /proc/<pid>/status.
- * Returns false on non-Linux platforms or if the proc file can't be read.
+ * Check if a Linux process has exited, including a zombie whose threads are gone.
+ * Unreadable procfs is inconclusive unless an existence probe confirms exit.
  */
-function isZombieProcess(pid: number): boolean {
+function isExitedLinuxProcess(pid: number): boolean {
   if (process.platform !== "linux") {
     return false;
   }
@@ -108,6 +108,14 @@ function isZombieProcess(pid: number): boolean {
     // evidence must not revoke a live process's locks or cleanup obligations.
     return stateMatch?.[1] === "Z" && /^Threads:[ \t]+1[ \t]*$/m.test(status);
   } catch {
+    // Reaping can remove procfs after the caller's existence probe. An unreadable
+    // status alone is not death evidence, so confirm that the PID is now gone.
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      // SAFETY: Node's process.kill reports syscall failures as ErrnoException.
+      return (error as NodeJS.ErrnoException).code === "ESRCH";
+    }
     return false;
   }
 }
@@ -127,7 +135,7 @@ export function isPidAlive(pid: number): boolean {
       return false;
     }
   }
-  return !isZombieProcess(pid);
+  return !isExitedLinuxProcess(pid);
 }
 
 /** Returns true only when the PID is invalid, missing, or known to be a Linux zombie. */
@@ -140,7 +148,7 @@ export function isPidDefinitelyDead(pid: number): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "ESRCH";
   }
-  return isZombieProcess(pid);
+  return isExitedLinuxProcess(pid);
 }
 
 function getDarwinProcessStartTime(

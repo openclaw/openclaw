@@ -88,7 +88,6 @@ extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
 extensions/google/transport-stream.test.ts
 extensions/google/transport-stream.ts
-extensions/imessage/src/actions.test.ts
 extensions/imessage/src/actions.ts
 extensions/imessage/src/monitor.last-route.test.ts
 extensions/imessage/src/monitor/inbound-processing.ts
@@ -570,7 +569,6 @@ src/media-understanding/apply.test.ts
 src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
 src/media/fetch.test.ts
-src/media/web-media.test.ts
 src/media/web-media.ts
 src/node-host/invoke-system-run-plan.test.ts
 src/node-host/invoke-system-run.test.ts

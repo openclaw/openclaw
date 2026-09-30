@@ -20,8 +20,8 @@ import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-iden
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff-current.js";
 import { admitSystemdUpdate } from "../../infra/update-managed-service-handoff-service.js";
-import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";

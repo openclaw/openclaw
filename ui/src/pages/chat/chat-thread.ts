@@ -30,8 +30,8 @@ export {
 export { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
+  generation: number;
   input: BuildChatItemsProps | null;
-  inputOrder: ChatInputOrderState;
   items: ReturnType<typeof buildChatItems>;
   liveStream: {
     index: number;
@@ -54,7 +54,15 @@ type ToolCardExpansionState = {
   };
 };
 
-const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
+type ChatItemsProjection = "visible" | "unfiltered";
+type CachedChatProjections = Partial<Record<ChatItemsProjection, CachedChatItems>> & {
+  inputOrder: ChatInputOrderState;
+  initialTurnId: BuildChatItemsProps["initialTurnId"];
+};
+// Search and gallery inputs must not evict each other. Both projections share
+// the pane/session's input order, bounded lifetime, and canonical builder.
+const chatItemsByPane = new Map<string, Map<string, CachedChatProjections>>();
+const chatItemsGenerations = new WeakMap<readonly RenderChatItem[], number>();
 const toolCardStateBySession = new Map<string, ToolCardExpansionState>();
 const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
 const expansionMapVersions = new WeakMap<ReadonlyMap<string, unknown>, number>();
@@ -342,20 +350,43 @@ export function findLiveStreamIndex(items: readonly RenderChatItem[]): number {
   return items.findIndex((item) => item.kind === "stream" && item.isStreaming);
 }
 
+export function getChatItemsGeneration(items: readonly RenderChatItem[]): number {
+  return chatItemsGenerations.get(items) ?? 0;
+}
+
 export function buildCachedChatItems(
   input: BuildChatItemsProps,
+  projection: ChatItemsProjection = "visible",
 ): ReturnType<typeof buildChatItems> {
   let paneCache = chatItemsByPane.get(input.paneId);
   if (!paneCache) {
     paneCache = new Map();
     chatItemsByPane.set(input.paneId, paneCache);
   }
-  const cached = getOrCreateSessionCacheValue(paneCache, input.sessionKey, () => ({
+  const projections = getOrCreateSessionCacheValue(
+    paneCache,
+    input.sessionKey,
+    (): CachedChatProjections => ({
+      inputOrder: { keys: [] },
+      initialTurnId: input.initialTurnId,
+    }),
+  );
+  if (projections.initialTurnId !== input.initialTurnId) {
+    projections.initialTurnId = input.initialTurnId;
+    projections.inputOrder.keys = [];
+    // Retiring the initial input resets both views of that ordering ledger.
+    for (const cached of [projections.visible, projections.unfiltered]) {
+      if (cached) {
+        cached.input = null;
+      }
+    }
+  }
+  const cached = (projections[projection] ??= {
+    generation: 0,
     input: null,
-    inputOrder: { keys: [] },
     items: [],
     liveStream: null,
-  }));
+  });
   // Keep stream-only updates off the loaded-history path; structural changes
   // still use the full builder.
   if (cached.input && sameChatItemsStructuralInput(cached.input, input)) {
@@ -367,10 +398,10 @@ export function buildCachedChatItems(
       return cached.items;
     }
   }
-  if (cached.input?.initialTurnId !== input.initialTurnId) {
-    cached.inputOrder.keys = [];
-  }
-  const items = stabilizeChatItems(cached.items, buildChatItems(input, cached.inputOrder));
+  const items = stabilizeChatItems(cached.items, buildChatItems(input, projections.inputOrder));
+  // A rebuild can retain every row and the array. Consumers still need to
+  // observe the structural pass; text-only slot replacements do not advance it.
+  chatItemsGenerations.set(items, ++cached.generation);
   cached.input = input;
   cached.items = items;
   const liveStreamIndex = findLiveStreamIndex(items);

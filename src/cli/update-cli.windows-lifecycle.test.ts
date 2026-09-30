@@ -665,7 +665,18 @@ describe("update-cli", () => {
           resolveGatewayTaskScriptPath(process.env),
         );
       }
-      resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
+      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
+        async (
+          _env,
+          options: Parameters<
+            typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate
+          >[1],
+        ) => {
+          await options?.beforeMutation?.();
+          options?.assertCurrent?.();
+          return true;
+        },
+      );
       if (phase === "service pre-stop inspection") {
         serviceLoaded.mockResolvedValue(true);
         serviceReadRuntime.mockImplementation(async () => {

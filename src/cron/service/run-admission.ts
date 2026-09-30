@@ -608,6 +608,7 @@ export async function executeQueuedCronRun(params: {
         runId: taskRunId,
         activeJobMarker,
         runReceipt: started.runReceipt,
+        runReceiptContext: started.runReceiptContext,
         executionIdentity: createCronOwnerExecutionIdentityAdmission({
           state,
           runReceipt: started.runReceipt,

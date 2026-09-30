@@ -83,6 +83,7 @@ async function finishPreparedManualRun(
         streamScheduleKey: prepared.streamScheduleKey,
         streamSourceIdentity: prepared.streamSourceIdentity,
         runReceipt: prepared.runReceipt,
+        runReceiptContext: prepared.runReceiptContext,
         executionIdentity: createCronOwnerExecutionIdentityAdmission({
           state,
           runReceipt: prepared.runReceipt,

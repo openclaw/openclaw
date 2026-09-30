@@ -28,7 +28,11 @@ import type {
 import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronScratchReadCommand, CronScratchSnapshot } from "../cron/scratch-contract.js";
-import type { CronRunReceiptOwnerObservation } from "../cron/store/run-receipt.types.js";
+import type {
+  CronRunReceiptCurrentFacts,
+  CronRunReceiptCurrentReadCommand,
+  CronRunReceiptOwnerObservation,
+} from "../cron/store/run-receipt.types.js";
 import type {
   CronRunRecoveryReadCommand,
   CronRunRecoveryObservation,
@@ -172,6 +176,7 @@ export type OpenClawStateReadCommand =
           };
     }
   | CronRunRecoveryReadCommand
+  | CronRunReceiptCurrentReadCommand
   | CronScratchReadCommand
   | { type: "cron.activeReceiptOwners"; agentId: string }
   | { type: "cron.jobNames"; jobIds: string[]; storePath?: string }
@@ -353,6 +358,7 @@ export type OpenClawStateReadResult =
       type: "cron.observeRunRecovery";
       observation: CronRunRecoveryObservation;
     }
+  | { type: "cron.currentReceipt"; facts: CronRunReceiptCurrentFacts }
   | { type: "cron.scratch"; snapshot: CronScratchSnapshot | undefined }
   | {
       type: "cron.jobNames";

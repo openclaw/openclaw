@@ -41,51 +41,6 @@ export function buildNonSensitiveProbeFailure(
   return { ok: false, error: PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR };
 }
 
-function resolveProbeAccountEnabled(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-  account: unknown;
-  diagnostics: string[];
-}): boolean {
-  const fallback = asBoolean(asNullableRecord(params.account)?.enabled) ?? true;
-  try {
-    return resolveChannelAccountEnabled({
-      plugin: params.plugin,
-      account: params.account,
-      cfg: params.cfg,
-    });
-  } catch (error) {
-    params.diagnostics.push(
-      `${params.plugin.id}:${params.accountId}: failed to evaluate enabled state (${formatErrorMessage(error)}).`,
-    );
-    return fallback;
-  }
-}
-
-async function resolveProbeAccountConfigured(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-  account: unknown;
-  diagnostics: string[];
-}): Promise<boolean> {
-  const fallback = asBoolean(asNullableRecord(params.account)?.configured) ?? true;
-  try {
-    return await resolveChannelAccountConfigured({
-      plugin: params.plugin,
-      account: params.account,
-      cfg: params.cfg,
-      readAccountConfiguredField: true,
-    });
-  } catch (error) {
-    params.diagnostics.push(
-      `${params.plugin.id}:${params.accountId}: failed to evaluate configured state (${formatErrorMessage(error)}).`,
-    );
-    return fallback;
-  }
-}
-
 export async function resolveHealthAccountContext(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -131,20 +86,27 @@ export async function resolveHealthAccountContext(params: {
     };
   }
 
-  const enabled = resolveProbeAccountEnabled({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    account,
-    diagnostics,
-  });
-  const configured = await resolveProbeAccountConfigured({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    account,
-    diagnostics,
-  });
+  let enabled = asBoolean(asNullableRecord(account)?.enabled) ?? true;
+  try {
+    enabled = resolveChannelAccountEnabled({ plugin: params.plugin, account, cfg: params.cfg });
+  } catch (error) {
+    diagnostics.push(
+      `${params.plugin.id}:${params.accountId}: failed to evaluate enabled state (${formatErrorMessage(error)}).`,
+    );
+  }
+  let configured = asBoolean(asNullableRecord(account)?.configured) ?? true;
+  try {
+    configured = await resolveChannelAccountConfigured({
+      plugin: params.plugin,
+      account,
+      cfg: params.cfg,
+      readAccountConfiguredField: true,
+    });
+  } catch (error) {
+    diagnostics.push(
+      `${params.plugin.id}:${params.accountId}: failed to evaluate configured state (${formatErrorMessage(error)}).`,
+    );
+  }
 
   return {
     probeAccount: account,

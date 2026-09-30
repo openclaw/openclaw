@@ -1044,6 +1044,7 @@ img.chat-avatar {
 }
 
 .chat-reply-attribution--inline .chat-reply-attribution__unavailable {
+  grid-column: 3;
   contain: inline-size;
   justify-self: stretch;
 }
