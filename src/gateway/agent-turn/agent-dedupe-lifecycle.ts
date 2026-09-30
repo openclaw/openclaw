@@ -312,7 +312,6 @@ export function createAgentDedupeLifecycle(params: {
     clearUnaccepted,
     abortForLifecycleRotation,
     isReserved: () => reserved,
-    isAccepted: () => accepted,
     markAccepted: (value: boolean) => {
       accepted = value;
     },

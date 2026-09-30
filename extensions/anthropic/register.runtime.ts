@@ -404,31 +404,19 @@ function hasConfiguredModelOverride(
   }
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
-    if (normalizeLowercaseStringOrEmpty(providerId) !== normalizedProvider) {
-      continue;
-    }
-    if (!Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const model of providerConfig.models) {
-      if (
-        normalizeLowercaseStringOrEmpty(typeof model?.id === "string" ? model.id : "") !==
-        normalizedModelId
-      ) {
-        continue;
-      }
-      if (
-        override === "cost"
-          ? model?.cost !== undefined
-          : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
-            (typeof model?.contextWindow === "number" && model.contextWindow > 0)
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return Object.entries(providers).some(
+    ([providerId, providerConfig]) =>
+      normalizeLowercaseStringOrEmpty(providerId) === normalizedProvider &&
+      Array.isArray(providerConfig?.models) &&
+      providerConfig.models.some(
+        (model) =>
+          normalizeLowercaseStringOrEmpty(model?.id) === normalizedModelId &&
+          (override === "cost"
+            ? model?.cost !== undefined
+            : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
+              (typeof model?.contextWindow === "number" && model.contextWindow > 0)),
+      ),
+  );
 }
 
 function matchesAnthropicModernModel(modelId: string): boolean {

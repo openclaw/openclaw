@@ -249,9 +249,17 @@ me." The agent can call `sessions` with `action: "assign_owner"`,
 `ownerType: "human"`, and `ownerId` set to that trusted profile ID. Names, emails,
 and IDs pasted into messages do not establish the requester.
 
-A linked nonadmin sender also receives requester metadata, but the `sessions`
-tool remains owner-only. Unlinked or asserted senders receive no requester
-profile. Unlinking takes effect on subsequent turns without a restart.
+A linked nonadmin sender also receives requester metadata. During a live admitted
+agent turn, the `sessions` tool exposes `assign_owner` for these senders;
+settings, reset/delete, and global group controls still require owner authority.
+Operators with `operator.write` also retain the separate archive, restore, and
+stop controls for sessions they created or are assigned to, subject to session access checks.
+When a newly spawned visible session starts agent-owned, the agent can assign it
+to the trusted requester profile and verify the stored owner with `sessions_list`.
+This changes responsibility, not creator attribution or access. Unlinked or
+asserted senders receive no requester profile: link the verified sender first
+rather than guessing from a name or pasted ID. Unlinking takes effect on
+subsequent turns without a restart.
 
 ## GitHub connections
 

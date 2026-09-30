@@ -1,4 +1,3 @@
-// Fireworks plugin module implements model id behavior.
 export function isFireworksKimiModelId(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
   const lastSegment = normalized.split("/").pop() ?? normalized;

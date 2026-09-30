@@ -289,9 +289,12 @@ describe("native heartbeat busy poll settlement", () => {
           await vi.advanceTimersByTimeAsync(firstTick - Date.now());
           await waitForRequest(1);
           expect(request).toHaveBeenCalledOnce();
+          await vi.advanceTimersByTimeAsync(250);
+          // Scratch preflight uses a real worker, which fake-clock advancement cannot join.
+          await runOnce.mock.results[0]?.value;
           // Observe the full original watchdog window on both versions. The
           // unfixed scheduler records a timeout; the fixed poll settled promptly.
-          await vi.advanceTimersByTimeAsync(600_001);
+          await vi.advanceTimersByTimeAsync(600_001 - 250);
           await waitForFinished(1);
           expect(finished()).toHaveLength(1);
           // Finished precedes schedule maintenance and release of the active marker.
@@ -423,6 +426,7 @@ describe("native heartbeat busy poll settlement", () => {
           monitor,
           sessionKey,
           reply,
+          runOnce,
           request,
           waitForRequest,
           finished,
@@ -443,6 +447,7 @@ describe("native heartbeat busy poll settlement", () => {
           await waitForRequest(1);
           expect(request).toHaveBeenCalledOnce();
           await vi.advanceTimersByTimeAsync(250);
+          await runOnce.mock.results[0]?.value;
           expect(finished()).toHaveLength(0);
           expect(peekSystemEventEntries(sessionKey).map((entry) => entry.text)).toContain(text);
           expect(reply).not.toHaveBeenCalled();
@@ -544,12 +549,14 @@ describe("native heartbeat busy poll settlement", () => {
         await waitForRequest(1);
         expect(request).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(250);
+        await runOnce.mock.results[0]?.value;
         expect(deps.isReplyRunActive).toHaveBeenCalledTimes(2);
         expect(finished()).toHaveLength(0);
         expect(reply).not.toHaveBeenCalled();
         const releaseMain = await holdLane(CommandLane.Main);
         await vi.advanceTimersByTimeAsync(60_000);
         expect(runOnce).toHaveBeenCalledTimes(2);
+        await runOnce.mock.results[1]?.value;
         expect(finished()).toHaveLength(0);
         await releaseMain();
         await vi.advanceTimersByTimeAsync(60_000);
