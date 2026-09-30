@@ -1,7 +1,6 @@
 import type { HookRunnerRegistry } from "./hook-registry.types.js";
 import {
   isPluginHookReplyDispatchKind,
-  type PluginHookAgentTrigger,
   type PluginHookName,
   type PluginHookRegistration,
 } from "./hook-types.js";
@@ -24,11 +23,10 @@ export function isHookContextEligible(hook: PluginHookRegistration, ctx?: unknow
     return true;
   }
   const trigger =
-    typeof ctx === "object" && ctx !== null && "trigger" in ctx
-      ? (ctx as { trigger?: unknown }).trigger
-      : undefined;
+    typeof ctx === "object" && ctx !== null && "trigger" in ctx ? ctx.trigger : undefined;
   return (
-    typeof trigger === "string" && hook.eligibleTriggers.includes(trigger as PluginHookAgentTrigger)
+    typeof trigger === "string" &&
+    hook.eligibleTriggers.some((eligibleTrigger) => eligibleTrigger === trigger)
   );
 }
 
@@ -39,8 +37,11 @@ export function getHooksForName<K extends PluginHookName>(
   ctx?: unknown,
   toolName?: string,
 ): PluginHookRegistration<K>[] {
-  return (registry.typedHooks as PluginHookRegistration<K>[])
-    .filter((hook) => hook.hookName === hookName && isHookContextEligible(hook, ctx))
+  return registry.typedHooks
+    .filter(
+      (hook): hook is PluginHookRegistration<K> =>
+        hook.hookName === hookName && isHookContextEligible(hook, ctx),
+    )
     .filter((hook) => toolName === undefined || pluginToolMatcherCoversTool(hook.matcher, toolName))
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
