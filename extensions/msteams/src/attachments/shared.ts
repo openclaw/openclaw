@@ -13,6 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MSTeamsMonitorLogger } from "../monitor-types.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
 
@@ -320,11 +321,9 @@ export type MSTeamsAttachmentFetchPolicy = {
   authAllowHosts: string[];
 };
 
-export type MSTeamsAttachmentDownloadLogger = {
-  debug?: (message: string, meta?: Record<string, unknown>) => void;
-  warn?: (message: string, meta?: Record<string, unknown>) => void;
-  error?: (message: string, meta?: Record<string, unknown>) => void;
-};
+export type MSTeamsAttachmentDownloadLogger = Partial<
+  Pick<MSTeamsMonitorLogger, "debug" | "warn" | "error">
+>;
 
 export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
 

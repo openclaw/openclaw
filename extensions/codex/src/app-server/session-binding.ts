@@ -650,26 +650,23 @@ export function createCodexAppServerBindingStore(
             }
             let binding: CodexAppServerThreadBinding;
             if (mutation.kind === "set" || mutation.kind === "replace-thread") {
-              binding = validateBindingForWrite(mutation.binding);
+              binding = mutation.binding;
             } else if (mutation.kind === "patch-pending-supervision-branch") {
-              binding = validateBindingForWrite({
+              binding = {
                 ...active!.binding,
                 pendingSupervisionBranch: mutation.pending,
-              });
-            } else if (mutation.kind === "commit-pending-supervision-branch") {
-              binding = validateBindingForWrite({
-                ...active!.binding,
-                ...mutation.patch,
-                threadId: mutation.threadId,
-                pendingSupervisionBranch: undefined,
-              });
+              };
             } else {
-              binding = validateBindingForWrite({
+              binding = {
                 ...active!.binding,
                 ...mutation.patch,
                 threadId: mutation.threadId,
-              });
+                ...(mutation.kind === "commit-pending-supervision-branch"
+                  ? { pendingSupervisionBranch: undefined }
+                  : {}),
+              };
             }
+            binding = validateBindingForWrite(binding);
             const nativeSubagentSubmissions = active
               ? preserveCodexNativeSubagentSubmissions(
                   active.binding,

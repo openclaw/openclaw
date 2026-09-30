@@ -1,4 +1,5 @@
 import type { AnyMessageContent } from "baileys";
+import { isInsideCode, type CodeRegion } from "openclaw/plugin-sdk/text-chunking";
 
 export type WhatsAppOutboundMentionParticipant =
   | string
@@ -21,11 +22,6 @@ const KNOWN_USER_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted|lid|hosted\.
 const PHONE_JID_DOMAIN_RE = /^(s\.whatsapp\.net|hosted|c\.us)$/i;
 const LID_JID_DOMAIN_RE = /^(lid|hosted\.lid)$/i;
 
-type TextRange = {
-  start: number;
-  end: number;
-};
-
 type MentionTarget = {
   mentionJid: string;
   replacementText?: string;
@@ -39,23 +35,19 @@ export function mayContainWhatsAppOutboundMention(text: string): boolean {
   return /@\+?\d/.test(text);
 }
 
-function collectCodeRanges(text: string): TextRange[] {
-  const ranges: TextRange[] = [];
+function collectCodeRanges(text: string): CodeRegion[] {
+  const ranges: CodeRegion[] = [];
   for (const match of text.matchAll(CODE_FENCE_RE)) {
     ranges.push({ start: match.index, end: match.index + match[0].length });
   }
   for (const match of text.matchAll(INLINE_CODE_RE)) {
     const start = match.index;
-    if (ranges.some((range) => start >= range.start && start < range.end)) {
+    if (isInsideCode(start, ranges)) {
       continue;
     }
     ranges.push({ start, end: start + match[0].length });
   }
   return ranges.toSorted((a, b) => a.start - b.start);
-}
-
-function isInRange(index: number, ranges: readonly TextRange[]): boolean {
-  return ranges.some((range) => index >= range.start && index < range.end);
 }
 
 function normalizeKnownUserJid(value: string): string | null {
@@ -170,9 +162,9 @@ function shouldSkipMentionAt(
   text: string,
   index: number,
   end: number,
-  codeRanges: readonly TextRange[],
+  codeRanges: CodeRegion[],
 ): boolean {
-  if (isInRange(index, codeRanges)) {
+  if (isInsideCode(index, codeRanges)) {
     return true;
   }
   const previous = index > 0 ? text[index - 1] : "";
@@ -200,8 +192,7 @@ export function resolveWhatsAppOutboundMentions(params: {
 
   const codeRanges = collectCodeRanges(params.text);
   const replacements: Array<{ start: number; end: number; text: string }> = [];
-  const mentionedJids: string[] = [];
-  const seenMentionJids = new Set<string>();
+  const mentionedJids = new Set<string>();
 
   for (const match of params.text.matchAll(OUTBOUND_MENTION_RE)) {
     const start = match.index;
@@ -220,10 +211,7 @@ export function resolveWhatsAppOutboundMentions(params: {
     if (!target) {
       continue;
     }
-    if (!seenMentionJids.has(target.mentionJid)) {
-      seenMentionJids.add(target.mentionJid);
-      mentionedJids.push(target.mentionJid);
-    }
+    mentionedJids.add(target.mentionJid);
     if (target.replacementText && target.replacementText !== token) {
       replacements.push({
         start,
@@ -234,7 +222,7 @@ export function resolveWhatsAppOutboundMentions(params: {
   }
 
   if (replacements.length === 0) {
-    return { text: params.text, mentionedJids };
+    return { text: params.text, mentionedJids: [...mentionedJids] };
   }
 
   let text = "";
@@ -245,7 +233,7 @@ export function resolveWhatsAppOutboundMentions(params: {
     cursor = replacement.end;
   }
   text += params.text.slice(cursor);
-  return { text, mentionedJids };
+  return { text, mentionedJids: [...mentionedJids] };
 }
 
 export function addWhatsAppOutboundMentionsToContent(

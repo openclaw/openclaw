@@ -644,10 +644,7 @@ export async function runSessionCompactionIfNeeded(params: {
   }
   const isCodexRuntime = normalizeLowercaseStringOrEmpty(runtimeId) === "codex";
 
-  const compactionSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
-  if (!compactionSessionKey) {
-    return entry ?? params.sessionEntry;
-  }
+  const compactionSessionKey = params.sessionKey;
   const configuredAgentId = params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg);
   const compactionAgentId = isUnscopedSessionKeySentinel(compactionSessionKey)
     ? configuredAgentId
@@ -866,7 +863,6 @@ export async function runSessionCompactionIfNeeded(params: {
       logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
     }
   };
-  let startedCompactionNotice = false;
   let terminalCompactionNoticeSent = false;
   const notifyTerminalCompaction = async (
     phase: "end" | "incomplete" | "skipped",
@@ -921,7 +917,6 @@ export async function runSessionCompactionIfNeeded(params: {
     params.abortSignal,
   );
   try {
-    startedCompactionNotice = true;
     await notifyCompaction("start");
     assertActive();
     const result = await compactEmbeddedAgentSession(
@@ -1104,7 +1099,7 @@ export async function runSessionCompactionIfNeeded(params: {
     }
     return entry ?? params.sessionEntry;
   } catch (err) {
-    if (startedCompactionNotice && !terminalCompactionNoticeSent && !params.abortSignal?.aborted) {
+    if (!terminalCompactionNoticeSent && !params.abortSignal?.aborted) {
       await notifyCompaction("incomplete");
     }
     throw err;

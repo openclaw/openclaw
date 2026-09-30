@@ -613,7 +613,7 @@ class SearchPage extends OpenClawLightDomElement {
                                 }}
                               />`,
                             })}
-                            ${renderSettingsRow({ title: t("searchPage.test"), description: !result.testProvider && !result.route.testable ? result.route.reason : undefined, control: html`<button class="btn" ?disabled=${!this.canEdit || !(result.testProvider || result.route.testable) || !this.query.trim() || this.query.trim().length > 500 || this.testing || this.loading || !isSearchConfigSettled(configState) || !this.gateway.connected} @click=${() => this.test(scope, statusGeneration)}>${this.testing ? t("searchPage.testing") : result.testProvider ? t("searchPage.testProvider", { provider: result.testProvider.label }) : t("searchPage.test")}</button>` })}
+                            ${renderSettingsRow({ title: t("searchPage.test"), control: html`<button class="btn" ?disabled=${!this.canEdit || !this.query.trim() || this.query.trim().length > 500 || this.testing || this.loading || !isSearchConfigSettled(configState) || !this.gateway.connected} @click=${() => this.test(scope, statusGeneration)}>${this.testing ? t("searchPage.testing") : result.testProvider ? t("searchPage.testProvider", { provider: result.testProvider.label }) : t("searchPage.test")}</button>` })}
                           `
                         : nothing
                     }

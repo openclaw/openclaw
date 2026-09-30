@@ -126,7 +126,6 @@ export type DreamingState = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   configSnapshot: ConfigSnapshot | null;
-  applySessionKey: string;
   selectedAgentId: string | null;
   resourceRequests: Partial<Record<DreamingResourceKey, DreamingResourceRequest>>;
   dreamingStatusAgentId?: string | null;
@@ -155,10 +154,7 @@ export type DreamingState = {
 
 export function createDreamingState(
   initial: Partial<
-    Pick<
-      DreamingState,
-      "client" | "connected" | "hello" | "configSnapshot" | "applySessionKey" | "selectedAgentId"
-    >
+    Pick<DreamingState, "client" | "connected" | "hello" | "configSnapshot" | "selectedAgentId">
   > = {},
 ): DreamingState {
   return {
@@ -166,7 +162,6 @@ export function createDreamingState(
     connected: initial.connected ?? false,
     hello: initial.hello ?? null,
     configSnapshot: initial.configSnapshot ?? null,
-    applySessionKey: initial.applySessionKey ?? "main",
     selectedAgentId: initial.selectedAgentId ?? null,
     resourceRequests: {},
     dreamingStatusLoading: false,
@@ -285,7 +280,7 @@ function buildDreamDiaryActionSuccessMessage(
       return t("dreaming.actions.resetDiaryComplete", {
         count: String(typeof payload?.removedEntries === "number" ? payload.removedEntries : 0),
       });
-    case "doctor.memory.resetGroundedShortTerm":
+    default:
       return t("dreaming.actions.clearReplayedComplete", {
         count: String(
           typeof payload?.removedShortTermEntries === "number"
@@ -294,7 +289,6 @@ function buildDreamDiaryActionSuccessMessage(
         ),
       });
   }
-  return t("dreaming.actions.complete");
 }
 
 function resolveSelectedAgentId(state: DreamingState): string | null {

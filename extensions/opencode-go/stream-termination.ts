@@ -179,13 +179,6 @@ export function createOpencodeGoStalledStreamWrapper(
       }
     };
 
-    const releaseResolvedStream = (baseStream: AsyncIterable<AssistantMessageEvent>) => {
-      const iterator = baseStream[Symbol.asyncIterator]();
-      if (iterator.return) {
-        void Promise.resolve(iterator.return()).catch(() => undefined);
-      }
-    };
-
     armTimer(firstEventTimeoutMs);
     let baseStreamResult: ReturnType<ProviderStreamFn>;
     try {
@@ -198,11 +191,11 @@ export function createOpencodeGoStalledStreamWrapper(
     void (async () => {
       try {
         const baseStream = await baseStreamResult;
+        baseIterator = baseStream[Symbol.asyncIterator]();
         if (settled) {
-          releaseResolvedStream(baseStream);
+          releaseBaseStream();
           return;
         }
-        baseIterator = baseStream[Symbol.asyncIterator]();
         for (;;) {
           const result = await baseIterator.next();
           if (settled) {

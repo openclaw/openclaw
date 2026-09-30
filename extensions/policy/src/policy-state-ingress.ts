@@ -4,7 +4,6 @@ import {
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { configuredChannels } from "./policy-state-core.js";
 import { ocPathSegment } from "./policy-state-helpers.js";
 import { IMPLICIT_DEFAULT_ACCOUNT_FIELDS } from "./policy-state-tool-posture.js";
 import { RESERVED_CHANNEL_CONFIG_KEYS } from "./policy-state-types.js";
@@ -24,7 +23,7 @@ const ALLOWLIST_DEFAULT_INGRESS_GROUP_POLICY_CHANNELS = new Set([
 const OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS = new Set(["feishu", "qa-channel"]);
 
 export function scanPolicyIngress(cfg: Record<string, unknown>): readonly PolicyIngressEvidence[] {
-  const channels = configuredChannels(cfg);
+  const channels = asNonArrayRecord(cfg.channels);
   const channelDefaults = asNonArrayRecord(channels.defaults);
   const inheritedChannelDefaults = pickSupportedIngressDefaults(channelDefaults);
   const channelDefaultsSource = "oc://openclaw.config/channels/defaults";

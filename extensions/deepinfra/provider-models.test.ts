@@ -311,11 +311,20 @@ describe("discoverDeepInfraModels", () => {
 });
 
 describe("discoverDeepInfraSurfaces (per-surface bucketing)", () => {
-  it("buckets dynamic entries by short-alias surface tag", async () => {
+  it("buckets unique surface tags while ignoring unknown and prototype-named tags", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       Response.json({
         data: [
-          surfaceEntry("anthropic/claude-sonnet-4-6", ["chat", "vlm", "vision", "prompt_cache"]),
+          surfaceEntry("anthropic/claude-sonnet-4-6", [
+            "chat",
+            "vlm",
+            "vision",
+            "prompt_cache",
+            "constructor",
+            "toString",
+            "__proto__",
+            "chat",
+          ]),
           surfaceEntry("BAAI/bge-m3", ["embed"]),
           surfaceEntry("black-forest-labs/FLUX-1-schnell", ["image-gen"], {
             pricing: { per_image_unit: 0.003 },

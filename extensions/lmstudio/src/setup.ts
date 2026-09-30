@@ -158,25 +158,6 @@ function buildLmstudioSetupProviderConfig(params: {
   };
 }
 
-function resolveLmstudioModelAdvertisedContextLimit(entry: LmstudioModelWire): number | undefined {
-  const raw = entry.max_context_length;
-  if (raw === undefined || !Number.isFinite(raw) || raw <= 0) {
-    return undefined;
-  }
-  return Math.floor(raw);
-}
-
-function applyModelContextTokensOverride(
-  model: ModelDefinitionConfig,
-  contextTokens: number,
-): ModelDefinitionConfig {
-  return {
-    ...model,
-    contextTokens,
-    maxTokens: Math.min(model.maxTokens, contextTokens),
-  };
-}
-
 function applyRequestedContextWindowToAllModels(params: {
   models: ModelDefinitionConfig[];
   discoveryModels: LmstudioModelWire[];
@@ -187,25 +168,21 @@ function applyRequestedContextWindowToAllModels(params: {
     return params.models;
   }
   const contextLimitByModelId = new Map(
-    params.discoveryModels
-      .map((entry) => {
-        const modelId = entry.key?.trim();
-        if (!modelId) {
-          return null;
-        }
-        return [modelId, resolveLmstudioModelAdvertisedContextLimit(entry)] as const;
-      })
-      .filter((entry): entry is readonly [string, number | undefined] => Boolean(entry)),
+    params.discoveryModels.flatMap((entry) => {
+      const modelId = entry.key?.trim();
+      const raw = entry.max_context_length;
+      const limit =
+        raw !== undefined && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
+      return modelId ? [[modelId, limit] as const] : [];
+    }),
   );
-  return params.models.map((model) =>
-    applyModelContextTokensOverride(
-      model,
-      Math.min(
-        requestedContextWindow,
-        contextLimitByModelId.get(model.id) ?? requestedContextWindow,
-      ),
-    ),
-  );
+  return params.models.map((model) => {
+    const contextTokens = Math.min(
+      requestedContextWindow,
+      contextLimitByModelId.get(model.id) ?? requestedContextWindow,
+    );
+    return { ...model, contextTokens, maxTokens: Math.min(model.maxTokens, contextTokens) };
+  });
 }
 
 function collectLoadedLmstudioModelIds(discovery: LmstudioDiscoveryResult): Set<string> {

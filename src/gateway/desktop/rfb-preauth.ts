@@ -229,9 +229,6 @@ function leftPadBigInt(value: bigint, length: number): Buffer {
 }
 
 function modularExponentiation(base: bigint, exponent: bigint, modulus: bigint): bigint {
-  if (modulus <= 0n) {
-    throw new Error("invalid ARD Diffie-Hellman modulus");
-  }
   let result = 1n;
   let factor = base % modulus;
   let power = exponent;

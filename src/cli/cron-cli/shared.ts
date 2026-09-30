@@ -521,9 +521,7 @@ const formatCell = (value: unknown, width: number) => {
   const truncated =
     visibleWidth(text) <= width
       ? text
-      : width <= TRUNCATED_SUFFIX.length
-        ? truncateToVisibleWidth(text, width)
-        : `${truncateToVisibleWidth(text, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
+      : `${truncateToVisibleWidth(text, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
   const remaining = width - visibleWidth(truncated);
   return remaining > 0 ? `${truncated}${" ".repeat(remaining)}` : truncated;
 };

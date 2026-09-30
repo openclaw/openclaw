@@ -2544,6 +2544,9 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
     fi
     phase patch-restored-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs patch
     phase stop-restored-index-baseline stop_gateway
+    if [ "$native_assignment_enabled" = "1" ]; then
+      phase handoff-native-assignments node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs handoff
+    fi
     phase restore-baseline-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs restore
     # Do not restart the published Gateway after restoring stale metadata over its current SQLite state.
   fi
@@ -2614,6 +2617,9 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
       assert-legacy-operator-gateway post-update
   else
     phase legacy-operator-first-hop-cron probe_legacy_operator_migration
+  fi
+  if [ "$native_assignment_enabled" = "1" ]; then
+    phase capture-native-assignment-first-hop-runtime node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs inventory after-first-hop
   fi
 fi
 phase mobile-pairing-candidate-first verify_mobile_pairing_once \

@@ -146,24 +146,15 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     );
   }
 
-  private openAdd() {
+  private openEditor(profile?: ConfiguredCloudWorkerProfile) {
     if (!this.canManage()) {
       return;
     }
-    this.editor = { kind: "add" };
-    this.draft = createCloudWorkerDraft();
-    this.configSave.update({ error: null, notice: null });
-  }
-
-  private openEdit(profile: ConfiguredCloudWorkerProfile) {
-    if (!this.canManage()) {
-      return;
-    }
-    if (profile.providerId !== "crabbox" || !profile.machineClass) {
+    if (profile && (profile.providerId !== "crabbox" || !profile.machineClass)) {
       this.context.navigate("advanced", { search: "?section=cloudWorkers" });
       return;
     }
-    this.editor = { kind: "edit", profileId: profile.id };
+    this.editor = profile ? { kind: "edit", profileId: profile.id } : { kind: "add" };
     this.draft = createCloudWorkerDraft(profile);
     this.configSave.update({ error: null, notice: null });
   }
@@ -302,7 +293,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
           type="button"
           aria-label=${`${t("cloudWorkersPage.editAction")}: ${profile.id}`}
           ?disabled=${!canManage}
-          @click=${() => this.openEdit(profile)}
+          @click=${() => this.openEditor(profile)}
         >
           ${t("cloudWorkersPage.editAction")}
         </button>
@@ -527,7 +518,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     const profiles = this.profiles();
     const canManage = this.canManage();
     const addAction = canManage
-      ? html`<button class="btn btn--sm primary" type="button" @click=${() => this.openAdd()}>
+      ? html`<button class="btn btn--sm primary" type="button" @click=${() => this.openEditor()}>
           ${t("cloudWorkersPage.addProfile")}
         </button>`
       : undefined;

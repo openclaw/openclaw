@@ -114,7 +114,9 @@ function buildSessionsListResult(
   // the requested agent when scoped, otherwise the legacy compatibility agent.
   // Legacy plain-array catalogs (direct list callers) pass through
   // unchanged; per-agent maps resolve by the same identity.
-  const defaultsAgentId = resolveSessionsListDefaultsAgentId(cfg, opts.agentId);
+  const defaultsAgentId = normalizeAgentId(
+    opts.agentId || (tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID),
+  );
   const preparedDefaultsCatalog =
     modelCatalog instanceof Map ? modelCatalog.get(defaultsAgentId) : undefined;
   const defaultsCatalog =
@@ -156,15 +158,6 @@ function buildSessionsListResult(
     defaults: policy ? policy.defaults(defaults) : defaults,
     sessions,
   };
-}
-
-function resolveSessionsListDefaultsAgentId(
-  cfg: OpenClawConfig,
-  requestedAgentId?: string,
-): string {
-  return requestedAgentId
-    ? normalizeAgentId(requestedAgentId)
-    : normalizeAgentId(tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID);
 }
 
 type RecordRow = ReturnType<SessionRowProjection["selectEntries"]>[number];
