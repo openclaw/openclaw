@@ -440,6 +440,18 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     const inventory = UpdateCandidateSnapshotInventorySchema.parse(
       await run({ mode: "inventory" }),
     );
+    for (const warning of inventory.pluginWarnings ?? []) {
+      if (snapshotDiagnostics.length >= UPDATE_RUN_DIAGNOSTIC_LIMIT) {
+        break;
+      }
+      snapshotDiagnostics.push(
+        redactSupportString(
+          warning,
+          { env: params.env, stateDir: params.stateDir },
+          { maxLength: UPDATE_RUN_TEXT_LIMIT },
+        ),
+      );
+    }
     const size: SnapshotSize = {
       ...(await measureUpdateStateFiles(
         [...inventory.databases.values()].map(({ spellings }) => spellings[0]),

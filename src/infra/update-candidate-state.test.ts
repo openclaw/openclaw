@@ -867,6 +867,35 @@ it("projects through an aliased temporary state directory without changing sourc
   expect(await fs.realpath(path.join(plugin, "node_modules", "dependency"))).toBe(dependency);
 });
 
+it("projects a plugin whose source cannot be parsed instead of failing the snapshot", async () => {
+  const plugin = path.join(root, "broken-plugin");
+  await fs.mkdir(plugin);
+  await fs.writeFile(
+    path.join(plugin, "package.json"),
+    JSON.stringify({ name: "broken", type: "module", openclaw: { extensions: ["./index.mjs"] } }),
+  );
+  await fs.writeFile(
+    path.join(plugin, "openclaw.plugin.json"),
+    JSON.stringify({ id: "broken", configSchema: { type: "object", properties: {} } }),
+  );
+  await fs.writeFile(path.join(plugin, "index.mjs"), "export const value = /(/;\n");
+  const params = {
+    config: { plugins: { load: { paths: [plugin] } } },
+    stateDir: path.join(root, "source-state"),
+    targetStateDir: path.join(root, "candidate"),
+    candidateRoot: root,
+  } satisfies Parameters<typeof prepareUpdateCandidatePlugins>[0];
+  const warnings: string[] = [];
+  const projection = await prepareUpdateCandidatePlugins({
+    ...params,
+    onWarning: (warning) => warnings.push(warning),
+  });
+  const paths = await copyUpdateCandidatePlugins(projection, params);
+  expect(await fs.readFile(path.join(paths[plugin]!, "index.mjs"), "utf8")).toContain("value");
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("plugin broken");
+});
+
 it("keeps an optional-only linked node_modules copy bounded to its module owner", async () => {
   const repo = path.join(root, "repository");
   const plugin = path.join(repo, "plugin");
