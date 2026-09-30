@@ -234,6 +234,18 @@ including when ordinary reply delivery fails. Local forced completion and final
 cleanup join the same pending release. Restart recovery, schemas, persisted
 fields, and update behavior are unchanged.
 
+Staged workspace-result pointers also commit through that placement worker. The
+same transaction checks the pending-result claim, immutable staged ref, and exact
+repository session owner, with live caller guards rechecked at admission and
+commit. Repository publication awaits the durable pointer before accepting its
+reconciliation journal. Local worktree reconciliation preserves its applied
+journal and final-verification ordering, then awaits durable pointer publication.
+Commit receipts
+invalidate pending-result read observations without revoking separate turn
+claims; uncertain writes retain recovery custody and are not replayed. Other
+placement lifecycle methods and their synchronous guards remain separate
+migration work. Schemas, stored fields, and update behavior are unchanged.
+
 Memory session preparation retains only export text, provenance, timestamps, and
 classification/reset facts from each decoded SQLite event. Full-message observers
 retain their original snapshot, and callbacks run after its read transaction closes.

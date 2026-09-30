@@ -105,7 +105,7 @@ describe("worker turn launcher remote handoff", () => {
           throw new Error("expected a local workspace source");
         }
         expect(request.source.stagedResult).toBeDefined();
-        request.source.stagedResult!.record(request.source.stagedResult!.ref);
+        await request.source.stagedResult!.record(request.source.stagedResult!.ref);
         expect(placements.listPendingWorkspaceResults()).toMatchObject([
           { stagedResultRef: request.source.stagedResult!.ref, workspaceAcceptedAtMs: null },
         ]);
