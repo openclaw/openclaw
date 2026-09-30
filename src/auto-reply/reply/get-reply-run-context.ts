@@ -188,6 +188,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const groupParticipation =
     isGroupChat &&
     !isHeartbeat &&
+    inboundEventKind !== "room_event" &&
     promptSessionCtx.WasMentioned !== true &&
     !isExplicitSourceReplyCommand(promptSessionCtx, cfg) &&
     (conversation.activation ?? defaultActivation) === "always" &&

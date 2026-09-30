@@ -145,6 +145,33 @@ it.each(["opt-out", "model-removal"])(
   },
 );
 
+it("keeps ambient room events on their message-tool path without participation evaluation", async () => {
+  fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
+  models.decision.mockImplementation(async (batch) =>
+    judgment(batch, { attention: "opportunity" }),
+  );
+  models.embedded.mockResolvedValue({ payloads: [], meta: { durationMs: 1 } });
+  await fixture.reply(
+    "Alice joined the group.",
+    "room-event-source",
+    "-10111",
+    undefined,
+    false,
+    undefined,
+    "room_event",
+  );
+  expect(models.decision).not.toHaveBeenCalled();
+  expect(models.embedded).toHaveBeenCalledTimes(1);
+  const params = models.embedded.mock.calls[0]?.[0];
+  expect(params).toMatchObject({
+    sourceReplyDeliveryMode: "message_tool_only",
+    terminalReplyExpectation: "optional",
+  });
+  expect(params?.disableMessageTool).not.toBe(true);
+  expect(params?.permissionMode).not.toBe("read-only");
+  expect(params?.reviewSettledDraft).toBeUndefined();
+});
+
 it("keeps explicit native group commands on the ordinary reply path", async () => {
   fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
   models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
