@@ -113,6 +113,8 @@ export function createSlackProgressRuntime(runtimeParams: {
   let appendRenderedText = "";
   let appendSourceText = "";
   let nativeProgressCompletionSent = false;
+  // A requested card post may still be queued or in flight without a message id.
+  let cardPostRequested = false;
   // Terminal status of the turn's final payload; completion retries and
   // queued rotation must not repaint an errored turn as complete.
   let nativeProgressTerminalStatus: "complete" | "error" = "complete";
@@ -339,6 +341,7 @@ export function createSlackProgressRuntime(runtimeParams: {
 
   const resetProgressTurnState = () => {
     progressWorkCounter.reset();
+    cardPostRequested = false;
     nativeNarrationRenderedText = "";
     nativeNarrationSourceText = "";
   };
@@ -385,7 +388,8 @@ export function createSlackProgressRuntime(runtimeParams: {
       if (cardBlocks?.length === 0) {
         // Hidden state (e.g. a plan in the default card) can outlive the last visible
         // row; delete the card rather than leave a resolved approval on screen.
-        if (draftStream.messageId()) {
+        if (cardPostRequested || draftStream.messageId()) {
+          cardPostRequested = false;
           await draftStream.clear();
           draftStream.forceNewMessage();
         }
@@ -409,6 +413,9 @@ export function createSlackProgressRuntime(runtimeParams: {
               ? { text: previewText, blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
               : previewText,
       );
+      if (cardBlocks) {
+        cardPostRequested = true;
+      }
       if (options?.flush) {
         await draftStream.flush();
       }
@@ -420,6 +427,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         nativeUpdates.update(true);
         await nativeUpdates.flush();
       } else {
+        cardPostRequested = false;
         await draftStream?.clear();
         draftStream?.forceNewMessage();
       }

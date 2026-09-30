@@ -3465,26 +3465,34 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
-  it("deletes a working card once a resolved approval was its last visible row", async () => {
-    const draftStream = useDraftStream();
-    mockedSlackStreamingMode = "progress";
-    mockedReplyOptionEvents = [
-      // The default card hides the plan, but the compositor still holds it.
-      { kind: "plan", phase: "update", steps: [{ step: "Inspect", status: "in_progress" }] },
-      { kind: "approval", phase: "requested", approvalId: "approval-1", command: "run checks" },
-      { kind: "approval", phase: "resolved", approvalId: "approval-1" },
-    ];
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        accountConfig: { streaming: { mode: "progress", progress: { style: "card" } } },
-      }),
-    );
-    expect(draftUpdateTexts(draftStream)).toEqual([
-      "Approval required: run checks; approval requested",
-    ]);
-    expect(draftStream.clear).toHaveBeenCalled();
-    expect(draftStream.forceNewMessage).toHaveBeenCalled();
-  });
+  it.each([
+    { firstSend: "delivered", messageId: "171234.567" },
+    // The first Slack post is still queued or in flight, so no message id exists yet.
+    { firstSend: "pending", messageId: undefined },
+  ])(
+    "deletes a working card once a resolved approval was its last visible row (first send $firstSend)",
+    async ({ messageId }) => {
+      const draftStream = useDraftStream();
+      draftStream.messageId = () => messageId;
+      mockedSlackStreamingMode = "progress";
+      mockedReplyOptionEvents = [
+        // The default card hides the plan, but the compositor still holds it.
+        { kind: "plan", phase: "update", steps: [{ step: "Inspect", status: "in_progress" }] },
+        { kind: "approval", phase: "requested", approvalId: "approval-1", command: "run checks" },
+        { kind: "approval", phase: "resolved", approvalId: "approval-1" },
+      ];
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: { streaming: { mode: "progress", progress: { style: "card" } } },
+        }),
+      );
+      expect(draftUpdateTexts(draftStream)).toEqual([
+        "Approval required: run checks; approval requested",
+      ]);
+      expect(draftStream.clear).toHaveBeenCalled();
+      expect(draftStream.forceNewMessage).toHaveBeenCalled();
+    },
+  );
 
   it("keeps and terminalizes the progress card when the final reply is an error", async () => {
     const draftStream = useDraftStream();
