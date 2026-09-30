@@ -77,8 +77,7 @@ export function redactPersistedOnePasswordResult(
   return {
     message: {
       ...event.message,
-      content: [{ type: "text", text: JSON.stringify(persisted, null, 2) }],
-      details: persisted,
+      ...jsonResult(persisted),
     },
   };
 }

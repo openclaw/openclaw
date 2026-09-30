@@ -272,15 +272,13 @@ export function invalidateSessionSlashCommands(
     ?.delete(remoteSlashCommandCacheKey(scope.agentId, scope.sessionKey));
 }
 
-export function applyRemoteSlashCommandsResult(params: {
-  client: GatewayBrowserClient | null;
-  agentId?: string | null;
-  result: CommandsListResult | null | undefined;
-}): boolean {
-  if (!Array.isArray(params.result?.commands)) {
+export function applyRemoteSlashCommandsResult(
+  result: CommandsListResult | null | undefined,
+): boolean {
+  if (!Array.isArray(result?.commands)) {
     return false;
   }
-  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(params.result));
+  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
   refreshSeq += 1;
   replaceSlashCommands(commands);
   return true;

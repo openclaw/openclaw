@@ -313,6 +313,7 @@ async function resolveApprovedModel(params: {
     // automatic profile so generic auth fallback cannot cross to another route.
     const prepared = await prepareSimpleCompletionModel({
       cfg: modelConfig,
+      transport: "provider-stream",
       agentId: target.agentId,
       provider: resolved.ref.provider,
       modelId: resolved.ref.model,

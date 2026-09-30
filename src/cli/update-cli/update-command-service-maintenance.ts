@@ -1,5 +1,4 @@
 // Managed service identity, shutdown, and recovery shared by update and Doctor.
-import { Writable } from "node:stream";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV, isGatewayServiceEnv } from "../../daemon/constants.js";
@@ -28,6 +27,7 @@ import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-ru
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createNullWriter } from "../../shared/null-writer.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import {
@@ -61,11 +61,7 @@ export { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-ser
 export type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 export { UpdateCommandAbort } from "./update-command-windows-task.js";
 
-const JSON_MODE_SERVICE_STDOUT = new Writable({
-  write(_chunk, _encoding, callback) {
-    callback();
-  },
-});
+const JSON_MODE_SERVICE_STDOUT = createNullWriter();
 
 export type UpdateCommandRecoveryState = {
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import type {
@@ -178,20 +179,15 @@ export function createCatalogAttemptReporter(
 export function registerPreparedModelRuntimePublicationListener(
   listener: (event: PreparedModelRuntimePublicationEvent) => void,
 ): () => void {
-  publicationListeners.add(listener);
-  return () => publicationListeners.delete(listener);
+  return registerListener(publicationListeners, listener);
 }
 
 export function notifyPreparedModelRuntimePublication(
   event: PreparedModelRuntimePublicationEvent,
 ): void {
-  for (const listener of publicationListeners) {
-    try {
-      listener(event);
-    } catch (error) {
-      log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
-    }
-  }
+  notifyListeners(publicationListeners, event, (error) => {
+    log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
+  });
 }
 
 export function resetPreparedModelRuntimePublicationListenersForTest(): void {

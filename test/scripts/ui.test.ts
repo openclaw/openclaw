@@ -640,7 +640,7 @@ require("node:module").syncBuiltinESMExports();
         }
       }
       expect(fs.readdirSync(path.join(root, "dist")).toSorted()).toEqual(
-        expectedDistEntries.toSorted(),
+        expectedDistEntries.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
       );
       if (seedSiblings) {
         for (const name of liveUiBuildSiblings) {

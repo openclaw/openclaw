@@ -5,7 +5,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeSortedUniqueTrimmedStringList,
+  sortUniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { getConfigResolutionFacts } from "../config/resolution-facts.js";
@@ -529,12 +532,7 @@ export function getScopedChannelsCommandSecretTargets(params: {
   const channels =
     params.channels === undefined
       ? undefined
-      : sortUniqueStrings(
-          params.channels.flatMap((candidate) => {
-            const normalized = normalizeOptionalString(candidate);
-            return normalized ? [normalized] : [];
-          }),
-        );
+      : normalizeSortedUniqueTrimmedStringList(params.channels);
   const targetIds =
     channels === undefined
       ? selectChannelTargetIds(channel)

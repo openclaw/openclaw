@@ -140,8 +140,9 @@ export function getUserProfileListItem(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileListItem {
-  ensureUserProfilesSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
+  const database = openOpenClawStateDatabase(options);
+  ensureUserProfilesSchema(options, database);
+  const { db } = database;
   const profile = requireResolvedUserProfileMetadataById(db, profileId);
   return selectUserProfileListItemById(db, profile.id);
 }

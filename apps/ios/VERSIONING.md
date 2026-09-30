@@ -99,7 +99,8 @@ OPENCLAW_TESTFLIGHT_GROUP_ID="<EXTERNAL_GROUP_ID>" pnpm ios:release:upload -- --
 
 The scheduled operation runs daily at **7:00 AM America/Los_Angeles**, including
 daylight saving time. GitHub may delay scheduled jobs. Both release destinations
-share the `ios-release` concurrency lock and native release qualification.
+share the `ios-release` concurrency lock. Manual and scheduled TestFlight runs
+skip native release qualification; App Store releases require it to pass.
 TestFlight uses the main-only `ios-testflight` environment without per-run
 approval; App Store staging retains `ios-store-release` and its approval rules.
 See [environment setup](fastlane/SETUP.md#github-actions) for activation and

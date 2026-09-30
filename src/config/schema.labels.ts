@@ -1,4 +1,3 @@
-// Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";

@@ -1,4 +1,3 @@
-// Resolves ClawHub plugin catalog entries and install metadata.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

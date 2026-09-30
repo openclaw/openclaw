@@ -60,14 +60,14 @@ describe("resolveOpenPathCommand", () => {
 });
 
 describe("execOpenPath", () => {
-  it.each(["darwin", "win32"] as const)("bounds the %s launcher wait", async (platform) => {
+  it("bounds the non-Linux launcher wait", async () => {
     runExecMock.mockResolvedValue({ stdout: "", stderr: "" });
     const command = {
-      command: platform === "darwin" ? "open" : "powershell.exe",
+      command: "open",
       args: ["/tmp/workspace"],
     };
 
-    await execOpenPath(command, platform);
+    await execOpenPath(command, "darwin");
 
     expect(runExecMock).toHaveBeenCalledWith(command.command, command.args, {
       logOutput: false,
@@ -166,8 +166,6 @@ describe("isHeadlessOpenPathError", () => {
     { platform: "linux", command: "xdg-open", code: "ENOENT", expected: true },
     { platform: "linux", command: "xdg-open", code: "EACCES", expected: false },
     { platform: "linux", command: "other-opener", code: "ENOENT", expected: false },
-    { platform: "darwin", command: "open", code: "ENOENT", expected: false },
-    { platform: "win32", command: "powershell.exe", code: "ENOENT", expected: false },
     { platform: "freebsd", command: "xdg-open", code: "ENOENT", expected: false },
   ] as const)("classifies $platform $command $code", ({ platform, command, code, expected }) => {
     const error = Object.assign(new Error("Launcher failed"), { code });

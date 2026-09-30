@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEntryOrigin } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
@@ -21,13 +22,6 @@ import type {
   MemoryOriginReadTarget,
 } from "./memory-entry-origins-task.js";
 import { ensureMemorySessionTombstones } from "./memory-session-tombstones.js";
-import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
-import {
-  runMemoryOriginRows,
-  runMemoryTombstoneRows,
-  runMemoryOriginExists,
-  runMemoryIndexedOriginKeys,
-} from "./memory/manager-cpu-worker-runtime.js";
 import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 export type { MemoryEntryOrigin };
@@ -46,6 +40,13 @@ type MemoryOriginDatabase = {
 };
 // Four bindings per row stay below SQLite's historical 999-variable default.
 const TOMBSTONE_INSERT_BATCH_SIZE = 128;
+// Lazy: the runtime-api graph must not statically reach the manager sidecar modules.
+const loadMemoryCpuProcessEntrypoints = createLazyRuntimeModule(
+  () => import("./memory/manager-cpu-entrypoints.js"),
+);
+const loadMemoryCpuWorkerRuntime = createLazyRuntimeModule(
+  () => import("./memory/manager-cpu-worker-runtime.js"),
+);
 type OriginDatabaseOptions = ReturnType<typeof captureOriginDatabaseOptions>;
 
 function captureOriginDatabaseOptions(agentId: string) {
@@ -58,6 +59,8 @@ async function executeOriginCommand<Key extends keyof MemoryEntryOriginOperation
   command: { type: Key; input: MemoryEntryOriginOperations[Key]["input"] },
   assertOriginal?: () => void,
 ): Promise<MemoryEntryOriginOperations[Key]["output"]> {
+  const { memoryCpuProcessEntrypoints } = await loadMemoryCpuProcessEntrypoints();
+  const moduleUrl = resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins);
   assertOriginal?.();
   return runOpenClawAgentWriteAdmission(
     options,
@@ -73,7 +76,7 @@ async function executeOriginCommand<Key extends keyof MemoryEntryOriginOperation
             options,
             db,
             {
-              moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins),
+              moduleUrl,
               input: undefined,
             },
           );
@@ -111,13 +114,13 @@ export async function listMemoryEntryOrigins(
   if (params.sessionIds?.length === 0 || params.entryKeys?.length === 0) {
     return [];
   }
-  return runMemoryOriginRows(
-    captureOriginReadTarget(options ?? captureOriginDatabaseOptions(params.agentId)),
-    {
-      ...(params.sessionIds ? { sessionIds: [...params.sessionIds] } : {}),
-      ...(params.entryKeys ? { entryKeys: [...params.entryKeys] } : {}),
-    },
-  );
+  const target = captureOriginReadTarget(options ?? captureOriginDatabaseOptions(params.agentId));
+  const filters = {
+    ...(params.sessionIds ? { sessionIds: [...params.sessionIds] } : {}),
+    ...(params.entryKeys ? { entryKeys: [...params.entryKeys] } : {}),
+  };
+  const { runMemoryOriginRows } = await loadMemoryCpuWorkerRuntime();
+  return runMemoryOriginRows(target, filters);
 }
 
 export async function listMemorySessionTombstones(params: {
@@ -127,11 +130,10 @@ export async function listMemorySessionTombstones(params: {
   if (params.sessionIds?.length === 0) {
     return [];
   }
-  const options = captureOriginDatabaseOptions(params.agentId);
-  return runMemoryTombstoneRows(
-    captureOriginReadTarget(options),
-    params.sessionIds ? [...params.sessionIds] : undefined,
-  );
+  const target = captureOriginReadTarget(captureOriginDatabaseOptions(params.agentId));
+  const sessionIds = params.sessionIds ? [...params.sessionIds] : undefined;
+  const { runMemoryTombstoneRows } = await loadMemoryCpuWorkerRuntime();
+  return runMemoryTombstoneRows(target, sessionIds);
 }
 
 /** Record on the supplied connection; the caller retains write admission. */
@@ -219,10 +221,14 @@ async function deleteMemoryEntryOrigins(
     return 0;
   }
   assertOriginal();
-  const existing = await runMemoryOriginExists(captureOriginReadTarget(options), {
+  const target = captureOriginReadTarget(options);
+  const filters = {
     entryKeys: [...params.entryKeys],
     ...(params.sessionIds ? { sessionIds: [...params.sessionIds] } : {}),
-  });
+  };
+  const { runMemoryOriginExists } = await loadMemoryCpuWorkerRuntime();
+  assertOriginal();
+  const existing = await runMemoryOriginExists(target, filters);
   assertOriginal();
   if (!existing) {
     return 0;
@@ -341,6 +347,7 @@ export async function pruneMemoryEntryOrigins(params: {
     ),
   );
   const diaryKeys = new Set(diaries.flatMap(extractPromotionKeys));
+  const { runMemoryIndexedOriginKeys } = await loadMemoryCpuWorkerRuntime();
   for (const options of owners) {
     await runOpenClawAgentWriteAdmission(
       options,

@@ -85,7 +85,6 @@ export function inspectBase64(
   let out: Buffer | undefined;
   let outLen = 0;
   let padding = 0;
-  let sawPadding = false;
   let lastDataValue = 0;
 
   for (let i = 0; i < base64.length; i += 1) {
@@ -109,10 +108,9 @@ export function inspectBase64(
       if (padding > 2) {
         return undefined;
       }
-      sawPadding = true;
     } else {
       const value = base64DataValue(code);
-      if (sawPadding || value < 0) {
+      if (padding > 0 || value < 0) {
         return undefined;
       }
       lastDataValue = value;
@@ -127,7 +125,7 @@ export function inspectBase64(
     return undefined;
   }
   const remainder = cleanedLength % 4;
-  if (remainder !== 0 && (sawPadding || remainder === 1)) {
+  if (remainder !== 0 && (padding > 0 || remainder === 1)) {
     return undefined;
   }
   const effectivePadding = remainder === 0 ? padding : 4 - remainder;

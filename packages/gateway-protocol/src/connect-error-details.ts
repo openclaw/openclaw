@@ -152,6 +152,33 @@ const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
   "metadata-upgrade": "device metadata change pending approval",
 };
 
+const AUTH_CONNECT_ERROR_CODES = new Map<string | undefined, ConnectErrorDetailCode>([
+  ["token_missing", ConnectErrorDetailCodes.AUTH_TOKEN_MISSING],
+  ["token_mismatch", ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH],
+  ["token_missing_config", ConnectErrorDetailCodes.AUTH_TOKEN_NOT_CONFIGURED],
+  ["password_missing", ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING],
+  ["password_mismatch", ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH],
+  ["password_missing_config", ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED],
+  ["bootstrap_token_invalid", ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID],
+  ["tailscale_user_missing", ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING],
+  ["tailscale_proxy_missing", ConnectErrorDetailCodes.AUTH_TAILSCALE_PROXY_MISSING],
+  ["tailscale_whois_failed", ConnectErrorDetailCodes.AUTH_TAILSCALE_WHOIS_FAILED],
+  ["tailscale_user_mismatch", ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH],
+  ["rate_limited", ConnectErrorDetailCodes.AUTH_RATE_LIMITED],
+  ["device_token_mismatch", ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH],
+  ["scope_mismatch", ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH],
+  [undefined, ConnectErrorDetailCodes.AUTH_REQUIRED],
+]);
+
+const DEVICE_AUTH_CONNECT_ERROR_CODES = new Map<string | undefined, ConnectErrorDetailCode>([
+  ["device-id-mismatch", ConnectErrorDetailCodes.DEVICE_AUTH_DEVICE_ID_MISMATCH],
+  ["device-signature-stale", ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_EXPIRED],
+  ["device-nonce-missing", ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED],
+  ["device-nonce-mismatch", ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH],
+  ["device-signature", ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID],
+  ["device-public-key", ConnectErrorDetailCodes.DEVICE_AUTH_PUBLIC_KEY_INVALID],
+]);
+
 /** Maps internal auth failure reasons to public connect-error detail codes. */
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
@@ -159,62 +186,14 @@ export function resolveAuthConnectErrorDetailCode(
   if (reason?.startsWith("trusted_proxy_missing_header_")) {
     return ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED;
   }
-  switch (reason) {
-    case "token_missing":
-      return ConnectErrorDetailCodes.AUTH_TOKEN_MISSING;
-    case "token_mismatch":
-      return ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH;
-    case "token_missing_config":
-      return ConnectErrorDetailCodes.AUTH_TOKEN_NOT_CONFIGURED;
-    case "password_missing":
-      return ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING;
-    case "password_mismatch":
-      return ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH;
-    case "password_missing_config":
-      return ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED;
-    case "bootstrap_token_invalid":
-      return ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID;
-    case "tailscale_user_missing":
-      return ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING;
-    case "tailscale_proxy_missing":
-      return ConnectErrorDetailCodes.AUTH_TAILSCALE_PROXY_MISSING;
-    case "tailscale_whois_failed":
-      return ConnectErrorDetailCodes.AUTH_TAILSCALE_WHOIS_FAILED;
-    case "tailscale_user_mismatch":
-      return ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH;
-    case "rate_limited":
-      return ConnectErrorDetailCodes.AUTH_RATE_LIMITED;
-    case "device_token_mismatch":
-      return ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH;
-    case "scope_mismatch":
-      return ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH;
-    case undefined:
-      return ConnectErrorDetailCodes.AUTH_REQUIRED;
-    default:
-      return ConnectErrorDetailCodes.AUTH_UNAUTHORIZED;
-  }
+  return AUTH_CONNECT_ERROR_CODES.get(reason) ?? ConnectErrorDetailCodes.AUTH_UNAUTHORIZED;
 }
 
 /** Maps device-auth verifier reasons to public connect-error detail codes. */
 export function resolveDeviceAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
-  switch (reason) {
-    case "device-id-mismatch":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_DEVICE_ID_MISMATCH;
-    case "device-signature-stale":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_EXPIRED;
-    case "device-nonce-missing":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED;
-    case "device-nonce-mismatch":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH;
-    case "device-signature":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID;
-    case "device-public-key":
-      return ConnectErrorDetailCodes.DEVICE_AUTH_PUBLIC_KEY_INVALID;
-    default:
-      return ConnectErrorDetailCodes.DEVICE_AUTH_INVALID;
-  }
+  return DEVICE_AUTH_CONNECT_ERROR_CODES.get(reason) ?? ConnectErrorDetailCodes.DEVICE_AUTH_INVALID;
 }
 
 /** Reads a non-empty detail code from an untrusted error details payload. */

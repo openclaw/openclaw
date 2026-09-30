@@ -106,13 +106,13 @@ function releaseArtifactFiles(workflowFile: string, artifactPrefix: string, runn
 }
 
 describe("mobile release CI tools", () => {
-  it("routes daily and manual TestFlight through qualification and its unattended environment", () => {
+  it("skips qualification for TestFlight while requiring it for App Store releases", () => {
     const workflow = parse(fs.readFileSync(".github/workflows/ios-store-release.yml", "utf8")) as {
       on: { schedule: Array<{ cron: string; timezone: string }> };
       concurrency: { group: string; "cancel-in-progress": boolean };
       jobs: {
         qualify: { if: string };
-        release: { if: string; environment: string; steps: WorkflowStep[] };
+        release: { if: string; needs: string; environment: string; steps: WorkflowStep[] };
         screenshots: { if: string };
       };
     };
@@ -121,13 +121,26 @@ describe("mobile release CI tools", () => {
       group: "ios-release",
       "cancel-in-progress": false,
     });
+    expect(workflow.jobs.release.needs).toBe("qualify");
     const upload = expectDefined(
       workflow.jobs.release.steps.find((step) => step.name === "Prepare and upload iOS release"),
       "iOS upload step",
     );
     const uploadEnvironment = expectDefined(upload.env, "iOS upload environment");
 
-    for (const scenario of [
+    const scenarios: Array<{
+      event: string;
+      operation: string;
+      enabled: string;
+      admitted: boolean;
+      destination?: "testflight" | "app-store";
+      qualify?: boolean;
+      qualificationResult?: "success" | "failure" | "cancelled" | "skipped";
+      cancelled?: boolean;
+      screenshots?: boolean;
+      ref?: string;
+      repository?: string;
+    }> = [
       {
         event: "schedule",
         operation: "",
@@ -150,7 +163,23 @@ describe("mobile release CI tools", () => {
         enabled: "false",
         admitted: true,
         destination: "app-store",
+        qualify: true,
       },
+      ...(["failure", "cancelled", "skipped"] as const).map((qualificationResult) => ({
+        event: "workflow_dispatch",
+        operation: "release",
+        enabled: "true",
+        qualify: true,
+        qualificationResult,
+        admitted: false,
+      })),
+      ...["schedule", "workflow_dispatch"].map((event) => ({
+        event,
+        operation: event === "schedule" ? "" : "testflight",
+        enabled: "true",
+        cancelled: true,
+        admitted: false,
+      })),
       {
         event: "workflow_dispatch",
         operation: "screenshots",
@@ -174,7 +203,10 @@ describe("mobile release CI tools", () => {
         repository: "example/fork",
       },
       { event: "push", operation: "release", enabled: "true", admitted: false },
-    ]) {
+    ];
+    for (const scenario of scenarios) {
+      const qualificationResult =
+        scenario.qualificationResult ?? (scenario.qualify ? "success" : "skipped");
       const context = {
         github: {
           event_name: scenario.event,
@@ -186,15 +218,25 @@ describe("mobile release CI tools", () => {
           IOS_TESTFLIGHT_ENABLED: scenario.enabled,
           OPENCLAW_TESTFLIGHT_GROUP_ID: "external-group-id",
         },
+        needs: { qualify: { result: qualificationResult } },
+        cancelled: () => scenario.cancelled ?? qualificationResult === "cancelled",
+        success: () => qualificationResult === "success",
+        failure: () => qualificationResult === "failure",
+        always: () => true,
       };
       const evaluate = (expression: string) =>
         runInNewContext(expression.replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), context);
       expect(Boolean(evaluate(workflow.jobs.qualify.if)), JSON.stringify(scenario)).toBe(
-        scenario.admitted,
+        scenario.qualify ?? false,
       );
-      expect(Boolean(evaluate(workflow.jobs.release.if)), JSON.stringify(scenario)).toBe(
-        scenario.admitted,
-      );
+      // GitHub adds success() unless the job condition includes a status function.
+      // A skipped qualification must not silently skip TestFlight's upload job.
+      const releaseCondition = /\b(always|cancelled|failure|success)\s*\(/u.test(
+        workflow.jobs.release.if,
+      )
+        ? workflow.jobs.release.if
+        : `success() && (${workflow.jobs.release.if})`;
+      expect(Boolean(evaluate(releaseCondition)), JSON.stringify(scenario)).toBe(scenario.admitted);
       expect(Boolean(evaluate(workflow.jobs.screenshots.if))).toBe(scenario.screenshots ?? false);
       if (!scenario.admitted) {
         continue;

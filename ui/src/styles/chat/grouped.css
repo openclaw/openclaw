@@ -231,7 +231,8 @@
 
 .chat-group.user .chat-group-footer-actions,
 .chat-group.assistant .chat-group-footer-actions,
-.chat-group.assistant .chat-message-actions-row {
+.chat-group.assistant .chat-message-actions-row,
+.chat-group.user.chat-group--peer .chat-message-actions-row {
   justify-content: flex-start;
   margin-left: 0;
 }
@@ -241,6 +242,7 @@
 }
 
 .chat-message-actions-row {
+  --chat-message-action-size: 24px;
   align-self: stretch;
   margin-top: 4px;
 }
@@ -250,11 +252,21 @@
 .chat-sender-name {
   font-weight: 500;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--chat-sender-name-color, var(--muted));
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.chat-sender-name.person-activity-link {
+  color: color-mix(in srgb, var(--chat-sender-name-color, var(--muted)) 60%, var(--text));
+}
+
+.chat-sender-name.person-activity-link:hover,
+.chat-sender-name.person-activity-link:focus-visible {
+  color: color-mix(in srgb, var(--chat-sender-name-color, var(--muted)) 50%, var(--text));
+  text-decoration: none;
 }
 
 .chat-message-source {
@@ -380,12 +392,77 @@
 /* Inline rows belong to earlier messages in a group, so the latest footer's
    resting disclosure must not reveal them before hover or touch. */
 .chat-message-actions-row button {
+  min-height: var(--chat-message-action-size);
   opacity: var(--chat-message-action-opacity, 0);
   pointer-events: var(--chat-message-action-pointer-events, none);
 }
 
 .chat-group:hover .chat-group-footer-actions button,
 .chat-group:hover .chat-message-actions-row button {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+.chat-group.user.chat-group--peer .chat-message-actions-row button,
+.chat-group.user.chat-group--peer .chat-group-footer-actions button {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The native row owns both layout space and actions; no overlaid copy.
+   Keep :hover separate from touch/focus selectors for the build hover guard. */
+.chat-group.user.chat-group--peer
+  :is(.chat-bubble, .chat-message--reply):hover
+  + .chat-message-actions-row
+  button,
+.chat-group.user.chat-group--peer .chat-message-actions-row:hover button,
+.chat-group.user.chat-group--peer
+  :is(.chat-bubble, .chat-message--reply):is(:focus-within, .chat-bubble--actions-revealed)
+  + .chat-message-actions-row
+  button,
+.chat-group.user.chat-group--peer
+  .chat-message--reply:has(> .chat-bubble--actions-revealed)
+  + .chat-message-actions-row
+  button,
+.chat-group.user.chat-group--peer .chat-message-actions-row:focus-within button {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+/* The final action belongs to the final bubble, alongside its native metadata.
+   Keep the :has() state on its subject: a combinator after a non-subject :has()
+   joins Chromium's shared :has() invalidation set and restyles every button.
+   Hover and touch/focus reveals stay separate rules: the build hover guard
+   moves any selector containing :hover under @media (hover: hover). */
+.chat-group.user.chat-group--peer:has(
+    > .chat-group-messages > .chat-bubble:last-child:hover,
+    > .chat-group-messages > .chat-message--reply:last-child > .chat-bubble:hover
+  ) {
+  --chat-peer-final-action-opacity: 0.6;
+  --chat-peer-final-action-pointer-events: auto;
+}
+
+.chat-group.user.chat-group--peer:has(
+    > .chat-group-messages
+      > .chat-bubble:last-child:is(:focus-within, .chat-bubble--actions-revealed),
+    > .chat-group-messages
+      > .chat-message--reply:last-child
+      > .chat-bubble:is(:focus-within, .chat-bubble--actions-revealed)
+  ) {
+  --chat-peer-final-action-opacity: 0.6;
+  --chat-peer-final-action-pointer-events: auto;
+}
+
+.chat-group.user.chat-group--peer > .chat-group-footer .chat-group-footer-actions button {
+  opacity: var(--chat-peer-final-action-opacity, 0);
+  pointer-events: var(--chat-peer-final-action-pointer-events, none);
+}
+
+.chat-group.user.chat-group--peer .chat-group-footer:hover .chat-group-footer-actions button,
+.chat-group.user.chat-group--peer
+  .chat-group-footer:focus-within
+  .chat-group-footer-actions
+  button {
   opacity: 0.6;
   pointer-events: auto;
 }
@@ -953,7 +1030,8 @@ button.chat-reply-attribution__target:disabled {
   :where(.chat-thread) .chat-group {
     --chat-footer-disclosure-opacity: 0;
     --chat-footer-disclosure-pointer-events: none;
-    --chat-footer-detail-position: absolute;
+    /* Hidden metadata keeps exactly the footprint of the revealed row. */
+    --chat-footer-detail-position: static;
     --chat-persistent-footer-opacity: 0;
   }
 
@@ -1192,7 +1270,7 @@ button.chat-reply-attribution__target:disabled {
 }
 
 .chat-group.user.chat-group--sender-tint .chat-sender-name {
-  color: hsl(var(--chat-sender-hue) 45% 70%);
+  --chat-sender-name-color: hsl(var(--chat-sender-hue) 45% 70%);
 }
 
 :where(:root[data-theme-mode="light"]) .chat-group.user.chat-group--sender-tint .chat-bubble {
@@ -1206,7 +1284,7 @@ button.chat-reply-attribution__target:disabled {
 }
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {
-  color: hsl(var(--chat-sender-hue) 60% 36%);
+  --chat-sender-name-color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
 /* Ephemeral drafts share sent-turn geometry, typography, and identity tint. */
@@ -1631,6 +1709,66 @@ button.chat-reply-attribution__target:disabled {
 
   .chat-group-messages > .chat-reply-attribution {
     margin-block-end: calc(var(--chat-reply-attribution-gap) - var(--chat-message-gap));
+  }
+
+  .chat-group-footer {
+    flex-wrap: nowrap;
+    align-items: flex-start;
+  }
+
+  .chat-group-footer__meta :is(.chat-group-timestamp, .msg-meta) {
+    flex-shrink: 0;
+  }
+
+  .chat-group.user:not(.chat-group--peer)
+    .chat-group-footer--persistent-identity
+    :is(.chat-sender-name, .chat-message-source) {
+    order: 0;
+  }
+
+  .chat-group.user .chat-group-footer__meta > .chat-group-footer-actions {
+    order: 1;
+  }
+
+  .chat-group.user.chat-group--peer .chat-group-footer-actions {
+    flex-basis: auto;
+    justify-content: flex-start;
+  }
+
+  .chat-group.user.chat-group--peer .chat-message-footer {
+    --chat-footer-disclosure-opacity: 0;
+    --chat-footer-disclosure-pointer-events: none;
+    --chat-footer-action-opacity: 0;
+    opacity: var(--chat-footer-disclosure-opacity);
+    pointer-events: var(--chat-footer-disclosure-pointer-events);
+  }
+
+  .chat-group.user.chat-group--peer .chat-message-footer .chat-group-footer-actions button {
+    opacity: var(--chat-footer-action-opacity);
+    pointer-events: var(--chat-footer-disclosure-pointer-events);
+  }
+
+  .chat-group.user.chat-group--peer
+    .chat-group-messages
+    > .chat-bubble:hover
+    + .chat-message-footer,
+  .chat-group.user.chat-group--peer
+    .chat-group-messages
+    > .chat-message--reply:has(> .chat-bubble:hover)
+    + .chat-message-footer,
+  .chat-group.user.chat-group--peer .chat-message-footer:hover,
+  .chat-group.user.chat-group--peer
+    .chat-group-messages
+    > .chat-bubble:is(:focus-within, .chat-bubble--actions-revealed)
+    + .chat-message-footer,
+  .chat-group.user.chat-group--peer
+    .chat-group-messages
+    > .chat-message--reply:has(> .chat-bubble:is(:focus-within, .chat-bubble--actions-revealed))
+    + .chat-message-footer,
+  .chat-group.user.chat-group--peer .chat-message-footer:focus-within {
+    --chat-footer-disclosure-opacity: 1;
+    --chat-footer-disclosure-pointer-events: auto;
+    --chat-footer-action-opacity: 0.6;
   }
 
   .chat-group.chat-group--reply {

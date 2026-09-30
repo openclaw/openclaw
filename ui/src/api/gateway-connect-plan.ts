@@ -205,6 +205,7 @@ export async function buildBrowserGatewayConnectPlan({
           "inline-widgets",
           "model-selection-policy",
           "ui-commands",
+          "ultrafast",
           "usage-refreshing",
         ],
       }),

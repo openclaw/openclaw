@@ -79,6 +79,10 @@ afterAll(async () => {
   >("../src/state/openclaw-agent-db-resources.js");
   // File-owned homes must survive until retained Worker leases have been released.
   await drainAgentDatabaseResources({}, async () => {
+    const { drainGlobalSingletonLifecycleState } = await vi.importActual<
+      typeof import("../src/shared/global-singleton.js")
+    >("../src/shared/global-singleton.js");
+    await drainGlobalSingletonLifecycleState();
     testEnv.cleanup();
   });
 });

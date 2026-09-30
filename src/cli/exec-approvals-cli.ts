@@ -22,7 +22,6 @@ import type {
   ExecApprovalsNodeSetParams,
 } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import {
   getTerminalTableWidth,
   renderTerminalSafeTable,
@@ -53,6 +52,7 @@ import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -1194,11 +1194,7 @@ export function registerExecApprovalsCli(program: Command) {
     .command("approvals")
     .alias("exec-approvals")
     .description("Manage approval policy and pending requests")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/approvals"));
 
   const pendingCmd = approvals
     .command("pending")
@@ -1382,7 +1378,7 @@ export function registerExecApprovalsCli(program: Command) {
         )}\n${formatExample(
           'openclaw approvals allowlist remove "~/Projects/**/bin/rg"',
           "Remove an allowlist pattern.",
-        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
+        )}\n${formatDocsHelp("/cli/approvals")}`,
     );
 
   registerAllowlistMutationCommand({

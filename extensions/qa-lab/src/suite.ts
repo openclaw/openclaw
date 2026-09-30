@@ -293,20 +293,12 @@ export function shouldRunQaSuiteWithIsolatedScenarioWorkers(params: {
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
 }) {
-  if (
-    !shouldUseIsolatedQaSuiteScenarioWorkers({
+  return (
+    shouldUseIsolatedQaSuiteScenarioWorkers({
       scenarios: params.scenarios,
       concurrency: params.concurrency,
-    })
-  ) {
-    return false;
-  }
-
-  if (params.concurrency === 1 && params.lab && !params.startLab) {
-    return false;
-  }
-
-  return true;
+    }) && !(params.concurrency === 1 && params.lab && !params.startLab)
+  );
 }
 
 const QA_IMAGE_UNDERSTANDING_PNG_BASE64 =

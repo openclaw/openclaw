@@ -1,6 +1,7 @@
-import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { logWarn } from "../logger.js";
+import { mergeLiteralSchemas } from "../shared/json-schema-literals.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MCP_LOOPBACK_LOG_PREFIX = "mcp-loopback";
@@ -22,12 +23,7 @@ function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description
 }
 
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
-  const value = readLoopbackToolField(tool, "name");
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const name = value.trim();
-  return name || undefined;
+  return normalizeOptionalString(readLoopbackToolField(tool, "name"));
 }
 
 function readLoopbackToolDescription(tool: McpLoopbackTool): string | undefined {
@@ -50,69 +46,6 @@ function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unkno
   } catch {
     return undefined;
   }
-}
-
-function readLiteralSchemaValues(schema: Record<string, unknown>): unknown[] | undefined {
-  const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
-  if (Object.hasOwn(schema, "const")) {
-    if (!enumValues) {
-      return [schema.const];
-    }
-    return enumValues.some((value) => isDeepStrictEqual(value, schema.const)) ? [schema.const] : [];
-  }
-  return enumValues;
-}
-
-function uniqueLiteralValues(values: unknown[]): unknown[] {
-  return values.filter(
-    (value, index) =>
-      values.findIndex((candidate) => isDeepStrictEqual(candidate, value)) === index,
-  );
-}
-
-const SCHEMA_ANNOTATION_KEYS = new Set([
-  "$comment",
-  "default",
-  "deprecated",
-  "description",
-  "example",
-  "examples",
-  "readOnly",
-  "title",
-  "writeOnly",
-]);
-
-function readLiteralValidationConstraints(
-  schema: Record<string, unknown>,
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(schema).filter(
-      ([key]) => key !== "const" && key !== "enum" && !SCHEMA_ANNOTATION_KEYS.has(key),
-    ),
-  );
-}
-
-function mergeLiteralSchemas(
-  existing: Record<string, unknown>,
-  incoming: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const existingValues = readLiteralSchemaValues(existing);
-  const incomingValues = readLiteralSchemaValues(incoming);
-  if (existingValues === undefined || incomingValues === undefined) {
-    return undefined;
-  }
-  const existingConstraints = readLiteralValidationConstraints(existing);
-  const incomingConstraints = readLiteralValidationConstraints(incoming);
-  if (!isDeepStrictEqual(existingConstraints, incomingConstraints)) {
-    return undefined;
-  }
-  const values = uniqueLiteralValues([...existingValues, ...incomingValues]);
-  if (values.length === 0) {
-    return undefined;
-  }
-  const merged: Record<string, unknown> = { ...existing, enum: values };
-  delete merged.const;
-  return merged;
 }
 
 function flattenUnionSchema(

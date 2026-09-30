@@ -1,4 +1,3 @@
-// Boolean parameter helpers parse plugin-facing string flags into stable booleans.
 import { parseBoolean } from "../../packages/normalization-core/src/boolean-coercion.js";
 import { readSnakeCaseParamRaw } from "../param-key.js";
 

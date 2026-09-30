@@ -251,6 +251,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
 
   const transport = await prepareEmbeddedAttemptTransport({
     attempt,
+    assertCronRootCurrent: sessionLock.assertCronRootCurrent,
     session: activeSession,
     settingsManager,
     providerThinkingLevel,

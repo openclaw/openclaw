@@ -20,6 +20,7 @@ describe("CLI backend resolveExecutionArgs fast mode", () => {
     [true, true],
     [false, false],
     ["auto", true],
+    ["ultrafast", true],
     [undefined, undefined],
   ] as const)("resolves fastMode=%s to %s at execution", async (fastMode, expected) => {
     const resolveExecutionArgs = vi.fn((context: CliBackendResolveExecutionArgsContext) => [

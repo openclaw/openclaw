@@ -7,7 +7,7 @@ import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
-import { renderMessageGroup } from "./chat-message.ts";
+import { renderMessageGroup } from "./chat-message-group.ts";
 
 let container: HTMLDivElement;
 
@@ -187,7 +187,16 @@ describe("forwarded message attribution", () => {
       prefix: null,
       titled: true,
     },
-  ])("$name", async ({ key, label, chipText, prefix, titled }) => {
+    {
+      name: "cron run respects the app base path and encodes its ids",
+      key: "agent:main:cron:daily report:run:first+run",
+      chipText: "Automation",
+      prefix: null,
+      titled: true,
+      basePath: "/control",
+      href: "/control/automations?job=daily+report&run=first%2Brun",
+    },
+  ])("$name", async ({ key, label, chipText, prefix, titled, basePath, href }) => {
     const group = createGroup({
       senderSession: { sessionKey: key, agentId: key.split(":")[1], label },
     });
@@ -196,20 +205,21 @@ describe("forwarded message attribution", () => {
         agentId: "main",
         agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
         mainKey: "main",
+        basePath,
       }),
       container,
     );
 
     const chip = expectDefined(
-      container.querySelector<HTMLAnchorElement>(
-        `a.markdown-session-link[data-session-key="${key}"]`,
-      ),
+      container.querySelector<HTMLAnchorElement>("a.markdown-session-link"),
       "source session link",
     );
     expect(chip).toBeInstanceOf(HTMLAnchorElement);
     expect(chip.textContent?.trim()).toBe(chipText);
     expect(chip.querySelector(":scope > .session-label")?.textContent).toBe(chipText);
     expect(chip.classList.contains("markdown-session-link--titled")).toBe(titled);
+    const isCronRun = key.includes(":cron:");
+    expect(chip.getAttribute("data-session-key")).toBe(isCronRun ? null : key);
     const attributionText =
       container
         .querySelector(".chat-group--forwarded .chat-reply-attribution")
@@ -223,7 +233,7 @@ describe("forwarded message attribution", () => {
     if (titled) {
       const titler = new SessionLinkTitler(container);
       titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
-      vi.spyOn(titler.client, "request").mockResolvedValueOnce({
+      const request = vi.spyOn(titler.client, "request").mockResolvedValueOnce({
         status: "ok",
         sessionKey: key,
         agentId: key.split(":")[1],
@@ -232,8 +242,11 @@ describe("forwarded message attribution", () => {
       await titler.decorate(chip, true);
       expect(chip.textContent?.trim()).toBe(chipText);
       expect(chip.getAttribute("href")).toBe(
-        key.includes(":cron:") ? "/chat/main/cron/daily/run/first" : `/chat/${key.split(":")[1]}`,
+        isCronRun ? (href ?? "/automations?job=daily&run=first") : `/chat/${key.split(":")[1]}`,
       );
+      if (isCronRun) {
+        expect(request).not.toHaveBeenCalled();
+      }
     }
     if (key.includes(":cron:")) {
       expect(chip.querySelector(".session-link-icon svg")?.namespaceURI).toBe(

@@ -1,9 +1,10 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import type {
-  MockOpenAiCodeModeExecSurface,
-  ResponsesInputItem,
-  StreamEvent,
+import {
+  type MockOpenAiCodeModeExecSurface,
+  type ResponsesInputItem,
+  type StreamEvent,
+  parseJsonObjectBody,
 } from "./mock-openai-contracts.js";
 import {
   findNamedToolDefinition,
@@ -32,9 +33,6 @@ function stringifyScenarioToolOutput(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
-  if (value === undefined) {
-    return "";
-  }
   try {
     return JSON.stringify(value) ?? "";
   } catch {
@@ -54,16 +52,11 @@ function decodeCodeModeTarget(code: string | undefined) {
   if (!marker) {
     return null;
   }
-  try {
-    const encoded = marker.slice(`// ${QA_CODE_MODE_TARGET_MARKER}`.length).trim();
-    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown;
-    if (!isRecord(parsed) || typeof parsed.name !== "string" || !isRecord(parsed.args)) {
-      return null;
-    }
-    return { name: parsed.name, args: parsed.args };
-  } catch {
-    return null;
-  }
+  const encoded = marker.slice(`// ${QA_CODE_MODE_TARGET_MARKER}`.length).trim();
+  const parsed = parseJsonObjectBody(Buffer.from(encoded, "base64url").toString("utf8"));
+  return typeof parsed?.name === "string" && isRecord(parsed.args)
+    ? { name: parsed.name, args: parsed.args }
+    : null;
 }
 
 export function resolveCodeModeExecSurface(
@@ -86,9 +79,7 @@ export function resolveCodeModeExecSurface(
   }
   const properties = schema.properties;
   const required = schema.required;
-  return properties !== null &&
-    typeof properties === "object" &&
-    !Array.isArray(properties) &&
+  return isRecord(properties) &&
     Object.hasOwn(properties, "code") &&
     Array.isArray(required) &&
     required.includes("code")
@@ -120,22 +111,17 @@ export function resolveCurrentToolDeclarationSurface(
 }
 
 function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
-  return input.toReversed().find((item) => {
-    const type = item.type;
-    return (type === "function_call" || type === "custom_tool_call") && item.call_id === callId;
-  });
+  return input.findLast(
+    (item) =>
+      (item.type === "function_call" || item.type === "custom_tool_call") &&
+      item.call_id === callId,
+  );
 }
 
 function parseToolCallArguments(toolCall: ResponsesInputItem) {
-  if (typeof toolCall.arguments !== "string") {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(toolCall.arguments) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  return typeof toolCall.arguments === "string" && toolCall.arguments
+    ? parseJsonObjectBody(toolCall.arguments)
+    : null;
 }
 
 function readGeneratedCodeModeExecSource(toolCall: ResponsesInputItem | undefined) {

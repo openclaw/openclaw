@@ -638,9 +638,6 @@ function buildGoogleTransportRequestUrl(
 
 function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
   const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
-  if (raw === undefined || raw.trim() === "") {
-    return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
-  }
   return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 

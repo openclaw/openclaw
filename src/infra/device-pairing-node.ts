@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
+import type { NodePairingPendingSnapshot } from "./device-pairing-admission.types.js";
 import type { NodePairingGeneration } from "./device-pairing-identity.js";
 import {
   projectNodePairing,
@@ -14,7 +15,6 @@ import {
   type NodePairingCleanupClaim,
   type NodePairingList,
   type NodePairingListWithGeneration,
-  type NodePairingPendingSnapshot,
   type NodePairingRequestInput,
   type NodePairingSupersededRequest,
   type PairedDeviceNode,

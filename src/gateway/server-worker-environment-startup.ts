@@ -467,6 +467,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     },
     ...preparedWorkspaces,
     prepareNodeEnrollment: nodeEnrollment.begin,
+    admitsNodeSetupCompletion: nodeEnrollment.admitsNodeSetupCompletion,
     prepareNodeRuntime: nodeEnrollment.prepareRuntime,
     closeNodeRuntime: nodeEnrollment.closeRuntime,
     closeNodeEnrollment: nodeEnrollment.close,

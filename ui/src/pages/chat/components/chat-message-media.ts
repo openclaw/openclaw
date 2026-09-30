@@ -26,7 +26,7 @@ export type ImageBlock = {
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
 export type ArtifactDownloadResolver = (
-  params: { sessionKey: string; artifactId: string },
+  params: { sessionKey: string; artifactId: string; variant?: "full" | "thumbnail" },
   signal?: AbortSignal,
 ) => Promise<{ url: string; expiresAt?: string; blob?: Blob } | null>;
 

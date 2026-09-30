@@ -1,7 +1,8 @@
 // Full embedded-runner stream wrapper chain around the real Codex Responses
 // provider with a mocked WebSocket, proving the idle watchdog polices provider
 // silence in the shapes seen live (fresh, cached, and consumer-parked streams).
-import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
+import { createLlmRuntime } from "@openclaw/ai";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -9,7 +10,7 @@ import {
 } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { Model } from "../../../llm/types.js";
-// Registers built-in providers on the default registry exactly like the runtime does.
+// Installs the OpenClaw transport host exactly like the runtime does.
 import "../../../llm/stream.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -52,6 +53,9 @@ const context = {
   systemPrompt: "You are a test.",
   messages: [{ role: "user", content: "hi", timestamp: 1 }],
 } as Parameters<StreamFn>[1];
+
+const llmRuntime = createLlmRuntime();
+registerBuiltInApiProviders(llmRuntime.registry);
 
 type Frame = Record<string, unknown>;
 
@@ -108,7 +112,7 @@ function buildRunnerChain(params: {
 }): { streamFn: StreamFn; idleTimeoutMs: number; firstEventTimeoutMs: number; strategy: string } {
   const cfg = { agents: { defaults: { timeoutSeconds: 3600 } } };
   const { streamFn: base, strategy } = resolveEmbeddedAgentStream({
-    llmRuntime: defaultLlmRuntime,
+    llmRuntime,
     currentStreamFn: undefined,
     sessionId: params.sessionId,
     signal: params.runSignal,

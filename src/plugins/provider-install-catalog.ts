@@ -1,4 +1,3 @@
-// Builds provider install catalog entries from plugin metadata.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";

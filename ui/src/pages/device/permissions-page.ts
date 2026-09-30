@@ -27,9 +27,8 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  private readonly subscriptions = new SubscriptionsController(this).watch(
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.nativeDeviceSettings,
-    (capability, notify) => capability.subscribe(notify),
   );
 
   override disconnectedCallback() {

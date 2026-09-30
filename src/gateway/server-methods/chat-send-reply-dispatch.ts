@@ -1,5 +1,6 @@
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
@@ -436,15 +437,13 @@ export function createChatSendReplyDispatch(params: {
       extractAssistantDisplayText(assistantContent) ??
       buildTranscriptReplyTextFromInputs(transcriptInputs);
     const payloadMetadata = getReplyPayloadMetadata(payload);
-    const sourceMediaUrls = Array.from(
-      new Set(
-        payloadMetadata?.assistantTranscriptMediaUrls?.length
-          ? payloadMetadata.assistantTranscriptMediaUrls
-          : [
-              ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-              ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
-            ],
-      ),
+    const sourceMediaUrls = uniqueStrings(
+      payloadMetadata?.assistantTranscriptMediaUrls?.length
+        ? payloadMetadata.assistantTranscriptMediaUrls
+        : [
+            ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+            ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
+          ],
     );
     const ownedTranscriptIdempotencyKey =
       transcript?.idempotencyKey ??

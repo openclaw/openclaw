@@ -1,11 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import * as support from "./service.test-support.js";
-import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 
 describe("worker allocation cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -38,20 +36,13 @@ describe("worker allocation cleanup", () => {
             throw new Error("expected pending enrollment");
           }
           if (bound) {
-            runOpenClawStateWriteTransaction(
-              ({ db }) => {
-                const { environmentId, ...patch } = bindCloudWorkerSetupCompletion({
-                  db,
-                  completion: {
-                    setupId: enrollment.setupId,
-                    deviceId: "cleanup-device",
-                    completedAtMs: 1_000,
-                  },
-                });
-                publishWorkerEnvironmentNativeMutation(db, environmentId, patch);
-              },
-              { database: support.testState.stateDb },
-            );
+            await completeWorkerNodeSetupForTest({
+              baseDir: support.testState.root,
+              store: support.testState.store,
+              setupId: enrollment.setupId,
+              deviceId: "cleanup-device",
+              completedAtMs: 1_000,
+            });
           }
           throw WorkerProviderError.cleanupComplete("cleanup-node-lease", primaryError);
         },

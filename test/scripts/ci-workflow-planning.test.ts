@@ -468,6 +468,7 @@ function runCheckShardFixture(options: {
     profile?: "blacksmith" | "github" | "hybrid";
     eventName?: "pull_request" | "push" | "workflow_dispatch" | "schedule";
     stripeSupport?: boolean;
+    rootStripeSupport?: boolean;
     hostedContract?: boolean;
     failStripe?: string;
     changedPathsJson?: string;
@@ -499,7 +500,9 @@ function runCheckShardFixture(options: {
     );
     writeFileSync(
       path.join(root, "scripts/run-tsgo-core-test-shards.mts"),
-      options.types?.stripeSupport === false ? "// legacy runner\n" : "// --stripe\n",
+      options.types?.stripeSupport === false
+        ? "// legacy runner\n"
+        : `// --stripe${options.types?.rootStripeSupport ? " --root-stripe" : ""}\n`,
     );
     writeFileSync(
       path.join(root, "scripts/run-tsgo-core-test-shards.mjs"),
@@ -6528,6 +6531,39 @@ describe("ci workflow guards", () => {
       } else {
         expect(stripes).toEqual([]);
         expect(result.calls).toEqual(["check:test-types", "tsgo:scripts"]);
+      }
+    },
+  );
+
+  it.each(["pull_request", "schedule", "workflow_dispatch"] as const)(
+    "runs every root partition after its existing core stripe on %s",
+    (eventName) => {
+      const result = runCheckShardFixture({
+        task: "test-types",
+        scripts: ["tsgo:scripts", "tsgo:test:root"],
+        frozenTarget: false,
+        types: { compose: true, profile: "hybrid", eventName, rootStripeSupport: true },
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.rows).toHaveLength(6);
+      expect(result.calls).toEqual(["tsgo:extensions:test", "tsgo:scripts"]);
+      for (let stripe = 1; stripe <= 5; stripe++) {
+        expect(result.typeCalls.filter((call) => call.row === `core-${stripe}`)).toEqual([
+          {
+            row: `core-${stripe}`,
+            command: `node --stripe ${stripe}/5 --concurrency 2`,
+            localCheck: null,
+          },
+          ...(stripe >= 2
+            ? [
+                {
+                  row: `core-${stripe}`,
+                  command: `node --root-stripe ${stripe - 1}/4`,
+                  localCheck: "0",
+                },
+              ]
+            : []),
+        ]);
       }
     },
   );

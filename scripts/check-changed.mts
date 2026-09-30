@@ -336,7 +336,7 @@ function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
   return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
 }
 
-export function shouldRunControlUiI18nVerify(paths: string[]) {
+function shouldRunControlUiI18nVerify(paths: string[]) {
   return paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath));
 }
 
@@ -355,21 +355,21 @@ function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
 }
 
 /** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
-export function shouldRunPluginSdkSurfaceChecks(paths: string[]) {
+function shouldRunPluginSdkSurfaceChecks(paths: string[]) {
   return paths.some((changedPath) => PLUGIN_SDK_SURFACE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can alter deprecated API or plugin-boundary results. */
-export function shouldRunDeprecationHygieneChecks(paths: string[]) {
+function shouldRunDeprecationHygieneChecks(paths: string[]) {
   return paths.some((changedPath) => DEPRECATION_HYGIENE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can alter wrapper-shadowing results. */
-export function shouldRunWrapperShadowingCheck(paths: string[]) {
+function shouldRunWrapperShadowingCheck(paths: string[]) {
   return paths.some((changedPath) => WRAPPER_SHADOWING_PATH_RE.test(changedPath));
 }
 
-export function shouldRunAppcastOwnerTest(paths: string[]) {
+function shouldRunAppcastOwnerTest(paths: string[]) {
   return paths.some((changedPath) => /^appcast(?:-(?:arm64|x86_64))?\.xml$/u.test(changedPath));
 }
 
