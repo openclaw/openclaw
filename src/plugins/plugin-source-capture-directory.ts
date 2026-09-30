@@ -4,6 +4,7 @@ import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import {
@@ -355,7 +356,7 @@ export async function prunePluginNativeCaptureDirectories(
   const removed: string[] = [];
   const warnings: string[] = [];
   assertCurrent();
-  const recordFailure = (error: unknown) => warnings.push(String(error));
+  const recordFailure = (error: unknown) => warnings.push(formatErrorMessage(error));
   const maintenance = { retainedPaths, assertCurrent, removed, ...options };
   await reclaimInstances(
     path.resolve(resolvePluginSourceCapturesDirectory(stateDir)),
@@ -436,7 +437,7 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
         }
         warningBackoff.set(root, { next: now + delay, delay });
         warn(
-          `${failures} cleanup failure(s) in ${root}; will retry. First: ${String(firstFailure)}`,
+          `${failures} cleanup failure(s) in ${root}; will retry. First: ${formatErrorMessage(firstFailure)}`,
         );
       })
       .finally(() => sweeps.delete(root));

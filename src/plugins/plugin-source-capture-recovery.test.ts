@@ -51,7 +51,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["failed removal", "identity-change return"] as const)(
+it.each(["failed removal", "maintenance failed removal", "identity-change return"] as const)(
   "preserves reclamation errors and closes the original token after %s",
   async (mode) => {
     const stateDir = temp.make("capture-reclaim-close-");
@@ -67,7 +67,7 @@ it.each(["failed removal", "identity-change return"] as const)(
     fs.utimesSync(root, old, old);
     const primary = Object.assign(new Error("Fixture capture removal refused"), { code: "EACCES" });
     const cleanup = Object.assign(new Error("Fixture token close refused once"), {
-      code: mode === "failed removal" ? "SQLITE_BUSY" : "EACCES",
+      code: mode === "identity-change return" ? "EACCES" : "SQLITE_BUSY",
     });
     let closeRefused = false;
     let original: ReturnType<typeof stagingToken.acquireSqliteStagingToken> | undefined;
@@ -94,7 +94,7 @@ it.each(["failed removal", "identity-change return"] as const)(
       });
     const remove = fsPromises.rm.bind(fsPromises);
     const removal = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
-      if (mode === "failed removal" && target === captures) {
+      if (mode !== "identity-change return" && target === captures) {
         throw primary;
       }
       await remove(target, options);
@@ -102,11 +102,40 @@ it.each(["failed removal", "identity-change return"] as const)(
     const classification = vi.spyOn(sqliteDiagnostics, "isSqliteLockError");
     const warning = vi.spyOn(process, "emitWarning");
     warning.mockClear();
+    const collectWarnings = async () => {
+      if (mode !== "maintenance failed removal") {
+        await sweepPluginSourceCapturesForTest(stateDir);
+        return warning.mock.calls.map(([message]) => String(message));
+      }
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const lease = acquireGatewayStateOwner({ databasePath: resolveOpenClawStateSqlitePath(env) });
+      const scope = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: lease.assertCurrent,
+        assertDatabaseAccess: lease.assertDatabaseAccess,
+      });
+      try {
+        const result = await scope.run(() =>
+          captureDirectory.prunePluginNativeCaptureDirectories(stateDir, new Set(), () =>
+            scope.assertAdmission(),
+          ),
+        );
+        return result.warnings;
+      } finally {
+        try {
+          await scope.close();
+        } finally {
+          lease.release();
+        }
+      }
+    };
     try {
-      await sweepPluginSourceCapturesForTest(stateDir);
+      const messages = await collectWarnings();
       expect(closeRefused).toBe(true);
-      expect(warning.mock.calls.length).toBe(1);
-      if (mode === "failed removal") {
+      expect(messages.length).toBe(1);
+      expect(messages[0]?.includes(cleanup.message)).toBe(true);
+      if (mode !== "identity-change return") {
+        expect(messages[0]?.includes(primary.message)).toBe(true);
         const failure = classification.mock.calls.find(
           ([error]) => error instanceof AggregateError && error.cause === primary,
         )?.[0];
@@ -131,9 +160,9 @@ it.each(["failed removal", "identity-change return"] as const)(
       fs.rmSync(extraLink, { force: true });
     }
     fs.utimesSync(root, old, old);
-    await sweepPluginSourceCapturesForTest(stateDir);
+    const after = await collectWarnings();
     expect(fs.existsSync(root)).toBe(false);
-    expect(warning.mock.calls.length).toBe(1);
+    expect(after.length).toBe(mode === "maintenance failed removal" ? 0 : 1);
   },
 );
 
