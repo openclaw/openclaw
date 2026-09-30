@@ -219,7 +219,10 @@ describe("worker turn launcher claim admission", () => {
         owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       });
       placements.markWorkspaceResultPending(priorClaim);
-      placements.recordStagedWorkspaceResult(priorClaim, "refs/openclaw/worker-results/missing");
+      await placements.recordStagedWorkspaceResult(
+        priorClaim,
+        "refs/openclaw/worker-results/missing",
+      );
       placements.clearLocalTurnClaimsAfterRestart();
       const pending = placements.listPendingWorkspaceResults();
       expect(pending).toMatchObject([

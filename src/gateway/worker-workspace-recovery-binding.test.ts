@@ -490,7 +490,7 @@ describe("registered worker workspace recovery target binding", () => {
             throw new Error("Expected staged local recovery");
           }
           await stageResult(request.source.stagedResult.ref, base);
-          request.source.stagedResult.record(request.source.stagedResult.ref);
+          await request.source.stagedResult.record(request.source.stagedResult.ref);
           await applyStagedWorkerWorkspaceResult({
             root: boundary.worktreePath,
             stagedResultRef: request.source.stagedResult.ref,
@@ -645,7 +645,7 @@ describe("registered worker workspace recovery target binding", () => {
             throw new Error("Expected staged local recovery");
           }
           await stageResult(request.source.stagedResult.ref, base);
-          request.source.stagedResult.record(request.source.stagedResult.ref);
+          await request.source.stagedResult.record(request.source.stagedResult.ref);
           await applyStagedWorkerWorkspaceResult({
             root: boundary.worktreePath,
             stagedResultRef: request.source.stagedResult.ref,

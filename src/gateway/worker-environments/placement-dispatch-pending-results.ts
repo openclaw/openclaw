@@ -252,11 +252,13 @@ export async function recoverPendingWorkspaceResults(
               }))
             ) {
               recovery.assertCurrent();
-              placements.recordStagedWorkspaceResult(
+              await placements.recordStagedWorkspaceResult(
                 turnClaim,
                 canonicalStagedResultRef,
                 workspace.kind === "repository" ? workspace.repository.workspaceId : undefined,
+                recovery.assertCurrent,
               );
+              recovery.assertCurrent();
               stagedResultRef = canonicalStagedResultRef;
               stagedResultOwners.add(pending.sessionId);
             }
@@ -562,12 +564,13 @@ export async function recoverPendingWorkspaceResults(
                       ref: canonicalStagedResultRef,
                       record: (ref) => {
                         recovery.assertCurrent();
-                        placements.recordStagedWorkspaceResult(
+                        return placements.recordStagedWorkspaceResult(
                           turnClaim,
                           ref,
                           workspace.kind === "repository"
                             ? workspace.repository.workspaceId
                             : undefined,
+                          recovery.assertCurrent,
                         );
                       },
                     },
