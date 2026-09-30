@@ -1,22 +1,35 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
+import { createModelCatalogWait } from "../model-catalog-wait.js";
 import { prepareSessionsPatchEntry, projectSessionsPatchEntry } from "../sessions-patch.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 export type SessionPatchCatalogResult = Result<ModelCatalogSnapshot, unknown>;
 
+/** One patch request's catalog loads, bounded by one shared wait budget. */
 export function createSessionPatchCatalogPreparation(
-  loadCatalog: (agentId: string) => Promise<ModelCatalogSnapshot>,
-  diagnostics?: SessionPatchDiagnostics,
+  request: {
+    client: GatewayClient | null;
+    context: Pick<GatewayRequestContext, "loadGatewayModelCatalogSnapshot">;
+    diagnostics?: SessionPatchDiagnostics;
+  },
+  assertCurrent: () => void,
 ) {
+  const waitForModelCatalog = createModelCatalogWait({
+    connectionSignal: request.client?.connectionSignal,
+    assertCurrent,
+  });
   const preparations = new Map<string, Promise<SessionPatchCatalogResult>>();
   const prepare = (agentId: string) => {
     let promise = preparations.get(agentId);
     if (!promise) {
       promise = (async () => {
-        const timing = diagnostics?.scope("catalog");
+        const timing = request.diagnostics?.scope("catalog");
         try {
-          const catalog = await loadCatalog(agentId);
+          const catalog = await waitForModelCatalog(
+            request.context.loadGatewayModelCatalogSnapshot({ agentId }),
+          );
           return ok(catalog);
         } catch (error) {
           return err(error);

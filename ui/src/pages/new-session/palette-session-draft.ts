@@ -408,9 +408,14 @@ export class PaletteSessionDraft implements ReactiveController {
   }
 
   renderRecovery() {
-    return this.rejectedOpen
-      ? html`<button class="btn btn--sm" type="button" @click=${this.rejectedOpen}>
-          ${t("sessionsView.openSession")}
+    if (this.rejectedOpen) {
+      return html`<button class="btn btn--sm" type="button" @click=${this.rejectedOpen}>
+        ${t("sessionsView.openSession")}
+      </button>`;
+    }
+    return this.draft?.submission.errorActions.includes("retry")
+      ? html`<button class="btn btn--sm" type="button" @click=${() => void this.submit()}>
+          ${t("common.retry")}
         </button>`
       : nothing;
   }

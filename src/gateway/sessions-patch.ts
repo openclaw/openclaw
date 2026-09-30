@@ -84,6 +84,7 @@ import {
 } from "../sessions/session-agent-status.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
+import { modelCatalogLoadingError } from "./model-catalog-wait.js";
 import {
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
@@ -539,13 +540,7 @@ function* projectSessionPatchSteps(
       }
       const catalog = yield* loadPreparedModelCatalogForPatch();
       if (!catalog) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "model catalog is still loading; retry in a few seconds",
-          ),
-        };
+        return { ok: false, error: modelCatalogLoadingError() };
       }
       const resolved = resolveSessionPatchModelSelection({
         cfg,

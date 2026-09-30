@@ -155,7 +155,7 @@ describe("command palette paste-only images", () => {
           }),
         ],
       }),
-      { reconciliation: "background" },
+      { reconciliation: "background", rethrow: true },
     );
     expect(context.navigateAndWait).not.toHaveBeenCalled();
     expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
@@ -336,7 +336,7 @@ describe("command palette paste-only images", () => {
                 }),
               ],
             }),
-            { reconciliation: "background" },
+            { reconciliation: "background", rethrow: true },
           ),
         );
       } else {

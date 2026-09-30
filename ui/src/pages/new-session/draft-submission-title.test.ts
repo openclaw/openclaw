@@ -119,7 +119,7 @@ describe("prepared title creation handoff", () => {
           expect.objectContaining({
             model: `test/primary@${accounts[1].authProfileId}`,
           }),
-          { reconciliation: "background" },
+          { reconciliation: "background", rethrow: true },
         );
         const createParams = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
         if (handoff === "ready") {
@@ -212,7 +212,7 @@ describe("prepared title creation handoff", () => {
     await flow.submit();
     expect(context.sessions.createResult).toHaveBeenCalledWith(
       expect.objectContaining({ displayName: "Repair naming", worktreeName: "my-explicit-branch" }),
-      { reconciliation: "background" },
+      { reconciliation: "background", rethrow: true },
     );
   });
 

@@ -52,8 +52,10 @@ async function createPersonalAccountSessionFixture() {
       assertCurrent() {},
     }).authProfileId;
   const authProfileId = connectAccount("first-account@example.test");
+  const connection = new AbortController();
   const client: GatewayClient & { connId: string } = {
     connId: "personal-session-connection",
+    connectionSignal: connection.signal,
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -83,12 +85,28 @@ async function createPersonalAccountSessionFixture() {
       entries: catalog,
       routeVariants: catalog,
     })),
+    // Session-row hydration reads the published catalog without waiting for publication.
+    readPreparedGatewayModelCatalog: async () => ({ entries: catalog, routeVariants: catalog }),
     getClientConnIds: (filter?: (current: GatewayClient) => boolean) =>
       new Set(
         [...clients].filter((current) => !filter || filter(current)).map(({ connId }) => connId),
       ),
   };
-  return { storePath, owner, authProfileId, connectAccount, client, clients, catalog, context };
+  const disconnect = () => {
+    connection.abort();
+    clients.delete(client);
+  };
+  return {
+    storePath,
+    owner,
+    authProfileId,
+    connectAccount,
+    client,
+    clients,
+    disconnect,
+    catalog,
+    context,
+  };
 }
 
 test("session creation provenance cannot authorize a fresh personal account", async () => {
@@ -582,7 +600,7 @@ test.each([
   "sessions.create rejects a personal $selection when $loss while the model catalog is loading",
   async ({ loss, selection }) => {
     await withSessionTestState({ layout: "state-only" }, async () => {
-      const { storePath, authProfileId, client, clients, catalog, context } =
+      const { storePath, authProfileId, client, disconnect, catalog, context } =
         await createPersonalAccountSessionFixture();
       const writer: GatewayOperatorRoleDefinition = {
         agents: "*",
@@ -618,7 +636,19 @@ test.each([
         ]);
         expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
         if (loss === "disconnected") {
-          clients.delete(client);
+          disconnect();
+          let stillWaiting: NodeJS.Timeout | undefined;
+          const settledWhileCatalogHeld = await Promise.race([
+            creating,
+            new Promise((resolve) => {
+              stillWaiting = setTimeout(() => resolve("still waiting on the model catalog"), 5_000);
+            }),
+          ]);
+          clearTimeout(stillWaiting);
+          expect(settledWhileCatalogHeld).toMatchObject({
+            ok: false,
+            error: { code: "FORBIDDEN" },
+          });
         } else {
           writer.scopes = ["operator.read"];
         }
@@ -632,6 +662,166 @@ test.each([
     });
   },
 );
+
+test("sessions.create stops waiting for an unpublished model catalog after 30 seconds", async () => {
+  await withSessionTestState({ layout: "state-only" }, async () => {
+    const { storePath, client, context } = await createPersonalAccountSessionFixture();
+    const catalogStarted = createDeferredCore();
+    context.loadGatewayModelCatalogSnapshot.mockImplementationOnce(async () => {
+      catalogStarted.resolve();
+      return await new Promise<never>(() => {});
+    });
+    const key = "agent:main:dashboard:catalog-deadline";
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const creating = directSessionReq(
+        "sessions.create",
+        { key, model: "openai/gpt-5.6-sol" },
+        { client, context },
+      );
+      let settled = false;
+      void creating.finally(() => {
+        settled = true;
+      });
+      await catalogStarted.promise;
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(settled).toBe(true));
+
+      await expect(creating).resolves.toEqual({
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Models are still loading; retry in a moment.",
+          retryable: true,
+          details: { code: "MODEL_CATALOG_LOADING" },
+        },
+      });
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+test("sessions.create shares one 30 second catalog budget across its catalog waits", async () => {
+  await withSessionTestState({ layout: "state-only" }, async () => {
+    const { storePath, client, catalog, context } = await createPersonalAccountSessionFixture();
+    const key = "agent:main:dashboard:catalog-budget";
+    // A write-scoped create on an existing row checks the selection, then projects it.
+    await writeSessionStore({
+      entries: {
+        [key]: sessionStoreEntry("catalog-budget", {
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-sol",
+          modelOverrideSource: "user",
+        }),
+      },
+    });
+    const before = loadSessionEntry({ sessionKey: key, storePath });
+    const firstCatalogStarted = createDeferredCore();
+    const secondCatalogStarted = createDeferredCore();
+    context.loadGatewayModelCatalogSnapshot
+      .mockImplementationOnce(async () => {
+        firstCatalogStarted.resolve();
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20_000);
+        });
+        return { entries: catalog, routeVariants: catalog };
+      })
+      .mockImplementationOnce(async () => {
+        secondCatalogStarted.resolve();
+        return await new Promise<never>(() => {});
+      });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const creating = directSessionReq(
+        "sessions.create",
+        { key, model: "openai/gpt-5.6-sol" },
+        { client, context },
+      );
+      let settled = false;
+      void creating.finally(() => {
+        settled = true;
+      });
+      await firstCatalogStarted.promise;
+      await vi.advanceTimersByTimeAsync(20_000);
+      await secondCatalogStarted.promise;
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(settled).toBe(true));
+
+      await expect(creating).resolves.toEqual({
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Models are still loading; retry in a moment.",
+          retryable: true,
+          details: { code: "MODEL_CATALOG_LOADING" },
+        },
+      });
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toEqual(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+test("sessions.create waits for the model catalog before preparing a worktree", async () => {
+  await withSessionTestState({ layout: "state-only" }, async (state) => {
+    const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
+    testState.agentConfig = { workspace };
+    const { storePath, client, context } = await createPersonalAccountSessionFixture();
+    client.connect.scopes = ["operator.admin"];
+    const catalogStarted = createDeferredCore();
+    context.loadGatewayModelCatalogSnapshot.mockImplementationOnce(async () => {
+      catalogStarted.resolve();
+      return await new Promise<never>(() => {});
+    });
+    const createWorktree = vi.spyOn(managedWorktrees, "createWithOutcome");
+    const key = "agent:main:dashboard:catalog-before-worktree";
+    const params = { key, model: "openai/gpt-5.6-sol", worktree: true };
+    try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      try {
+        const timedOut = directSessionReq("sessions.create", params, { client, context });
+        await catalogStarted.promise;
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(timedOut).resolves.toEqual({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: "Models are still loading; retry in a moment.",
+            retryable: true,
+            details: { code: "MODEL_CATALOG_LOADING" },
+          },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(createWorktree).toHaveBeenCalledTimes(0);
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+
+      const retried = await directSessionReq("sessions.create", params, { client, context });
+
+      expect(retried.ok, JSON.stringify(retried.error)).toBe(true);
+      expect(createWorktree).toHaveBeenCalledTimes(1);
+    } finally {
+      const worktree = managedWorktrees.findLiveByOwner("session", key);
+      if (worktree) {
+        await managedWorktrees.remove({
+          id: worktree.id,
+          reason: "test-cleanup",
+          allowSnapshotLoss: true,
+        });
+      }
+      createWorktree.mockRestore();
+      testState.agentConfig = undefined;
+    }
+  });
+});
 
 test("sessions.create names an adopted worktree with its committed account before selecting a new personal account", async () => {
   await withSessionTestState({ layout: "state-only" }, async (state) => {

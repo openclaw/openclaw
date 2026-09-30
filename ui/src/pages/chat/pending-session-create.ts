@@ -89,12 +89,14 @@ class PendingSessionCreate extends OpenClawLightDomElement {
             ? (startup.error ??
               t(checking ? "chat.queue.checkDeliveryHelp" : "newSession.createFailed"))
             : null,
-          errorAction: errorAction
-            ? {
-                ...errorAction,
-                disabled: snapshot.phase !== "connected" || !snapshot.client?.recoveryScopeReady,
-              }
-            : undefined,
+          errorActions: errorAction
+            ? [
+                {
+                  ...errorAction,
+                  disabled: snapshot.phase !== "connected" || !snapshot.client?.recoveryScopeReady,
+                },
+              ]
+            : [],
           pendingMessage,
           userId: identity?.type === "profile" ? identity.id : null,
           submitting,

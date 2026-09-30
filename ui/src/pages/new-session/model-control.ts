@@ -410,6 +410,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     return this.restoringPreference;
   }
 
+  catalogReadFailed(): boolean {
+    return this.metadataState.status === "error";
+  }
+
   requiresModelSetup(
     state: Omit<
       Parameters<typeof requiresChatModelSetup>[0],

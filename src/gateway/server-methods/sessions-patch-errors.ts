@@ -7,12 +7,16 @@ import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/li
 import { formatErrorMessage } from "../../infra/errors.js";
 import { SessionWorktreeLifecycleError } from "../../sessions/session-worktree-lifecycle.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelCatalogLoadingError, modelCatalogLoadingError } from "../model-catalog-wait.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { sessionLog } from "./sessions-shared.js";
 
 export function unexpectedPatchError(key: string, error: unknown): ErrorShape {
   if (error instanceof ModelAccountConnectAuthorityError) {
     return errorShape(ErrorCodes.FORBIDDEN, error.message);
+  }
+  if (error instanceof ModelCatalogLoadingError) {
+    return modelCatalogLoadingError();
   }
   if (error instanceof SessionMutationAuthorizationChangedError) {
     return error.error;

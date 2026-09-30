@@ -60,7 +60,7 @@ describe("submitted custom worktree names", () => {
           worktreeName: "first-task",
           worktreeBaseRef: "main",
         }),
-        { reconciliation: "background" },
+        { reconciliation: "background", rethrow: true },
       );
       expect(place.worktreeName).toBe("");
       expect(place.worktree).toBe(true);
@@ -263,6 +263,7 @@ it("retires the frozen name after a creating placement is restored into a fresh 
   await retry.flow.submit(undefined, true);
   expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
     reconciliation: "background",
+    rethrow: true,
   });
   expect(start).toHaveBeenCalledOnce();
   expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();

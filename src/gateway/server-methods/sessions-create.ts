@@ -23,6 +23,11 @@ import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js"
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import {
+  createModelCatalogWait,
+  ModelCatalogLoadingError,
+  modelCatalogLoadingError,
+} from "../model-catalog-wait.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
@@ -153,6 +158,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       personalModelSelection?.assertCurrent();
       personalAccountDefaults?.assertCurrent();
     };
+    const waitForModelCatalog = createModelCatalogWait({
+      signal,
+      connectionSignal: client?.connectionSignal,
+      assertCurrent: commitGuard,
+    });
     await using operatorCapture = {
       preparation: captureGatewayOperatorRunAuthority({
         client,
@@ -559,7 +569,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: !repository,
       loadGatewayModelCatalogSnapshot: () =>
-        context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+        waitForModelCatalog(context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId })),
       commitGuard,
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
@@ -618,6 +628,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const created = await createGatewaySession(createParams).catch((error: unknown) => {
       if (error instanceof ModelAccountConnectAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+        return undefined;
+      }
+      if (error instanceof ModelCatalogLoadingError) {
+        respond(false, undefined, modelCatalogLoadingError());
         return undefined;
       }
       return authority.handleClosedError(error);

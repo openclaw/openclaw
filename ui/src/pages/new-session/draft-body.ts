@@ -35,7 +35,7 @@ registerNewSessionSetupEnglish();
 
 export function renderDraftError(
   message: string,
-  action?: { label: string; onClick: () => void; disabled?: boolean },
+  actions: readonly { label: string; onClick: () => void; disabled?: boolean }[] = [],
 ) {
   return html`
     <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
@@ -44,15 +44,20 @@ export function renderDraftError(
         >${formatUiError(message)}</span
       >
       ${
-        action
-          ? html`<button
-              class="btn btn--sm"
-              type="button"
-              ?disabled=${action.disabled}
-              @click=${action.onClick}
-            >
-              ${action.label}
-            </button>`
+        actions.length
+          ? html`<span class="new-session-page__alert-actions">
+              ${actions.map(
+                (action) =>
+                  html`<button
+                    class="btn btn--sm"
+                    type="button"
+                    ?disabled=${action.disabled}
+                    @click=${action.onClick}
+                  >
+                    ${action.label}
+                  </button>`,
+              )}
+            </span>`
           : nothing
       }
     </div>
@@ -61,7 +66,7 @@ export function renderDraftError(
 
 export function renderNewSessionBody(options: {
   error: string | null;
-  errorAction?: Parameters<typeof renderDraftError>[1];
+  errorActions?: Parameters<typeof renderDraftError>[1];
   pendingMessage: ReturnType<typeof buildLocalUserMessage>;
   userId?: string | null;
   submitting: boolean;
@@ -89,7 +94,7 @@ export function renderNewSessionBody(options: {
       aria-busy=${String(options.submitting)}
       @mousedown=${beginNativeWindowDragFromTopInset}
     >
-      ${options.error ? renderDraftError(options.error, options.errorAction) : nothing}
+      ${options.error ? renderDraftError(options.error, options.errorActions) : nothing}
       ${
         pendingMessage && normalized
           ? renderNewSessionSubmission(

@@ -500,7 +500,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         </div>
       </div>
       ${
-        options.blockedSubmitNotice
+        options.submitNotice
           ? html`<div
               class="new-session-page__blocked-submit agent-chat__composer-status"
               data-tone="info"
@@ -510,7 +510,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 <span class="agent-chat__composer-status-icon" aria-hidden="true"
                   >${icons.info}</span
                 >
-                <span class="agent-chat__composer-status-text">${options.blockedSubmitNotice}</span>
+                <span class="agent-chat__composer-status-text">${options.submitNotice}</span>
               </div>
             </div>`
           : nothing

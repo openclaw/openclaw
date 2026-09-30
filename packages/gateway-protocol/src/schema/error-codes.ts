@@ -32,6 +32,7 @@ export {
   readGitHubPublicationSelectionRejectedError,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
+  isModelCatalogLoadingError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
   buildSkillProposalRevisionChangedErrorDetails,

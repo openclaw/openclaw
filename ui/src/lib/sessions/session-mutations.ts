@@ -90,7 +90,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
 
   const createResult = async (
     params: SessionCreateParams = {},
-    options: { reconciliation?: SessionCreateReconciliation } = {},
+    options: { reconciliation?: SessionCreateReconciliation; rethrow?: boolean } = {},
   ) => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -132,6 +132,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return result;
     } catch (error) {
       reportError(scope, error);
+      if (options.rethrow) {
+        throw error;
+      }
       return null;
     }
   };

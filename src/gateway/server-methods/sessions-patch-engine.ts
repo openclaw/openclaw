@@ -247,9 +247,12 @@ export async function executeSessionPatchMutations(params: {
       ? await import("./sessions-patch-sandbox.runtime.js")
       : undefined;
 
-  const catalogs = createSessionPatchCatalogPreparation(
-    (agentId) => params.context.loadGatewayModelCatalogSnapshot({ agentId }),
-    params.diagnostics,
+  const catalogs = createSessionPatchCatalogPreparation(params, () =>
+    assertSessionPatchCommitAllowed({
+      personalModelSelection,
+      guards: originalCommitGuards,
+      archiveTransitions: [],
+    }),
   );
 
   if (activePrepared.length > 0) {

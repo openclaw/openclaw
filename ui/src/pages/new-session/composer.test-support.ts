@@ -31,7 +31,7 @@ export function renderComposer(
     canSubmit?: boolean;
     requiresModifier?: boolean;
     submitDisabledReason?: string;
-    blockedSubmitNotice?: string;
+    submitNotice?: string;
     dictationActive?: boolean;
     dictationPreview?: string;
     dictationStatus?: TemplateResult;
@@ -85,7 +85,7 @@ export function renderComposer(
         requiresModifier: overrides.requiresModifier ?? false,
         requestUpdate: renderCurrent,
         submitDisabledReason: overrides.submitDisabledReason,
-        blockedSubmitNotice: overrides.blockedSubmitNotice,
+        submitNotice: overrides.submitNotice,
         dictationActive: overrides.dictationActive,
         dictationPreview: overrides.dictationPreview,
         dictationStatus: overrides.dictationStatus,

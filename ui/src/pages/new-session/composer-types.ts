@@ -31,7 +31,7 @@ export type NewSessionComposerOptions = {
   requestUpdate: () => void;
   refreshCommands?: () => void | Promise<void>;
   submitDisabledReason?: string;
-  blockedSubmitNotice?: string;
+  submitNotice?: string;
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: TemplateResult | typeof nothing;

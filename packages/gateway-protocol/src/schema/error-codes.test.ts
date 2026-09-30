@@ -8,6 +8,7 @@ import {
   GatewayErrorDetailsSchema,
   GitHubPublicationSelectionRejectedErrorDetailsSchema,
   isMcpAppViewExpiredError,
+  isModelCatalogLoadingError,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   OutboundDeliveryQueuedErrorDetailsSchema,
@@ -112,6 +113,18 @@ describe("gateway error details", () => {
     expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
     expect(isMcpAppViewExpiredError({ details })).toBe(true);
     expect(isMcpAppViewExpiredError(new Error("upstream token expired"))).toBe(false);
+  });
+
+  it("identifies a retryable model catalog wait without message parsing", () => {
+    const details = { code: GatewayErrorDetailCodes.MODEL_CATALOG_LOADING };
+    expect(isModelCatalogLoadingError({ code: ErrorCodes.UNAVAILABLE, details })).toBe(true);
+    expect(isModelCatalogLoadingError({ code: ErrorCodes.FORBIDDEN, details })).toBe(false);
+    expect(
+      isModelCatalogLoadingError({
+        code: ErrorCodes.UNAVAILABLE,
+        message: "Models are still loading; retry in a moment.",
+      }),
+    ).toBe(false);
   });
 
   it("validates queued outbound delivery details", () => {

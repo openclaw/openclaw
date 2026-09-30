@@ -277,7 +277,7 @@ export type SessionCapability = {
   capturePermissionObservation: (key: string, agentId?: string | null) => () => boolean;
   createResult: (
     params?: SessionCreateParams,
-    options?: { reconciliation?: SessionCreateReconciliation },
+    options?: { reconciliation?: SessionCreateReconciliation; rethrow?: boolean },
   ) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;

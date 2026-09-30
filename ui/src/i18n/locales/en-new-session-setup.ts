@@ -38,6 +38,9 @@ const enNewSessionSetup = {
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
+    startWithDefaultModel: "Start with default model",
+    modelCatalogWait:
+      "Models aren't ready yet. Starting with your model or thinking choice may wait for them.",
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
     preferenceSaveUnconfirmed:
       "Saving your new-session choices could not be confirmed. Check them before starting a session.",

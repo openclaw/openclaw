@@ -195,6 +195,48 @@ test("catalog reload releases the agent writer while preserving same-session ord
   });
 });
 
+test("a model patch stops waiting for an unpublished catalog after 30 seconds", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:catalog-deadline";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: key },
+      { sessionId: key, updatedAt: 1 },
+    );
+    const entered = createDeferredCore();
+    const respond = vi.fn();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const patch = patchRequest(
+        patchContext(() => {
+          entered.resolve();
+          return new Promise<never>(() => {});
+        }),
+      );
+      void patch({ key, model: "anthropic/claude-sonnet-4-6" }, respond);
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(respond).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(respond).toHaveBeenCalled());
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "UNAVAILABLE",
+          message: "Models are still loading; retry in a moment.",
+          retryable: true,
+          details: { code: "MODEL_CATALOG_LOADING" },
+        },
+      ],
+    ]);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.modelOverride).toBeUndefined();
+  });
+});
+
 test.each(["identity", "label", "alias", "cleared-selection"] as const)(
   "catalog preparation revalidates fresh %s before using the prepared result",
   async (change) => {

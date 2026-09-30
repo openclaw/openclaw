@@ -1273,6 +1273,19 @@ export async function createGatewaySession(
       identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
     });
   }
+  // Selections the mutation resolves against the catalog wait here first, so a
+  // catalog timeout cannot discard worktree or setup preparation. The load inside
+  // the mutation stays the authoritative read.
+  if (
+    params.loadGatewayModelCatalogSnapshot &&
+    (catalogModel ||
+      normalizeOptionalString(params.model) ||
+      normalizeOptionalString(params.thinkingLevel) ||
+      normalizeOptionalString(params.contextWindow) ||
+      params.fork === true)
+  ) {
+    await params.loadGatewayModelCatalogSnapshot();
+  }
   // Generated, keyed, same-store, and cross-agent creations all share the
   // lifecycle owner's canonical identity order and one active mutation fence.
   onPhase?.("lifecycleAdmission");

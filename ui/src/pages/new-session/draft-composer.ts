@@ -39,10 +39,12 @@ export function renderNewSessionDraftErrors(
     ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
     ${
       isCatalogTarget && capabilities.toolOverrides
-        ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
-            label: t("common.reset"),
-            onClick: () => capabilities.setToolOverrides(null),
-          })
+        ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), [
+            {
+              label: t("common.reset"),
+              onClick: () => capabilities.setToolOverrides(null),
+            },
+          ])
         : nothing
     }
     ${
@@ -54,11 +56,13 @@ export function renderNewSessionDraftErrors(
                 : "newSession.placementSetupInterrupted",
             ),
             submission.pendingPlacement.sessionKey
-              ? {
-                  label: t("common.reset"),
-                  onClick: () => submission.clearPendingPlacementRecovery(),
-                }
-              : undefined,
+              ? [
+                  {
+                    label: t("common.reset"),
+                    onClick: () => submission.clearPendingPlacementRecovery(),
+                  },
+                ]
+              : [],
           )
         : nothing
     }

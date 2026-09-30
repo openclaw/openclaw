@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { AgentSelect } from "../../components/agent-select.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
@@ -144,7 +145,7 @@ describe("PaletteSessionDraft", () => {
       await host.draft.submit();
       expect(context.sessions.createResult).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: "other", message: "Create with this explicit agent" }),
-        { reconciliation: "background" },
+        { reconciliation: "background", rethrow: true },
       );
       if (initialRun.status === "rejected") {
         expect(host.started).not.toHaveBeenCalled();
@@ -321,6 +322,41 @@ describe("PaletteSessionDraft", () => {
     Object.assign(context.gateway.snapshot.client!, { recoveryScope: "principal-b" });
     publish();
     expect(host.draft.message).toBe("");
+  });
+
+  it("retries a retryable create failure from the palette with the same draft", async () => {
+    const { host, context } = await mount();
+    // A real click grants user activation, which lets sending offer notifications.
+    Object.assign(context, { webPush: { snapshot: { supported: false } } });
+    vi.mocked(context.sessions.createResult)
+      .mockRejectedValueOnce(
+        new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "Models are still loading; retry in a moment.",
+          retryable: true,
+          details: { code: "MODEL_CATALOG_LOADING" },
+        }),
+      )
+      .mockResolvedValueOnce({
+        key: "agent:main:dashboard:retried",
+        initialRun: { status: "idle" },
+      });
+    host.draft.setMessage("Retry from the palette");
+    await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+    await host.draft.submit();
+    await host.updateComplete;
+    const retry = host.querySelector<HTMLButtonElement>("button.btn--sm");
+    expect({ error: host.draft.error, retry: retry?.textContent?.trim() }).toEqual({
+      error: "Models are still loading; retry in a moment.",
+      retry: "Retry",
+    });
+
+    retry?.click();
+
+    await vi.waitFor(() => expect(host.started).toHaveBeenCalledOnce());
+    expect(
+      vi.mocked(context.sessions.createResult).mock.calls.map(([params]) => params?.message),
+    ).toEqual(["Retry from the palette", "Retry from the palette"]);
   });
 });
 

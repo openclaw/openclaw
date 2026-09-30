@@ -31,6 +31,7 @@ export const GatewayErrorDetailCodes = {
   CRON_JOB_NOT_FOUND: "CRON_JOB_NOT_FOUND",
   MISSING_SCOPE: "MISSING_SCOPE",
   MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
+  MODEL_CATALOG_LOADING: "MODEL_CATALOG_LOADING",
   OUTBOUND_DELIVERY_QUEUED: "OUTBOUND_DELIVERY_QUEUED",
   USER_PREFS_LIMIT_EXCEEDED: "USER_PREFS_LIMIT_EXCEEDED",
   SESSION_COMPANION_BUSY: "SESSION_COMPANION_BUSY",
@@ -232,6 +233,15 @@ export function readMissingScopeErrorDetails(details: unknown): MissingScopeErro
 export function isMcpAppViewExpiredError(error: unknown): boolean {
   const record = asProtocolRecord(error);
   return asProtocolRecord(record?.details)?.code === GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
+}
+
+/** The request timed out waiting for the published model catalog and can be retried. */
+export function isModelCatalogLoadingError(error: unknown): boolean {
+  const record = asProtocolRecord(error);
+  return (
+    record?.code === ErrorCodes.UNAVAILABLE &&
+    asProtocolRecord(record.details)?.code === GatewayErrorDetailCodes.MODEL_CATALOG_LOADING
+  );
 }
 
 /**

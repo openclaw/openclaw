@@ -1195,6 +1195,12 @@ wa-popover.new-session-page__where-popover::part(body) {
   overflow-wrap: anywhere;
 }
 
+.new-session-page__alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .new-session-page__browser-use,
 .new-session-page__browser-register {
   padding: 6px 14px;

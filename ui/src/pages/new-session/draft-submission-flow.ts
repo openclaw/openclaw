@@ -1,4 +1,6 @@
+import { isModelCatalogLoadingError } from "@openclaw/gateway-protocol/gateway-error-details";
 import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
@@ -17,7 +19,11 @@ import { promptNewSessionNotifications } from "./background-session-notice.ts";
 import { NewSessionCapabilityController } from "./capability-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
-import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
+import {
+  withoutModelCatalogSelection,
+  type DraftSessionCreateOverrides,
+  type NewSessionVisibility,
+} from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
@@ -58,6 +64,7 @@ import { submitDraftInTerminal } from "./terminal-start.ts";
 
 registerNewSessionSetupEnglish();
 type SubmittedDraft = ReturnType<NewSessionDraftPersistence["captureSubmission"]>;
+export type DraftErrorAction = "retry" | "default-model" | "cancel";
 
 export class DraftSubmissionFlow {
   private visibilityValue: NewSessionVisibility = "normal";
@@ -86,6 +93,7 @@ export class DraftSubmissionFlow {
   submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
   error: string | null = null;
+  private createFailure: { error: string; recovery: "retry" | "model-catalog" } | null = null;
   private submitRequestToken = 0;
   private readonly sessionStartup: DraftSessionStartup;
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState(() => this.read().context);
@@ -144,6 +152,35 @@ export class DraftSubmissionFlow {
   get submitting(): boolean {
     return this.activeSubmission !== null || this.sessionStartup.active;
   }
+
+  /** Recovery the shown error offers for the draft that is still held. */
+  get errorActions(): readonly DraftErrorAction[] {
+    const failure = this.createFailure;
+    if (!failure || failure.error !== this.error || this.submitting) {
+      return [];
+    }
+    if (failure.recovery === "retry") {
+      return ["retry"];
+    }
+    return this.defaultModelCreateParams()
+      ? ["retry", "default-model", "cancel"]
+      : ["retry", "cancel"];
+  }
+
+  /** Informs, without blocking, that this draft's model choices wait on a catalog that failed to load. */
+  modelCatalogNotice(): string | undefined {
+    return this.place.modelControl.catalogReadFailed() &&
+      this.defaultModelCreateParams() &&
+      this.submitBlock() === undefined
+      ? t("newSession.modelCatalogWait")
+      : undefined;
+  }
+
+  // Placement recovery resends its frozen request, so it cannot drop the selection.
+  private defaultModelCreateParams = () =>
+    this.pendingPlacement.createParams
+      ? undefined
+      : withoutModelCatalogSelection(this.buildDraftSessionCreateParams());
 
   get pendingMessage() {
     return this.activeSubmission?.message ?? this.completedSubmission?.message ?? null;
@@ -375,7 +412,11 @@ export class DraftSubmissionFlow {
     this.applyRecoveryDraft(this.pendingPlacement.restore(gatewayUrl, recoveryScope));
   }
 
-  async submit(startup?: DraftStartupResumption, backgroundRequested = false) {
+  async submit(
+    startup?: DraftStartupResumption,
+    backgroundRequested = false,
+    model: "selected" | "default" = "selected",
+  ) {
     if (!startup && catalog.isTarget(this.read().data)) {
       return this.startInTerminal();
     }
@@ -455,7 +496,7 @@ export class DraftSubmissionFlow {
         }
         this.place.browser.recordRemoteProjectId(remoteProject.cloneUrl, project.id);
       }
-      const createParams =
+      const draftCreateParams =
         startup?.params ??
         this.buildDraftSessionCreateParams({
           message: input.message,
@@ -468,6 +509,10 @@ export class DraftSubmissionFlow {
               : this.visibilityValue,
           attachments: input.draftAttachments,
         });
+      const createParams =
+        model === "default"
+          ? (withoutModelCatalogSelection(draftCreateParams) ?? draftCreateParams)
+          : draftCreateParams;
       const beginInstant = prepareInstantThreadHandoff({
         context,
         params: createParams,
@@ -522,7 +567,7 @@ export class DraftSubmissionFlow {
               placementCreateParams ??
                 startup?.params ??
                 this.sessionStartup.start(createParams, background),
-              { reconciliation: "background" },
+              { reconciliation: "background", rethrow: true },
             );
       instant = beginInstant?.();
       const result = await createRequest;
@@ -618,6 +663,12 @@ export class DraftSubmissionFlow {
       if (requestId === this.submitRequestToken && this.gateway.client === input.client) {
         this.sessionStartup.clear();
         this.error = error instanceof Error ? error.message : String(error);
+        const recovery = isModelCatalogLoadingError(error)
+          ? "model-catalog"
+          : error instanceof GatewayRequestError && error.retryable
+            ? "retry"
+            : null;
+        this.createFailure = recovery && { error: this.error, recovery };
         if (instant) {
           await instant.rollback();
         }

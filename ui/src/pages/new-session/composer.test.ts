@@ -491,7 +491,7 @@ describe("new-session composer keyboard submission", () => {
     const { composer } = renderComposer({
       canSubmit: false,
       submitDisabledReason: "Restoring your last session setup…",
-      blockedSubmitNotice: "Restoring your last session setup…",
+      submitNotice: "Restoring your last session setup…",
       onSubmit,
     });
     const notice = composer.querySelector<HTMLElement>(".new-session-page__blocked-submit");

@@ -89,7 +89,7 @@ describe("DraftSubmissionFlow", () => {
             model: "openai/gpt-5.6-sol",
             agentRuntime: "codex",
           }),
-          { reconciliation: "background" },
+          { reconciliation: "background", rethrow: true },
         );
         if (storage === "available") {
           expect(context.placementStartup.start).toHaveBeenCalledOnce();
@@ -396,7 +396,7 @@ describe("DraftSubmissionFlow", () => {
         message: "@Alex start this in the background",
         mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
       }),
-      { reconciliation: "background" },
+      { reconciliation: "background", rethrow: true },
     );
     expect(context.navigateAndWait).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith(
@@ -722,7 +722,7 @@ describe("DraftSubmissionFlow", () => {
         projectGitUrl: "https://github.com/openclaw/openclaw.git",
         attachments: [expect.objectContaining({ fileName: "note.txt", mimeType: "text/plain" })],
       }),
-      { reconciliation: "background" },
+      { reconciliation: "background", rethrow: true },
     );
     expect(request).not.toHaveBeenCalledWith("projects.add", expect.anything(), expect.anything());
     expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]?.worktree).toBe(
