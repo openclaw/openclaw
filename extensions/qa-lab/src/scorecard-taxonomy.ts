@@ -784,17 +784,6 @@ export function qaMaturityCoverageCategoryKey(surfaceId: string, categoryName: s
   return `${surfaceId}\u0000${categoryName}`;
 }
 
-function expectedMaturityLtsSupported(params: {
-  coverage?: QaMaturityScoreObject;
-  scoreCategory: QaMaturityScoreCategory;
-  taxonomyCategory: QaMaturityTaxonomyCategory;
-}) {
-  return (
-    (params.scoreCategory.quality.score > 80 && (params.coverage?.score ?? -1) > 90) ||
-    params.taxonomyCategory.human_lts_override === true
-  );
-}
-
 function expectedMaturitySurfaceLtsStatus(supportedCategories: number, totalCategories: number) {
   if (supportedCategories === 0) {
     return "none";
@@ -878,11 +867,9 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
         qaMaturityCoverageCategoryKey(surfaceId, categoryName),
       );
       if (coverage || taxonomyCategory.human_lts_override === true) {
-        const expectedSupported = expectedMaturityLtsSupported({
-          coverage,
-          scoreCategory,
-          taxonomyCategory,
-        });
+        const expectedSupported =
+          (scoreCategory.quality.score > 80 && (coverage?.score ?? -1) > 90) ||
+          taxonomyCategory.human_lts_override === true;
         if (lts.supported !== expectedSupported) {
           throw new Error(
             `${scoresPath}.${surfaceId}.${categoryName}.lts.supported must match quality, release evidence coverage, or taxonomy human_lts_override`,

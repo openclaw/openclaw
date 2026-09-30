@@ -728,11 +728,12 @@ if (runCheckPlan && narrowCheckScope.types) {
   const { resolveChangedCiTsgoInputs } = await import(
     fromTarget("./scripts/lib/tsgo-core-test-shards.mts")
   );
+  const compilerPaths = resolveChangedCiTsgoInputs(changedPaths, existsSync);
   typeGraphBoundaryOwner =
     runNodeFull &&
     !releaseFastLane &&
     narrowCheckScope.additionalGroups.includes("boundaries") &&
-    !resolveChangedCiTsgoInputs(changedPaths, existsSync)
+    (!compilerPaths || compilerPaths.every((file) => file.startsWith("extensions/")))
       ? "additional-checks"
       : "check-plan";
 }
@@ -1408,14 +1409,13 @@ const manifest = {
           {
             check_name: "android-test-third-party",
             task: "test-third-party",
-            ...(androidTestTier ? { app_lint: "third-party" } : {}),
           },
           ...(!useCompatibleAndroidCi
             ? [
                 {
                   check_name: "android-test-wear",
                   task: "test-wear",
-                  ...(androidTestTier ? { lint: true } : {}),
+                  ...(androidTestTier ? { lint: true, app_lint: "third-party" } : {}),
                 },
               ]
             : []),

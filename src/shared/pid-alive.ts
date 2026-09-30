@@ -18,7 +18,9 @@ let darwinNative:
 function readDarwinNativeIdentity(pid: number): { parentPid: number; startedAt: number } | null {
   if (
     process.platform !== "darwin" ||
-    (process.arch !== "arm64" && process.arch !== "x64") ||
+    // Koffi calls segfault the x86_64 worker under Rosetta, where release packaging
+    // proves it; Intel keeps the bounded ps path it used before this native query.
+    process.arch !== "arm64" ||
     pid > 0x7fffffff ||
     (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
   ) {
@@ -33,7 +35,7 @@ function readDarwinNativeIdentity(pid: number): { parentPid: number; startedAt: 
       );
       darwinNative = { library, query };
     }
-    // Darwin's public PROC_PIDTBSDINFO ABI is 136 bytes on arm64 and x86_64.
+    // Darwin's public PROC_PIDTBSDINFO ABI is 136 bytes on arm64.
     // Query every foreign PID afresh; only the callable and its library are retained.
     const bytes = Buffer.alloc(136);
     if (darwinNative.query(pid, 3, 0, bytes, bytes.length) !== bytes.length) {

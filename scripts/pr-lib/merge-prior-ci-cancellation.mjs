@@ -135,7 +135,7 @@ export function qualifyPriorCiCancelledRoots(context) {
         check.conclusion === "cancelled" &&
         check.started_at === job.started_at &&
         check.completed_at === job.completed_at,
-      "cancelled root requires a matching live GitHub Actions check-run",
+      "cancelled deadline/failed-step root requires a matching live GitHub Actions check-run",
     );
     const attribution = evidence.failures.find((value) => value.jobId === job.id);
     if (attribution.failedStep !== undefined) {

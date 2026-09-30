@@ -13,6 +13,8 @@ import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   clearMemoryEmbeddingCacheIdentities,
+  countMemoryEmbeddingCache,
+  pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
 import type {
@@ -215,6 +217,22 @@ function createPublicationBackend(
             }
           }
           return undefined;
+        }
+        if (command.type === "cache.prune") {
+          if (countMemoryEmbeddingCache(db) <= command.input.maxEntries) {
+            return { ok: true, value: false };
+          }
+          return transact((hooks) =>
+            runSqliteImmediateTransactionSync(
+              db,
+              () => {
+                hooks.onBegin();
+                pruneMemoryEmbeddingCache(db, command.input.maxEntries);
+                return true;
+              },
+              { withCommit: hooks.withCommit },
+            ),
+          );
         }
         if (command.type === "cache.clear") {
           return transact((hooks) =>

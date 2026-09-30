@@ -45,11 +45,15 @@ import {
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
+type PublicationWorker = {
+  store: OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>;
+  busyTimeoutMs: number;
+};
 
 export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
-  private publicationWorker?: Promise<OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>>;
+  private publicationWorker?: Promise<PublicationWorker>;
   private shadow?: {
     path: string;
     identity: MemoryShadowConnection["fileIdentity"];
@@ -230,9 +234,7 @@ export class MemoryIndexDatabase {
     };
   }
 
-  private getPublicationWorker(): Promise<
-    OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>
-  > {
+  private getPublicationWorker(): Promise<PublicationWorker> {
     this.publicationWorker ??= (async () => {
       const filename = this.shadow?.path ?? this.writeOptions?.path;
       if (!filename || this.readOnly || this.closed) {
@@ -261,11 +263,14 @@ export class MemoryIndexDatabase {
         },
       };
       if (this.writeOptions) {
-        return openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
-          this.writeOptions,
-          this.db,
-          worker,
-        );
+        return {
+          store: await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
+            this.writeOptions,
+            this.db,
+            worker,
+          ),
+          busyTimeoutMs: pragmas.busy_timeout,
+        };
       }
       const store = await openSqliteWorkerStore<MemoryPublicationOperations>({
         ...worker,
@@ -285,9 +290,12 @@ export class MemoryIndexDatabase {
         throw new Error("Memory shadow disappeared before publication Worker open");
       }
       return {
-        run: <T>(operation: (scope: PublicationScope) => Promise<T>, assertCurrent: () => void) =>
-          runSqliteWorkerStoreWrite(store, operation, assertCurrent, [filename]),
-        close: () => store.close(),
+        store: {
+          run: <T>(operation: (scope: PublicationScope) => Promise<T>, assertCurrent: () => void) =>
+            runSqliteWorkerStoreWrite(store, operation, assertCurrent, [filename]),
+          close: () => store.close(),
+        },
+        busyTimeoutMs: pragmas.busy_timeout,
       };
     })().catch((error: unknown) => {
       // Open failure has already drained its native owner, or retained failed
@@ -306,7 +314,7 @@ export class MemoryIndexDatabase {
       assertCurrent();
       try {
         const worker = await this.getPublicationWorker();
-        return await worker.run(operation, assertCurrent);
+        return await worker.store.run(operation, assertCurrent);
       } catch (error) {
         const [cleanup] = await Promise.allSettled([this.closePublicationWorker()]);
         if (cleanup.status === "rejected") {
@@ -326,8 +334,8 @@ export class MemoryIndexDatabase {
     run: () => Promise<MemoryPublicationResult<T>>,
     prepare: () => Promise<boolean> = async () => true,
   ): Promise<T | undefined> {
-    const policy = this.db.prepare("PRAGMA busy_timeout").get();
-    const deadline = performance.now() + Number(policy?.timeout ?? policy?.busy_timeout ?? 5000);
+    const worker = await this.getPublicationWorker();
+    const deadline = performance.now() + worker.busyTimeoutMs;
     while (await prepare()) {
       const result = await run();
       if (result.ok) {
@@ -349,6 +357,19 @@ export class MemoryIndexDatabase {
       await delay(Math.min(25, Math.max(0, deadline - performance.now())));
     }
     return undefined;
+  }
+
+  async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {
+    assertCurrent();
+    // Each failed BEGIN releases admission before retry; successful batches yield at the caller.
+    return (
+      (await this.retryPublication(() =>
+        this.runPublication(
+          (scope) => scope.execute({ type: "cache.prune", input: { maxEntries } }),
+          assertCurrent,
+        ),
+      )) ?? false
+    );
   }
 
   async mutateEmbeddingCache(
@@ -490,7 +511,7 @@ export class MemoryIndexDatabase {
   async closePublicationWorker(): Promise<void> {
     if (this.publicationWorker) {
       const worker = await this.publicationWorker;
-      await worker.close();
+      await worker.store.close();
       this.publicationWorker = undefined;
     }
   }

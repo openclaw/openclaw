@@ -5766,7 +5766,7 @@ jobs:
               ;;
           esac
 
-          # Third-party lint reuses its phone test compilation and build metadata.
+          # The lighter Wear and Kotlin-lint rows keep app lint off the phone-test path.
           case "$APP_LINT" in
             third-party)
               ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintThirdPartyDebug

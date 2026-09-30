@@ -2,10 +2,8 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   buildFileEntry,
-  MEMORY_EMBEDDING_CACHE_TABLE,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { runSqliteImmediateTransaction } from "openclaw/plugin-sdk/sqlite-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import {
@@ -23,9 +21,6 @@ import {
   type MemorySemanticProviderGeneration,
 } from "./manager-sync-ops.js";
 
-const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
-const EMBEDDING_CACHE_PRUNE_BATCH_SIZE = 100;
-
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 
 export type MemoryEmbeddingCacheCandidate = {
@@ -40,26 +35,13 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     if (!this.cache.enabled || !max || max <= 0) {
       return;
     }
-    const count = this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`);
-    const excess = () => Number(count.get()?.c ?? 0) - max;
-    const remove = this.db.prepare(
-      `DELETE FROM ${EMBEDDING_CACHE_TABLE} WHERE rowid IN (
-         SELECT rowid FROM ${EMBEDDING_CACHE_TABLE} ORDER BY updated_at ASC LIMIT ?
-       )`,
-    );
-    while (excess() > 0) {
-      await runSqliteImmediateTransaction(
-        this.db,
-        async () => () => {
-          // Purges can reduce the cache while admission waits; retain the newest cap.
-          const currentExcess = excess();
-          if (currentExcess > 0) {
-            remove.run(Math.min(currentExcess, EMBEDDING_CACHE_PRUNE_BATCH_SIZE));
-          }
-        },
-        undefined,
-        (write) => this.withDatabaseWrite(write),
-      );
+    const database = this.database;
+    const assertCurrent = () => {
+      if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
+        throw new Error("Memory database owner closed or changed before write admission");
+      }
+    };
+    while (await database.pruneEmbeddingCache(max, assertCurrent)) {
       await yieldToEventLoop();
     }
   }

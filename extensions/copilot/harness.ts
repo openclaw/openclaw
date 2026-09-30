@@ -203,11 +203,7 @@ async function lookupStoredBinding(
   try {
     return normalizeAttemptBinding(await store?.lookup(key));
   } catch {
-    try {
-      await store?.delete(key);
-    } catch {
-      // Durable binding cleanup is best-effort; the turn can create a fresh SDK session.
-    }
+    await deleteStoredBinding(store, key);
     return undefined;
   }
 }
@@ -220,11 +216,7 @@ async function registerStoredBinding(
   try {
     await store?.register(key, binding);
   } catch {
-    try {
-      await store?.delete(key);
-    } catch {
-      // A failed invalidation just degrades to in-memory reuse for this process.
-    }
+    await deleteStoredBinding(store, key);
   }
 }
 
@@ -236,7 +228,7 @@ async function deleteStoredBinding(
     await store?.delete(key);
     return true;
   } catch {
-    // Reset must still clear tracked SDK sessions even if plugin state is unhealthy.
+    // Failed durable cleanup must not block fresh sessions or tracked-session reset.
     return false;
   }
 }

@@ -14,6 +14,7 @@ import {
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
+  TSGO_CI_ADDITIONAL_GRAPHS,
   selectTsgoCoreTestShards,
   selectTsgoCoreTestStripe,
   TSGO_CORE_TEST_SHARDS,
@@ -635,6 +636,83 @@ process.exit(result.status??1);
       const initial = await check([leaf], "1/5");
       expect(initial.result.status, initial.result.stderr).toBe(0);
       expect(initial.builds).toEqual([]);
+      const extension = "extensions/example/value.ts";
+      write(extension, "export type ExtensionValue = number;\n");
+      const noncoreConsumer = "test/noncore-consumer.ts";
+      write(
+        noncoreConsumer,
+        "export type { ExtensionValue } from '../extensions/example/value.js';\n",
+      );
+      for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
+        write(
+          graph.config,
+          JSON.stringify({
+            compilerOptions: {
+              noEmit: true,
+              strict: true,
+              types: [],
+              lib: ["es5"],
+              module: "nodenext",
+              target: "es2022",
+            },
+            files: [path.join(root, noncoreConsumer)],
+          }),
+        );
+      }
+      const plannerDriver = write(
+        "scripts/extension-plan-fixture.mts",
+        `import { createChangedCiTypeCheckPlan } from "./run-tsgo-core-test-shards.mts";
+import { checkCoreTsgoGraphBoundary } from "./check-tsgo-core-boundary.mts";
+if (process.argv[2] === "boundary") {
+  await checkCoreTsgoGraphBoundary();
+} else {
+  const plan = await createChangedCiTypeCheckPlan([${JSON.stringify(extension)}], {
+    cwd: process.cwd(), coreBoundaryOwner: "additional-checks",
+  });
+  console.log(JSON.stringify({ mode: plan.mode, names: plan.graphs.map(({ name }) => name) }));
+}
+`,
+      );
+      const inspectExtension = async (mode: "plan" | "boundary") => {
+        write("compiler-events.jsonl", "");
+        return await lifetime.track(
+          runNodeScript(
+            [
+              "--import",
+              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+              plannerDriver,
+              mode,
+            ],
+            env,
+            undefined,
+            { cwd: root, signal, requireProcessTreeExit: true },
+          ),
+        );
+      };
+      const extensionPlan = await inspectExtension("plan");
+      expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
+      expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
+        mode: "changed",
+        names: ["extensions", "extensions-test", "scripts", "test-root"],
+      });
+      const discovery = fs
+        .readFileSync(path.join(root, "compiler-events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      expect(discovery).toHaveLength(4);
+      expect(discovery.every((args) => args.includes("--listFilesOnly"))).toBe(true);
+      // Its parallel owner must still reject a type-only edge into an extension.
+      write(
+        consumer,
+        "export type { ExtensionValue } from '../../../extensions/example/value.js';\n",
+      );
+      const extensionBoundary = await inspectExtension("boundary");
+      expect(extensionBoundary.status).not.toBe(0);
+      expect(extensionBoundary.stderr).toContain(
+        "Core tsgo graphs include bundled extension files",
+      );
+      expect(extensionBoundary.stderr).toContain(extension);
       write(
         consumer,
         "import type {Value} from '../nested/leaf.test.js';\nconst value: Value = 1;\n",

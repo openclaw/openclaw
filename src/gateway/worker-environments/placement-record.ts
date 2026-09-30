@@ -102,21 +102,11 @@ export function placementTurnOwner(placement: {
   };
 }
 
-export type PersistedTurnClaim =
-  | {
-      owner: "local";
-      claimId: string;
-      runId: string;
-      generation: number;
-      ownerEpoch: null;
-    }
-  | {
-      owner: "worker";
-      claimId: string;
-      runId: string;
-      generation: number;
-      ownerEpoch: number;
-    };
+export type PersistedTurnClaim = {
+  claimId: string;
+  runId: string;
+  generation: number;
+} & ({ owner: "local"; ownerEpoch: null } | { owner: "worker"; ownerEpoch: number });
 
 type PersistedLocalTurnClaim = Extract<PersistedTurnClaim, { owner: "local" }>;
 

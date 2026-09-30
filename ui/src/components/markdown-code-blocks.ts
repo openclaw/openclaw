@@ -100,8 +100,7 @@ export function handleMarkdownCodeBlockClick(event: Event): void {
     () => readMarkdownCodeBlockCopyText(button) === code,
     (copied) => {
       if (copied === undefined) {
-        button.classList.remove("copied");
-        button.classList.remove("copy-failed");
+        button.classList.remove("copied", "copy-failed");
         button.setAttribute("aria-label", t("common.copyCode"));
       } else {
         button.classList.toggle("copied", copied);
@@ -117,9 +116,10 @@ function handleCodeBlockDisclosure(target: Element): void {
   if (!wrapper) {
     return;
   }
-  if (target.closest(".code-block-expand")) {
+  const expandButton = target.closest<HTMLButtonElement>(".code-block-expand");
+  if (expandButton) {
     wrapper.classList.add("is-expanded");
-    target.closest<HTMLButtonElement>(".code-block-expand")?.setAttribute("aria-expanded", "true");
+    expandButton.setAttribute("aria-expanded", "true");
   }
   const jsonMode = target.closest<HTMLButtonElement>(".code-block-json-mode");
   if (jsonMode) {

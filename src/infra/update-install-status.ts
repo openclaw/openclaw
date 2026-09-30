@@ -108,6 +108,11 @@ export function withUpdateInstallStatus(
   installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
 ): UpdateScheduleState {
+  if (update.installKind === "host") {
+    // Host ownership is not a package/Git update target in the Gateway protocol.
+    const { install: _install, target: _target, campaign: _campaign, ...rest } = schedule;
+    return { ...rest, autoEnabled: false };
+  }
   const git = includeGitStatus ? resolveGitScheduleStatus(update, installReceipt, root) : undefined;
   return {
     ...schedule,

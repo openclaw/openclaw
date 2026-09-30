@@ -116,7 +116,7 @@ export type AgentEvent = {
   agentId?: string;
 };
 
-export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
+type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {
   thinkingLevel?: string;

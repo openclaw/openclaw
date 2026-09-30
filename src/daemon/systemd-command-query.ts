@@ -160,10 +160,7 @@ export async function createSystemdCommandQuery(
     if (performance.now() >= (legacyOutput ? callDeadline : deadlineAt)) {
       throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
-    if (legacyOutput && result.termination !== "exit") {
-      throw systemdInspectionError(result, unavailable().message, scope);
-    }
-    if (managerUid !== undefined && result.termination !== "exit") {
+    if ((legacyOutput || managerUid !== undefined) && result.termination !== "exit") {
       throw systemdInspectionError(result, unavailable().message, scope);
     }
     if (result.code !== 0) {

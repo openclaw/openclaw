@@ -245,9 +245,11 @@ capacity and writing vectors. Conflicting dimensions invalidate the generation
 before its writer turn releases, even when clearing fails or loses its reply;
 the error still propagates without replay. Bounded staging retains one vector row
 at a time and preserves cache binary values. Source-file inspection remains on the
-host. Cache reads and pruning, the published-generation guard for shadow source
-writes, and cold opening remain separate work. Schemas, cache retention, and stored
-formats are unchanged.
+host. Cache pruning uses that same worker for its live count and oldest-row deletion,
+with a transaction recheck before each batch of at most 100 rows. The host releases
+admission and yields between batches; only definite pre-entry lock failures retry.
+Cache reads, the published-generation guard for shadow source writes, and cold
+opening remain separate work. Schemas, cache retention, and stored formats are unchanged.
 
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
@@ -319,6 +321,13 @@ candidate order and skips every durable pending result or journal. Per-candidate
 environment and move checks remain live, and reclaim rechecks idle policy,
 session work, and the exact placement before draining. Those synchronous guards
 remain separate migration work; suspension policy and teardown are unchanged.
+
+Disk-space monitoring discovers placement identities in the same reader, then
+hydrates their current records through the existing placement projection. Probe
+order remains the database's session-ID order. Live row checks still prune old
+observations and reject samples from an owner replaced during a tunnel probe;
+those synchronous checks remain separate migration work. Disk-pressure thresholds,
+probe limits, and notification behavior are unchanged.
 
 Worker session-tool grants and operation journals use the same shared-state
 writer. The placement authority owner publishes committed tool grants and fences

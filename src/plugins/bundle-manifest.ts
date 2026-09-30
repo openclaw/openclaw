@@ -81,10 +81,7 @@ function hasInlineCapabilityValue(value: unknown): boolean {
 function slugifyPluginId(raw: string | undefined, rootDir: string): string {
   const fallback = path.basename(rootDir);
   const source = normalizeLowercaseStringOrEmpty(raw) || normalizeLowercaseStringOrEmpty(fallback);
-  const slug = source
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const slug = source.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return slug || "bundle-plugin";
 }
 
@@ -95,7 +92,6 @@ function loadBundleManifestFile(params: {
   rejectHardlinks: boolean;
   allowMissing?: boolean;
   strictJson?: boolean;
-  maxBytes?: number;
 }): BundleManifestFileLoadResult {
   const manifestPath = path.join(params.rootDir, params.manifestRelativePath);
   const file = readPluginCacheFile({
@@ -103,7 +99,7 @@ function loadBundleManifestFile(params: {
     rootRealPath: params.rootRealPath,
     relativePath: params.manifestRelativePath,
     rejectHardlinks: params.rejectHardlinks,
-    maxBytes: params.maxBytes ?? MAX_AGENT_BUNDLE_MANIFEST_BYTES,
+    maxBytes: MAX_AGENT_BUNDLE_MANIFEST_BYTES,
   });
   if (!file.ok) {
     return matchRootFileOpenFailure(file.failure, {
@@ -248,7 +244,6 @@ export function loadBundleManifest(params: {
     rejectHardlinks,
     allowMissing: params.bundleFormat === "claude",
     strictJson: params.bundleFormat === "agent",
-    ...(params.bundleFormat === "agent" ? { maxBytes: MAX_AGENT_BUNDLE_MANIFEST_BYTES } : {}),
   });
   if (!loaded.ok) {
     return loaded;
@@ -388,7 +383,6 @@ export function detectBundleManifestFormat(
       manifestRelativePath: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
       rejectHardlinks: false,
       strictJson: true,
-      maxBytes: MAX_AGENT_BUNDLE_MANIFEST_BYTES,
     });
     if (agentManifest.ok && agentManifest.raw.$schema === AGENT_BUNDLE_MANIFEST_SCHEMA) {
       return "agent";

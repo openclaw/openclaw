@@ -169,7 +169,6 @@ extensions/qa-lab/web/src/app.ts
 extensions/signal/src/core.test.ts
 extensions/signal/src/monitor/event-handler.inbound-context.test.ts
 extensions/signal/src/monitor/event-handler.ts
-extensions/slack/src/action-runtime.test.ts
 extensions/slack/src/action-runtime.ts
 extensions/slack/src/approval-native.test.ts
 extensions/slack/src/channel.test.ts
@@ -291,7 +290,6 @@ src/agents/main-session-recovery/main-session-restart-recovery.test.ts
 src/agents/model-auth-availability.ts
 src/agents/model-fallback.test.ts
 src/agents/model-selection-shared.ts
-src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts

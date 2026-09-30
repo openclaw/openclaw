@@ -242,7 +242,7 @@ export async function synthesizeGoogleTtsPcmOnce(params: {
   }
   const { assertOkOrThrowProviderError, postJsonRequest, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
-  const { resolveGoogleGenerativeAiHttpRequestConfig } = await import("./api.js");
+  const { resolveGoogleGenerativeAiHttpRequestConfig } = await import("./http-request.js");
   const { canonicalizeGoogleProviderBase64 } = await import("./base64.js");
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveGoogleGenerativeAiHttpRequestConfig({

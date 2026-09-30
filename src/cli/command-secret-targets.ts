@@ -77,13 +77,6 @@ const STATIC_STATUS_TARGET_IDS = [
   "agents.entries.*.memory.search.remote.apiKey",
 ] as const;
 
-function idsByPrefix(prefixes: readonly string[]): string[] {
-  return listSecretTargetRegistryEntries()
-    .map((entry) => entry.id)
-    .filter((id) => prefixes.some((prefix) => id.startsWith(prefix)))
-    .toSorted();
-}
-
 type CommandSecretTargetScope = {
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
@@ -96,8 +89,10 @@ const cachedCapabilityWebTargetIds: Partial<Record<WebCapability, string[]>> = {
 let cachedChannelSecretTargetIds: string[] | undefined;
 
 function getChannelSecretTargetIds(): string[] {
-  cachedChannelSecretTargetIds ??= idsByPrefix(["channels."]);
-  return cachedChannelSecretTargetIds;
+  return (cachedChannelSecretTargetIds ??= listSecretTargetRegistryEntries()
+    .map((entry) => entry.id)
+    .filter((id) => id.startsWith("channels."))
+    .toSorted());
 }
 
 function pluginWebCredentialConfigPath(entry: {

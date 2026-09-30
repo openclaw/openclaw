@@ -20,17 +20,23 @@ export function bindSqliteWorkerBackend(
         publication: MemoryPublicationConnection;
         maximum: number;
       }
-    | { kind: "cache-clear-result"; publication: MemoryPublicationConnection },
+    | { kind: "cache-clear-result"; publication: MemoryPublicationConnection }
+    | { kind: "cache-prune-result"; publication: MemoryPublicationConnection },
   context: Parameters<typeof bindBackend>[1],
 ) {
-  if (input.kind === "cache-clear-result") {
+  if (input.kind === "cache-clear-result" || input.kind === "cache-prune-result") {
     const backend = bindBackend(input.publication, context);
+    const operation = input.kind === "cache-clear-result" ? "cache.clear" : "cache.prune";
     return {
       ...backend,
       execute(command: Parameters<typeof backend.execute>[0]) {
         const result = backend.execute(command);
-        if (command.type === "cache.clear" && result && result.ok && result.value === true) {
-          throw new Error("injected committed cache clear reply failure");
+        if (command.type === operation && result && result.ok && result.value === true) {
+          throw new Error(
+            input.kind === "cache-clear-result"
+              ? "injected committed cache clear reply failure"
+              : "injected committed cache prune reply failure",
+          );
         }
         return result;
       },
