@@ -596,10 +596,6 @@ describe("streamOpenAICodexResponses transport", () => {
       constructor() {
         throw new Error("websocket connect failed");
       }
-      send(): void {}
-      close(): void {}
-      addEventListener(): void {}
-      removeEventListener(): void {}
     }
     vi.stubGlobal("WebSocket", FailingWebSocket);
 
