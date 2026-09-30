@@ -2417,8 +2417,8 @@ async function pollRelease(state, client, pending, readOptions) {
   const parentJobs = await read("parent jobs", () =>
     client.getParentJobs(parentRunId, readOptions),
   );
-  // A relay snapshot can lag the parent run; completion waits for every dispatch log.
-  let dispatchPending = parentJobs === undefined;
+  // A relay snapshot can lag the parent run; completion waits for settled jobs and every dispatch log.
+  let dispatchPending = !parentJobs?.length || parentJobs.some((job) => job.status !== "completed");
   for (const job of parentJobs ?? []) {
     const failure = failedJobEvent("parent", job, parent.run_attempt);
     if (failure) {

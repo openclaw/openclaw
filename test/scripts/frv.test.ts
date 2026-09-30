@@ -1761,7 +1761,7 @@ describe("FRV watch completion", () => {
       repository: REPOSITORY,
       getRun: async (runId: string) =>
         runId === "77" ? rootRun(1, "failure") : runFor(ci, 1, "failure"),
-      getParentJobs: async () => [
+      getParentJobs: async (): Promise<Record<string, unknown>[]> => [
         { conclusion: null, id: 5, name: "Run normal full CI", run_attempt: 1, status: snapshot },
       ],
       getJobLog: async () =>
@@ -1771,6 +1771,10 @@ describe("FRV watch completion", () => {
       ],
     };
     const poll = () => watchRelease("77", client, { emit: () => undefined, once: true, statePath });
+    const parentJobs = client.getParentJobs;
+    client.getParentJobs = async () => [];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getParentJobs = parentJobs;
 
     await expect(poll()).resolves.toMatchObject({ complete: false });
     snapshot = "completed";
