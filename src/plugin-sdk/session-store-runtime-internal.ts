@@ -2,6 +2,7 @@ import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../agents/main-session-recove
 import type { SessionAccessScope } from "../config/sessions/session-accessor.js";
 import {
   projectPublicSessionEntry,
+  projectPublicSessionEntryPatch,
   SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
 } from "../config/sessions/session-entry-projection.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
@@ -37,6 +38,12 @@ export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionE
       ? { restartRecoveryRuns: entry.restartRecoveryRuns.map((run) => ({ ...run })) }
       : {}),
   };
+}
+
+export function projectPluginSessionEntryPatch(
+  patch: Partial<InternalSessionEntry>,
+): Partial<SessionEntry> {
+  return projectPublicSessionEntryPatch(patch);
 }
 
 export function projectPluginSessionStore(
