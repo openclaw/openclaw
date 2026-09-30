@@ -710,13 +710,11 @@ describe("handleControlUiHttpRequest", () => {
         ["/new/unknown", null],
       ] as const;
       for (const [pathname, route] of cases) {
-        const { handled, res, end, setHeader } = await runControlUiRequest({
-          url: `${mount}${pathname}`,
-          method: "GET",
+        const { handled, res, end, setHeader } = await runControlUiRequest(
           rootPath,
-          rootKind: "bundled",
-          basePath,
-        });
+          `${mount}${pathname}`,
+          { method: "GET", rootKind: "bundled", basePath },
+        );
         expect(handled, pathname).toBe(true);
         expect(res.statusCode, pathname).toBe(200);
         const body = responseBody(end);
