@@ -968,7 +968,7 @@ export const en: TranslationMap & {
     actionRequiresConnection: "Connect to the Gateway to change sessions.",
     actionUnavailable: "This Gateway does not support this session action.",
     actionRequiresScope: "This action requires {scope} access.",
-    actionRequiresOwnership: "Only the session owner can make this change.",
+    actionRequiresOwnership: "Only the session creator or an admin can make this change.",
     deletePreservedReasons: {
       "owner-mismatch": "owned elsewhere",
       busy: "live run or cleanup active",

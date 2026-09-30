@@ -10,6 +10,7 @@ import {
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { notifyListeners } from "../shared/listeners.js";
+import { resolveModelRefOverride } from "../shared/model-ref-override.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -96,21 +97,6 @@ function message(role: "assistant" | "user", text: string): SystemAgentHistoryMe
     role,
     content: [{ type: "text", text }],
     timestamp: Date.now(),
-  };
-}
-
-function splitModelRef(ref: string | undefined): { provider?: string; model?: string } {
-  const trimmed = ref?.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
-    return { model: trimmed };
-  }
-  return {
-    provider: trimmed.slice(0, slash),
-    model: trimmed.slice(slash + 1),
   };
 }
 
@@ -550,7 +536,7 @@ async function requireTuiVerifiedInference(
         agentDir: route.agentDir,
         readOnly: true,
       })?.entries;
-      const model = splitModelRef(route.modelLabel);
+      const model = resolveModelRefOverride(route.modelLabel);
       return {
         model: model.model,
         modelProvider: model.provider,

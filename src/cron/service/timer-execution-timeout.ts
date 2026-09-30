@@ -125,7 +125,7 @@ export type ExecuteJobCoreOptions = {
     | undefined;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates the durable run fence after awaited planning and before effects. */
-  assertRunCurrent?: () => void;
+  assertRunCurrent?: () => Promise<void>;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.
   // The key catches edits; the identity catches disable→re-enable and A→B→A.

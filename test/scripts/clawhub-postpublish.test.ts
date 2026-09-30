@@ -443,7 +443,7 @@ it.each([{ version: "2026.8.2-alpha.1" }, { publishTag: "alpha" }])(
     expect(() =>
       createPreparedClawHubManifest({
         ...f.sealOptions,
-        matrix: f.sealOptions.matrix.map((entry) => ({ ...entry, ...override })),
+        matrix: [{ ...f.sealOptions.matrix[0], ...override }],
       }),
     ).toThrow("Alpha releases are retired;");
   },

@@ -69,7 +69,7 @@ function expectForkedNonIsolatedRunner(
 }
 
 describe("createScopedVitestConfig", () => {
-  it("keeps broad package scoped cli directory filters aligned with repo-root include patterns", () => {
+  it("narrows package CLI directories within their owner", () => {
     const config = createScopedVitestConfig(["packages/**/*.test.ts"], {
       argv: ["vitest", "run", "packages/normalization-core"],
       dir: "packages",
@@ -77,7 +77,7 @@ describe("createScopedVitestConfig", () => {
       passWithNoTests: true,
     });
 
-    expect(requireTestConfig(config).include).toEqual(["**/*.test.ts"]);
+    expect(requireTestConfig(config).include).toEqual(["normalization-core/**/*.test.ts"]);
   });
 
   it("relativizes scoped include and exclude patterns to the configured dir", () => {

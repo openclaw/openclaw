@@ -9,7 +9,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
@@ -21,7 +20,7 @@ import type { SessionWorkerPlacementContext } from "../worker-environments/sessi
 import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-export const sessionLog = createSubsystemLogger("gateway/sessions");
+export { sessionLog } from "../session-log.js";
 
 export function resolveSessionWorkerPlacementPatchError(params: {
   agentId: string;

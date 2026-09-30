@@ -179,6 +179,9 @@ vi.mock("../infra/update-managed-service-handoff.js", async (importOriginal) => 
   startManagedServiceUpdateHandoff: managedUpdateHandoff.start,
   transferManagedServiceUpdateHandoff: managedUpdateHandoff.transfer,
   cancelManagedServiceUpdateHandoff: managedUpdateHandoff.cancel,
+}));
+vi.mock("../infra/update-managed-service-handoff-current.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-managed-service-handoff-current.js")>()),
   isCurrentManagedServiceUpdateHandoffProcess: async () => false,
 }));
 vi.mock("../infra/update-repair-agent.js", () => ({

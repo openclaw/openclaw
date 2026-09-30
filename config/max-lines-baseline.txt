@@ -88,7 +88,6 @@ extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
 extensions/google/transport-stream.test.ts
 extensions/google/transport-stream.ts
-extensions/imessage/src/actions.test.ts
 extensions/imessage/src/actions.ts
 extensions/imessage/src/monitor.last-route.test.ts
 extensions/imessage/src/monitor/inbound-processing.ts
@@ -355,7 +354,6 @@ src/auto-reply/reply/queue.collect.test.ts
 src/auto-reply/reply/queue/drain.ts
 src/auto-reply/reply/reply-run-registry.test.ts
 src/auto-reply/reply/reply-turn-admission.test.ts
-src/auto-reply/reply/reply-utils.test.ts
 src/auto-reply/reply/session.test.ts
 src/auto-reply/reply/session.ts
 src/auto-reply/status.test.ts
@@ -430,7 +428,6 @@ src/config/io.write-config.test.ts
 src/config/io.write-prepare.ts
 src/config/mutate.test.ts
 src/config/mutate.ts
-src/config/redact-snapshot.test.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
 src/config/sessions/session-accessor.conformance.test.ts
@@ -572,7 +569,6 @@ src/media-understanding/apply.test.ts
 src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
 src/media/fetch.test.ts
-src/media/web-media.test.ts
 src/media/web-media.ts
 src/node-host/invoke-system-run-plan.test.ts
 src/node-host/invoke-system-run.test.ts
@@ -614,7 +610,6 @@ src/plugins/official-external-plugin-catalog.test.ts
 src/plugins/plugin-registry-snapshot.test.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts
-src/plugins/providers.test.ts
 src/plugins/providers.ts
 src/plugins/schema-validator.test.ts
 src/plugins/sdk-alias.test.ts

@@ -302,9 +302,9 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     }
     this.toolRegistry = toolRegistry;
 
-    const nextActiveToolNames = (
-      options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]
-    ).filter((name) => isAllowedTool(name));
+    const nextActiveToolNames = (options?.activeToolNames ?? previousActiveToolNames).filter(
+      (name) => isAllowedTool(name),
+    );
 
     if (allowedToolNames) {
       for (const toolName of this.toolRegistry.keys()) {

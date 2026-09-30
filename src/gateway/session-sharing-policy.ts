@@ -430,7 +430,7 @@ export function authorizeSessionAgentRun(
 }
 
 export function authorizeSessionSharingTarget(
-  params: SessionSharingRoleParams,
+  params: SessionSharingRoleParams & { requireOwner?: boolean },
   prepared?: { value: ReturnType<typeof operatorSessionCap>; role: SessionSharingRole },
 ): ErrorShape | null {
   const visibility = resolveSessionVisibility(params.target.entry);
@@ -440,6 +440,12 @@ export function authorizeSessionSharingTarget(
   const role = prepared?.role ?? resolveSessionSharingRole(params, { value: sessionCap });
   if (sessionCap === "none" && role !== "owner" && role !== "admin") {
     return hiddenSessionNotFound(params.target.canonicalKey);
+  }
+  if (params.requireOwner && !canManageSessionSharing(role)) {
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      "Only the session creator or an admin can archive or restore this session.",
+    );
   }
   const capped = sessionCap === "view" || sessionCap === "suggest";
   // Draft membership is inactive, while an explicit role caps even shared visibility.
