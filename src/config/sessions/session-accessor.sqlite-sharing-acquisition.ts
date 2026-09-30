@@ -1,7 +1,8 @@
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
-import type {
-  SessionEntryPlaceholder,
-  SessionSharingEntry,
+import {
+  sessionSharingEntriesEqual,
+  type SessionEntryPlaceholder,
+  type SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 
 export type CommittedSessionSharingFacts = {
@@ -26,6 +27,39 @@ export type PreparedSessionSharingRead = {
     current: Pick<SessionSharingEntry, "sessionId" | "lifecycleRevision"> | null | undefined;
   };
 };
+
+export type PendingSessionEntryPublication = {
+  superseded: Map<string, Pick<SessionSharingEntry, "sessionId" | "lifecycleRevision"> | undefined>;
+  membershipInvalidated: Set<string>;
+  unchangedSharing: ReadonlyMap<string, SessionSharingEntry>;
+  settled: boolean;
+};
+
+/** A retained snapshot may cross a grant only when that exact policy cannot change. */
+export function isSessionSharingReadPending(
+  read: PreparedSessionSharingRead,
+  sessionKey: string,
+  membership: boolean,
+  publications: Iterable<PendingSessionEntryPublication> | undefined,
+): boolean {
+  return (
+    read.pending.size > 0 ||
+    [...(publications ?? [])].some((publication) => {
+      const unchanged = publication.unchangedSharing.get(sessionKey);
+      return (
+        !publication.settled &&
+        !(
+          unchanged &&
+          read.facts?.entry &&
+          !publication.membershipInvalidated.has(sessionKey) &&
+          sessionSharingEntriesEqual(read.facts.entry, unchanged)
+        ) &&
+        (!publication.superseded.has(sessionKey) ||
+          (membership && publication.membershipInvalidated.has(sessionKey)))
+      );
+    })
+  );
+}
 
 export type SessionSharingRetentionRequest = {
   databaseIdentity: string;

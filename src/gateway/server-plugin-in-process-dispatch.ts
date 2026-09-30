@@ -140,6 +140,11 @@ export async function withInProcessGatewayDispatch<T>(
       resolved.client = mergePluginRuntimeClientInternal(resolved.client, {
         operatorRunAuthority: captured.authority,
       });
+      const assertSourceCurrent = resolved.assertSourceCurrent;
+      resolved.assertSourceCurrent = () => {
+        assertSourceCurrent();
+        captured.authority.assertCurrent();
+      };
       const assertContextCurrent = resolved.assertContextCurrent;
       resolved.assertContextCurrent = () => {
         assertContextCurrent();
@@ -278,7 +283,10 @@ export async function dispatchGatewayMethodInProcess<T>(
       // Plugins may load through another source/bundle graph. Only the captured host can
       // create turns against its published runtime; a local import creates a second owner.
       const facade = await createAgentTurnFacade({
-        assertContextCurrent: resolved.assertContextCurrent,
+        // Admission below still checks the selecting turn. Accepted executions
+        // outlive that turn while retaining its operator source and Gateway owner.
+        assertContextCurrent:
+          method === "agent" ? resolved.assertSourceCurrent : resolved.assertContextCurrent,
         client: resolved.client,
         isWebchatConnect: resolved.isWebchatConnect,
       });

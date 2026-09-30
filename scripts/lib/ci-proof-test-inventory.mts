@@ -64,6 +64,7 @@ export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/gateway/server.cron.test.ts",
   "src/gateway/server.labs-hot-reload.test.ts",
   "src/gateway/server.message-buffer-caption.test.ts",
+  "src/gateway/server.sessions-yield-publication.test.ts",
   "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
   "src/gateway/server.sessions.create.projects.test.ts",
   "src/gateway/server.sessions.delete-worktree-lifecycle.test.ts",

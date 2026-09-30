@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  withGatewayPersonalToolUser,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { createGitHubIdentityStatusTool } from "../agents/tools/github-identity-status-tool.js";
 import {
   callAgentToolGatewayRequest,
   runWithGatewayToolContinuationContext,
 } from "../agents/tools/in-process-gateway.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
+import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -21,6 +25,7 @@ import * as operatorCapture from "./operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   captureOperatorToolGatewayContinuationContext,
+  dispatchGatewayMethodInProcess,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import {
@@ -43,6 +48,111 @@ describe("typed in-process agent continuation authorization", () => {
     startTurn.mockReset();
     waitForTurn.mockReset();
   });
+
+  it.each(["turn ended", "source revoked", "Gateway replaced", "before acceptance"] as const)(
+    "keeps an accepted agent on its original source, not its selecting turn (%s)",
+    async (boundary) => {
+      const client = createOperatorClient({
+        profileName: "accepted-source",
+        scopes: ["operator.write", "operator.approvals"],
+      });
+      const context = createContext();
+      let current = true;
+      const resolveGatewayContext = () => (current ? context : undefined);
+      context.resolveGatewayContext = resolveGatewayContext;
+      const sourceSignal = new AbortController();
+      const source = await operatorCapture.captureGatewayOperatorRunAuthority({
+        client,
+        context,
+        sourceAuthority: {
+          signal: sourceSignal.signal,
+          assertCurrent: () => sourceSignal.signal.throwIfAborted(),
+        },
+      });
+      if (!source) {
+        throw new Error("Expected original operator source");
+      }
+      const participants = createReplyTurnParticipants({ operatorAuthority: source.authority });
+      const createFacade = context.createAgentTurnFacade!;
+      let assertExecution: (() => void) | undefined;
+      let releaseExecution: (() => void) | undefined;
+      context.createAgentTurnFacade = (principal) => {
+        assertExecution = principal.assertContextCurrent;
+        const authority = principal.client.internal?.operatorRunAuthority;
+        expect(authority?.profileId).toBe(source.authority.profileId);
+        expect(authority?.scopes).toEqual(["operator.write"]);
+        // Model the accepting execution's own hold, independently of the tool call.
+        releaseExecution = authority?.retain?.();
+        if (boundary === "before acceptance") {
+          participants.close();
+        }
+        return createFacade(principal);
+      };
+      const accepted = { status: "accepted", runId: "accepted-source-run" };
+      startTurn.mockImplementation(async ({ io }) => {
+        io.emitAcceptance([true, accepted, undefined]);
+      });
+      try {
+        const pending = withPluginRuntimeGatewayRequestScope(
+          {
+            client: { ...client, connect: { ...client.connect, scopes: ["operator.write"] } },
+            context,
+            resolveGatewayContext,
+            isWebchatConnect: () => false,
+          },
+          () =>
+            withGatewayToolCallerIdentity(
+              {
+                agentId: "main",
+                sessionKey: "agent:main:requester",
+                operatorAuthority: source.authority,
+                personalToolParticipants: participants,
+                operationalRunInstance: createOperationalRunInstanceRef("selecting-turn"),
+                receiptAuthority: () => true,
+              },
+              () =>
+                withGatewayPersonalToolUser(source.authority.profileId, () =>
+                  dispatchGatewayMethodInProcess(
+                    "agent",
+                    {
+                      message: "Complete accepted work",
+                      idempotencyKey: accepted.runId,
+                    },
+                    { forceSyntheticClient: true, resolveGatewayContext },
+                  ),
+                ),
+            ),
+        );
+        if (boundary === "before acceptance") {
+          await expect(pending).rejects.toThrow("This turn has ended");
+          expect(startTurn).not.toHaveBeenCalled();
+          return;
+        }
+        await expect(pending).resolves.toEqual(accepted);
+        participants.close();
+        if (!assertExecution) {
+          throw new Error("Expected the accepted execution's context assertion");
+        }
+        if (boundary === "source revoked") {
+          sourceSignal.abort(new Error("original source revoked"));
+          expect(assertExecution).toThrow("original source revoked");
+        } else if (boundary === "Gateway replaced") {
+          current = false;
+          expect(assertExecution).toThrow();
+        } else {
+          expect(assertExecution).not.toThrow();
+          releaseExecution?.();
+          releaseExecution = undefined;
+          source.release();
+          expect(assertExecution).toThrow();
+        }
+      } finally {
+        participants.close();
+        releaseExecution?.();
+        source.release();
+      }
+    },
+  );
 
   it.each(["invocation", "receipt"] as const)(
     "rejects continuation transfer when its %s closes during preparation",

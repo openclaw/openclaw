@@ -409,6 +409,16 @@ identity-keyed sharing caches, bounded reuse, ordering, and byte-stable codecs.
 Reuse published facts through the request rather than reopening SQLite for each
 viewer or row. Do not add an independent freshness clock or cache lifecycle.
 
+Session-entry replacement grants retain existing sharing facts when the native
+transaction proves that its validated preimage and normalized postimage have the
+same session incarnation and sharing policy. Activity timestamps alone do not
+change that policy. This prevents a label or run-metadata update from invalidating
+an admitted followup while the worker result is still in flight. Readers still
+check current membership and their original physical store and lifecycle. Alias
+changes, owner assignment, maintenance, changed policy, and unknown settlement
+keep their existing fences; no mutation or continuation is retried. Schemas,
+permissions, persisted data, and update behavior are unchanged.
+
 A writer publishes projections, revision changes, and observer notifications only
 after the committed result is acknowledged. A delayed reply cannot replace a
 newer native or worker publication. If result delivery is uncertain, retain the

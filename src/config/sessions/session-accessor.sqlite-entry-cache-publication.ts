@@ -30,6 +30,8 @@ import {
   stageIncognitoSharingPublication,
 } from "./session-accessor.sqlite-incognito-sharing.js";
 import {
+  isSessionSharingReadPending,
+  type PendingSessionEntryPublication,
   publishRetainedSessionGeneration,
   reconcileSessionSharingAcquisition,
   updateSessionSharingField,
@@ -90,11 +92,6 @@ const preparedSharingChanges = resolveGlobalSingleton(
   }),
 );
 
-type PendingSessionEntryPublication = {
-  superseded: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined>;
-  membershipInvalidated: Set<string>;
-  settled: boolean;
-};
 const pendingSessionEntryPublications = resolveGlobalSingleton(
   Symbol.for("openclaw.pendingSessionEntryPublications"),
   () => new Map<string, Set<PendingSessionEntryPublication>>(),
@@ -341,12 +338,11 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   preparedSharingReads.set(key, reads);
   let active = true;
   const pending = (membership: boolean) =>
-    read.pending.size > 0 ||
-    [...(pendingSessionEntryPublications.get(key) ?? [])].some(
-      (publication) =>
-        !publication.settled &&
-        (!publication.superseded.has(params.sessionKey) ||
-          (membership && publication.membershipInvalidated.has(params.sessionKey))),
+    isSessionSharingReadPending(
+      read,
+      params.sessionKey,
+      membership,
+      pendingSessionEntryPublications.get(key),
     );
   return {
     initialize: (snapshot: CommittedSessionSharingFacts) => {
@@ -564,18 +560,24 @@ export function retainSessionEntryWorkerPublication(params: {
   const owner: PendingSessionEntryPublication = {
     superseded: new Map(),
     membershipInvalidated: new Set(),
+    unchangedSharing: new Map(),
     settled: false,
   };
   let keys: string[] = [];
   const identityKey = `file:${params.databaseIdentity}`;
   let pending = false;
   return {
-    begin(sessionKeys: readonly string[], membershipInvalidatedKeys: readonly string[]) {
+    begin(
+      sessionKeys: readonly string[],
+      membershipInvalidatedKeys: readonly string[],
+      unchangedSharing: ReadonlyMap<string, SessionSharingEntry> = new Map(),
+    ) {
       if (pending) {
         return;
       }
       keys = [...new Set(sessionKeys)];
       owner.membershipInvalidated = new Set(membershipInvalidatedKeys);
+      owner.unchangedSharing = unchangedSharing;
       pending = true;
       for (const sessionKey of keys) {
         const key = `${identityKey}\0${sessionKey}`;

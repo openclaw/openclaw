@@ -12,6 +12,7 @@ import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announc
 import {
   assertSubagentRegistryWriteOutcomeKnown,
   captureSubagentRunMutationSnapshot,
+  captureSubagentRunPostimagePublication,
   publishSubagentRunPostimages,
   waitForPendingSubagentKillClaim,
 } from "./subagent-registry-persistence.js";
@@ -664,6 +665,16 @@ describe("queued registry worker publication", () => {
     });
     expect(announcement.text).toBe("child result");
     const entries = new Map([[entry.runId, entry]]);
+    const delivery = entry.delivery;
+    const prepareOwner = () =>
+      captureSubagentRunPostimagePublication({
+        runs: entries,
+        previous: new Map([[entry, captureSubagentRunMutationSnapshot(entry)]]),
+        context: original,
+        assertCurrent: () => {},
+        fromWorker: { deliveryReceipt: "retain-unchanged" },
+      });
+    const owner = prepareOwner();
     const preimage = captureSubagentRunMutationSnapshot(entry);
     entry.completion.capturedAt = 2;
     const pending = publishSubagentRunPostimages({
@@ -678,6 +689,13 @@ describe("queued registry worker publication", () => {
       assertCurrent: () => {},
     });
     const currentWhilePending = announcement.isCurrent();
+    const deliveryWhilePending = entry.delivery;
+    let pendingOwnerError: unknown;
+    try {
+      owner.assertCurrent();
+    } catch (error) {
+      pendingOwnerError = error;
+    }
     const capturedAtWhilePending = entry.completion.capturedAt;
     expect(await request("transaction")).toBe(true);
     expect(await request("commit")).toBe(true);
@@ -688,8 +706,42 @@ describe("queued registry worker publication", () => {
     expect(entry.completion.capturedAt).toBe(2);
     expect(currentWhilePending).toBe(true);
     expect(announcement.isCurrent()).toBe(true);
+    expect(deliveryWhilePending).toBe(delivery);
+    expect(pendingOwnerError).toBeUndefined();
+    // The committed field change still invalidates the older whole-row preimage.
+    expect(owner.assertCurrent).toThrow("Subagent publication lost its original preimage");
+    const committedOwner = prepareOwner();
+    expect(committedOwner.assertCurrent).not.toThrow();
+    entry.delivery = { ...expectDefined(entry.delivery, "delivery receipt") };
+    expect(committedOwner.assertCurrent).toThrow("Subagent publication lost its original preimage");
     entry.completion.terminalReply = { disposition: "silent" };
     expect(announcement.isCurrent()).toBe(false);
+  });
+
+  it("keeps a changed delivery private until its native acknowledgement", async () => {
+    const entry = run();
+    const entries = new Map([[entry.runId, entry]]);
+    const preimage = captureSubagentRunMutationSnapshot(entry);
+    expectDefined(entry.delivery, "original delivery").status = "pending";
+    const pending = publishSubagentRunPostimages({
+      runs: entries,
+      previous: new Map([[entry, preimage]]),
+      context: original,
+      persist: (stateContext, callbacks, ...ids) =>
+        persistSubagentRunsToDiskAsyncOrThrow(entries, ids, {
+          context: stateContext,
+          ...callbacks,
+        }),
+      assertCurrent: () => {},
+    });
+    const whilePending = entry.delivery;
+    expect(await request("transaction")).toBe(true);
+    expect(await request("commit")).toBe(true);
+    reply.resolve({ writeId: command.writeId });
+    await pending;
+    expect(whilePending).toEqual({ status: "not_required" });
+    expect(entry.delivery).toEqual({ status: "pending" });
+    expect(entry.delivery).not.toBe(whilePending);
   });
 
   it("does not publish a known commit into a successor database", async () => {

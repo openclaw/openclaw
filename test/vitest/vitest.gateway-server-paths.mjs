@@ -482,6 +482,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.placement-abandonment.lifecycle.test.ts",
   "src/gateway/server.placement-abandonment.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",
+  "src/gateway/server.sessions-yield-publication.test.ts",
   "src/gateway/server.xai-fallback.test.ts",
 ];
 

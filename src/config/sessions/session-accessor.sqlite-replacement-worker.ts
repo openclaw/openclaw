@@ -25,6 +25,11 @@ import {
   type SessionEntryReplacementPublication,
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
+import {
+  projectSessionSharingEntry,
+  sessionSharingEntriesEqual,
+  type SessionSharingEntry,
+} from "./session-accessor.sqlite-entry-cache.types.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite-replacement-types.js";
@@ -340,8 +345,32 @@ export async function commitSessionEntryReplacementsInWorker(
       ) {
         throw new Error("Session replacement commit omitted its publication keys");
       }
+      // The native transaction has validated expectedRows and projected its actual postimage.
+      // A metadata-only replacement cannot revoke these same policy facts while its reply is
+      // in flight. Keep all incarnation, alias/member, owner-assignment and maintenance fences.
+      const unchangedSharing = new Map<string, SessionSharingEntry>();
+      if (!input.maintenance && facts.publication.current instanceof Map) {
+        for (const [sessionKey, entry] of facts.publication.current) {
+          const previous = input.expectedRows.get(sessionKey)?.entry;
+          if (
+            !previous ||
+            input.ownerAssignment?.sessionKey === sessionKey ||
+            facts.publication.membershipInvalidatedKeys.includes(sessionKey)
+          ) {
+            continue;
+          }
+          const sharing = projectSessionSharingEntry(previous);
+          if (sessionSharingEntriesEqual(sharing, entry)) {
+            unchangedSharing.set(sessionKey, sharing);
+          }
+        }
+      }
       admitted = { admission, retained };
-      publication.begin(facts.publication.changedKeys, facts.publication.membershipInvalidatedKeys);
+      publication.begin(
+        facts.publication.changedKeys,
+        facts.publication.membershipInvalidatedKeys,
+        unchangedSharing,
+      );
     },
     retainedExecution,
   );

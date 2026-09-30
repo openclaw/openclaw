@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -72,6 +74,16 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry): Session
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
   };
+}
+
+/** Activity timestamps do not change the policy or incarnation held by an admitted reader. */
+export function sessionSharingEntriesEqual(left: SessionSharingEntry, right: unknown) {
+  if (!isRecord(right)) {
+    return false;
+  }
+  const { updatedAt: _leftActivity, ...leftPolicy } = left;
+  const { updatedAt: _rightActivity, ...rightPolicy } = right;
+  return isDeepStrictEqual(leftPolicy, rightPolicy);
 }
 
 export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;

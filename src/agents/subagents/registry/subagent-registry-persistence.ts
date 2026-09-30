@@ -569,7 +569,12 @@ export async function publishSubagentRunPostimages(params: {
 }): Promise<SubagentRegistryPostimageResult> {
   const selected = [...params.previous].map(([entry, previous]) => ({
     entry,
-    previous,
+    // A snapshot clone must not revoke another prepared worker when delivery
+    // did not change. Changed delivery stays private in the rollback snapshot.
+    previous:
+      entry.delivery && isDeepStrictEqual(entry.delivery, previous.delivery)
+        ? { ...previous, delivery: entry.delivery }
+        : previous,
     next: { ...entry },
     retire: params.retire?.has(entry) === true,
   }));
