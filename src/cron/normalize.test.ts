@@ -904,11 +904,11 @@ describe("normalizeCronJobPatch", () => {
   });
 });
 describe("on-exit schedule normalization", () => {
-  it("keeps command/cwd and strips time fields for on-exit jobs", () => {
+  it.each(["make build", " printf %s hello\\ "])("keeps on-exit command bytes: %j", (command) => {
     const normalized = createMain({
       schedule: {
         kind: "on-exit",
-        command: "make build",
+        command,
         cwd: "/repo",
         everyMs: 1000,
         expr: "* * * * *",
@@ -917,8 +917,11 @@ describe("on-exit schedule normalization", () => {
       payload: { kind: "systemEvent", text: "build done" },
     });
     expect(normalized).not.toBeNull();
-    expect(normalized.schedule).toEqual({ kind: "on-exit", command: "make build", cwd: "/repo" });
+    expect(normalized.schedule).toEqual({ kind: "on-exit", command, cwd: "/repo" });
     expect(validateCronAddParams(normalized)).toBe(true);
+    const patch = normalizeCronJobPatch({ schedule: { kind: "on-exit", command } });
+    expect(patch?.schedule).toEqual({ kind: "on-exit", command });
+    expect(validateCronUpdateParams({ id: "job-1", patch })).toBe(true);
   });
   it("drops command/cwd when normalizing a non-on-exit schedule", () => {
     const normalized = createMain({

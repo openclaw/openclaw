@@ -509,6 +509,22 @@ describe("shared automation mutation options", () => {
     },
   );
 
+  it.each([
+    { method: "cron.add", args: ["add", "--name", "watch", "--message", "done"] },
+    { method: "cron.add", args: ["create", "--name", "watch", "--message", "done"] },
+    { method: "cron.update", args: ["edit", "job-1"] },
+  ])("preserves shell whitespace in --on-exit with $args", async ({ method, args }) => {
+    const command = " printf %s hello\\ ";
+    await createMutationProgram().parseAsync([...args, "--on-exit", command], { from: "user" });
+
+    const schedule = { kind: "on-exit", command };
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      method,
+      expect.anything(),
+      expect.objectContaining(method === "cron.add" ? { schedule } : { patch: { schedule } }),
+    );
+  });
+
   it("updates an existing automation to an exit-triggered schedule", async () => {
     await createMutationProgram().parseAsync(
       ["edit", "job-1", "--on-exit", "./watch.sh", "--on-exit-cwd", "/repo"],
