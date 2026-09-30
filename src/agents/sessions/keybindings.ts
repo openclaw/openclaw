@@ -233,7 +233,7 @@ function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAM
 
 /** Migrates legacy keybinding names and orders known entries ahead of unknown extras. */
 function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): KeybindingsConfig {
-  const config: KeybindingsConfig = {};
+  const config = new Map<string, KeyId | KeyId[]>();
   for (const [key, binding] of Object.entries(rawConfig)) {
     const nextKey = isLegacyKeybindingName(key) ? KEYBINDING_NAME_MIGRATIONS[key] : key;
     if (key !== nextKey && Object.hasOwn(rawConfig, nextKey)) {
@@ -241,30 +241,20 @@ function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): Keybindin
       continue;
     }
     if (typeof binding === "string") {
-      config[nextKey] = binding as KeyId;
+      config.set(nextKey, binding as KeyId);
     } else if (Array.isArray(binding) && binding.every((entry) => typeof entry === "string")) {
-      config[nextKey] = binding as KeyId[];
+      config.set(nextKey, binding as KeyId[]);
     }
   }
-  return orderKeybindingsConfig(config);
+  return orderKeybindingsConfig(Object.fromEntries(config));
 }
 
 function orderKeybindingsConfig(config: KeybindingsConfig): KeybindingsConfig {
-  const ordered: KeybindingsConfig = {};
-  for (const keybinding of Object.keys(KEYBINDINGS)) {
-    if (Object.hasOwn(config, keybinding)) {
-      ordered[keybinding] = config[keybinding];
-    }
-  }
-
+  const known = Object.keys(KEYBINDINGS).filter((key) => Object.hasOwn(config, key));
   const extras = Object.keys(config)
-    .filter((key) => !Object.hasOwn(ordered, key))
+    .filter((key) => !Object.hasOwn(KEYBINDINGS, key))
     .toSorted();
-  for (const key of extras) {
-    ordered[key] = config[key];
-  }
-
-  return ordered;
+  return Object.fromEntries([...known, ...extras].map((key) => [key, config[key]]));
 }
 
 /** Keybinding manager that loads OpenClaw defaults plus optional user overrides. */

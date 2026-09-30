@@ -20,6 +20,7 @@ it("loads legacy overrides with canonical precedence and replaces them on reload
       "app.clear": 42,
       exit: ["ctrl+q", 1],
       "extra.a": [],
+      ["__proto__"]: ["ctrl+p"],
       toString: "ctrl+b",
       submit: ["enter", "ctrl+j"],
     }),
@@ -35,15 +36,22 @@ it("loads legacy overrides with canonical precedence and replaces them on reload
     "tui.input.submit",
     "app.interrupt",
     "app.message.followUp",
+    "__proto__",
     "extra.a",
     "extra.z",
     "toString",
   ]);
-  expect(manager.getUserBindings()).toMatchObject({ toString: "ctrl+b" });
+  expect(manager.getUserBindings()).toMatchObject({
+    ["__proto__"]: ["ctrl+p"],
+    toString: "ctrl+b",
+  });
 
-  await writeFile(configPath, JSON.stringify({ followUp: "ctrl+g" }));
+  await writeFile(configPath, JSON.stringify({ followUp: "ctrl+g", ["__proto__"]: "ctrl+y" }));
   manager.reload();
   expect(manager.getKeys("app.interrupt")).toEqual(["escape"]);
   expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+g"]);
-  expect(manager.getUserBindings()).toEqual({ "app.message.followUp": "ctrl+g" });
+  expect(manager.getUserBindings()).toEqual({
+    "app.message.followUp": "ctrl+g",
+    ["__proto__"]: "ctrl+y",
+  });
 });
