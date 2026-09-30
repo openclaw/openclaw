@@ -14,66 +14,6 @@ import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getTlonRuntime } from "../runtime.js";
 import { normalizeShip } from "../targets.js";
 
-export interface ParsedCite {
-  type: "chan" | "group" | "desk" | "bait";
-  nest?: string;
-  author?: string;
-  postId?: string;
-  group?: string;
-  flag?: string;
-  where?: string;
-}
-
-export function extractCites(content: unknown): ParsedCite[] {
-  if (!content || !Array.isArray(content)) {
-    return [];
-  }
-
-  const cites: ParsedCite[] = [];
-
-  for (const verse of content) {
-    const verseRecord = asNullableRecord(verse);
-    const block = asNullableRecord(verseRecord?.block);
-    const cite = asNullableRecord(block?.cite);
-    if (cite) {
-      const chan = asNullableRecord(cite.chan);
-      const group = readStringField(cite, "group");
-      const desk = asNullableRecord(cite.desk);
-      const bait = asNullableRecord(cite.bait);
-
-      if (chan) {
-        const nest = readStringField(chan, "nest");
-        const where = readStringField(chan, "where");
-        const whereMatch = where?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
-        cites.push({
-          type: "chan",
-          nest,
-          where,
-          author: whereMatch?.[1],
-          postId: whereMatch?.[2],
-        });
-      } else if (group) {
-        cites.push({ type: "group", group });
-      } else if (desk) {
-        cites.push({
-          type: "desk",
-          flag: readStringField(desk, "flag"),
-          where: readStringField(desk, "where"),
-        });
-      } else if (bait) {
-        cites.push({
-          type: "bait",
-          group: readStringField(bait, "group"),
-          nest: readStringField(bait, "graph"),
-          where: readStringField(bait, "where"),
-        });
-      }
-    }
-  }
-
-  return cites;
-}
-
 export function formatModelName(modelString?: string | null): string {
   if (!modelString) {
     return "AI";
@@ -235,21 +175,6 @@ export function isGroupInviteAllowed(
   }).allowed;
 }
 
-export async function resolveAuthorizedMessageText(params: {
-  rawText: string;
-  content: unknown;
-  authorizedForCites: boolean;
-  resolveAllCites: (content: unknown) => Promise<string>;
-}): Promise<string> {
-  const { rawText, content, authorizedForCites, resolveAllCites } = params;
-  if (!authorizedForCites) {
-    return rawText;
-  }
-  const citedContent = await resolveAllCites(content);
-  return citedContent + rawText;
-}
-
-// Helper to recursively extract text from inline content
 function renderInlineItem(
   item: unknown,
   options?: {

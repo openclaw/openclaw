@@ -614,16 +614,11 @@ async function trySendAttachmentForTarget(params: {
         params.sendTransport === "bridge" ? "dylib" : params.sendTransport,
       ]);
     });
-  } catch (error) {
-    await forgetPersistedIMessageEchoKey(pendingEchoKey);
-    if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
-      return null;
+    const failure = resolveIMessageSendFailure(result);
+    if (failure) {
+      throw new Error(failure);
     }
-    throw error;
-  }
-  const failure = resolveIMessageSendFailure(result);
-  if (failure) {
-    const error = new Error(failure);
+  } catch (error) {
     await forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;

@@ -281,7 +281,7 @@ struct DashboardWindowSmokeTests {
             buttonNumber: 1))
     }
 
-    @Test func `dashboard permits only trusted ClickClack discussion subframes`() throws {
+    @Test func `dashboard permits HTTP subframes requested by the trusted main frame`() throws {
         let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let channel = try #require(URL(string: "http://127.0.0.1:18890/embed/channel/T01/C01"))
         let thread = try #require(URL(string: "http://127.0.0.1:18890/embed/thread/T01/M01"))
@@ -309,8 +309,24 @@ struct DashboardWindowSmokeTests {
             to: channel, dashboardURL: dashboard, isMainFrame: true))
         #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: credentialedFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
             to: unrelatedPath, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        for address in ["https://app.example.com/any/path?query=yes", "https://app.example.com/mcp-app-sandbox"] {
+            let url = try #require(URL(string: address))
+            #expect(ControlUIDocumentHost.shouldAllowNavigation(
+                to: url, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            #expect(!ControlUIDocumentHost.shouldAllowNavigation(
+                to: url, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
+            #expect(!ControlUIDocumentHost.shouldAllowNavigation(
+                to: url, dashboardURL: dashboard, isMainFrame: true, isTrustedDashboardSource: true))
+        }
+        for address in ["custom://app.example.com/path", "https://user@app.example.com/path"] {
+            #expect(try !ControlUIDocumentHost.shouldAllowNavigation(
+                to: #require(URL(string: address)),
+                dashboardURL: dashboard,
+                isMainFrame: false,
+                isTrustedDashboardSource: true))
+        }
         #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: externalFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
         #expect(!ControlUIDocumentHost.shouldAllowNavigation(

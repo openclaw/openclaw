@@ -280,7 +280,7 @@ function buildDreamDiaryActionSuccessMessage(
       return t("dreaming.actions.resetDiaryComplete", {
         count: String(typeof payload?.removedEntries === "number" ? payload.removedEntries : 0),
       });
-    case "doctor.memory.resetGroundedShortTerm":
+    default:
       return t("dreaming.actions.clearReplayedComplete", {
         count: String(
           typeof payload?.removedShortTermEntries === "number"
@@ -289,7 +289,6 @@ function buildDreamDiaryActionSuccessMessage(
         ),
       });
   }
-  return t("dreaming.actions.complete");
 }
 
 function resolveSelectedAgentId(state: DreamingState): string | null {

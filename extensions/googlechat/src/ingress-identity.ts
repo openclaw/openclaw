@@ -6,9 +6,6 @@ import {
 
 export function normalizeGoogleChatUserId(raw?: string | null): string {
   const trimmed = normalizeOptionalString(raw) ?? "";
-  if (!trimmed) {
-    return "";
-  }
   return normalizeLowercaseStringOrEmpty(trimmed.replace(/^users\//i, ""));
 }
 

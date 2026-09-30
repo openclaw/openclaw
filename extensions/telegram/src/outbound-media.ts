@@ -167,11 +167,7 @@ export function resolveTelegramOutboundMediaSenders(params: {
   let label: TelegramOutboundMediaKind = "document";
   if (params.plan.isGif && params.plan.deliveryKind !== "document") {
     label = "animation";
-  } else if (
-    params.plan.deliveryKind === "image" &&
-    !params.plan.isGif &&
-    params.sendImageAsPhoto !== false
-  ) {
+  } else if (params.plan.deliveryKind === "image" && params.sendImageAsPhoto !== false) {
     label = "photo";
   } else if (params.plan.deliveryKind === "video") {
     label = params.plan.isVideoNote ? "video_note" : "video";
