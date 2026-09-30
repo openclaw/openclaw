@@ -122,7 +122,28 @@ suite.define(() => {
           stream: "tool",
           data: { name: "read", phase: "start", toolCallId: "sidebar-tool" },
         });
-        await narrationRow.getByText("Using read", { exact: true }).waitFor();
+        await gateway.emitGatewayEvent("session.tool", {
+          sessionKey: narrated,
+          runId: "run-2",
+          stream: "item",
+          data: {
+            kind: "tool",
+            itemId: "tool:sidebar-tool",
+            toolCallId: "sidebar-tool",
+            name: "read",
+            phase: "update",
+            title: "Read",
+            progressText: "Reading the source",
+          },
+        });
+        const tool = narrationRow.getByRole("img", { name: "Tool: read", exact: true });
+        await tool.waitFor();
+        expect(await narrationRow.locator(".sidebar-recent-session__subtitle").textContent()).toBe(
+          "Reading the source",
+        );
+        expect(await tool.evaluate((element) => getComputedStyle(element).animationName)).toBe(
+          "none",
+        );
         expect(await narrationRow.getAttribute("class")).toContain("session-row-host--running");
         for (const event of [
           "agent",
@@ -169,6 +190,7 @@ suite.define(() => {
             ).length,
           });
         }
+        expect(await narrationRow.locator(".sidebar-session-tool").count()).toBe(0);
         await send(second, "run-1", "Second pane resumed");
         await panes.nth(1).getByText("Second pane resumed", { exact: true }).waitFor();
         await send(unrelated, "other-run", "Unrelated must stay off the socket");

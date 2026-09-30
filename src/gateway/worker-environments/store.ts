@@ -61,7 +61,8 @@ function isCommitAdmission(value: unknown): value is WorkerEnvironmentCommitAdmi
       (fact) =>
         isRecord(fact) &&
         typeof fact.environmentId === "string" &&
-        typeof fact.recordAuthority === "string" &&
+        typeof fact.environmentAuthority === "string" &&
+        typeof fact.credentialAuthority === "string" &&
         typeof fact.transferAuthority === "string" &&
         typeof fact.attachmentAuthority === "string",
     )

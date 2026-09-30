@@ -2477,6 +2477,7 @@ async function validateStrictChildRun({
         repository,
         role: child.manifestKey,
         targetSha: parentEvidence.manifest.targetSha,
+        workflowSha: parentEvidence.manifest.workflowSha,
       })
     : undefined;
   const run = reused?.run ?? (await client.getRun(runId));

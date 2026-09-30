@@ -1,4 +1,5 @@
 /** Best-effort durable signal log for session state changes. */
+import type { DatabaseSync } from "node:sqlite";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
@@ -115,20 +116,24 @@ export function getSessionStateVersion(
 ): number {
   try {
     const { db } = openOpenClawStateDatabase(options);
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getSessionStateKysely(db)
-        .selectFrom("session_state_heads")
-        .select("last_sequence")
-        .where("session_key", "=", sessionKey)
-        .where("agent_id", "=", agentId),
-    );
-    return normalizeOptionalSqliteNumber(row?.last_sequence) ?? 0;
+    return readSessionStateSequence(db, sessionKey, agentId);
   } catch (error) {
     // Best-effort log: enrichment reads must never fail core session tools.
     log.warn(`failed to read session state version: ${String(error)}`);
     return 0;
   }
+}
+
+function readSessionStateSequence(db: DatabaseSync, sessionKey: string, agentId: string): number {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getSessionStateKysely(db)
+      .selectFrom("session_state_heads")
+      .select("last_sequence")
+      .where("session_key", "=", sessionKey)
+      .where("agent_id", "=", agentId),
+  );
+  return normalizeOptionalSqliteNumber(row?.last_sequence) ?? 0;
 }
 
 /** Batch durable signal-log heads for session-list enrichment, keyed agent → session key. */
@@ -307,20 +312,15 @@ export function handleSessionStateSessionDeleted(
   try {
     runOpenClawStateWriteTransaction(({ db }) => {
       const kysely = getSessionStateKysely(db);
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("session_state_events")
-          .where("session_key", "=", sessionKey)
-          .where("agent_id", "=", agentId),
-      );
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("session_state_heads")
-          .where("session_key", "=", sessionKey)
-          .where("agent_id", "=", agentId),
-      );
+      for (const table of ["session_state_events", "session_state_heads"] as const) {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .deleteFrom(table)
+            .where("session_key", "=", sessionKey)
+            .where("agent_id", "=", agentId),
+        );
+      }
       executeSqliteQuerySync(
         db,
         kysely
@@ -592,21 +592,14 @@ export function registerSessionStateWatch(
         return;
       }
       const agentId = params.targetAgentId ?? resolveAgentIdFromSessionKey(params.targetSessionKey);
-      const head = executeSqliteQueryTakeFirstSync(
-        db,
-        getSessionStateKysely(db)
-          .selectFrom("session_state_heads")
-          .select("last_sequence")
-          .where("session_key", "=", params.targetSessionKey)
-          .where("agent_id", "=", agentId),
-      );
+      const sequence = readSessionStateSequence(db, params.targetSessionKey, agentId);
       // Seed at the current head: the watcher is synced now; only future changes notify.
       upsertSeedCursor({
         db,
         watcherSessionKey: params.watcherSessionKey,
         watcherStorePath,
         targetSessionKey: params.targetSessionKey,
-        sequence: normalizeOptionalSqliteNumber(head?.last_sequence) ?? 0,
+        sequence,
         now,
       });
       registered = true;
@@ -662,15 +655,7 @@ export function registerMainSessionGroupWatch(
         registered = true;
         return;
       }
-      const head = executeSqliteQueryTakeFirstSync(
-        db,
-        getSessionStateKysely(db)
-          .selectFrom("session_state_heads")
-          .select("last_sequence")
-          .where("session_key", "=", params.sessionKey)
-          .where("agent_id", "=", params.agentId),
-      );
-      const sequence = normalizeOptionalSqliteNumber(head?.last_sequence) ?? 0;
+      const sequence = readSessionStateSequence(db, params.sessionKey, params.agentId);
       upsertSeedCursor({
         db,
         watcherSessionKey,

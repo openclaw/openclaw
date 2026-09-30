@@ -42,10 +42,7 @@ import {
   resolveGatewayCallDeviceAuth,
   type GatewayCallDeviceAuthOptions,
 } from "./call-device-auth.js";
-import {
-  ensureGatewaySupportsRequiredCapabilities,
-  ensureGatewaySupportsRequiredMethods,
-} from "./call-required-features.js";
+import { ensureGatewaySupportsRequiredFeatures } from "./call-required-features.js";
 import {
   ensureExplicitGatewayAuth,
   GatewayExplicitAuthRequiredError,
@@ -762,14 +759,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }
         void (async () => {
           try {
-            ensureGatewaySupportsRequiredMethods({
-              requiredMethods: opts.requiredMethods,
-              methods: hello.features?.methods,
+            ensureGatewaySupportsRequiredFeatures({
+              kind: "method",
+              required: Array.isArray(opts.requiredMethods) ? opts.requiredMethods : [],
+              supported: Array.isArray(hello.features?.methods) ? hello.features.methods : [],
               attemptedMethod: opts.method,
             });
-            ensureGatewaySupportsRequiredCapabilities({
-              requiredCapabilities: opts.requiredCapabilities,
-              capabilities: hello.features?.capabilities,
+            ensureGatewaySupportsRequiredFeatures({
+              kind: "capability",
+              required: opts.requiredCapabilities,
+              supported: hello.features?.capabilities,
               attemptedMethod: opts.method,
             });
             const activeClient = client;

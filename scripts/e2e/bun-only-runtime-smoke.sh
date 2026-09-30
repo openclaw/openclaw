@@ -13,8 +13,6 @@ mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
 echo "Bun-only smoke artifacts: $ARTIFACT_DIR"
 BUN_BIN="$(command -v "${BUN_BIN:-bun}")"
-# Preserve the resolved binary before masking; fallback Node never appears on a runtime PATH.
-INSTALL_NODE="$(node -e 'console.log(require("node:fs").realpathSync(process.execPath))')"
 BUN_BIN="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$BUN_BIN")"
 PACKAGE_TGZ="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$PACKAGE_TGZ")"
 AI_PACKAGE_TGZ=""
@@ -29,11 +27,8 @@ fi
 printf '' >"$ARTIFACT_DIR/sentinel-ledger.jsonl"
 "$BUN_BIN" "$ROOT_DIR/scripts/e2e/lib/bun-only-runtime/sentinel.mjs" \
   "$ARTIFACT_DIR/sentinel-bin" "$ARTIFACT_DIR/sentinel-ledger.jsonl"
-FALLBACK_NODE="$INSTALL_NODE"
 if [[ "${OPENCLAW_BUN_ONLY_SMOKE_HIDE_SYSTEM_NODE:-0}" == 1 ]]; then
   command -v unshare setpriv >/dev/null
-  FALLBACK_NODE="$ARTIFACT_DIR/install-node"
-  printf '' >"$FALLBACK_NODE"
 fi
 summary_env=()
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
@@ -46,7 +41,6 @@ harness_command=(env -i \
   BUN_BIN="$BUN_BIN" \
   OPENCLAW_BUN_ONLY_SMOKE_PACKAGE_TGZ="$PACKAGE_TGZ" \
   OPENCLAW_BUN_ONLY_SMOKE_ARTIFACT_DIR="$ARTIFACT_DIR" \
-  OPENCLAW_BUN_ONLY_SMOKE_INSTALL_NODE="$FALLBACK_NODE" \
   OPENCLAW_BUN_ONLY_SMOKE_AI_PACKAGE_TGZ="$AI_PACKAGE_TGZ" \
   "$BUN_BIN" "$ROOT_DIR/scripts/e2e/lib/bun-only-runtime/harness.mjs")
 if [[ "${OPENCLAW_BUN_ONLY_SMOKE_HIDE_SYSTEM_NODE:-0}" == 1 ]]; then
@@ -54,18 +48,15 @@ if [[ "${OPENCLAW_BUN_ONLY_SMOKE_HIDE_SYSTEM_NODE:-0}" == 1 ]]; then
     set -euo pipefail
     invoking_uid=$1
     invoking_gid=$2
-    install_node=$3
-    fallback_node=$4
-    sentinel_node=$5
-    shift 5
-    mount --bind "$install_node" "$fallback_node"
+    sentinel_node=$3
+    shift 3
     for entry in /usr/local/bin/node /usr/bin/node; do
       if [[ -e "$entry" ]]; then
         mount --bind "$sentinel_node" "$entry"
       fi
     done
     exec setpriv --reuid="$invoking_uid" --regid="$invoking_gid" --init-groups -- "$@"
-  ' bash "$(id -u)" "$(id -g)" "$INSTALL_NODE" "$FALLBACK_NODE" \
+  ' bash "$(id -u)" "$(id -g)" \
     "$ARTIFACT_DIR/sentinel-bin/node" "${harness_command[@]}"
 fi
 exec "${harness_command[@]}"

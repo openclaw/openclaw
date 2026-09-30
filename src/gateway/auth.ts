@@ -49,7 +49,7 @@ export type GatewayAuthResult = {
     | "trusted-proxy";
   user?: string;
   /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
-  tailscaleIdentity?: VerifiedTailscaleIdentity;
+  tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
   rateLimited?: boolean;
@@ -96,8 +96,6 @@ type AuthorizeGatewayConnectParams = {
     allowHostHeaderOriginFallback?: boolean;
   };
 };
-
-type VerifiedTailscaleIdentity = VerifiedTailscaleIngressIdentity;
 
 type GatewayAuthRequestContext = {
   authSurface: GatewayAuthSurface;
@@ -306,10 +304,7 @@ function authorizeHttpBrowserOrigin(params: {
     allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
     isLocalClient: params.isLocalClient,
   });
-  if (originCheck.ok) {
-    return null;
-  }
-  return { ok: false, reason: params.reason };
+  return originCheck.ok ? null : { ok: false, reason: params.reason };
 }
 
 function authorizeTrustedProxyBrowserOrigin(params: {

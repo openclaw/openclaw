@@ -216,5 +216,5 @@ export function resolveElevatedPermissions(params: {
       key: `agents.entries.*.tools.elevated.allowFrom.${params.provider}`,
     });
   }
-  return { enabled, allowed: globalAllowed && agentAllowed, failures };
+  return { enabled, allowed: agentAllowed, failures };
 }

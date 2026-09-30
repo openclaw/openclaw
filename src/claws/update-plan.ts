@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
-import { stableStringify } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +16,7 @@ import {
   isApplicationUpdateBlocker,
   recordingClawPackagePreflight,
 } from "./application-provenance.js";
+import { digestClawValue as digest } from "./digest.js";
 import { readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { digestClawMcpServer, readClawMcpServerRefsByName } from "./mcp.js";
@@ -53,10 +52,6 @@ export {
   type ClawUpdatePlan,
 } from "./update-plan-types.js";
 
-function digest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
-}
-
 function diagnostic(code: string, path: string, message: string): ClawDiagnostic {
   return { level: "error", code, phase: "plan", path, message };
 }
@@ -89,7 +84,6 @@ export async function buildClawUpdatePlan(params: {
         ),
       ],
       diagnostics: params.diagnostics,
-      digest,
     });
   const ownsDatabase = !params.stateOptions?.database;
   const database =
@@ -138,7 +132,6 @@ export async function buildClawUpdatePlan(params: {
           ),
         ],
         diagnostics: params.diagnostics,
-        digest,
       });
     }
     const record = status.records[0]!;
@@ -161,7 +154,6 @@ export async function buildClawUpdatePlan(params: {
           ),
         ],
         diagnostics: params.diagnostics,
-        digest,
       });
     }
 

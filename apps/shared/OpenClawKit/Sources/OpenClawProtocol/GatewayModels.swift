@@ -17845,8 +17845,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let limit: Int?
     public let offset: Int?
     public let activeminutes: Int?
-    public let activitypulsesince: Double?
-    public let activitypulseuntil: Double?
+    public let activitypulseboundaries: [Double]?
     public let activeonly: Bool?
     public let requirelastinteraction: Bool?
     public let sortby: AnyCodable?
@@ -17883,8 +17882,7 @@ public struct SessionsListParams: Codable, Sendable {
         limit: Int? = nil,
         offset: Int? = nil,
         activeminutes: Int? = nil,
-        activitypulsesince: Double? = nil,
-        activitypulseuntil: Double? = nil,
+        activitypulseboundaries: [Double]? = nil,
         activeonly: Bool? = nil,
         requirelastinteraction: Bool? = nil,
         sortby: AnyCodable? = nil,
@@ -17920,8 +17918,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.limit = limit
         self.offset = offset
         self.activeminutes = activeminutes
-        self.activitypulsesince = activitypulsesince
-        self.activitypulseuntil = activitypulseuntil
+        self.activitypulseboundaries = activitypulseboundaries
         self.activeonly = activeonly
         self.requirelastinteraction = requirelastinteraction
         self.sortby = sortby
@@ -17959,8 +17956,7 @@ public struct SessionsListParams: Codable, Sendable {
         case limit
         case offset
         case activeminutes = "activeMinutes"
-        case activitypulsesince = "activityPulseSince"
-        case activitypulseuntil = "activityPulseUntil"
+        case activitypulseboundaries = "activityPulseBoundaries"
         case activeonly = "activeOnly"
         case requirelastinteraction = "requireLastInteraction"
         case sortby = "sortBy"

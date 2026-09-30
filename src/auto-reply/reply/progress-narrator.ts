@@ -166,24 +166,20 @@ function createProgressNarrator(params: {
     if (options?.flushAssistant) {
       flushSessionActivityAssistantNote(activity, NARRATION_NOTE_MAX_CHARS);
     }
-    const added = activity.noteSequence > sequenceBefore;
-    if (added) {
+    if (activity.noteSequence > sequenceBefore) {
       maybeRun(options?.immediate === true);
     }
   };
 
   const shouldRunNow = (immediate: boolean): boolean => {
     const newNotes = activity.noteSequence - Math.max(0, noteSequenceAtLastRun);
-    if (newNotes <= 0) {
-      return false;
-    }
-    if (immediate || noteSequenceAtLastRun < 0) {
-      return true;
-    }
-    if (newNotes >= MIN_EVENTS_PER_NARRATION) {
-      return true;
-    }
-    return Date.now() - lastRunAt >= MIN_INTERVAL_MS;
+    return (
+      newNotes > 0 &&
+      (immediate ||
+        noteSequenceAtLastRun < 0 ||
+        newNotes >= MIN_EVENTS_PER_NARRATION ||
+        Date.now() - lastRunAt >= MIN_INTERVAL_MS)
+    );
   };
 
   // Skips retain note bookkeeping; one replaceable timer rechecks the active gate.
@@ -402,8 +398,8 @@ export function attachProgressNarratorToReplyOptions(params: {
     hideCommandText: opts.narrationHideCommandText === true,
   });
   opts.onProgressNarratorLifecycle?.({
-    beginTurn: () => narrator.beginTurn(),
-    stopTurn: () => narrator.stopTurn(),
+    beginTurn: narrator.beginTurn,
+    stopTurn: narrator.stopTurn,
   });
   return {
     ...opts,

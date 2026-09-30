@@ -591,12 +591,8 @@ function maskSecretFieldValue(key: string, value: string): string {
   return "***";
 }
 
-function readEnvAssignmentKey(match: string): string | undefined {
-  return match.match(/\b([A-Z_][A-Z0-9_]*)\b\s*[=:]/)?.[1];
-}
-
 function shouldPreserveShellReferenceMatch(match: string, token: string): boolean {
-  const key = readEnvAssignmentKey(match);
+  const key = match.match(/\b([A-Z_][A-Z0-9_]*)\b\s*[=:]/)?.[1];
   return key ? isShellReferenceToKey(key, token) : false;
 }
 

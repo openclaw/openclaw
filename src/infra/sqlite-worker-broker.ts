@@ -127,7 +127,7 @@ export class SqliteWorkerBroker {
       const generation = options.runtimeGeneration;
       generation?.retain(this, async () => {
         await this.inputAdmission.joinOpens();
-        await this.lifecycle.closeGeneration(generation);
+        return await this.lifecycle.settleGeneration(generation);
       });
     } catch (error) {
       this.clients.delete(client);

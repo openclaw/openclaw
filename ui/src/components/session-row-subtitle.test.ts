@@ -14,6 +14,45 @@ function workSession(): SidebarRecentSession {
 }
 
 describe("resolveSidebarSessionSubtitle", () => {
+  it("shows tool progress in previews without displacing critical status", () => {
+    const params = {
+      session: { ...workSession(), hasActiveRun: true, activeRunIds: ["run-1"] },
+      hasDisplay: false,
+      displaySubtitle: undefined,
+      sidebarLiveActivity: true,
+      showPreview: true,
+      narrationLine: "Earlier assistant narration",
+      toolActivity: { name: "exec", text: "Running focused tests" },
+    };
+    expect(resolveSidebarSessionSubtitle(params)).toEqual({
+      subtitle: "Running focused tests",
+      narration: undefined,
+      toolName: "exec",
+    });
+    expect(resolveSidebarSessionSubtitle({ ...params, showPreview: false })).toEqual({
+      subtitle: undefined,
+      narration: undefined,
+    });
+    expect(
+      resolveSidebarSessionSubtitle({
+        ...params,
+        observerDigest: {
+          runId: "run-1",
+          headline: "Needs a credential",
+          health: "stuck",
+          revision: 1,
+          updatedAt: 2000,
+        },
+      }).subtitle,
+    ).toBe("Needs a credential");
+    expect(
+      resolveSidebarSessionSubtitle({
+        ...params,
+        session: { ...params.session, attention: { kind: "question", requests: [] } },
+      }).subtitle,
+    ).toBeUndefined();
+  });
+
   it("does not fall back to a backing work subtitle when catalog display omits one", () => {
     expect(
       resolveSidebarSessionSubtitle({

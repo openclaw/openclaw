@@ -1973,7 +1973,7 @@ function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
   return { ...fixture, client, executionPlan, manifest };
 }
 
-function trustedMainChildReuseFixture() {
+function trustedMainChildReuseFixture(workflowSha?: string) {
   const fixture = trustedMainNpmFixture();
   const child = expectDefined(
     fixture.executionPlan.children.find((entry) => entry.key === "normalCi"),
@@ -1986,7 +1986,7 @@ function trustedMainChildReuseFixture() {
   const repository = { id: 1, full_name: "openclaw/openclaw" };
   Object.assign(run, {
     display_title: "CI full-release-validation-77-1-ci",
-    head_sha: "b".repeat(40),
+    head_sha: workflowSha ?? fixture.manifest.workflowSha,
     repository,
     head_repository: repository,
     html_url: `https://github.com/openclaw/openclaw/actions/runs/${run.id}`,
@@ -2059,7 +2059,7 @@ function trustedMainChildReuseFixture() {
     sourceParentRunId: "77",
     sourceParentAttempt: 1,
     workloadConclusion: "success",
-    inputs,
+    inputs: Object.fromEntries(Object.entries(inputs).filter(([, value]) => value !== "")),
     publisher: { jobId: "502", jobName: FULL_RELEASE_CHILD_EVIDENCE_JOB },
   };
   const receiptSha256 = createHash("sha256")
@@ -2874,7 +2874,7 @@ describe("release CI summary child correlation", () => {
         evidence.children.find((child: { role: string }) => child.role === "normalCi"),
       ).toMatchObject({
         runId: String(fixture.run.id),
-        workflowSha: "b".repeat(40),
+        workflowSha: fixture.manifest.workflowSha,
         parentJobId: "201",
         sourceParentRunId: "77",
         sourceParentAttempt: 1,
@@ -2892,13 +2892,16 @@ describe("release CI summary child correlation", () => {
   );
 
   it.each([
+    ["different-tooling", "same tooling is required"],
     ["expired-artifact", "artifact identity, digest, or expiry is invalid"],
     ["newer-attempt", "not the current successful attempt"],
     ["missing-adoption-witness", "reuse adoption witness mismatch"],
     ["changed-composite", "manifest child composite evidence mismatch"],
     ["unsealed-selection", "execution plan artifact digest"],
   ])("rejects independently reused final evidence with %s", async (fault, message) => {
-    const fixture = trustedMainChildReuseFixture();
+    const fixture = trustedMainChildReuseFixture(
+      fault === "different-tooling" ? "b".repeat(40) : undefined,
+    );
     if (fault === "expired-artifact") {
       fixture.artifact.expired = true;
     }
