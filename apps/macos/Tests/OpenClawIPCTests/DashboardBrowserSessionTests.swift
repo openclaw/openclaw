@@ -629,6 +629,68 @@ struct DashboardEmbedCookieTests {
         #expect(DashboardBrowserSessionStore.embedOrigin(for: domainCookie, gateway: gateway, now: now) == nil)
     }
 
+    @Test(arguments: ["discovery", "helper", "current"])
+    func `embed sign in requires its document to remain current through suspended work`(_ phase: String) async throws {
+        let issuer = "https://tenant.cloudflareaccess.com"
+        let gateway = try self.session(host: "gateway.example.com", issuer: issuer)
+        let embed = try self.session(issuer: issuer)
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "type": "match", "hostname": "embed.example.com", "auth_domain": "tenant.cloudflareaccess.com",
+            "aud": "fixture-audience", "iat": Date().timeIntervalSince1970,
+        ]).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let header = Data(#"{"alg":"RS256"}"#.utf8).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+        let application = try CloudflareAccessLogin.application(
+            gatewayURL: embed.origin, metadata: "\(header).\(payload).c3ludGhldGlj")
+        var documentCurrent = true
+        var helperRuns = 0
+        var helperSawRetirement = false
+        var pending: CheckedContinuation<Void, Never>?
+        var started: CheckedContinuation<Void, Never>?
+        let suspend: @MainActor @Sendable () async -> Void = {
+            await withCheckedContinuation { continuation in
+                pending = continuation
+                started?.resume()
+            }
+        }
+        let signIn = CloudflareAccessEmbedLogin(
+            discover: { _ in
+                if phase == "discovery" { await suspend() }
+                return application
+            },
+            signIn: { _, isCurrent in
+                helperRuns += 1
+                if phase != "discovery" { await suspend() }
+                helperSawRetirement = !isCurrent()
+                return embed
+            })
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent(), embedSignIn: signIn)
+        let lease = store.lease(for: gateway)
+        try await lease.prepare(for: gateway.origin, in: WKUserContentController())
+        let flight = Task {
+            try await lease.signInEmbed(
+                appURL: embed.origin,
+                observedIframeHosts: ["embed.example.com"],
+                documentIsCurrent: { documentCurrent })
+        }
+        await withCheckedContinuation { started = $0 }
+        documentCurrent = phase == "current"
+        pending?.resume()
+        if documentCurrent {
+            #expect(try await flight.value)
+        } else {
+            await #expect(throws: CancellationError.self) { try await flight.value }
+        }
+        #expect(helperRuns == (phase == "discovery" ? 0 : 1))
+        #expect(helperSawRetirement == (phase == "helper"))
+        let cookies = await store.dataStore.httpCookieStore.allCookies()
+        #expect(Set(cookies.map(\.domain)) ==
+            (documentCurrent ? ["gateway.example.com", "embed.example.com"] : ["gateway.example.com"]))
+    }
+
     @Test func `cookie rules allow exact gateway and HTTPS embed authorities only`() throws {
         let gateway = try #require(URL(string: "https://gateway.example.com:8443/"))
         let embed = try #require(URL(string: "https://embed.example.com/"))

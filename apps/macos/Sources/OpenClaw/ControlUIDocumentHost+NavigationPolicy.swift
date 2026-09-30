@@ -299,10 +299,17 @@ extension ControlUIDocumentHost {
                 lease.recordEmbedFailure(appURL: applicationURL, reason: .documentUnavailable)
                 return
             }
-            guard await (try? lease.signInEmbed(appURL: applicationURL, observedIframeHosts: observedHosts)) == true,
-                  self.generation == generation, self.isAvailable(),
-                  self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
-                  Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            guard await (try? lease.signInEmbed(
+                appURL: applicationURL,
+                observedIframeHosts: observedHosts,
+                documentIsCurrent: { [weak self] in
+                    guard let self else { return false }
+                    return self.generation == generation && self.isAvailable() &&
+                        self.auth.usesBrowserIdentity && self.hasCurrentBrowserSession
+                })) == true,
+                self.generation == generation, self.isAvailable(),
+                self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
+                Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
             else { return }
             // The iframe's src retains its original path through server redirects.
             // Reset it from the trusted parent so the reload obeys the same policy

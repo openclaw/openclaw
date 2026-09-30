@@ -20,19 +20,26 @@ final class DashboardBrowserSessionStore {
             self.owner.revision == self.revision
         }
 
-        func signInEmbed(appURL: URL, observedIframeHosts: [String]) async throws -> Bool {
+        func signInEmbed(
+            appURL: URL,
+            observedIframeHosts: [String],
+            documentIsCurrent: @escaping CloudflareAccessEmbedLogin.IsCurrent) async throws -> Bool
+        {
+            guard documentIsCurrent() else { throw CancellationError() }
             guard self.isCurrent, let gateway = self.session else { throw GatewayBrowserSessionError.superseded }
             try gateway.validate(for: gateway.origin)
             let embed = try await self.owner.embedSignIn.signIn(
                 appURL: appURL, gateway: gateway, observedIframeHosts: observedIframeHosts, isCurrent: {
-                    guard self.isCurrent, let current = self.session,
+                    guard documentIsCurrent(), self.isCurrent, let current = self.session,
                           current.browserDataPrincipal == gateway.browserDataPrincipal
                     else { return false }
                     return (try? current.validate(for: current.origin)) != nil
                 })
+            guard documentIsCurrent() else { throw CancellationError() }
             guard let embed else { return false }
             do {
-                try await self.installEmbedSession(embed)
+                try await self.owner.installEmbedSession(
+                    embed, revision: self.revision, documentIsCurrent: documentIsCurrent)
             } catch {
                 self.recordEmbedFailure(appURL: appURL, reason: .cookieInstallationFailed)
                 throw error
@@ -80,7 +87,7 @@ final class DashboardBrowserSessionStore {
     private var cookieRule: WKContentRuleList?
     private var cookieRuleSource: String?
     private var publishedRevision: UInt64?
-    private let embedSignIn = CloudflareAccessEmbedLogin()
+    private let embedSignIn: CloudflareAccessEmbedLogin
     private final class PreparedController {
         weak var controller: WKUserContentController?
 
@@ -91,13 +98,21 @@ final class DashboardBrowserSessionStore {
 
     private var preparedControllers: [PreparedController] = []
 
-    convenience init(dataStore: WKWebsiteDataStore) {
-        self.init(dataStore: dataStore, ownership: Ownership())
+    convenience init(
+        dataStore: WKWebsiteDataStore,
+        embedSignIn: CloudflareAccessEmbedLogin = CloudflareAccessEmbedLogin())
+    {
+        self.init(dataStore: dataStore, ownership: Ownership(), embedSignIn: embedSignIn)
     }
 
-    private init(dataStore: WKWebsiteDataStore, ownership: Ownership) {
+    private init(
+        dataStore: WKWebsiteDataStore,
+        ownership: Ownership,
+        embedSignIn: CloudflareAccessEmbedLogin = CloudflareAccessEmbedLogin())
+    {
         self.dataStore = dataStore
         self.ownership = ownership
+        self.embedSignIn = embedSignIn
     }
 
     static func persistent(
@@ -351,10 +366,15 @@ final class DashboardBrowserSessionStore {
         }
     }
 
-    private func installEmbedSession(_ embed: GatewayBrowserSession, revision: UInt64) async throws {
+    private func installEmbedSession(
+        _ embed: GatewayBrowserSession,
+        revision: UInt64,
+        documentIsCurrent: @escaping CloudflareAccessEmbedLogin.IsCurrent = { true }) async throws
+    {
         let previous = self.preparation
         let preparation = Task { @MainActor in
             try await previous?.value
+            guard documentIsCurrent() else { throw CancellationError() }
             guard self.revision == revision, !self.ownership.requiresRemoval,
                   let gateway = self.session
             else { throw GatewayBrowserSessionError.superseded }
