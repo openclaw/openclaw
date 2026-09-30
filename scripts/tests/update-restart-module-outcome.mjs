@@ -161,6 +161,7 @@ async function fixture({
     DEFINITION_DENIAL: /fixture-definition-denial/,
     resolveGatewayService: () => service,
     getUpdateRun: () => undefined,
+    getUpdateRunAsync: async () => undefined,
     isContainerEnvironment: () => false,
     resolveStateDir: () => "/fixture/state",
     mutateRun: (runId, update, options) => {
