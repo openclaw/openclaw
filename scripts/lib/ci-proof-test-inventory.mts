@@ -3738,7 +3738,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/system-agent/inference-route-runtime.test.ts",
   "src/system-agent/inference-route.test.ts",
   "src/system-agent/operations.roles.test.ts",
-  "src/system-agent/operations.setup-transaction.test.ts",
   "src/system-agent/operations.setup.test.ts",
   "src/system-agent/plugin-artifact.test.ts",
   "src/system-agent/rescue-message.test.ts",
