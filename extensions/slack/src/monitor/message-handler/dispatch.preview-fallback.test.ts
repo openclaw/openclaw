@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { slackSetupPlugin } from "../../channel.setup.js";
 import type { SlackSendResult } from "../../send.js";
 import { getSlackSessionRuns } from "../session-run-targets.js";
@@ -3347,6 +3348,38 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         },
       ],
     });
+  });
+
+  it("caps the card fallback text at the draft limit while keeping the long blocks", async () => {
+    const draftStream = useDraftStream();
+    mockedSlackStreamingMode = "progress";
+    const long = (word: string) => Array.from({ length: 400 }, () => word).join(" ");
+    mockedReplyOptionEvents = [
+      {
+        kind: "plan",
+        phase: "update",
+        explanation: long("explain"),
+        steps: [{ step: "Inspect", status: "in_progress" }],
+      },
+      { kind: "item", itemKind: "preamble", itemId: "preamble-1", progressText: long("status") },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        kind: "approval" as const,
+        phase: "requested" as const,
+        approvalId: `approval-${index}`,
+        command: `${long("run")}-${index}`,
+      })),
+    ];
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "progress", progress: { style: "card" } } },
+      }),
+    );
+    const update = requireRecord(draftStream.update.mock.calls.at(-1)?.[0], "long card update");
+    const blocks = update.blocks as unknown[];
+    // Precondition: the full card text exceeds the 4,000-character draft limit.
+    expect(buildSlackCompleteBlocksFallbackText(blocks).length).toBeGreaterThan(4000);
+    expect((update.text as string).length).toBeLessThanOrEqual(4000);
+    expect(JSON.stringify(blocks)).toContain("Approval required:");
   });
 
   it.each([false, true])(

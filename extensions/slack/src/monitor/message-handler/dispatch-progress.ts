@@ -13,7 +13,6 @@ import {
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "../../limits.js";
@@ -403,7 +402,7 @@ export function createSlackProgressRuntime(runtimeParams: {
             }
           : cardBlocks
             ? {
-                text: buildSlackCompleteBlocksFallbackText(cardBlocks),
+                text: progressCard.resolveCardText(cardBlocks),
                 blocks: cardBlocks,
               }
             : snapshot.preparedBlocks

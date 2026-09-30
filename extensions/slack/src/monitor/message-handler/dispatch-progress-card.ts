@@ -10,6 +10,7 @@ import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
+import { SLACK_TEXT_LIMIT } from "../../limits.js";
 import {
   buildSlackProgressCardBlocks,
   type SlackProgressSessionLink,
@@ -103,6 +104,13 @@ export function createSlackDraftProgressCardRuntime(params: {
     });
   };
 
+  // Blocks carry the card; its fallback text must fit the draft limit or the stream stops.
+  const resolveCardText = (blocks: ReturnType<typeof resolvePresentation>) =>
+    truncateSlackText(
+      buildSlackCompleteBlocksFallbackText(blocks),
+      Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
+    );
+
   const finalize = async (
     status: Exclude<DraftProgressCardState, "working">,
     options: { snapshot?: ChannelProgressDraftCompositorSnapshot; postIfMissing?: boolean } = {},
@@ -121,7 +129,7 @@ export function createSlackDraftProgressCardRuntime(params: {
     let messageId = params.draftStream.messageId();
     const blocks = resolvePresentation(snapshot, terminalStatus);
     if ((!channelId || !messageId) && terminalStatus === "error" && options.postIfMissing) {
-      params.draftStream.update({ text: buildSlackCompleteBlocksFallbackText(blocks), blocks });
+      params.draftStream.update({ text: resolveCardText(blocks), blocks });
       await params.draftStream.flush();
       channelId = params.draftStream.channelId();
       messageId = params.draftStream.messageId();
@@ -145,7 +153,7 @@ export function createSlackDraftProgressCardRuntime(params: {
           accountId: account.accountId,
           channelId,
           messageId,
-          text: buildSlackCompleteBlocksFallbackText(blocks),
+          text: resolveCardText(blocks),
           blocks,
           threadTs: params.getThreadTs(),
         });
@@ -170,6 +178,7 @@ export function createSlackDraftProgressCardRuntime(params: {
       }
     },
     resolvePresentation,
+    resolveCardText,
     finalize,
     get hasTerminalized() {
       return finalStatus !== undefined;
