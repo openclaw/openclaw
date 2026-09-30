@@ -1054,4 +1054,78 @@ describe("gateway plugin instance bindings", () => {
       expect(coordinator.serviceStops).toBe(serviceStopFailure === "timeout" ? 3 : 1);
     },
   );
+
+  it(
+    "a retained-work reload refusal reports queued readiness and leaves the serving runtime authoritative",
+    { timeout: 120_000 },
+    async () => {
+      const { coordinator } = await prepareInstanceBindingTest();
+      const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const server = await startTestGatewayServer(claim, {
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        sidecarStartup: "start",
+      });
+      started.push(server);
+      await server.startupSettled;
+      const socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
+      sockets.push(socket);
+
+      const registry = getActivePluginRegistry();
+      const record = registry?.plugins.find((entry) => entry.id === "instance-binding-probe");
+      const instance = record && getPluginInstance(record);
+      if (!instance) {
+        throw new Error("instance-binding-probe instance missing");
+      }
+      const { runtime } = await requireBoundRuntime(coordinator.runtimes, "initial retained owner");
+      const before = await requestInstanceBindingProbe(runtime);
+      const releaseWork = instance.retainWork();
+      const hostCleanup = await import("../plugins/host-hook-cleanup-timeout.js");
+      const withCleanupTimeout = hostCleanup.withPluginHostCleanupTimeout;
+      const observeQueuedReadiness = createDeferred<void>();
+      const readGatewayReadiness = async () => {
+        const response = await fetch(`http://127.0.0.1:${claim.port}/readyz`);
+        return await response.json();
+      };
+      const cleanupSpy = vi
+        .spyOn(hostCleanup, "withPluginHostCleanupTimeout")
+        .mockImplementation(async (label, run, timeoutMs) => {
+          if (label !== "retained plugin work") {
+            return withCleanupTimeout(label, run, timeoutMs);
+          }
+          await observeQueuedReadiness.promise;
+          return withCleanupTimeout(label, run, 1);
+        });
+      const reloading = rpcReq(socket, "plugins.reload", {
+        plugins: [{ pluginId: "instance-binding-probe" }],
+      });
+      try {
+        await expect.poll(readGatewayReadiness, { timeout: 30_000 }).toMatchObject({
+          ready: false,
+          failing: ["plugin-reload"],
+          pluginReload: {
+            phase: "reloading",
+            pluginIds: ["instance-binding-probe"],
+            deadlineAtMs: expect.any(Number),
+            reason: expect.stringMatching(/queued behind \d+ retained work/),
+          },
+        });
+        await expect(requestInstanceBindingProbe(runtime)).resolves.toEqual(before);
+        observeQueuedReadiness.resolve();
+        const reload = await reloading;
+        expect(reload.ok).toBe(false);
+        expect(reload.error?.message).toMatch(/admitted work did not settle|active retained work/i);
+        const cleared = await readGatewayReadiness();
+        expect(cleared).toMatchObject({ ready: true, failing: [] });
+        expect(cleared.pluginReload).toBeUndefined();
+        await expect(requestInstanceBindingProbe(runtime)).resolves.toEqual(before);
+        expect(getActivePluginRegistry()).toBe(registry);
+      } finally {
+        observeQueuedReadiness.resolve();
+        cleanupSpy.mockRestore();
+        releaseWork();
+        await reloading;
+      }
+    },
+  );
 });

@@ -38,6 +38,11 @@ export function createGatewayPluginRuntimeGeneration(params: {
   let current: GatewayPluginRuntimeClaim;
   let latestReservation: GatewayPluginRuntimeClaim | undefined;
   let reloadStatus: GatewayPluginReloadStatus | undefined;
+  // Queued status before admission is an overlay. Readiness can see it while the
+  // serving claim stays current. A later reservation snapshots the pre-overlay
+  // status so refusal restores that status instead of keeping the queue.
+  let transientReloadBaseline: GatewayPluginReloadStatus | undefined;
+  let transientReloadActive = false;
   let pending:
     | {
         claim: GatewayPluginRuntimeClaim;
@@ -69,8 +74,33 @@ export function createGatewayPluginRuntimeGeneration(params: {
   };
   current = createClaim();
 
+  const closeTransientReload = (restore: boolean) => {
+    if (!transientReloadActive) {
+      return;
+    }
+    if (restore) {
+      reloadStatus = transientReloadBaseline;
+    }
+    transientReloadActive = false;
+    transientReloadBaseline = undefined;
+  };
+
   return {
     getReloadStatus: () => reloadStatus,
+    publishReloadStatus: (status: GatewayPluginReloadStatus | undefined) => {
+      if (pending) {
+        return;
+      }
+      if (status === undefined) {
+        closeTransientReload(true);
+        return;
+      }
+      if (!transientReloadActive) {
+        transientReloadBaseline = reloadStatus;
+        transientReloadActive = true;
+      }
+      reloadStatus = status;
+    },
     currentClaim: () => current,
     currentServices: () => params.getServices(),
     publishServices: (claim: GatewayPluginRuntimeClaim, services: PluginServicesHandle | null) =>
@@ -80,7 +110,8 @@ export function createGatewayPluginRuntimeGeneration(params: {
         throw new Error("a Gateway plugin runtime replacement is already pending");
       }
       const reservation = { claim: createClaim(), settled: createDeferredCore() };
-      const previousReloadStatus = reloadStatus;
+      const previousReloadStatus = transientReloadActive ? transientReloadBaseline : reloadStatus;
+      closeTransientReload(false);
       latestReservation = reservation.claim;
       pending = reservation;
       const settle = (accepted: boolean) => {

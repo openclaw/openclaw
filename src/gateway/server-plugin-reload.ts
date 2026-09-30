@@ -50,6 +50,7 @@ import {
   createPluginReloadRecovery,
   resolvePluginReloadReplacementIds,
 } from "./server-plugin-reload-recovery.js";
+import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generation.js";
 import {
   GatewayConfigReloadSupersededError,
   type GatewayReloadHandlerParams,
@@ -173,7 +174,16 @@ export async function reloadGatewayPlugins(
     recordWarning,
     retainRetirement: (retire) => kernel.pluginMetadata.retire(cache, retire),
   });
-  const replacement = kernel.pluginRuntimeGeneration.reserve();
+  let replacement: ReturnType<typeof kernel.pluginRuntimeGeneration.reserve> | undefined;
+  let stagedReloadStatus: GatewayPluginReloadStatus | undefined;
+  const reportReloadStatus = (status: GatewayPluginReloadStatus | undefined) => {
+    stagedReloadStatus = status;
+    if (replacement) {
+      replacement.setReloadStatus(status);
+      return;
+    }
+    kernel.pluginRuntimeGeneration.publishReloadStatus(status);
+  };
   const assertCurrent = () => {
     drainSignal.throwIfAborted();
     params.assertInvokerOwned?.();
@@ -259,9 +269,13 @@ export async function reloadGatewayPlugins(
       channels: channelTargets,
     });
     phase = "drain";
-    replacement.setReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
-    await drainRetainedWork(resourceHandoffIds, drainSignal, replacement.setReloadStatus);
+    reportReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
+    await drainRetainedWork(resourceHandoffIds, drainSignal, reportReloadStatus);
     assertCurrent();
+    replacement = kernel.pluginRuntimeGeneration.reserve();
+    if (stagedReloadStatus) {
+      replacement.setReloadStatus(stagedReloadStatus);
+    }
     channels.pause();
     decisionReplacement = prepareDecisionProviderReload(previousRegistry, changedPluginIds);
     for (const sidecar of runtimeState.gatewayLifetimeSidecars.snapshot()) {
@@ -303,11 +317,11 @@ export async function reloadGatewayPlugins(
     await drainBeforeReplacement(
       resourceHandoffIds,
       drainSignal,
-      replacement.setReloadStatus,
+      reportReloadStatus,
       assertCurrent,
     );
     assertCurrent();
-    replacement.setReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
+    reportReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
     // Channel monitors and services hold long-lived consumers until stop cancels
     // their loops. Ask those owners to stop before joining the remaining work.
     previousStopStarted = true;
@@ -478,11 +492,15 @@ export async function reloadGatewayPlugins(
       runtime: receipt,
     };
   } catch (error) {
+    if (!replacement) {
+      kernel.pluginRuntimeGeneration.publishReloadStatus(undefined);
+      stagedReloadStatus = undefined;
+    }
     let failure = includeServiceStopFailure(error);
     const onCleanupFailure = (message: string) => (cleanupError: unknown) => {
       failure = new AggregateError([failure, cleanupError], message);
     };
-    replacement.reject();
+    replacement?.reject();
     if (!committed) {
       const candidateRegistry =
         loaded?.pluginRegistry ??
@@ -537,7 +555,7 @@ export async function reloadGatewayPlugins(
           if (previousStopStarted) {
             // Stop is not reversible for all plugins (for example, aborted controllers).
             // Re-register captured old code instead of reopening a stopped registration.
-            await drainForRecovery(restartDrainSignal, replacement.setReloadStatus);
+            await drainForRecovery(restartDrainSignal, reportReloadStatus);
             if (!previousHooksStopped) {
               previousHooksStopped = true;
               await runLifecycleHooks(
@@ -705,7 +723,7 @@ export async function reloadGatewayPlugins(
     // instances keep their own resource/admission fence until a later safe reload.
     channels.release("failed");
     const activated = phase === "dispose";
-    replacement.finishReload(
+    replacement?.finishReload(
       activated ? "applied" : restored ? "restored" : phase === "prepare" ? "unchanged" : "failed",
       changedPluginIds,
       pluginRuntime.registry,

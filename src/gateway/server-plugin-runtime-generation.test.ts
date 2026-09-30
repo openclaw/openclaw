@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 
@@ -89,4 +90,36 @@ describe("Gateway plugin runtime generation", () => {
       expect(discoveryStop).toHaveBeenCalledTimes(survives ? 0 : 1);
     },
   );
+
+  it("publishes queued reload status without fencing the serving claim", () => {
+    const owner = createOwner();
+    const serving = owner.currentClaim();
+    const prior = owner.reserve();
+    prior.setReloadStatus({ phase: "failed", pluginIds: ["prior"] });
+    prior.reject();
+    const queued = {
+      phase: "reloading" as const,
+      pluginIds: ["probe"],
+      deadlineAtMs: 1_700_000_000_000,
+      reason: "Plugin replacement queued behind 1 retained work item(s)",
+    };
+
+    owner.publishReloadStatus(queued);
+    expect(serving.isCurrent()).toBe(true);
+    expect(serving.publish(() => {})).toBe(true);
+    expect(owner.getReloadStatus()).toEqual(queued);
+
+    owner.publishReloadStatus(undefined);
+    expect(serving.isCurrent()).toBe(true);
+    expect(owner.getReloadStatus()).toEqual({ phase: "failed", pluginIds: ["prior"] });
+
+    owner.publishReloadStatus(queued);
+    const admitted = owner.reserve();
+    expect(serving.isCurrent()).toBe(false);
+    expect(owner.getReloadStatus()).toEqual(queued);
+    admitted.reject();
+    admitted.finishReload("unchanged", new Set(), createEmptyPluginRegistry(), new Set());
+    expect(serving.isCurrent()).toBe(true);
+    expect(owner.getReloadStatus()).toEqual({ phase: "failed", pluginIds: ["prior"] });
+  });
 });
