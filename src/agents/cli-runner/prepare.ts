@@ -799,12 +799,11 @@ async function prepareCliRunContextWithinReadFence(
     ...buildAgentHookContextChannelFields(params),
   };
   const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
-  // The recorder owns the admitted request and its stable admission identity.
-  // Without one, the event carries this turn's prompt text and no identity.
-  const admittedUserMessage = skipsTurnPreparation
+  // Only the recorder-owned admitted request carries current-input identity, so a
+  // run without one keeps the legacy identity-free event.
+  const currentUserMessage = skipsTurnPreparation
     ? undefined
     : await params.userTurnTranscriptRecorder?.resolveMessage();
-  const currentUserMessage = admittedUserMessage ?? params.prompt;
   const promptBuildHookResult = await (async () => {
     if (skipsTurnPreparation) {
       return undefined;

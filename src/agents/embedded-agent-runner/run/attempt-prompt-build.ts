@@ -137,10 +137,11 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   };
   const promptBuildMessages =
     pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
-  // The recorder owns the admitted request, so its message carries both the
-  // pre-projection text and the stable admission identity. Without one, fall back
-  // to this turn's prompt and let the event stay identity-free (legacy producers).
-  const currentUserMessage = input.preparedUserTurnMessage ?? attempt.prompt;
+  // The recorder owns the admitted request, so its message is the only source
+  // that carries both the pre-projection text and the stable admission identity.
+  // Runs without one keep the legacy identity-free event instead of guessing a
+  // request from the assembled prompt.
+  const currentUserMessage = input.preparedUserTurnMessage;
   const promptEvent = buildPromptBuildHookEvent({
     prompt: effectivePrompt,
     messages: promptBuildMessages,

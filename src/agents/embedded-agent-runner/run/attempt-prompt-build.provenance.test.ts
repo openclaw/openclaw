@@ -255,11 +255,12 @@ describe("prompt-build hook current-input identity", () => {
     });
   });
 
-  it("supplies the turn prompt without an admission identity when no request was admitted", async () => {
+  it("keeps the legacy identity-free event when no request was admitted", async () => {
     const { capturedEvents } = await assembleWithCapturedHookCtx("current-input-legacy-producer");
 
     expect(capturedEvents).toHaveLength(1);
-    expect(capturedEvents[0]).toMatchObject({ currentUserMessage: "Handoff payload" });
+    expect(capturedEvents[0]).toMatchObject({ prompt: "Handoff payload", messages: [] });
+    expect(capturedEvents[0]).not.toHaveProperty("currentUserMessage");
     expect(capturedEvents[0]).not.toHaveProperty("currentUserMessageId");
   });
 });

@@ -67,7 +67,6 @@ export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
   currentUserMessage?: PromptBuildHookCurrentUserMessage;
-  currentUserMessageId?: string;
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
 }): Promise<PluginHookBeforePromptBuildResult> {
@@ -129,7 +128,6 @@ export async function resolvePromptBuildHookResult(params: {
             prompt: params.prompt,
             messages: params.messages,
             currentUserMessage: params.currentUserMessage,
-            currentUserMessageId: params.currentUserMessageId,
           }),
           params.hookCtx,
         )

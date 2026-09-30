@@ -41,12 +41,13 @@ Use the phase-specific hooks for new plugins:
   detection when available; `prompt` may contain reconstructed history. Do not
   parse envelope markers to recover request boundaries. An explicit empty string
   means no textual request, including image-only input or a continuation without
-  a retained request. It must not fall back to history. The embedded runner, the
-  CLI backend, and the harness runtimes all read both fields from the
-  recorder-owned admitted request. Codex runtime refresh retains the original
-  recorder's text and identity. Without a recorder, a host supplies current text
-  but no admission ID; equal text and a correlation run ID alone do not identify
-  an admission. Omitted fields preserve existing producer behavior.
+  a retained request. It must not fall back to history. The embedded runner and
+  the CLI backend read both fields from the recorder-owned admitted request and
+  omit them when a run carries no recorder, so those runs keep the legacy event
+  shape. Codex runtime refresh retains the original recorder's text and identity.
+  Without a recorder, Codex supplies current text but no admission ID; equal text
+  and a correlation run ID alone do not identify an admission. Omitted fields
+  preserve existing producer behavior.
   Return `prependContext`, `appendContext`, `systemPrompt`,
   `prependSystemContext`, `appendSystemContext`, or `toolsAllow`. `toolsAllow`
   can only narrow the host-resolved tool surface for the current turn; `[]`
