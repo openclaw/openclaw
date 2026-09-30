@@ -95,9 +95,13 @@ suite.define(() => {
             );
             expect(await dialog.locator(".external-supervisor-guidance prod").count()).toBe(0);
             await copy.click();
-            await expect
-              .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-              .toBe(guidance.command);
+            await dialog
+              .locator(".external-supervisor-guidance [data-copy-feedback]")
+              .getByText("Copied!", { exact: true })
+              .waitFor();
+            expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+              guidance.command,
+            );
           } else {
             expect(await dialog.locator(".external-supervisor-guidance").count()).toBe(0);
           }
