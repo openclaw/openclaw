@@ -178,6 +178,7 @@ it.each([
       } finally {
         releaseOriginalTiming.resolve();
       }
+      await fixture.settle();
     }
 
     const children: Array<readonly [string, string]> = [
