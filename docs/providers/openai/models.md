@@ -1,8 +1,8 @@
 ---
-summary: "Pick an OpenAI model ref, including GPT-6 Astra, Sol, Luna, and the GPT-5.6 tiers"
+summary: "Pick an OpenAI model ref, including GPT-6.1 Sol, GPT-6 Astra, Sol, Luna, and the GPT-5.6 tiers"
 read_when:
   - You are choosing which OpenAI model ref to run
-  - You want to select GPT-6 Sol or Luna
+  - You want to select GPT-6.1 Sol, GPT-6 Sol, or Luna
   - You want Astra async tools, mid-turn steering, or cached reasoning changes
   - Your account does not expose a GPT-5.6 tier
 title: "OpenAI models"
@@ -15,6 +15,7 @@ sidebarTitle: "Models"
 | ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | ChatGPT/Codex subscription, native Codex runtime  | `openai/gpt-6-astra`                                               | Fresh subscription setup; sign in with Codex auth.                  |
 | Direct API-key billing for agent turns            | `openai/gpt-6-astra` plus an ordered API-key auth profile          | Fresh API-key setup uses Astra.                                     |
+| GPT-6.1 Sol                                       | `openai/gpt-6.1-sol`                                               | Select explicitly; reasoning cannot be disabled.                    |
 | GPT-6 Sol                                         | `openai/gpt-6-sol`                                                 | Select explicitly; account access can differ between auth routes.   |
 | Lower-cost GPT-6 Luna                             | `openai/gpt-6-luna`                                                | Select explicitly; check the account catalog for availability.      |
 | Choose an exact GPT-5.6 tier                      | `openai/gpt-5.6-sol`, `-terra`, or `-luna`                         | Check `models list` for the tiers available to this account.        |
@@ -127,6 +128,34 @@ metadata also start fresh after transport expiry.
 
 The native [Codex harness](/plugins/codex-harness) owns its own Responses loop;
 these built-in-runtime capabilities do not imply native Codex support.
+
+## GPT-6.1 Sol
+
+Select `openai/gpt-6.1-sol` with an OpenAI API-key profile or a
+ChatGPT/Codex subscription that exposes it:
+
+```bash
+openclaw models set openai/gpt-6.1-sol
+```
+
+It uses the Responses API for tool calls, accepts text and images, and supports
+a 1,050,000-token context window with up to 128,000 output tokens. OpenClaw
+keeps its 272,000-token active input budget by default; native Codex follows
+the selected account's advertised limits. Existing selections and the Astra
+setup default are unchanged. A successful account catalog remains authoritative;
+subscription offline hints do not imply access.
+
+Reasoning defaults to `medium` and supports `low`, `medium`, `high`, `xhigh`,
+and `max`. Unlike GPT-6 Sol, GPT-6.1 Sol cannot disable reasoning: `off` does
+not send `none`, and `minimal` maps to `low`. OpenClaw offers `/think ultra`
+through its existing orchestration mode; native Codex uses the account's
+advertised efforts.
+
+Standard API prices per million tokens are $2 input, $0.10 cache reads, $2.50
+cache writes, and $10 output. Above 272K input tokens, input and cache rates
+double and output costs 1.5 times the standard rate for the full request.
+See the [GPT-6.1 Sol model reference](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+for current capabilities, pricing, and regional availability.
 
 ## GPT-6 Sol and Luna
 
