@@ -2026,7 +2026,6 @@ async function prepareCliRunContextWithinReadFence(
       bindPreparedParams(preparedParams);
       return { ...buildPreparedContext(preparedParams), hadSessionFile: false };
     }
-    ensureContextEnginesInitialized();
     // Context remains session-owned. Trusted helper runs may borrow a different
     // agentDir only for model/auth execution.
     const contextEngineAgentDir = resolveAgentDir(runConfig, sessionAgentId);
@@ -2055,6 +2054,7 @@ async function prepareCliRunContextWithinReadFence(
     } else {
       const trackDisposal = captureAsyncWorkTracker();
       const ownedEngine = await resolveContextEngine(runConfig, {
+        initialize: ensureContextEnginesInitialized,
         agentDir: contextEngineAgentDir,
         workspaceDir,
       });

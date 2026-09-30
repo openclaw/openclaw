@@ -263,12 +263,14 @@ describe("runSessionBackfill", () => {
     expect(result.stagedEntries).toBe(1);
     expect(entries).toHaveLength(1);
     expect(
-      listMemoryEntryOrigins({ agentId: "main", entryKeys: [entries[0]!.key] }).map((origin) => ({
-        entryKey: origin.entryKey,
-        sessionId: origin.sessionId,
-        originClass: origin.originClass,
-        observedAt: origin.observedAt,
-      })),
+      (await listMemoryEntryOrigins({ agentId: "main", entryKeys: [entries[0]!.key] })).map(
+        (origin) => ({
+          entryKey: origin.entryKey,
+          sessionId: origin.sessionId,
+          originClass: origin.originClass,
+          observedAt: origin.observedAt,
+        }),
+      ),
     ).toEqual(
       sources.map((source) => ({
         entryKey: entries[0]?.key,
@@ -305,7 +307,7 @@ describe("runSessionBackfill", () => {
     });
 
     expect(await readShortTermRecallEntries({ workspaceDir })).toEqual([]);
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
   });
 
   it("buckets messages in the configured timezone and processes days oldest first", async () => {
@@ -712,7 +714,7 @@ describe("runSessionBackfill", () => {
         expect(await readShortTermRecallEntries({ workspaceDir })).toEqual([]);
         expect((await dreamingTestState.readSessionIngestionState(workspaceDir)).files).toEqual({});
         await expect(fs.stat(corpusParent)).rejects.toMatchObject({ code: "ENOENT" });
-        const origins = listMemoryEntryOrigins({ agentId: "main" });
+        const origins = await listMemoryEntryOrigins({ agentId: "main" });
         expect(origins.every(({ entryKey }) => before.includes(entryKey))).toBe(true);
         const repeated = await runSessionBackfill({
           agentId: "main",
@@ -721,7 +723,7 @@ describe("runSessionBackfill", () => {
           timezone: "UTC",
         });
         expect(repeated.writtenDiaryEntries).toBe(0);
-        expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(origins);
+        expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(origins);
       }
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();

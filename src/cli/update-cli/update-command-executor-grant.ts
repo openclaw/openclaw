@@ -9,7 +9,6 @@ import {
   type UpdateCommandChildGrant,
 } from "./update-command-executor-children.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-export type { UpdateCommandChildGrant } from "./update-command-executor-children.js";
 
 export function resolveUpdateCommandChildBinding(
   grant: UpdateCommandChildGrant,

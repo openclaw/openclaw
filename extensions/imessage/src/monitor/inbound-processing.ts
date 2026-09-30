@@ -31,7 +31,7 @@ import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversat
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
@@ -170,14 +170,7 @@ function normalizeGroupPolicy(policy: string): GroupPolicy {
 }
 
 function normalizeReplyField(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : undefined;
-  }
-  if (typeof value === "number") {
-    return String(value);
-  }
-  return undefined;
+  return typeof value === "number" ? String(value) : normalizeOptionalString(value);
 }
 
 function describeReplyContext(message: IMessagePayload): IMessageReplyContext | null {
@@ -442,6 +435,14 @@ export async function resolveIMessageInboundDecision(params: {
   const inboundMessageIds = resolveInboundEchoMessageIds(params.message);
   const inboundMessageId = inboundMessageIds[0];
   const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
+  const echoScope = buildIMessageEchoScope({
+    accountId: params.accountId,
+    isGroup,
+    chatId,
+    chatGuid,
+    chatIdentifier,
+    sender,
+  });
 
   if (params.message.is_from_me) {
     if (isAmbiguousSelfThread) {
@@ -449,14 +450,6 @@ export async function resolveIMessageInboundDecision(params: {
     }
     if (isSelfChat) {
       params.selfChatCache?.remember({ ...selfChatLookup, allowCreatedAtSkew: true });
-      const echoScope = buildIMessageEchoScope({
-        accountId: params.accountId,
-        isGroup,
-        chatId,
-        chatGuid,
-        chatIdentifier,
-        sender,
-      });
       if (
         params.echoCache &&
         (bodyText || inboundMessageId || mediaFacts.length > 0) &&
@@ -579,14 +572,7 @@ export async function resolveIMessageInboundDecision(params: {
       ((params.echoCache &&
         (await hasIMessageEchoMatch({
           echoCache: params.echoCache,
-          scope: buildIMessageEchoScope({
-            accountId: params.accountId,
-            isGroup,
-            chatId,
-            chatGuid,
-            chatIdentifier,
-            sender,
-          }),
+          scope: echoScope,
           messageIds: targetGuids,
         }))) ||
         (await isKnownFromMeIMessageTarget({
@@ -650,14 +636,6 @@ export async function resolveIMessageInboundDecision(params: {
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
   if (params.echoCache && (messageText || inboundMessageId || mediaFacts.length > 0)) {
-    const echoScope = buildIMessageEchoScope({
-      accountId: params.accountId,
-      isGroup,
-      chatId,
-      chatGuid,
-      chatIdentifier,
-      sender,
-    });
     if (
       await hasIMessageEchoMatch({
         echoCache: params.echoCache,
@@ -692,9 +670,10 @@ export async function resolveIMessageInboundDecision(params: {
     channel: "imessage",
     accountId: params.accountId,
   });
-  const replyContextAllowFrom = Array.from(
-    new Set([...groupAllowFromForAccess, ...effectiveGroupAllowFrom]),
-  );
+  const replyContextAllowFrom = uniqueStrings([
+    ...groupAllowFromForAccess,
+    ...effectiveGroupAllowFrom,
+  ]);
   const replySenderAllowed = resolveInboundSupplementalSenderAllowed({
     isGroup,
     groupPolicy: replyContextAllowFrom.length === 0 ? "open" : "allowlist",

@@ -1,4 +1,3 @@
-// Builds CLI runtime dispatch inputs for agent runner executions.
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

@@ -17,6 +17,7 @@ import type {
   PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 import type { PluginStateWorkerFailure } from "./plugin-state-worker-errors.js";
+import type { RuntimeHealthClearSelection } from "./runtime-health-records.js";
 
 type Namespace = { pluginId: string; namespace: string };
 type Key = Namespace & { key: string };
@@ -69,6 +70,10 @@ export type PluginStateWorkerRequests = {
   };
   "pluginState.count": { input: Namespace; output: number };
   "pluginState.clear": { input: Namespace; output: void };
+  "pluginState.clearRuntimeHealth": {
+    input: Namespace & { processId: number; selection: RuntimeHealthClearSelection };
+    output: void;
+  };
   "pluginState.sweep": { input: undefined; output: number };
 };
 
@@ -163,6 +168,11 @@ export const pluginStateWorkerOperations = {
     operation: "clear",
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to clear plugin state namespace.",
+  },
+  "pluginState.clearRuntimeHealth": {
+    operation: "clear",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to clear runtime health records.",
   },
   "pluginState.sweep": {
     operation: "sweep",

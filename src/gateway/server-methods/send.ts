@@ -196,7 +196,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               ? assertDirectAdapterHandoff
               : undefined,
             async () => {
-              const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+              const sessionKey = normalizeOptionalString(request.sessionKey);
               const requestedAgentId =
                 normalizeOptionalString(request.agentId) ?? trustedContext.runtimeAgentId;
               const sessionOwner = sessionKey
@@ -346,7 +346,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   : false,
                 conversationReadOrigin,
                 sessionKey,
-                sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
+                sessionId: normalizeOptionalString(request.sessionId),
                 inboundEventKind,
                 agentId,
                 mediaAccess,
@@ -613,8 +613,8 @@ export const sendHandlers: GatewayRequestHandlers = {
             mediaUrl,
             mediaUrls,
             buffer,
-            filename: normalizeOptionalString(request.filename) ?? undefined,
-            contentType: normalizeOptionalString(request.contentType) ?? undefined,
+            filename: normalizeOptionalString(request.filename),
+            contentType: normalizeOptionalString(request.contentType),
           };
           await hydrateAttachmentParamsForAction({
             cfg,

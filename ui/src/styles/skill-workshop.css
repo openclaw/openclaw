@@ -264,11 +264,13 @@
   text-align: left;
 }
 
-.sw-installed-skill:hover {
+.sw-installed-skill:hover,
+.sw-row:hover {
   background: var(--bg-hover);
 }
 
-.sw-installed-skill.is-selected {
+.sw-installed-skill.is-selected,
+.sw-row.is-selected {
   background: color-mix(in srgb, var(--bg-elevated) 58%, var(--card) 42%);
   border-left-color: var(--accent);
 }
@@ -418,15 +420,6 @@
   font: inherit;
   color: var(--text);
   width: 100%;
-}
-
-.sw-row:hover {
-  background: var(--bg-hover);
-}
-
-.sw-row.is-selected {
-  background: color-mix(in srgb, var(--bg-elevated) 58%, var(--card) 42%);
-  border-left-color: var(--accent);
 }
 
 .sw-row__dot {

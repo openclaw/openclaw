@@ -27,13 +27,9 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  private readonly subscriptions = new SubscriptionsController(this).watchStore(
-    () => this.context?.nativeDeviceSettings,
-  );
-
-  override disconnectedCallback() {
-    this.subscriptions.clear();
-    super.disconnectedCallback();
+  constructor() {
+    super();
+    void new SubscriptionsController(this).watchStore(() => this.context?.nativeDeviceSettings);
   }
 
   private renderPermissions(snapshot: NativeDeviceSettingsSnapshot) {

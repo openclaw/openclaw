@@ -85,7 +85,8 @@ function setZalouserGroupAllowlist(
 }
 
 function ensureZalouserPluginEnabled(cfg: OpenClawConfig): OpenClawConfig {
-  const next: OpenClawConfig = {
+  const allow = cfg.plugins?.allow;
+  return {
     ...cfg,
     plugins: {
       ...cfg.plugins,
@@ -96,17 +97,7 @@ function ensureZalouserPluginEnabled(cfg: OpenClawConfig): OpenClawConfig {
           enabled: true,
         },
       },
-    },
-  };
-  const allow = next.plugins?.allow;
-  if (!Array.isArray(allow) || allow.includes(channel)) {
-    return next;
-  }
-  return {
-    ...next,
-    plugins: {
-      ...next.plugins,
-      allow: [...allow, channel],
+      ...(Array.isArray(allow) && !allow.includes(channel) ? { allow: [...allow, channel] } : {}),
     },
   };
 }

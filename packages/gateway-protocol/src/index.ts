@@ -52,6 +52,7 @@ export {
   type SessionOwnerSessionCount,
 } from "./schema/sessions-list.js";
 export * from "./schema/sessions-suggestions.js";
+export * from "./schema/sessions-reactions.js";
 export * from "./schema/sessions-activity-summary.js";
 export * from "./schema/sessions-delete.js";
 export * from "./schema/sessions-goal.js";

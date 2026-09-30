@@ -313,6 +313,7 @@ describe("models list published transport", () => {
     await list({ local: true, plain: true });
     expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("catalog-provider/Reader");
     expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("keeps an empty plain list machine-readable", async () => {

@@ -1,18 +1,34 @@
 // Context-engine quarantine health tests cover cross-process status visibility.
 import { spawn } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdirSync, readdirSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   createCorePluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
 import { createRuntimeHealthRecordEnvelope } from "../plugin-state/runtime-health-store.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { getProcessStartTime } from "../shared/pid-alive.js";
+import { seedNativeVersionZeroState } from "../state/native-version-zero.test-support.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { MockContextEngine } from "./context-engine.test-support.js";
 import {
   clearPersistedContextEngineQuarantineForProcess,
+  listPersistedContextEngineQuarantines,
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
-import { listContextEngineQuarantines } from "./registry.js";
+import { listContextEngineQuarantines, registerContextEngineForOwner } from "./registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
 
 const CONTEXT_ENGINE_QUARANTINE_OWNER_ID = "core:context-engine-quarantine-health";
@@ -79,8 +95,8 @@ afterEach(() => {
 describe("context engine quarantine health", () => {
   it("lists persisted runtime quarantines when local process state is empty", async () => {
     await withStateDirEnv("openclaw-context-engine-quarantine-", async () => {
-      resetContextEngineRuntimeQuarantineForTests();
-      recordPersistedContextEngineQuarantine({
+      await resetContextEngineRuntimeQuarantineForTests();
+      await recordPersistedContextEngineQuarantine({
         engineId: "lossless-claw",
         owner: "plugin:lossless-claw",
         operation: "bootstrap",
@@ -99,6 +115,105 @@ describe("context engine quarantine health", () => {
       ]);
     });
   });
+
+  it("does not create state while clearing an absent health mirror", async () => {
+    await withStateDirEnv("openclaw-context-engine-quarantine-absent-", async ({ stateDir }) => {
+      expect(readdirSync(stateDir)).toEqual([]);
+      await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
+      expect(readdirSync(stateDir)).toEqual([]);
+    });
+  });
+
+  it("does not adopt native-only state while clearing an absent health mirror", async () => {
+    await withStateDirEnv("openclaw-context-engine-quarantine-native-", async ({ stateDir }) => {
+      const { DatabaseSync } = requireNodeSqlite();
+      const databasePath = resolveOpenClawStateSqlitePath();
+      expect(databasePath.startsWith(`${stateDir}${path.sep}`)).toBe(true);
+      mkdirSync(path.dirname(databasePath), { recursive: true });
+      const schemaSql = "SELECT type, name, sql FROM sqlite_schema ORDER BY type, name";
+      const before = (() => {
+        const database = new DatabaseSync(databasePath);
+        try {
+          seedNativeVersionZeroState(database, false);
+          return database.prepare(schemaSql).all();
+        } finally {
+          database.close();
+        }
+      })();
+      await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
+        expect(database.prepare(schemaSql).all()).toEqual(before);
+      } finally {
+        database.close();
+      }
+    });
+  });
+
+  it.each([false, true])(
+    "keeps accepted registration when its health cleanup is superseded (%s)",
+    async (superseded) => {
+      await withStateDirEnv("openclaw-context-engine-registration-", async () => {
+        const previous = captureActivePluginRegistrySnapshot();
+        const registry = previous.activeRegistry ?? createEmptyPluginRegistry();
+        if (!previous.activeRegistry) {
+          setActivePluginRegistry(registry);
+        }
+        const publication = captureActivePluginRegistrySnapshot();
+        const engineId = `health-registration-${superseded}`;
+        const quarantine = {
+          engineId,
+          operation: "resolve",
+          reason: "not registered",
+          failedAt: new Date(123),
+        };
+        await recordPersistedContextEngineQuarantine(quarantine);
+        const reached = createDeferredCore();
+        const release = createDeferredCore();
+        const clear = pluginStateWorker.clearRuntimeHealthInWorker;
+        const observer = vi
+          .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
+          .mockImplementation(async (params) => {
+            reached.resolve();
+            await release.promise;
+            await clear(params);
+          });
+        const registration = registerContextEngineForOwner(
+          engineId,
+          () => new MockContextEngine(),
+          "test:health-registration",
+        );
+        const observed = registration.then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          await reached.promise;
+          if (superseded) {
+            stageActivePluginRegistry(
+              createEmptyPluginRegistry(),
+              null,
+              publication.runtimeSubagentMode,
+              publication.workspaceDir ?? undefined,
+            );
+          }
+          release.resolve();
+          expect(await observed).toEqual({ result: { ok: true } });
+          expect(registry.contextEngines.get(engineId)?.owner).toBe("test:health-registration");
+          expect(await listPersistedContextEngineQuarantines()).toEqual(
+            superseded ? [quarantine] : [],
+          );
+        } finally {
+          release.resolve();
+          await observed;
+          observer.mockRestore();
+          registry.contextEngines.delete(engineId);
+          restoreActivePluginRegistrySnapshot(previous);
+        }
+      });
+    },
+  );
 
   it.runIf(hasProcessStartTimes)(
     "clears only the current process record while preserving live sibling quarantines",
@@ -122,7 +237,7 @@ describe("context engine quarantine health", () => {
             processStartTime: getProcessStartTime(siblingProcessId),
           });
 
-          clearPersistedContextEngineQuarantineForProcess("lossless-claw", process.pid);
+          await clearPersistedContextEngineQuarantineForProcess("lossless-claw", process.pid);
 
           expect(await listContextEngineQuarantines()).toEqual([
             {
@@ -165,7 +280,7 @@ describe("context engine quarantine health", () => {
             processStartTime: getProcessStartTime(siblingProcessId),
           });
 
-          resetContextEngineRuntimeQuarantineForTests();
+          await resetContextEngineRuntimeQuarantineForTests();
 
           expect(await listContextEngineQuarantines()).toEqual([
             {
@@ -183,7 +298,7 @@ describe("context engine quarantine health", () => {
 
   it("drops records from a previous incarnation of this PID", async () => {
     await withStateDirEnv("openclaw-context-engine-quarantine-incarnation-", async () => {
-      resetContextEngineRuntimeQuarantineForTests();
+      await resetContextEngineRuntimeQuarantineForTests();
       seedPersistedContextEngineQuarantineForTest({
         engineId: "lossless-claw",
         owner: "plugin:lossless-claw",
@@ -202,7 +317,7 @@ describe("context engine quarantine health", () => {
     async () => {
       await withStateDirEnv("openclaw-context-engine-quarantine-pid-reuse-", async () => {
         await withLiveSiblingProcess(async (siblingProcessId) => {
-          resetContextEngineRuntimeQuarantineForTests();
+          await resetContextEngineRuntimeQuarantineForTests();
           const siblingStartTime = getProcessStartTime(siblingProcessId);
           seedSiblingQuarantineForTest({
             engineId: "lossless-claw",
@@ -223,7 +338,7 @@ describe("context engine quarantine health", () => {
   it("drops sibling records whose process identity cannot be verified", async () => {
     await withStateDirEnv("openclaw-context-engine-quarantine-unverified-", async () => {
       await withLiveSiblingProcess(async (siblingProcessId) => {
-        resetContextEngineRuntimeQuarantineForTests();
+        await resetContextEngineRuntimeQuarantineForTests();
         // A null recorded start time (non-Linux recorder or /proc read failure)
         // must fail closed instead of trusting bare PID liveness.
         seedSiblingQuarantineForTest({

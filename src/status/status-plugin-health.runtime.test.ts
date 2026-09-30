@@ -69,15 +69,15 @@ describe("runtime plugin health snapshot", () => {
     "settles an overlapping snapshot and observes %s on the next read",
     async (change) => {
       await withStateDirEnv("openclaw-status-quarantine-recovery-", async () => {
-        resetContextEngineRuntimeQuarantineForTests();
+        await resetContextEngineRuntimeQuarantineForTests();
         const quarantine = {
           engineId: "recovered-engine",
           operation: "bootstrap",
           reason: "temporary failure",
           failedAt: new Date(123),
         };
-        recordPersistedContextEngineQuarantine(quarantine);
-        recordPersistedRuntimeToolSchemaQuarantine({
+        await recordPersistedContextEngineQuarantine(quarantine);
+        await recordPersistedRuntimeToolSchemaQuarantine({
           toolName: "still-quarantined-tool",
           reason: "unsupported schema",
           failedAt: new Date(456),
@@ -104,10 +104,10 @@ describe("runtime plugin health snapshot", () => {
               value: expect.objectContaining({ engineId: "recovered-engine" }),
             }),
           ]);
-          clearPersistedContextEngineQuarantineForProcess("recovered-engine", process.pid);
+          await clearPersistedContextEngineQuarantineForProcess("recovered-engine", process.pid);
           const replacement = { ...quarantine, reason: "new failure", failedAt: new Date(789) };
           if (change === "replace") {
-            recordPersistedContextEngineQuarantine(replacement);
+            await recordPersistedContextEngineQuarantine(replacement);
           }
           release.resolve();
           const snapshot = await pending;
@@ -134,8 +134,8 @@ describe("runtime plugin health snapshot", () => {
 
   it("includes persisted context-engine quarantines without caller-thread SQLite", async () => {
     await withStateDirEnv("openclaw-status-plugin-health-", async () => {
-      resetContextEngineRuntimeQuarantineForTests();
-      recordPersistedContextEngineQuarantine({
+      await resetContextEngineRuntimeQuarantineForTests();
+      await recordPersistedContextEngineQuarantine({
         engineId: "lossless-claw",
         owner: "plugin:lossless-claw",
         operation: "bootstrap",
@@ -166,7 +166,7 @@ describe("runtime plugin health snapshot", () => {
   it("includes core-owned runtime tool quarantines from this process", async () => {
     await withStateDirEnv("openclaw-status-tool-quarantine-core-", async () => {
       setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
-      recordPersistedRuntimeToolSchemaQuarantine({
+      await recordPersistedRuntimeToolSchemaQuarantine({
         toolName: "core_bad_tool",
         reason: "unsupported schema",
         failedAt: new Date(789),
@@ -226,7 +226,7 @@ describe("runtime plugin health snapshot", () => {
 
   it("suppresses persisted plugin-owned runtime tool quarantines after the owner plugin is gone", async () => {
     await withStateDirEnv("openclaw-status-tool-quarantine-owner-", async () => {
-      recordPersistedRuntimeToolSchemaQuarantine({
+      await recordPersistedRuntimeToolSchemaQuarantine({
         toolName: "bad_tool",
         owner: "plugin:bad-tools",
         reason: "unsupported anyOf",

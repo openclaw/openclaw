@@ -11,26 +11,37 @@ import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createManagedOutgoingMediaBlocks } from "./managed-image-attachments.js";
-import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
+import {
+  listManagedImageRecordEntries,
+  type ManagedImageRecord,
+} from "./managed-image-record-store.js";
+
+const bytes = createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 });
+
+function createMedia(stateDir: string, assertCurrent?: () => void) {
+  return createManagedOutgoingMediaBlocks({
+    sessionKey: "agent:main:custody",
+    agentId: "main",
+    stateDir,
+    items: [{ url: `data:image/png;base64,${bytes.toString("base64")}`, trustedLocal: false }],
+    assertCurrent,
+  });
+}
+
+function recordPath(record: ManagedImageRecord) {
+  return path.join(record.original.mediaRoot, record.original.mediaSubdir, record.original.mediaId);
+}
 
 describe("managed media worker custody", () => {
   it("retains committed bytes without accepting a result after its database admission closes", async () => {
     await withOpenClawTestState(
       { layout: "state-only", label: "managed-media-retirement" },
       async (state) => {
-        const bytes = createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 });
         const accepted = vi.fn();
         const result = withChannelReadAuthority(
           () => {},
           async () => {
-            const blocks = await createManagedOutgoingMediaBlocks({
-              sessionKey: "agent:main:custody",
-              agentId: "main",
-              stateDir: state.stateDir,
-              items: [
-                { url: `data:image/png;base64,${bytes.toString("base64")}`, trustedLocal: false },
-              ],
-            });
+            const blocks = await createMedia(state.stateDir);
             await closeOpenClawStateDatabaseByPathAsync(
               state.statePath("state", "openclaw.sqlite"),
             );
@@ -49,15 +60,7 @@ describe("managed media worker custody", () => {
         expect(entries).toHaveLength(1);
         expect(entries[0]?.cleanupPending).toBe(false);
         const record = entries[0]!.record;
-        expect(
-          await fs.readFile(
-            path.join(
-              record.original.mediaRoot,
-              record.original.mediaSubdir,
-              record.original.mediaId,
-            ),
-          ),
-        ).toEqual(bytes);
+        expect(await fs.readFile(recordPath(record))).toEqual(bytes);
       },
     );
   });
@@ -66,29 +69,17 @@ describe("managed media worker custody", () => {
     await withOpenClawTestState(
       { layout: "state-only", label: "managed-media-replacement" },
       async (state) => {
-        const bytes = createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 });
         const accepted = vi.fn();
         const displaced = state.statePath("displaced-original.png");
         let originalPath: string | undefined;
         const result = withChannelReadAuthority(
           () => {},
           async () => {
-            const blocks = await createManagedOutgoingMediaBlocks({
-              sessionKey: "agent:main:custody",
-              agentId: "main",
-              stateDir: state.stateDir,
-              items: [
-                { url: `data:image/png;base64,${bytes.toString("base64")}`, trustedLocal: false },
-              ],
-            });
+            const blocks = await createMedia(state.stateDir);
             const entries = await listManagedImageRecordEntries({ stateDir: state.stateDir });
             expect(entries).toHaveLength(1);
             const record = entries[0]!.record;
-            originalPath = path.join(
-              record.original.mediaRoot,
-              record.original.mediaSubdir,
-              record.original.mediaId,
-            );
+            originalPath = recordPath(record);
             await fs.rename(originalPath, displaced);
             await fs.writeFile(originalPath, "synthetic replacement");
             return blocks;
@@ -121,7 +112,6 @@ describe("managed media worker custody", () => {
       { layout: "state-only", label: "managed-media-custody" },
       async (state) => {
         await listManagedImageRecordEntries({ stateDir: state.stateDir });
-        const bytes = createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 });
         const revoked = new Error("Synthetic channel authority revoked");
         let active = true;
         let nativeReplies = 0;
@@ -183,16 +173,7 @@ describe("managed media worker custody", () => {
         try {
           const outcome = await withChannelReadAuthority(
             assertCurrent,
-            () =>
-              createManagedOutgoingMediaBlocks({
-                sessionKey: "agent:main:custody",
-                agentId: "main",
-                stateDir: state.stateDir,
-                items: [
-                  { url: `data:image/png;base64,${bytes.toString("base64")}`, trustedLocal: false },
-                ],
-                assertCurrent,
-              }),
+            () => createMedia(state.stateDir, assertCurrent),
             undefined,
             accepted,
           ).then(
@@ -209,15 +190,7 @@ describe("managed media worker custody", () => {
             expect(entries).toHaveLength(1);
             const record = entries[0]!.record;
             expect(record).toMatchObject({ retentionClass: "transient", messageId: null });
-            expect(
-              await fs.readFile(
-                path.join(
-                  record.original.mediaRoot,
-                  record.original.mediaSubdir,
-                  record.original.mediaId,
-                ),
-              ),
-            ).toEqual(bytes);
+            expect(await fs.readFile(recordPath(record))).toEqual(bytes);
             if (failure === "lost ordinary reply") {
               expect(outcome).toHaveProperty("blocks");
               expect(accepted).toHaveBeenCalledOnce();

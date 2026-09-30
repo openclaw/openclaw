@@ -130,7 +130,9 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "transcript-binding" &&
+          (value.kind !== "reactions" &&
+            value.kind !== "conversation-binding" &&
+            value.kind !== "transcript-binding" &&
             value.kind !== "artifacts" &&
             value.kind !== "message-page" &&
             value.kind !== "around-id" &&

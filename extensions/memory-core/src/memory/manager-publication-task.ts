@@ -1,3 +1,4 @@
+import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
 import type { MemorySourceIndexHeader } from "./manager-source-index-kernel.js";
 
@@ -8,10 +9,36 @@ export type MemoryPublicationState = {
   extensionPath?: string;
 };
 export type MemoryPublicationFragment = { row: number; part: number; json: string; last: boolean };
+export type MemoryEmbeddingCacheEntry = {
+  hash: string;
+  embedding: number[];
+  sessionId?: string;
+};
+export type MemoryEmbeddingCacheHeader = {
+  agentId: string;
+  provider: { id: string; model: string };
+  providerKey: string;
+  maxEntries?: number;
+};
+export type MemoryEmbeddingCacheMutation =
+  | { kind: "upsert"; header: MemoryEmbeddingCacheHeader; entries: MemoryEmbeddingCacheEntry[] }
+  | { kind: "clear"; identities: MemoryIndexProviderIdentity[] };
 export type MemoryPublicationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "cache.stage.start": {
+    input: { operation: string; header: MemoryEmbeddingCacheHeader; rows: number };
+    output: void;
+  };
+  "cache.write": {
+    input: { operation: string; expectedRevision: number };
+    output: MemoryPublicationResult<boolean>;
+  };
+  "cache.clear": {
+    input: { identities: MemoryIndexProviderIdentity[]; expectedRevision: number };
+    output: MemoryPublicationResult<boolean>;
+  };
   "stage.start": {
     input: { operation: string; header: MemorySourceIndexHeader; rows: number };
     output: void;

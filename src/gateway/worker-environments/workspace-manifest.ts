@@ -38,10 +38,10 @@ export type WorkerWorkspaceReconciliationJournal = {
 type WorkerWorkspaceReconciliationPlan = Omit<WorkerWorkspaceReconciliationJournal, "basePack">;
 
 export type WorkerWorkspaceReconciliationJournalAdapter = {
-  load(): WorkerWorkspaceReconciliationJournal | undefined;
-  begin(journal: WorkerWorkspaceReconciliationJournal): void;
-  commit(manifestRef: string): void;
-  abort(): void;
+  load(): Promise<WorkerWorkspaceReconciliationJournal | undefined>;
+  begin(journal: WorkerWorkspaceReconciliationJournal): Promise<void>;
+  commit(manifestRef: string): Promise<void>;
+  abort(): Promise<void>;
 };
 
 // A complete rebase can replace every entry in both valid inventories.
@@ -177,19 +177,12 @@ function validateAndProjectEntries(values: unknown[]): {
     byPath.set(entry.path, entry);
     previous = entry.path;
   }
+  const eligible = rawEntries.filter(
+    (entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
+  );
   return {
-    entries: rawEntries.filter(
-      (entry): entry is WorkerWorkspaceManifestEntry =>
-        entry.type !== "directory" &&
-        !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
-    ),
-    directories: rawEntries
-      .filter(
-        (entry) =>
-          entry.type === "directory" &&
-          !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
-      )
-      .map((entry) => entry.path),
+    entries: eligible.filter((entry) => entry.type !== "directory"),
+    directories: eligible.filter((entry) => entry.type === "directory").map((entry) => entry.path),
   };
 }
 

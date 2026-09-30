@@ -42,38 +42,57 @@ Outputs `dist/OpenClaw.app`. Packaging requires a real signing identity by
 default and fails if none is available. Ad-hoc signing is an explicit opt-in;
 it does not preserve TCC permissions. See [macOS signing](/platforms/mac/signing).
 
-Packaging builds the JavaScript runtime and Control UI, then provisions a
-private Node worker from the canonical package artifact for every requested
-`BUILD_ARCHS` architecture. The root worker tarball uses the repository-pinned
-pnpm packer; Corepack-only setups are supported. Packaging verifies native
-capabilities and worker readiness in temporary state before and after signing,
-then replaces the previous app. `scripts/restart-mac.sh` uses
-the same path; `SKIP_TSC=1` does not bypass the runtime build. Existing
-content-checked build caches still avoid unnecessary declaration work.
+Packaging builds the JavaScript runtime and Control UI, then stages the full
+canonical package with production dependencies under
+`Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
+package's `files` filter, including its CLI, Gateway, Control UI, npm, and
+optional `sqlite-vec`; on-demand plugins excluded from that package remain
+excluded. The root tarball uses the repository-pinned pnpm packer; Corepack-only
+setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
+build-time Node and npm, then stages Bun and SQLite. No Node executable or
+npm/corepack/npx shims ship in the app.
 
-Worker pruning follows module imports, runtime launch descriptors, and named
-worker entrypoints transitively. Helpers launched by another retained worker
-remain packaged with their imports and runtime dependencies.
+The OpenClaw Bun fork is pinned in `scripts/lib/openclaw-bun-macos.json` and
+downloaded by `scripts/stage-openclaw-bun-macos.sh`. Archives are cached under
+`apps/macos/.build/openclaw-bun/<tag>/`, checked against pinned SHA-256 hashes,
+and verified against the fork revision. `scripts/build-mac-sqlite.sh` builds
+the pinned amalgamation in `scripts/lib/sqlite-macos.json`, cached under
+`apps/macos/.build/sqlite/<version>/`. The resulting signed library supports
+SQLite extensions without relying on Apple's system SQLite or Homebrew.
+
+Packaging verifies the Bun revision, CLI version, Gateway help, SQLite and
+`sqlite-vec` loading, native capabilities, and worker readiness in temporary
+state before and after signing, then replaces the previous app. It also rejects
+any Node executable in the app. `scripts/restart-mac.sh` uses the same path;
+`SKIP_TSC=1` does not bypass the runtime build. Existing content-checked build
+caches still avoid unnecessary declaration work.
 
 The private worker preserves the app's saved desktop-sharing preference and
 profile selection. Packaging checks startup with sharing enabled, disabled,
 and unspecified, including named-profile launches, before and after signing.
 
 Set `OPENCLAW_NODE_VERSION=<version>` when packaging to select a supported Node
-version for every private worker. If unset or empty, the CLI installer's default
-applies. Packaging installs and verifies the complete worker with that runtime.
+version for the temporary package installation. If unset or empty, the CLI
+installer's default applies. This build-time override does not change the
+bundled Bun pin.
 
-Each worker keeps native binaries that support its architecture and omits
-incompatible macOS, Linux, and Windows prebuilds. This prevents unused Intel-only
-dependencies from triggering macOS compatibility warnings in Apple silicon
-builds. Compatible universal binaries, JavaScript, WASM, and other resources
-remain intact.
+The runtime shares one JavaScript package across requested `BUILD_ARCHS`
+architectures. Universal builds combine Bun and SQLite into universal binaries
+and retain the separate arm64 and x64 Darwin native packages. Staging installs
+each CPU's optional dependencies separately, merges matching shared files, and
+combines distinct Mach-O slices at shared paths. Other shared-file conflicts
+fail packaging. Single-architecture
+builds retain only their compatible native payloads. Linux and Windows prebuilds
+are removed; compatible JavaScript, WASM, and other resources remain intact.
+Universal staging on Apple silicon requires Rosetta for x64 dependency install
+hooks, which execute native code using a temporary x64 Node driver.
 
-Universal builds require both arm64 and x86_64 runtimes to execute during
-validation. Building x86_64 on Apple Silicon requires Rosetta; a missing
-architecture or nonportable native dependency fails packaging. Node downloads
-and package installation need network access. The larger app includes its
-complete private runtime; it does not update an independently managed Gateway.
+Packaging executes verification for each runnable architecture. Verifying
+x86_64 on Apple silicon requires Rosetta; without it, packaging reports that
+architecture's execution checks as skipped. Missing binary architectures or
+nonportable native dependencies fail packaging. Downloads and package
+installation need network access. The bundled full package prepares for future
+Gateway hosting; the app still uses the external CLI and launchd Gateway.
 
 Packaging builds the MLX voice helper with Swift Build (`--build-system swiftbuild`)
 and copies its SwiftPM resource bundles into `Contents/Resources`. The native

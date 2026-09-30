@@ -38,6 +38,27 @@ In a shared session, another person’s in-progress message stays visible when t
 
 Busy sessions keep the first two people’s preview bubbles in arrival order, including their separate **Draft** lifecycle. Only actively typing people beyond those two appear in the overflow row: its bounded stack shows up to five avatars and one sentence. One, two, or three active overflow collaborators are named naturally; four or five use the first two names and the number of others. With more than five active overflow people, the sentence becomes **Several people are typing…**. Stopping, pausing, sending, or leaving removes a person from that row immediately; the row disappears when nobody remains active there, even while the first two preview bubbles retain drafts. Long names remain visibly part of the sentence, with responsive ellipsis and full accessible names; enlarged text can wrap. The group reserves two text lines. Its first avatar aligns with the preview avatars, and the sentence follows the actual stack width with a small gap. Active typing text uses a subtle shared shimmer; preview **Draft** labels, reduced motion, and forced colors retain legible static text. Editing or pausing does not reorder the two preview slots; a slot opens only when its person sends, leaves, clears, or expires.
 
+## Reactions
+
+Hover a saved prompt or assistant reply and select **Add reaction** beside the
+message actions, or the **+** chip at the end of an existing reaction row. The
+quick palette offers **👍**, **❤️**, **🎉**, **👀**, **🚀**, and **😂**; an emoji
+you already placed shows pressed, and selecting it again removes it. Arrow keys
+move through the palette and Escape closes it.
+
+Select **…** for any other emoji. Type or paste one, or open the system emoji
+picker with **⌃⌘Space** on macOS or **Win+.** on Windows: a complete emoji is
+applied as soon as it lands in the field, so the system picker needs no extra
+keystroke. Anything that is not a single emoji stays in the field with a hint.
+Backspace in an empty field returns to the palette.
+
+Reaction chips appear directly below each message with a count and animate when
+the count changes. Hover a chip to see who reacted, with you listed first.
+Select a chip to add your reaction, or select a pressed chip again to remove
+yours. Viewers can read the chips; adding or toggling requires permission to
+send or suggest in that session. See
+[Multi-user reactions](/concepts/multi-user#reactions) for agent and channel behavior.
+
 ## Session rail and side chat
 
 While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Chat carries the result in a **session rail**: its compact pill shows the live digest, while the expanded rail shows pull requests, elapsed time, and a read-only Side chat thread. The rail can expand once when a run becomes stuck or needs input, and done or failed runs keep a frozen “finished” time based on the final digest. On wide chat panes the expanded rail docks as a 400 px right column; on narrower and mobile layouts it remains an overlay.

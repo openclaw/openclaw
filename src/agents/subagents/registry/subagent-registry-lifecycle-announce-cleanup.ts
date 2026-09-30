@@ -48,6 +48,7 @@ import {
   captureSubagentRunMutationSnapshot,
 } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 type RunSubagentAnnounceFlow =
@@ -342,6 +343,9 @@ export const startSubagentAnnounceCleanupFlow = (
   const pendingPayload = loadPendingFinalDeliveryPayload(entry);
   const requesterOrigin = normalizeDeliveryContext(pendingPayload.requesterOrigin);
   const requesterSettleGeneration = entry.requesterSettleWake?.rearmGeneration;
+  const requesterOwnsCompletion = () =>
+    entry.requesterTurnYielded === true || hasRequesterCompletionCohort(entry);
+  // Existing cohort ownership blocks competing sends but does not settle this attempt's delivery.
   const requesterTookCompletion = () =>
     entry.requesterTurnYielded === true ||
     (entry.completionTarget === "parent" &&
@@ -425,9 +429,7 @@ export const startSubagentAnnounceCleanupFlow = (
         committedDelivery,
       );
     },
-    isCompletionOwnedByRequesterYield: () =>
-      entry.requesterTurnYielded === true ||
-      entry.requesterSettleWake?.requesterYieldBatch === true,
+    isCompletionOwnedByRequesterYield: requesterOwnsCompletion,
     onBeforeDeleteChildSession:
       cleanup === "delete"
         ? async () => {

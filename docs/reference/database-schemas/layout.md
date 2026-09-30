@@ -33,6 +33,18 @@ imports stay retired; [upgrading very old versions](/install/updating#upgrading-
 describes the bridge-release path. Run the current Doctor after a direct binary
 replacement before starting the new Gateway.
 
+### Session reactions
+
+The per-agent `session_reactions` table stores reaction rows as side data for
+persisted transcript messages. Its key combines `session_key`,
+`session_id`, `message_id`, `emoji`, and `identity_id`; the row also records an
+optional identity label and creation time. `message_id` is the transcript event
+identity exposed as `__openclaw.id`. Reactions never modify transcript payloads.
+Rows cascade with their session node, and reads select the transcript session ID
+so reactions from a previous reset instance remain inert.
+The table is not secret storage. See the
+[same-version contract](/reference/database-schemas/versioning#versioning-contract).
+
 ### Activity session recaps
 
 [Activity](/web/control-ui/settings#activity-tab) stores one optional `activitySummary` object in the existing `session_nodes.entry_json` session metadata. This is a reconstructible cache; the transcript remains canonical. The [approved persistence design](https://github.com/openclaw/openclaw/issues/147383) adds no SQL table, column, or database schema-version change. Current and `v2026.9.4` metadata serializers preserve unknown optional fields; unknown recap payload versions are treated as cache misses.

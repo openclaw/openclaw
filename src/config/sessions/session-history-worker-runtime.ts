@@ -168,7 +168,13 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         },
       };
     }
-    if (request.kind === "message-count") {
+    if (request.kind === "conversation-binding") {
+      return {
+        kind: request.kind,
+        params: { target: capturedTarget, conversationRef: request.params.conversationRef },
+      };
+    }
+    if (request.kind === "message-count" || request.kind === "reactions") {
       return { kind: request.kind, params: { target: capturedTarget } };
     }
     if (request.kind === "message-by-id") {

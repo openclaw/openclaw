@@ -18,6 +18,12 @@ candidate main-thread paths from SQL already executing in workers.
 
 ## Keep one store owner
 
+Shared-state transaction diagnostics inherit the executing worker command name
+when the store does not supply a more specific operation label. Slow holds and
+failed lock waits therefore identify the domain operation without logging its
+input. Explicit labels take precedence; native callers outside a command scope
+must supply their own label for the same attribution.
+
 Move an existing domain operation across its worker boundary instead of creating
 a second store, generic SQL service, or cache manager. Read-only operations use the
 existing read-only worker scope and the relevant domain reader. Shared-state
@@ -77,6 +83,13 @@ rehearsal cleanup; it does not become an ordinary validation failure. Signal
 cleanup leaves history pending when an accepted write's outcome is unknown; a
 later successful receipt does not clear that uncertainty. Stored formats,
 schemas, and path-redaction rules are unchanged.
+
+Mutable execution also awaits validation, activation, and inspected Git-target
+phase receipts through that worker. The phase transformation and terminal-row
+no-op behavior stay with the existing ledger kernel. After each receipt wait,
+the caller rechecks its original executor and requester before continuing schema
+inspection, native stop, or publication. Accepted writes retain the same signal
+settlement owner; other phase callers keep their current contracts until migrated.
 
 The installed updater still owns its first upgrade hop. Shipped synchronous
 ledger APIs, effect guards, general command progress, and finalization writes
@@ -206,9 +219,27 @@ writer and a connection-bound worker. Recall staging, backfill, and consolidatio
 await their origin writes before publication or releasing the workspace lock.
 Compensation removes only the inserted prefix from its original database;
 uncertain file publication retains the reserved lineage. Missing-store and
-no-match preflights remain noncreating. Read-only origin planning and forget's
-supplied-connection kernels retain their existing owners; this is a mutation cut,
-not a claim that all memory persistence is off the calling thread.
+no-match preflights remain noncreating. Origin and tombstone listings, reservation
+planning, and prune preflights use the existing memory retrieval worker and fresh
+read-only admission. Each reader classifies failures through the canonical owner
+and closes before replying, without creating, registering, or migrating a store.
+The existing pool transports the primary error message, not native error identity
+or nested cause metadata.
+Callers retain their captured paths and recheck write authority after awaited
+planning. Synchronous ingestion filters consume prepared tombstones. Forget's
+live lineage rechecks and supplied-connection mutation transactions retain their
+existing owner. Session policy metadata reads and cold bootstrap also remain separate.
+
+Generated embedding-cache publication uses the existing memory publication worker
+and the captured published database, including during a shadow rebuild. Its native
+transaction rereads the index revision and session tombstones before reserving cache
+capacity and writing vectors. Conflicting dimensions invalidate the generation
+before its writer turn releases, even when clearing fails or loses its reply;
+the error still propagates without replay. Bounded staging retains one vector row
+at a time and preserves cache binary values. Source-file inspection remains on the
+host. Cache reads and pruning, the published-generation guard for shadow source
+writes, and cold opening remain separate work. Schemas, cache retention, and stored
+formats are unchanged.
 
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
@@ -260,9 +291,26 @@ reconciliation journal. Local worktree reconciliation preserves its applied
 journal and final-verification ordering, then awaits durable pointer publication.
 Commit receipts
 invalidate pending-result read observations without revoking separate turn
-claims; uncertain writes retain recovery custody and are not replayed. Other
-placement lifecycle methods and their synchronous guards remain separate
-migration work. Schemas, stored fields, and update behavior are unchanged.
+claims; uncertain writes retain recovery custody and are not replayed.
+
+Workspace reconciliation journal reads use the shared-state reader, and journal
+creation, cleanup, orphan pruning, and manifest acceptance use the existing
+shared-state writer. Callers await durable journal creation before applying files
+and await manifest acceptance before reporting success. Manifest acceptance still
+updates the placement base and applied-journal marker in one transaction. Native
+commit receipts preserve accepted results when ordinary reply delivery fails;
+an unknown commit retains recovery custody instead of authorizing inverse file
+changes. Journal inputs are copied under the existing worker input budget, and
+source and caller authority remain checked at admission and commit. General
+placement getters and lifecycle guards remain separate migration work. Journal
+formats, schemas, pack limits, retention, and update behavior are unchanged.
+
+Idle auto-suspend discovery reads placement candidates, pending results, and
+workspace journals through the existing shared-state reader. It preserves
+candidate order and skips every durable pending result or journal. Per-candidate
+environment and move checks remain live, and reclaim rechecks idle policy,
+session work, and the exact placement before draining. Those synchronous guards
+remain separate migration work; suspension policy and teardown are unchanged.
 
 Worker session-tool grants and operation journals use the same shared-state
 writer. The placement authority owner publishes committed tool grants and fences
@@ -619,6 +667,11 @@ retaining rows protected by current job or receipt ownership. Reconciled legacy
 rows remain history; they do not recreate a task runtime or linked-flow publication
 owner. This changes no schema, retention policy, or update step.
 
+Recording a cron result selects the matching run ID inside the existing write
+transaction before decoding history. Store partition checks, released-row
+fallbacks, and first-terminal-result protection still apply; unrelated runs are
+not materialized while the writer lock is held.
+
 Cron execution, descendant follow-up, and delivery observations use the existing
 subagent registry worker snapshot. Descendant closure selection and the existing
 query policies run in its consuming frame, including the paired fresh/active
@@ -659,9 +712,15 @@ host retains pending-media, descendant-settlement, and busy-session checks; the
 lifecycle mutation still compares each complete expected entry and rechecks its
 commit guard. Shared-store ownership, retention, schemas, and update behavior
 are unchanged. Discovery closes every matching retained SQLite reader before
-releasing its captured alias ownership, allowing successful Node reads to keep
-the existing worker warm. Failed reads, uncertain native cleanup, and Bun retain
-worker retirement; idle retirement remains unchanged.
+releasing its captured alias ownership, allowing successful reads on Node and Bun
+with the admitted native-close capability to keep the existing worker warm.
+Failed reads, uncertain native cleanup, and Bun without that capability retain
+worker retirement; idle retirement remains unchanged. Long-lived pool hosts await
+the existing SQLite runtime/library owner's decision before creating pools.
+Workers keep the decision inherited at creation: early workers stay conservative,
+while later workers inherit the completed capability. Per-operation host reads use
+conservative cleanup until that decision settles without sealing it;
+see [native-close lifecycle](/reference/database-schemas/storage-changes#keep-engine-specific-capabilities-owned).
 
 Shared GitHub publication prepares canonical profile identity and alias-binding
 lifetimes through the existing profile catalogue and read worker. Alias writers

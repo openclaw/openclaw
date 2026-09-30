@@ -160,7 +160,7 @@ Shell `-c` wrappers, `env` with assignments, `xcrun`, BusyBox/Toybox applets, sh
 
 POSIX login or interactive shell wrappers in the requested command never receive auto-review. When binding succeeds, as with `bash -lc 'printf ok'`, they require human approval because their implicit startup files are outside operand binding. Existing binding rejections still take precedence. Interactive forms rejected as code-loading options remain denied. This applies to wrappers in the requested command. The gateway's ordinary shell startup snapshot is unchanged.
 
-Explicit `ask=always`, security-audit suppression changes, and commands above the review candidate limit go directly to human approval.
+Explicit `ask=always` and commands above the review candidate limit go directly to human approval.
 
 Codex app-server command approvals that are not already decided by explicit runtime or native policy use the human approval route. OpenClaw does not run its configured exec reviewer for these requests because Codex does not expose an enforceable resolved executable that can bind the review decision to the command Codex runs.
 
