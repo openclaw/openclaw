@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import { decodeNodeInvokeParams } from "./invoke-payload.js";
 
 const MAX_ARG_COUNT = 128;
 const MAX_ARG_BYTES = 1024 * 1024;
@@ -130,17 +131,6 @@ export type ClaudeCliNodeRunResult = {
   timeoutKind?: "hard" | "idle";
 };
 
-function decodeJson(raw?: string | null): unknown {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
-  }
-}
-
 function requireBoundedString(value: unknown, label: string, maxBytes: number): string {
   if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > maxBytes) {
     throw new Error(`INVALID_REQUEST: ${label} must be a bounded string`);
@@ -226,7 +216,7 @@ export async function decodeClaudeCliNodeRunParams(
   if (Buffer.byteLength(raw ?? "", "utf8") > MAX_REQUEST_BYTES) {
     throw new Error("INVALID_REQUEST: Claude CLI request is too large");
   }
-  const value = asRecord(decodeJson(raw));
+  const value = asRecord(decodeNodeInvokeParams<unknown>(raw));
   if (!value) {
     throw new Error("INVALID_REQUEST: Claude CLI params must be an object");
   }

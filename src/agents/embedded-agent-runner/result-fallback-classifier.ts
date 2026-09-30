@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../failover/classify.js";
 import type { FailoverReason } from "../failover/signal.js";
@@ -19,13 +20,7 @@ type ProviderErrorPayloadFailoverReason = Extract<
 >;
 
 function isEmbeddedAgentRunResult(value: unknown): value is EmbeddedAgentRunResult {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    "meta" in value &&
-    (value as { meta?: unknown }).meta &&
-    typeof (value as { meta?: unknown }).meta === "object",
-  );
+  return asOptionalObjectRecord(asOptionalObjectRecord(value)?.meta) !== undefined;
 }
 
 /** Keeps final-candidate bookkeeping while surfacing the best trusted terminal payload. */
@@ -66,9 +61,6 @@ export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
 }
 
 function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boolean {
-  if (result.meta.error?.kind === "hook_block") {
-    return true;
-  }
   return [result.meta.finalAssistantRawText, result.meta.finalAssistantVisibleText].some(
     (text) => typeof text === "string" && isSilentReplyPayloadText(text),
   );
@@ -110,11 +102,11 @@ function classifyGenericExternalRunFailurePayload(params: {
   const [payload] = payloads;
   const text = payload?.text;
   if (
-    payload?.isError === true ||
-    payload?.isReasoning === true ||
+    !payload ||
+    payload.isError === true ||
+    payload.isReasoning === true ||
     typeof text !== "string" ||
     text.trim() !== GENERIC_EXTERNAL_RUN_FAILURE_TEXT ||
-    !payload ||
     hasNonTextVisiblePayloadContent(payload)
   ) {
     return null;

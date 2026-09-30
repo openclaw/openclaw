@@ -615,6 +615,7 @@ describe("chat transcript rendering", () => {
     const firstProps = {
       ...threadProps("pane-touch-first", "agent:main:first", [
         { role: "user", content: "Stored message", timestamp: 1_000 },
+        { role: "user", content: "Second stored message", timestamp: 1_500 },
       ]),
       stream: "Live reply",
       streamStartedAt: 2_000,
@@ -639,6 +640,14 @@ describe("chat transcript rendering", () => {
     storedBubble.dispatchEvent(new Event("pointerup", { bubbles: true }));
     expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
 
+    touchPointerUp(storedBubble);
+    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    // Nonparticipant groups still toggle their shared metadata, not each bubble.
+    expect(storedGroup.classList.contains("chat-group--peer")).toBe(false);
+    expect(storedGroup.querySelectorAll(".chat-bubble")).toHaveLength(2);
+    touchPointerUp(requireElement(storedGroup, ".chat-bubble:last-child"));
+    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
     touchPointerUp(storedBubble);
     expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
 

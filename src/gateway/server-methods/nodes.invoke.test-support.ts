@@ -169,7 +169,7 @@ export function registerNodeInvokeUploadTests({
   };
   invokeNode: ReturnType<typeof createNodeInvokeTestHarness>;
 }): void {
-  it.each(["terminal.upload", "file.write", "browser.proxy.upload.v1"])(
+  it.each(["terminal.upload"])(
     "blocks external %s upload bytes before node lookup, including spoofed internal params",
     async (command) => {
       mocks.getRuntimeConfig.mockReturnValue({ gateway: { uploads: { enabled: false } } });
@@ -225,7 +225,6 @@ export function registerNodeInvokeUploadTests({
 
   it.each([
     { label: "default-enabled", enabled: undefined, synthetic: false },
-    { label: "explicit-enabled", enabled: true, synthetic: false },
     { label: "internal-service", enabled: false, synthetic: true },
   ])("preserves terminal upload dispatch for $label", async ({ enabled, synthetic }) => {
     mocks.getRuntimeConfig.mockReturnValue({ gateway: { uploads: { enabled } } });

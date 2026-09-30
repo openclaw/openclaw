@@ -8,10 +8,15 @@ import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
-import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
+import type {
+  SessionDiffFileTextLoader,
+  SessionDiffLoader,
+  SessionDiffOwner,
+} from "./session-diff-panel.ts";
 import "./session-diff-panel.ts";
 
 type SessionDiffElement = HTMLElement & {
+  owner: SessionDiffOwner | null;
   execNode: string | null;
   loadFileText: SessionDiffFileTextLoader | null;
   loader: SessionDiffLoader | null;
@@ -159,6 +164,23 @@ describe("SessionDiffPanel", () => {
     await vi.waitFor(() => expect(panel.textContent).toContain("feature/pending"));
     expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("false");
+
+    const replacement = deferred<SessionsDiffResult>();
+    panel.owner = { agentId: "main", sessionKey: "another-session" };
+    panel.loader = () => replacement.promise;
+    await panel.updateComplete;
+    expect(panel.querySelector("openclaw-panel-loading-skeleton")?.variant).toBe("review");
+    expect(panel.textContent).not.toContain("feature/pending");
+    replacement.resolve(result("feature/replacement"));
+    await vi.waitFor(() => expect(panel.textContent).toContain("feature/replacement"));
+
+    panel.loader = async () => {
+      throw new Error("Diff unavailable");
+    };
+    await vi.waitFor(() =>
+      expect(panel.querySelector(".callout.danger")?.textContent).toContain("Diff unavailable"),
+    );
+    expect(panel.textContent).not.toContain("feature/replacement");
   });
 
   it.each([false, true])(

@@ -196,6 +196,13 @@ export async function killSubagentRun(params: {
     });
   let stopAccepted = false;
   let preparationResult: Awaited<ReturnType<typeof killSubagentRun>> | undefined;
+  const releaseKillClaim = (claim: NonNullable<typeof killClaim>) =>
+    releaseSubagentRunKillClaim({
+      runId: params.entry.runId,
+      expected: params.entry,
+      claim,
+      context: stateContext,
+    });
   const cancellationFailure = async (
     error: unknown,
     declined?: true,
@@ -203,12 +210,7 @@ export async function killSubagentRun(params: {
     let reason = formatErrorMessage(error);
     if (killClaim && !stopAccepted) {
       try {
-        await releaseSubagentRunKillClaim({
-          runId: params.entry.runId,
-          expected: params.entry,
-          claim: killClaim,
-          context: stateContext,
-        });
+        await releaseKillClaim(killClaim);
       } catch (releaseError) {
         if (hasSqliteWorkerOutcomeUnknown(releaseError)) {
           throw releaseError;
@@ -253,12 +255,7 @@ export async function killSubagentRun(params: {
   };
   const releaseChangedSessionKill = async (claim: NonNullable<typeof killClaim>) => {
     try {
-      await releaseSubagentRunKillClaim({
-        runId: params.entry.runId,
-        expected: params.entry,
-        claim,
-        context: stateContext,
-      });
+      await releaseKillClaim(claim);
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;
@@ -399,12 +396,7 @@ export async function killSubagentRun(params: {
       if (admission === "busy") {
         try {
           if (killClaim && !stopAccepted) {
-            await releaseSubagentRunKillClaim({
-              runId: params.entry.runId,
-              expected: params.entry,
-              claim: killClaim,
-              context: stateContext,
-            });
+            await releaseKillClaim(killClaim);
           }
         } catch (error) {
           if (hasSqliteWorkerOutcomeUnknown(error)) {
@@ -519,7 +511,7 @@ export async function killSubagentRun(params: {
         if (!killOwnerCurrent()) {
           return { killed: false, sessionId, superseded: true };
         }
-        let marked: number;
+        let marked = 0;
         try {
           marked = await markSubagentRunTerminated({
             runId: params.entry.runId,
@@ -543,15 +535,20 @@ export async function killSubagentRun(params: {
                 throw new Error("Subagent kill publication lost its original claim");
               }
             },
+            onPublished: (count) => {
+              marked = count;
+            },
           });
         } catch (error) {
           if (hasSqliteWorkerOutcomeUnknown(error)) {
             throw error;
           }
+          const action =
+            marked > 0 ? "finish subagent kill cleanup" : "persist subagent kill tombstone";
           return {
-            killed: false,
+            killed: marked > 0,
             sessionId,
-            error: `Failed to persist subagent kill tombstone: ${formatErrorMessage(error)}`,
+            error: `Failed to ${action}: ${formatErrorMessage(error)}`,
           };
         }
         if (marked === 0) {
@@ -614,12 +611,7 @@ export async function killSubagentRun(params: {
         }
         if (active && !stopAccepted) {
           try {
-            await releaseSubagentRunKillClaim({
-              runId: params.entry.runId,
-              expected: params.entry,
-              claim: killClaim,
-              context: stateContext,
-            });
+            await releaseKillClaim(killClaim);
           } catch (error) {
             if (hasSqliteWorkerOutcomeUnknown(error)) {
               throw error;
@@ -646,12 +638,7 @@ export async function killSubagentRun(params: {
             await markKilledBestEffort();
           } else {
             try {
-              await releaseSubagentRunKillClaim({
-                runId: params.entry.runId,
-                expected: params.entry,
-                claim: killClaim,
-                context: stateContext,
-              });
+              await releaseKillClaim(killClaim);
             } catch (error) {
               if (hasSqliteWorkerOutcomeUnknown(error)) {
                 throw error;

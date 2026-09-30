@@ -409,12 +409,22 @@
   pointer-events: none;
 }
 
-/* The native row owns both layout space and actions; no overlaid copy. */
+/* The native row owns both layout space and actions; no overlaid copy.
+   Keep :hover separate from touch/focus selectors for the build hover guard. */
 .chat-group.user.chat-group--peer
-  :is(.chat-bubble, .chat-message--reply):is(:hover, :focus-within, .chat-bubble--actions-revealed)
+  :is(.chat-bubble, .chat-message--reply):hover
   + .chat-message-actions-row
   button,
-.chat-group.user.chat-group--peer .chat-message-actions-row:is(:hover, :focus-within) button {
+.chat-group.user.chat-group--peer .chat-message-actions-row:hover button,
+.chat-group.user.chat-group--peer
+  :is(.chat-bubble, .chat-message--reply):is(:focus-within, .chat-bubble--actions-revealed)
+  + .chat-message-actions-row
+  button,
+.chat-group.user.chat-group--peer
+  .chat-message--reply:has(> .chat-bubble--actions-revealed)
+  + .chat-message-actions-row
+  button,
+.chat-group.user.chat-group--peer .chat-message-actions-row:focus-within button {
   opacity: 0.6;
   pointer-events: auto;
 }
@@ -706,16 +716,8 @@ img.chat-avatar.user {
   display: grid;
 }
 
-.chat-avatar.assistant {
-  background: var(--secondary);
-  color: var(--muted);
-}
-
-.chat-avatar.other {
-  background: var(--secondary);
-  color: var(--muted);
-}
-
+.chat-avatar.assistant,
+.chat-avatar.other,
 .chat-avatar.tool {
   background: var(--secondary);
   color: var(--muted);

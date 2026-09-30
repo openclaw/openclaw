@@ -431,37 +431,49 @@ extension OpenClawChatViewModel {
 
     public func renameSession(key: String, label: String, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
+        let nextLabel = ChatPayloadDecoding.trimmedNonEmptyString(label)
+        self.mutateSessionOptimistically(
+            field: "label",
+            update: {
+                if let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) }) {
+                    self.sessions[index].label = nextLabel
+                    self.sessions[index].displayName = nextLabel
+                }
+            },
+            mutation: { routeLease in
+                try await routeLease.patchSession(
+                    key: key,
+                    agentID: target.agentID,
+                    label: .some(nextLabel),
+                    category: nil,
+                    pinned: nil,
+                    archived: nil,
+                    unread: nil)
+            })
+    }
+
+    private func mutateSessionOptimistically(
+        field: String,
+        update: () -> Void,
+        mutation: @escaping @MainActor (OpenClawChatSessionMutationRouteLease) async throws -> Void)
+    {
         let transport = self.transport
         let presentation = self.currentSessionSnapshot()
-        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextLabel: String? = trimmed.isEmpty ? nil : trimmed
         let previous = self.sessions
-        if let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) }) {
-            self.sessions[index].label = nextLabel
-            self.sessions[index].displayName = nextLabel
-        }
+        update()
         Task {
             do {
                 guard let routeLease = await transport.acquireSessionMutationRouteLease() else {
                     throw OpenClawChatTransportSendError.notDispatched
                 }
-                try await routeLease.patchSession(
-                    key: key,
-                    agentID: target.agentID,
-                    expectedSessionID: nil,
-                    label: .some(nextLabel),
-                    category: nil,
-                    color: nil,
-                    pinned: nil,
-                    archived: nil,
-                    unread: nil)
+                try await mutation(routeLease)
                 self.refreshSessions()
             } catch {
                 guard self.isCurrentSession(presentation) else { return }
                 self.sessions = self.applyingLocalUnreadOverrides(to: previous)
                 self.errorText = error.localizedDescription
                 chatSessionActionsLogger.error(
-                    "sessions.patch(label) failed \(error.localizedDescription, privacy: .public)")
+                    "sessions.patch(\(field, privacy: .public)) failed \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -842,87 +854,58 @@ extension OpenClawChatViewModel {
 
     public func setSessionPinned(key: String, pinned: Bool, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
-        let transport = self.transport
-        let presentation = self.currentSessionSnapshot()
-        let previous = self.sessions
-        if let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) }) {
-            self.sessions[index].pinned = pinned
-            self.sessions[index].pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
-            self.sessions = OpenClawChatSessionListOrganizer.organize(self.sessions)
-        }
-        Task {
-            do {
-                guard let routeLease = await transport.acquireSessionMutationRouteLease() else {
-                    throw OpenClawChatTransportSendError.notDispatched
+        self.mutateSessionOptimistically(
+            field: "pinned",
+            update: {
+                if let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) }) {
+                    self.sessions[index].pinned = pinned
+                    self.sessions[index].pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
+                    self.sessions = OpenClawChatSessionListOrganizer.organize(self.sessions)
                 }
+            },
+            mutation: { routeLease in
                 try await routeLease.patchSession(
                     key: key,
                     agentID: target.agentID,
-                    expectedSessionID: nil,
                     label: nil,
                     category: nil,
-                    color: nil,
                     pinned: pinned,
                     archived: nil,
                     unread: nil)
-                self.refreshSessions()
-            } catch {
-                guard self.isCurrentSession(presentation) else { return }
-                self.sessions = self.applyingLocalUnreadOverrides(to: previous)
-                self.errorText = error.localizedDescription
-                chatSessionActionsLogger.error(
-                    "sessions.patch(pinned) failed \(error.localizedDescription, privacy: .public)")
-            }
-        }
+            })
     }
 
     public func setSessionArchived(_ session: OpenClawChatSessionEntry, archived: Bool) {
         let key = session.key
         let target = self.sessionMutationTarget(key: key, agentID: session.agentId)
-        let transport = self.transport
-        let presentation = self.currentSessionSnapshot()
         guard archived else {
             Task { await self.restoreSession(session) }
             return
         }
-        guard let expectedSessionID = session.sessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !expectedSessionID.isEmpty
-        else {
+        guard let expectedSessionID = ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId) else {
             self.errorText = "Session lifecycle action requires a durable session identity."
             return
         }
-        let previous = self.sessions
-        self.sessions.removeAll { self.sessionMatchesTarget($0, target: target) }
-        Task {
-            do {
-                guard let routeLease = await transport.acquireSessionMutationRouteLease() else {
-                    throw OpenClawChatTransportSendError.notDispatched
-                }
+        self.mutateSessionOptimistically(
+            field: "archived",
+            update: {
+                self.sessions.removeAll { self.sessionMatchesTarget($0, target: target) }
+            },
+            mutation: { routeLease in
                 try await routeLease.patchSession(
                     key: key,
                     agentID: target.agentID,
                     expectedSessionID: expectedSessionID,
                     label: nil,
                     category: nil,
-                    color: nil,
                     pinned: nil,
                     archived: true,
                     unread: nil)
                 if self.matchesCurrentSessionKey(incoming: key, agentId: target.agentID, current: self.sessionKey) {
-                    // The archived session rejects new sends; move the user back
-                    // to the main session instead of leaving a dead composer.
+                    // The archived session rejects new sends; return to the main session.
                     self.switchSession(to: self.resolvedMainSessionKey)
                 }
-                self.refreshSessions()
-            } catch {
-                guard self.isCurrentSession(presentation) else { return }
-                self.sessions = self.applyingLocalUnreadOverrides(to: previous)
-                self.errorText = error.localizedDescription
-                chatSessionActionsLogger.error(
-                    "sessions.patch(archived) failed \(error.localizedDescription, privacy: .public)")
-            }
-        }
+            })
     }
 
     /// Restores an archived session. Returns false (with `errorText` set) on

@@ -11,6 +11,7 @@ import {
   isMissingMethodError,
   mergeProbeResults,
   modelProviderErrorMessage,
+  modelProviderMutationWarnings,
 } from "./config-mutation.ts";
 import type { ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
@@ -79,9 +80,7 @@ export class ModelProviderProfileActionsController {
     const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
     this.probeEpochs.set(cardId, probeEpoch);
     const ownsProbe = () =>
-      this.options.isCurrentClient(client, clientEpoch) &&
-      this.options.getAgentEpoch() === agentEpoch &&
-      this.options.getAgentId() === agentId &&
+      this.isCurrentScope(client, clientEpoch, agentEpoch, agentId) &&
       this.probeEpochs.get(cardId) === probeEpoch;
     this.options.setBusy(key, true);
     this.options.clearMessage(cardId);
@@ -176,22 +175,12 @@ export class ModelProviderProfileActionsController {
         }
         return;
       }
-      const warnings = result.value.warning ? [result.value.warning] : [];
-      if (!result.refresh.ok) {
-        warnings.push(result.refresh.error);
-      } else {
-        try {
-          await this.options.refresh();
-          const warning = this.options.getData()?.error;
-          if (warning) {
-            warnings.push(warning);
-          }
-        } catch (error) {
-          warnings.push(modelProviderErrorMessage(error));
-        }
-      }
+      const warning = await modelProviderMutationWarnings(result, async () => {
+        await this.options.refresh();
+        return this.options.getData()?.error;
+      });
       if (isCurrentScope()) {
-        this.options.setLogoutSuccess(warnings.join(" ") || undefined);
+        this.options.setLogoutSuccess(warning || undefined);
       }
     } catch (error) {
       if (isCurrentScope()) {
@@ -300,9 +289,8 @@ export class ModelProviderProfileActionsController {
       if ((candidate.authProvider ?? candidate.provider) !== provider) {
         continue;
       }
-      const { profileOrder: _order, profileOrderStored: _stored, ...base } = candidate;
       providers[index] = {
-        ...base,
+        ...candidate,
         profileOrder: [...profileIds],
         profileOrderStored: true,
       };

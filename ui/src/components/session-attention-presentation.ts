@@ -7,7 +7,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { formatWebUiIconErrorText } from "./error-presentation.ts";
 import { icons } from "./icons.ts";
-import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
+import { SESSION_ATTENTION_ICONS } from "./session-attention-icon-registry.ts";
 import { renderSessionGlyph } from "./session-glyph.ts";
 
 function keepAttentionFocusOnTooltip(event: FocusEvent) {
@@ -34,7 +34,7 @@ export function renderSessionAttentionIcon(
       : attention.kind === "approval"
         ? icons.shieldQuestion
         : attention.kind === "agent"
-          ? resolveSessionAttentionIcon(attention.icon)
+          ? SESSION_ATTENTION_ICONS[attention.icon]
           : icons.alertTriangle;
   const content = html`<span
     class="sidebar-session-attention__icon sidebar-session-attention__icon--${attention.kind}"

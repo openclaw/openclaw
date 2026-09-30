@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { inspect } from "node:util";
 import { runTelegramTestScenario } from "./run-mock-sut-user-e2e.mjs";
 
 function deadline(promise, label, milliseconds = 1500) {
@@ -27,6 +28,7 @@ async function composition(mode, acquisitionReady = Promise.resolve()) {
   const originalFetch = globalThis.fetch;
   const originalSpawn = childProcess.spawn;
   const originalWriteFileSync = fs.writeFileSync;
+  const originalExistsSync = fs.existsSync;
   const originalKill = process.kill;
   let released = 0;
   let healthy = true;
@@ -36,10 +38,30 @@ async function composition(mode, acquisitionReady = Promise.resolve()) {
   let bodyController;
   let observedRequest;
   const waiters = new Map();
+  let baselineBarrier;
   const observe = (name, value) => {
     events.push(name);
     waiters.get(name)?.resolve(value);
   };
+  if (mode === "late") {
+    fs.existsSync = (pathname) => {
+      const exists = originalExistsSync(pathname);
+      if (pathname === baselineBarrier && !exists) {
+        observe("baseline-wait");
+      }
+      return exists;
+    };
+  }
+  if (mode === "success" && process.env.TELEGRAM_TEST_CONFINED === "1") {
+    process.kill = (pid, signal) => {
+      const gateway = children.find((entry) => entry.argv.includes("dist/entry.js"))?.child;
+      if (gateway && pid === -gateway.pid && signal === 0 && !events.includes("group-eperm")) {
+        observe("group-eperm");
+        throw Object.assign(new Error("Group is awaiting reap"), { code: "EPERM" });
+      }
+      return originalKill(pid, signal);
+    };
+  }
   const wait = (name) => {
     if (events.includes(name)) return Promise.resolve();
     const waiter = Promise.withResolvers();
@@ -134,6 +156,7 @@ sys.exit(record.main())
     else {
       const index=process.argv.indexOf('--ready-file');
       if(index>=0) fs.writeFileSync(process.argv[index+1],JSON.stringify({schemaVersion:1,startedAtUnixMs:Date.now(),chatId:-1001}));
+      if(${JSON.stringify(mode)}==='late') fs.watch(${JSON.stringify(root)},()=>{});
       console.log('recorder done');
     }
   `,
@@ -198,8 +221,10 @@ sys.exit(record.main())
         };
       }
     }
-    if (argv.some((value) => String(value).endsWith("user-record.py")))
+    if (argv.some((value) => String(value).endsWith("user-record.py"))) {
+      baselineBarrier = path.join(argv[argv.indexOf("--barrier-dir") + 1], "0");
       child.once("exit", () => observe("recorder-terminated"));
+    }
     child.stdout?.on("data", (data) => {
       if (data.toString().includes("fixture blocked")) observe("mock-wait");
       if (data.toString().includes("recorder done")) observe("recorder-exit");
@@ -270,7 +295,10 @@ sys.exit(record.main())
   };
   const actions =
     mode === "late"
-      ? [{ type: "patchConfig", atMs: 0, patch: { messages: { responsePrefix: "test" } } }]
+      ? [
+          { type: "send", atMs: 0, text: "BEFORE", awaitReply: { text: "BEFORE" } },
+          { type: "restartGateway", atMs: 0, graceMs: 15_000 },
+        ]
       : mode === "control"
         ? [{ type: "followupDrainWaitHeld", atMs: 0, timeoutMs: 60_000 }]
         : mode === "uncertain-send"
@@ -326,6 +354,9 @@ sys.exit(record.main())
     wait,
     headerBody,
     bodyStarted,
+    releaseBaseline() {
+      fs.writeFileSync(baselineBarrier, JSON.stringify({ sentMessageId: 10, messageId: 11 }));
+    },
     finishOldGatewayStop() {
       fs.writeFileSync(path.join(root, "release-stop"), "");
     },
@@ -334,7 +365,12 @@ sys.exit(record.main())
     ignoreGatewayStop() {
       process.kill = (pid, signal) => {
         const gateway = children.find((entry) => entry.argv.includes("dist/entry.js"))?.child;
-        if (gateway && pid === -gateway.pid && signal !== 0) return true;
+        if (gateway && pid === -gateway.pid) {
+          if (signal === 0) {
+            throw Object.assign(new Error("Group probe denied"), { code: "EPERM" });
+          }
+          return true;
+        }
         return originalKill(pid, signal);
       };
     },
@@ -364,6 +400,7 @@ sys.exit(record.main())
       for (const watcher of watchers) watcher.close();
       childProcess.spawn = originalSpawn;
       fs.writeFileSync = originalWriteFileSync;
+      fs.existsSync = originalExistsSync;
       syncBuiltinESMExports();
       globalThis.fetch = originalFetch;
       fs.rmSync(root, { recursive: true, force: true });
@@ -487,13 +524,14 @@ test("unconfirmed child termination cannot report clean release", async () => {
     f.ignoreGatewayStop();
     const result = await deadline(f.outcome, "teardown did not return its failure", 12_000);
     assert.equal(result.ok, false, "unconfirmed group stop must fail the run");
+    assert.match(inspect(result.error, { depth: null }), /Telegram process group did not stop:/u);
     assert.equal(f.releaseCount(), 0, "lease release must not precede proven child closure");
   } finally {
     await f.cleanup();
   }
 });
 
-test("closed run admission rejects a Gateway replacement after awaited stop", async () => {
+test("restart waits for the visible baseline and rejects replacement after run closure", async () => {
   const acquisition = Promise.withResolvers();
   const f = await composition("late", acquisition.promise);
   try {
@@ -505,6 +543,17 @@ test("closed run admission rejects a Gateway replacement after awaited stop", as
     assert.equal(stopped, false);
     assert.equal(f.children.length, 0, "setup must wait for credential acquisition");
     acquisition.resolve();
+    await deadline(
+      Promise.race([
+        f.wait("baseline-wait"),
+        restartStop.then(() => {
+          throw new Error("Gateway stopped before visible baseline");
+        }),
+      ]),
+      "runner did not wait for the baseline",
+    );
+    assert.equal(stopped, false);
+    f.releaseBaseline();
     await restartStop;
     f.controller.abort(new Error("cancel replacement"));
     f.finishOldGatewayStop();
@@ -529,7 +578,10 @@ test("uninterrupted composition completes strict readiness and drive on one leas
   const f = await composition("success");
   try {
     const result = await deadline(f.outcome, "positive composition did not complete", 10000);
-    assert.equal(result.ok, true, String(result.error));
+    assert.equal(result.ok, true, inspect(result.error, { depth: null }));
+    if (process.env.TELEGRAM_TEST_CONFINED === "1") {
+      assert.equal(f.events.includes("group-eperm"), true);
+    }
     assert.equal(f.events.includes("gateway-spawn"), true);
     await assert.rejects(
       Promise.race([f.wait("restart-stop"), new Promise((resolve) => setImmediate(resolve))]),
@@ -562,7 +614,7 @@ test("uncertain recorder send fences later Node actions while recording incoming
   const f = await composition("uncertain-send");
   try {
     const outcome = await deadline(f.outcome, "uncertain-send composition did not finish", 10000);
-    assert.equal(outcome.ok, true, String(outcome.error));
+    assert.equal(outcome.ok, true, inspect(outcome.error, { depth: null }));
     assert.equal(outcome.result.exitCode, 1);
     assert.equal(outcome.result.report.completed, false);
     assert.equal(fs.existsSync(path.join(f.root, "later-side-effect")), false);

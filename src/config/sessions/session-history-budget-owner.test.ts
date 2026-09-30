@@ -16,7 +16,10 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   createOpenClawTestState,
@@ -28,7 +31,7 @@ import { appendTranscriptMessage, resetSessionEntryLifecycle } from "./session-a
 import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
 import * as archives from "./session-accessor.sqlite-archive.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import {
   joinSessionHistoryBudgetSweeps,
   type SessionHistoryBudgetQueueObservation,
@@ -57,6 +60,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   workerChannel.unsubscribe(trackWorker);
   // Archive/reclamation promises above already joined their Workers; the measurement pool is idle.

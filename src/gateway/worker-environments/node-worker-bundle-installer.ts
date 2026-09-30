@@ -7,7 +7,7 @@ import {
 } from "../../worker/node-bundle-install-protocol.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
-import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { NodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 

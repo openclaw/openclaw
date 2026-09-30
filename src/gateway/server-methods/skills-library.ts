@@ -39,7 +39,7 @@ import {
 } from "../session-sharing.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 export type SkillLibraryRequestOwner = Pick<
   GatewayRequestHandlerOptions,
@@ -201,7 +201,7 @@ function selectedSession(options: SkillLibraryRequestOwner, sessionKey: string) 
   };
 }
 
-function libraryHandler<P>(
+function libraryHandler<P extends Record<string, unknown>>(
   name: string,
   validate: ProtocolValidator<P>,
   run: (
@@ -210,10 +210,7 @@ function libraryHandler<P>(
     options: GatewayRequestHandlerOptions,
   ) => unknown,
 ): GatewayRequestHandlers[string] {
-  return async (options) => {
-    if (!assertValidParams(options.params, validate, name, options.respond)) {
-      return;
-    }
+  return defineValidatedGatewayHandler(name, validate, async (options) => {
     try {
       options.respond(
         true,
@@ -253,7 +250,7 @@ function libraryHandler<P>(
             ),
       );
     }
-  };
+  });
 }
 
 export const skillsLibraryHandlers: GatewayRequestHandlers = {
@@ -347,16 +344,15 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
       }
       const existing = await readSkillLibrary(authority, params.skillId, params.expectedRevision);
       const filesByPath = new Map(existing.files.map((file) => [file.path, file]));
-      const selected = new Set<string>();
       const retained = retainFiles.map((path) => {
         const file = filesByPath.get(path);
-        if (!file || selected.has(path)) {
+        if (!file) {
           throw new SkillLibraryError(
             "INVALID_BUNDLE",
             "Retained skill files must name distinct support files in expectedRevision.",
           );
         }
-        selected.add(path);
+        filesByPath.delete(path);
         return file;
       });
       // The save owner rechecks write authority, CAS, and the complete merged bundle.

@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
-import { normalizeChatWorkspaceDock } from "../../../app/settings.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import {
   scopedAgentParamsForSession,
@@ -17,19 +16,18 @@ import type {
 import type { SidebarSelection } from "./chat-sidebar.ts";
 
 function resolvePaneAgent(state: SessionScopeHostWithKey): string {
-  const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
-  const activeAgentId =
-    normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
-  const scopedAgentId = scopedAgentParamsForSession(state, state.sessionKey).agentId;
-  const fallback = normalizeAgentId(
-    state.assistantAgentId ??
-      state.agentsList?.defaultId ??
-      state.agentsList?.agents?.[0]?.id ??
-      "main",
+  if (normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "global") {
+    return resolveAgentIdFromSessionKey(state.sessionKey);
+  }
+  return (
+    scopedAgentParamsForSession(state, state.sessionKey).agentId ??
+    normalizeAgentId(
+      state.assistantAgentId ??
+        state.agentsList?.defaultId ??
+        state.agentsList?.agents?.[0]?.id ??
+        "main",
+    )
   );
-  return normalizedKey === "global"
-    ? (scopedAgentId ?? fallback)
-    : (activeAgentId ?? scopedAgentId ?? fallback);
 }
 
 export function clearWorkspaceTimer(workspace: SessionWorkspaceState | undefined) {
@@ -60,10 +58,7 @@ function clearSessionCheckoutSidebar(state: SessionWorkspaceHost) {
   }
 }
 
-function createSessionWorkspaceState(
-  state: SessionWorkspaceHost,
-  previous?: SessionWorkspaceState,
-): SessionWorkspaceState {
+function createSessionWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
   return {
     previews: [],
     activePreviewId: null,
@@ -73,11 +68,7 @@ function createSessionWorkspaceState(
     browserSearch: "",
     filter: "all",
     browserSearchTimer: null,
-    collapsed: previous?.collapsed ?? true,
     connectionEpoch: state.connectionEpoch,
-    // Dock preference is app-wide, seeded from the host's loaded settings;
-    // per-session state just carries it forward.
-    dock: previous?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
     error: null,
     list: null,
     loading: false,
@@ -105,7 +96,7 @@ export function getSessionWorkspace(state: SessionWorkspaceHost): SessionWorkspa
   }
   clearSessionCheckoutSidebar(state);
   clearWorkspaceTimer(current);
-  const next = createSessionWorkspaceState(state, current);
+  const next = createSessionWorkspaceState(state);
   state.sessionWorkspaceState = next;
   return next;
 }
@@ -228,7 +219,7 @@ export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
   }
   clearSessionCheckoutSidebar(state);
   clearWorkspaceTimer(current);
-  const next = createSessionWorkspaceState(state, current);
+  const next = createSessionWorkspaceState(state);
   state.sessionWorkspaceState = next;
   state.requestUpdate?.();
 }

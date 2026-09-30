@@ -32,7 +32,6 @@ import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timelin
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
-  PluginHookContextWindowSource,
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
@@ -43,19 +42,9 @@ import type {
   ModelCallObservationState,
 } from "./attempt.model-diagnostic-observation.js";
 
-export type ModelCallDiagnosticContext = {
+export type ModelCallDiagnosticContext = Omit<PluginHookModelCallStartedEvent, "callId"> & {
   config?: OpenClawConfig;
-  runId: string;
   agentId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  provider: string;
-  model: string;
-  api?: string;
-  transport?: string;
-  contextTokenBudget?: number;
-  contextWindowSource?: PluginHookContextWindowSource;
-  contextWindowReferenceTokens?: number;
   trace: DiagnosticTraceContext;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
@@ -200,35 +189,23 @@ function modelCallHookContext(eventBase: ModelCallEventBase): PluginHookAgentCon
   });
 }
 
-function dispatchModelCallStartedHook(eventBase: ModelCallEventBase): void {
+function dispatchModelCallHook(
+  eventBase: ModelCallEventBase,
+  fields?: ModelCallEndedHookFields,
+): void {
   const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("model_call_started")) {
+  const hookName = fields ? "model_call_ended" : "model_call_started";
+  if (!hookRunner?.hasHooks(hookName)) {
     return;
   }
   const event = Object.freeze(modelCallHookEventBase(eventBase));
   const hookCtx = modelCallHookContext(eventBase);
   fireAndForgetBoundedHook(
-    () => hookRunner.runModelCallStarted(event, hookCtx),
-    "model_call_started plugin hook failed",
-  );
-}
-
-function dispatchModelCallEndedHook(
-  eventBase: ModelCallEventBase,
-  fields: ModelCallEndedHookFields,
-): void {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("model_call_ended")) {
-    return;
-  }
-  const event = Object.freeze({
-    ...modelCallHookEventBase(eventBase),
-    ...fields,
-  });
-  const hookCtx = modelCallHookContext(eventBase);
-  fireAndForgetBoundedHook(
-    () => hookRunner.runModelCallEnded(event, hookCtx),
-    "model_call_ended plugin hook failed",
+    () =>
+      fields
+        ? hookRunner.runModelCallEnded(Object.freeze({ ...event, ...fields }), hookCtx)
+        : hookRunner.runModelCallStarted(event, hookCtx),
+    `${hookName} plugin hook failed`,
   );
 }
 
@@ -281,7 +258,7 @@ function emitModelCallEnded(
     modelContentPrivateData(observer.completedContent()),
   );
   if (!observer.state.suppressPluginHooks) {
-    dispatchModelCallEndedHook(eventBase, {
+    dispatchModelCallHook(eventBase, {
       durationMs,
       outcome: failure ? "error" : "completed",
       ...sizeTimingFields,
@@ -382,7 +359,7 @@ export function createModelLifecycle(params: {
     modelContentPrivateData(observer.modelContent),
   );
   if (params.ctx.suppressPluginHooks !== true) {
-    dispatchModelCallStartedHook(eventBase);
+    dispatchModelCallHook(eventBase);
   }
   params.ctx.onStarted?.();
   const startedAt = Date.now();

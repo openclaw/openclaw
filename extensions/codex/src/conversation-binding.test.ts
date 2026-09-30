@@ -179,6 +179,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-aliases", async (importOriginal) => (
   resolveProviderIdForAuth: agentRuntimeMocks.resolveProviderIdForAuth,
 }));
 
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import codexPlugin from "../index.js";
 import {
   consumeCodexAppServerLiveThread,
@@ -210,7 +211,6 @@ import {
 } from "./conversation-binding-hooks.js";
 import { prepareCodexConversationBinding } from "./conversation-binding-preparation.js";
 import { readCodexConversationActiveTurn } from "./conversation-control.js";
-import { isIncognitoSessionKey } from "./incognito-session.js";
 
 function testConversationIdentity(sessionFile: string) {
   return {

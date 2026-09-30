@@ -8,6 +8,7 @@ import type { GatewayScheduler, GatewayScheduledJob } from "../../infra/gateway-
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
 import { toPublicCronJob } from "../public-job.js";
@@ -292,6 +293,8 @@ type QueuedCronRunReservation = {
   lifecycleGeneration: number;
   markerAtMs: number;
   runReceipt: CronRunReceiptHandle;
+  /** Host-only source custody from durable reservation through terminal settlement. */
+  runReceiptContext: OpenClawStateWorkerContext;
   preserveWhenDisabled: boolean;
   onExit?: boolean;
   activationPreviousLastError?: { value: string | undefined };
@@ -420,7 +423,12 @@ export type CronRunResult =
 
 /** Remove result, including deferred base-session cleanup after durable deletion. */
 export type CronRemoveResult =
-  | { ok: true; removed: boolean; sessionCleanup?: "pending" }
+  | {
+      ok: true;
+      removed: boolean;
+      activeRunCancellationRequested?: true;
+      sessionCleanup?: "pending";
+    }
   | { ok: false; removed: false };
 
 type CronDeclarativeAddResult = CronStoredJob & {
@@ -449,7 +457,7 @@ export type CronAddOptions = {
   toolsAllowProvenance?: CronToolsAllowProvenance;
   /** Restrict-only exec pin from the signed creator-turn identity. */
   toolsAllowExecTarget?: CronToolsAllowExecTarget;
-  /** Synchronous Gateway-owned liveness guard consumed immediately before mutation. */
+  /** Synchronous Gateway-owned liveness check repeated at mutation admission and commit. */
   commitGuard?: () => void;
   /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
   captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
@@ -465,7 +473,7 @@ export type CronUpdateOptions = Pick<
 };
 
 export type CronCommitGuardOptions = {
-  /** Synchronous Gateway-owned guard consumed at the mutation owner. */
+  /** Synchronous Gateway-owned liveness check repeated at mutation admission and commit. */
   commitGuard?: () => void;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */

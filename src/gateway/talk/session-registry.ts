@@ -29,7 +29,6 @@ type UnifiedTalkSessionRecord =
   | {
       kind: "managed-room";
       handoffId: string;
-      token: string;
       roomId: string;
     };
 

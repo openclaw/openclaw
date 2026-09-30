@@ -612,9 +612,6 @@ export function createChannelProgressDraftGate(params: {
     if (disposed || started) {
       return startPromise ?? Promise.resolve();
     }
-    if (startPromise) {
-      return startPromise;
-    }
     clearTimer();
     started = true;
     const nextStart = Promise.resolve()

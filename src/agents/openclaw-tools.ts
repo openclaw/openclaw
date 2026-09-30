@@ -183,6 +183,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     agentDir: options?.agentDir,
     authProfileStore: options?.authProfileStore,
     agentSessionKey: mediaGenerationAgentSessionKey,
+    requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
     requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
     workspaceDir,
@@ -402,6 +403,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
           createSessionsTool({
+            senderIsOwner: options?.senderIsOwner,
+            sessionControlAuthority: options?.sessionControlAuthority,
             stopAllowed: options?.swarmCollector !== true,
             controlOnly: options?.senderIsOwner === false,
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,

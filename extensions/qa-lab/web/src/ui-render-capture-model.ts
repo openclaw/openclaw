@@ -1,4 +1,8 @@
-import { captureEventKey, findPairedCaptureEvent } from "./ui-render-capture-events.js";
+import {
+  captureEventKey,
+  findPairedCaptureEvent,
+  groupCaptureEvents,
+} from "./ui-render-capture-events.js";
 import { renderCapturePayload } from "./ui-render-capture-format.js";
 import {
   isSensitiveCaptureField,
@@ -251,33 +255,19 @@ export function buildCaptureViewModel(state: UiState) {
   const groupedEvents =
     state.captureGroupMode === "none" || state.captureGroupMode === "burst"
       ? [{ id: "__all__", label: "All Events", meta: "", events: filteredEvents }]
-      : Array.from(
-          filteredEvents.reduce((groups, event) => {
-            const key =
-              state.captureGroupMode === "flow"
-                ? event.flowId || "(no flow)"
-                : [event.host || "(no host)", event.path || "/"].join(" ");
-            const label =
-              state.captureGroupMode === "flow"
-                ? event.flowId || "(no flow id)"
-                : [event.host || "(no host)", event.path || "/"].join(" ");
-            const existing = groups.get(key);
-            if (existing) {
-              existing.events.push(event);
-              return groups;
-            }
-            groups.set(key, {
-              id: key,
-              label,
-              meta:
-                state.captureGroupMode === "flow"
-                  ? [event.host, event.path].filter(Boolean).join(" ")
-                  : event.flowId || "",
-              events: [event],
-            });
-            return groups;
-          }, new Map()),
-        ).map(([, group]) => group);
+      : groupCaptureEvents(filteredEvents, (event) =>
+          state.captureGroupMode === "flow"
+            ? {
+                id: event.flowId || "(no flow)",
+                label: event.flowId || "(no flow id)",
+                meta: [event.host, event.path].filter(Boolean).join(" "),
+              }
+            : {
+                id: [event.host || "(no host)", event.path || "/"].join(" "),
+                label: [event.host || "(no host)", event.path || "/"].join(" "),
+                meta: event.flowId || "",
+              },
+        );
   const clusterEventBursts = (eventsForGroup: CaptureEventView[]) => {
     const sorted = eventsForGroup.toSorted(
       (left, right) =>

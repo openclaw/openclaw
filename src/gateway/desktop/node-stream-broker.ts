@@ -9,6 +9,7 @@ import {
 import { rawDataByteLength, rawDataToString } from "../../infra/ws.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   NODE_DESKTOP_ATTACH_PATH,
   NODE_PORTAL_ATTACH_PATH,
@@ -200,26 +201,21 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     attach: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => T,
   ) {
     const nowMs = now();
-    let resolve!: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => void;
-    let reject!: (error: Error) => void;
-    const attached = new Promise<T>((resolvePromise, rejectPromise) => {
-      resolve = (stream, metadata) => {
-        try {
-          resolvePromise(attach(stream, metadata));
-        } catch (error) {
-          stream.destroy();
-          rejectPromise(error instanceof Error ? error : new Error(String(error)));
-        }
-      };
-      reject = rejectPromise;
-    });
-    void attached.catch(() => undefined);
+    const attached = createDeferredCore<T>();
+    void attached.promise.catch(() => undefined);
     const entry: TicketEntry = {
       kind,
       binding,
       expiresAtMs: nowMs + ttlMs,
-      resolve,
-      reject,
+      resolve(stream, metadata) {
+        try {
+          attached.resolve(attach(stream, metadata));
+        } catch (error) {
+          stream.destroy();
+          attached.reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      },
+      reject: attached.reject,
       redeemed: false,
     };
     const { token: ticket, expiresAtMs } = tickets.mint(entry, { nowMs });
@@ -228,7 +224,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
       ticket,
       attachPath: `${kind === "desktop" ? NODE_DESKTOP_ATTACH_PATH : NODE_PORTAL_ATTACH_PATH}?ticket=${ticket}`,
       expiresAtMs,
-      attached,
+      attached: attached.promise,
       cancel() {
         rejectTicket(ticket, new Error(`node ${kind} stream ticket cancelled`));
       },

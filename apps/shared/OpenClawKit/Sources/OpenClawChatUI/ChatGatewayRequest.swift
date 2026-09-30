@@ -39,7 +39,7 @@ public enum OpenClawChatSessionTargetPolicy: Sendable {
     case scopeBareKeysToSelectedAgent
 }
 
-public struct OpenClawChatSessionTarget: Sendable, Equatable {
+public struct OpenClawChatSessionTarget: Sendable, Hashable {
     public let sessionKey: String
     public let agentID: String?
 
@@ -135,11 +135,9 @@ public enum OpenClawChatGatewayRequests {
         sessionKey: String,
         agentID: String?) -> OpenClawChatGatewayRequest
     {
-        var params: [String: AnyCodable] = ["sessionKey": AnyCodable(sessionKey)]
-        self.add(agentID, to: &params, key: "agentId")
-        return OpenClawChatGatewayRequest(
+        OpenClawChatGatewayRequest(
             method: "tools.effective",
-            params: params,
+            params: self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey"),
             timeoutMs: self.defaultTimeoutMs)
     }
 
@@ -148,11 +146,8 @@ public enum OpenClawChatGatewayRequests {
         agentID: String?,
         artifactId: String) -> OpenClawChatGatewayRequest
     {
-        var params: [String: AnyCodable] = [
-            "sessionKey": AnyCodable(sessionKey),
-            "artifactId": AnyCodable(artifactId),
-        ]
-        self.add(agentID, to: &params, key: "agentId")
+        var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey")
+        params["artifactId"] = AnyCodable(artifactId)
         return OpenClawChatGatewayRequest(
             method: "artifacts.download",
             params: params,
@@ -307,11 +302,8 @@ public enum OpenClawChatGatewayRequests {
         runID: String,
         requestTimeoutMs: Int = 10000) -> OpenClawChatGatewayRequest
     {
-        var params: [String: AnyCodable] = [
-            "sessionKey": AnyCodable(sessionKey),
-            "runId": AnyCodable(runID),
-        ]
-        self.add(agentID, to: &params, key: "agentId")
+        var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey")
+        params["runId"] = AnyCodable(runID)
         return OpenClawChatGatewayRequest(
             method: "chat.abort",
             params: params,
@@ -600,8 +592,7 @@ public enum OpenClawChatGatewayRequests {
         inputRunIDs: [String]? = nil,
         timeoutMs: Int? = nil) -> OpenClawChatGatewayRequest
     {
-        var params: [String: AnyCodable] = ["sessionKey": AnyCodable(sessionKey)]
-        self.add(agentID, to: &params, key: "agentId")
+        var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey")
         params["limit"] = limit.map(AnyCodable.init)
         params["maxChars"] = maxChars.map(AnyCodable.init)
         if let inputRunIDs, !inputRunIDs.isEmpty {
@@ -732,15 +723,10 @@ public enum OpenClawChatGatewayRequests {
         key: String,
         trim: Bool = true)
     {
-        let value = trim ? self.normalized(value) : value
+        let value = trim ? ChatPayloadDecoding.trimmedNonEmptyString(value) : value
         if let value {
             params[key] = AnyCodable(value)
         }
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
     }
 }
 

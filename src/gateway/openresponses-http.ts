@@ -1,11 +1,3 @@
-/**
- * OpenResponses HTTP Handler
- *
- * Implements the OpenResponses `/v1/responses` endpoint for OpenClaw Gateway.
- *
- * @see https://www.open-responses.com/
- */
-
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
@@ -85,10 +77,8 @@ import {
 import { resolveResponsesLimits } from "./openai-compatible-input-limits.js";
 import {
   applyToolChoice,
-  isToolChoiceConstraintSatisfied,
   resolveResponsesToolChoice,
-  resolveUnsatisfiedToolChoiceMessage,
-  type ToolChoiceConstraint,
+  resolveToolChoiceConstraintError,
 } from "./openai-tool-choice.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { lookupResponseSession, rememberResponseSession } from "./openresponses-session-store.js";
@@ -360,17 +350,9 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
   const clientTools = extractClientTools(payload);
-  let toolChoicePrompt: string | undefined;
-  let toolChoiceConstraint: ToolChoiceConstraint | undefined;
-  let resolvedClientTools = clientTools;
+  let toolChoice: ReturnType<typeof applyToolChoice>;
   try {
-    const toolChoiceResult = applyToolChoice(
-      clientTools,
-      resolveResponsesToolChoice(payload.tool_choice),
-    );
-    resolvedClientTools = toolChoiceResult.tools;
-    toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
-    toolChoiceConstraint = toolChoiceResult.constraint;
+    toolChoice = applyToolChoice(clientTools, resolveResponsesToolChoice(payload.tool_choice));
   } catch (err) {
     logWarn(`openresponses: tool configuration failed: ${String(err)}`);
     sendInvalidRequest(res, "invalid tool configuration");
@@ -438,9 +420,8 @@ export async function handleOpenResponsesHttpRequest(
   }
 
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
-  const toolChoiceContext = toolChoicePrompt?.trim();
+  const toolChoiceContext = toolChoice.extraSystemPrompt?.trim();
 
-  // Handle instructions + file context as extra system prompt
   const extraSystemPrompt = [
     payload.instructions,
     prompt.extraSystemPrompt,
@@ -500,7 +481,7 @@ export async function handleOpenResponsesHttpRequest(
       result = await runOpenAiCompatibleAgentCommand({
         message: prompt.message,
         images,
-        clientTools: resolvedClientTools,
+        clientTools: toolChoice.tools,
         extraSystemPrompt,
         modelOverride,
         streamParams,
@@ -550,17 +531,15 @@ export async function handleOpenResponsesHttpRequest(
       const assistantText = resolveAssistantResultText(result);
       const usage = extractUsageFromResult(result);
 
-      // A `required`/pinned `tool_choice` must reject a text-only turn instead
-      // of returning ordinary assistant prose, mirroring /v1/chat/completions.
-      // Shared satisfaction check lives in openai-tool-choice.ts.
-      if (
-        toolChoiceConstraint &&
-        !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
-      ) {
+      const toolChoiceError = resolveToolChoiceConstraintError(
+        toolChoice.constraint,
+        pendingToolCalls,
+      );
+      if (toolChoiceError) {
         const failed = createFailedResponse(
           {
             code: "api_error",
-            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+            message: toolChoiceError,
           },
           usage,
         );
@@ -568,11 +547,6 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
-      // If the agent invoked client tools, return one `function_call`
-      // output item per call (in arrival order) plus any assistant text the
-      // model produced before the tool calls. Pre-#52288 only the first
-      // pending call was emitted, so multi-tool turns lost every call but
-      // the leading one.
       const toolCalls =
         stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       const status = stopReason === "length" ? "incomplete" : "completed";
@@ -632,10 +606,6 @@ export async function handleOpenResponsesHttpRequest(
     }
     return true;
   }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Streaming mode
-  // ─────────────────────────────────────────────────────────────────────────
 
   setSseHeaders(res);
 
@@ -817,7 +787,6 @@ export async function handleOpenResponsesHttpRequest(
     );
   };
 
-  // Send initial events
   const initialResponse = createResponseResource({
     ...responseIdentity,
     model,
@@ -841,7 +810,6 @@ export async function handleOpenResponsesHttpRequest(
     item: { ...outputItem, content: [] },
   });
 
-  // Add content part
   writeSseEvent(res, {
     type: "response.content_part.added",
     item_id: outputItemId,
@@ -882,7 +850,7 @@ export async function handleOpenResponsesHttpRequest(
       const merged = mergeAssistantText(previous, input, "append-only");
       assistantText = merged;
       // Unconfirmed tool-choice prose may still be corrected before it is sent.
-      if (toolChoiceConstraint) {
+      if (toolChoice.constraint) {
         return;
       }
       // Keep physical wire progress separate from a corrected item snapshot.
@@ -958,17 +926,15 @@ export async function handleOpenResponsesHttpRequest(
       // lifecycle:end event may already have requested finalization.
       const resultPayloadText = resolveAssistantResultText(result);
 
-      // Reject an unsatisfied `required`/pinned `tool_choice` before any
-      // buffered prose is flushed, mirroring the non-streaming path and
-      // /v1/chat/completions. Closes the stream with a `response.failed` event.
-      if (
-        toolChoiceConstraint &&
-        !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
-      ) {
+      const toolChoiceError = resolveToolChoiceConstraintError(
+        toolChoice.constraint,
+        pendingToolCalls,
+      );
+      if (toolChoiceError) {
         const failed = createFailedResponse(
           {
             code: "api_error",
-            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+            message: toolChoiceError,
           },
           finalUsage,
         );

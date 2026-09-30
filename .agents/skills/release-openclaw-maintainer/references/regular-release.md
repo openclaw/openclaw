@@ -102,14 +102,15 @@ Record and reuse the full trusted Tooling SHA. Beta-publish uses
 `release_profile=beta`, `run_release_soak=false` (`npm-beta-v1` for a qualifying
 canonical beta target). Stable-publish requires `release_profile=stable` or
 `full`, soak, and blocking performance. Beta-profile evidence cannot qualify
-stable, and every selected validation lane must pass. See
-[validation](validation.md) and
+stable. Every selected validation lane except the policy-owned `windows-node-ci`
+class must pass. See [shared release boundaries](../SKILL.md#shared-release-boundaries),
+[validation](validation.md), and
 [publication recovery](publication-recovery.md). Diagnose
 failures and use the controller's bounded retry for affected required proof.
 Continue eligible parents to seal; a parent that produced its own sealed
 candidate artifacts requires a new parent with verified successful evidence
-reuse. Diagnose selected test failures before rerunning; an untouched test or
-passing replay alone does not prove a flake or a fix. Only a confirmed product
+reuse. Classify each selected test failure as a real blocker or a flake before
+rerunning, per the shared release boundaries. Only a confirmed product
 defect that a required lane blocks on creates a new Code SHA: the
 update/install path (previous stable updates to the candidate, install smoke,
 pack budget, worker bundle), the bytes to publish, or another required gate
@@ -354,8 +355,9 @@ failure without republishing npm.
 Run [postpublish confidence](validation.md#postpublish-confidence) against the
 exact published package. For a beta-to-latest promotion, retain available
 deferred-lane results, including published-package Telegram, while enforcing
-the shared required publication proofs. All selected test outcomes must pass
-before publication. Run safe
+the shared required publication proofs. All selected tests outside the
+`windows-node-ci` advisory class must pass before publication; retain advisory
+failures in the release evidence. Run safe
 independent rosters concurrently while controlling local Docker/VM load.
 Classify failures before admitting a fix to the next beta; do not scan moving
 main or automatically rerun all groups. An operator's beta-attempt cap counts
@@ -369,7 +371,7 @@ after verification and any requested announcement.
 
 Stable publication and any dist-tag promotion to `latest` require exact
 stable/full validation with soak, blocking performance, and successful selected
-lanes. Matching beta-profile evidence never qualifies stable. Run published npm
+blocking lanes. Matching beta-profile evidence never qualifies stable. Run published npm
 verification, Docker install/update, and selected platform checks against the
 qualified stable candidate. Promote beta to latest through the restricted dist-tag workflow in
 [publication recovery](publication-recovery.md#registry-selectors). After either

@@ -12,14 +12,13 @@ type DirectoryCacheKey = {
   channel: ChannelId;
   accountId?: string | null;
   kind: ChannelDirectoryEntryKind;
-  source: "cache" | "live";
   signature?: string | null;
   query?: string | null;
 };
 
 export function buildDirectoryCacheKey(key: DirectoryCacheKey): string {
   const signature = key.signature ?? "default";
-  return `${key.channel}:${key.accountId ?? "default"}:${key.kind}:${key.source}:${signature}:query:${key.query ?? ""}`;
+  return `${key.channel}:${key.accountId ?? "default"}:${key.kind}:${signature}:query:${key.query ?? ""}`;
 }
 
 /** TTL and capacity are scoped to a config object reference. */

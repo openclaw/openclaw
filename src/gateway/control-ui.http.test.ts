@@ -1153,6 +1153,57 @@ describe("handleControlUiHttpRequest", () => {
     );
   });
 
+  it.each(["", "/openclaw/"])(
+    "activates only the initial route's modulepreloads under %j",
+    async (basePath) => {
+      const script = "window.controlUiBoot = true;";
+      const html = `<html><head><script>${script}</script><link rel="modulepreload" href="./assets/shared.js"><template data-openclaw-route-preloads="chat"><link rel="modulepreload" crossorigin href="./assets/chat.js"></template><template data-openclaw-route-preloads="new"><link rel="modulepreload" crossorigin href="./assets/new.js"></template></head><body></body></html>`;
+      const rootPath = await createControlUiRoot(html);
+      const mount = basePath.replace(/\/$/, "");
+      const cases = [
+        ["/chat", "chat"],
+        ["/chat/main/session-ref?view=thread", "chat"],
+        ["/new/", "new"],
+        ["/", null],
+        ["/dashboard/main/session-ref", null],
+        ["/approve/request-id", null],
+        ["/share/chat/main/session-ref", null],
+        ["/chatty", null],
+        ["/new/unknown", null],
+      ] as const;
+      for (const [pathname, route] of cases) {
+        const { handled, res, end, setHeader } = await runControlUiRequest({
+          url: `${mount}${pathname}`,
+          method: "GET",
+          rootPath,
+          rootKind: "bundled",
+          basePath,
+        });
+        expect(handled, pathname).toBe(true);
+        expect(res.statusCode, pathname).toBe(200);
+        const body = responseBody(end);
+        expect(body, pathname).not.toContain("data-openclaw-route-preloads");
+        const preloads = Array.from(
+          body.matchAll(/<link rel="modulepreload"[^>]*href="([^"]+)"/g),
+          (match) => match[1],
+        );
+        expect(preloads, pathname).toEqual(
+          pathname.startsWith("/share/")
+            ? []
+            : [`${mount}/assets/shared.js`, ...(route ? [`${mount}/assets/${route}.js`] : [])],
+        );
+        if (!pathname.startsWith("/share/")) {
+          expect(body, pathname).toContain(`<script>${script}</script>`);
+          const csp = setHeader.mock.calls.findLast(
+            ([header]) => header === "Content-Security-Policy",
+          )?.[1];
+          const hash = createHash("sha256").update(script, "utf8").digest("base64");
+          expect(csp, pathname).toContain(`'sha256-${hash}'`);
+        }
+      }
+    },
+  );
+
   it("exposes only the environment identity on public HTML while bootstrap stays authenticated", async () => {
     const tmp = await createControlUiRoot("<html><head></head><body>Hello</body></html>\n");
 

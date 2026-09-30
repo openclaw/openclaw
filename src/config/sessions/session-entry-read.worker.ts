@@ -31,25 +31,81 @@ import {
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { readSessionBackingFactsInDatabase } from "./session-backing-facts.js";
 import {
+  assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
   assertCanonicalSqliteSessionRowsCurrent,
   canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { boundSessionDiagnosticText } from "./session-diagnostic-text.js";
+import {
+  assertSessionEntryCurrentNativeSource,
+  readSessionEntryCurrentFactsInDatabase,
+} from "./session-entry-current-admission.worker.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionDiagnosticTextWorkerInput,
+  type SessionEntryCurrentWorkerInput,
+  type SessionEntryCurrentWorkerResult,
   type SessionExactEntriesWorkerInput,
   type SessionExactEntriesWorkerResult,
   type SessionRowDatabaseFacts,
   type SessionRowFactsWorkerInput,
   type SessionRowFactsWorkerResult,
 } from "./session-transcript-worker.types.js";
+
+/** Canonical entry currency reuses parsed facts only at the same native connection revision. */
+export function readSessionEntryCurrentFacts(
+  request: SessionEntryCurrentWorkerInput,
+): SessionEntryCurrentWorkerResult {
+  const sessionKey = request.scope.sessionKey;
+  assertCanonicalSessionKeyWrite(sessionKey, request.scope.agentId);
+  if (request.source) {
+    if (
+      request.source.path !== request.database.path ||
+      request.source.agentId !== request.database.agentId ||
+      request.source.sessionKey !== sessionKey
+    ) {
+      throw new Error("Session currency request differs from its captured source");
+    }
+    assertSessionEntryCurrentNativeSource(request.source);
+  }
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
+        const identity = readOpenClawAgentDatabaseIdentity(database);
+        if (
+          typeof identity.identity !== "string" ||
+          !isOpenClawAgentDatabasePathCurrent(database)
+        ) {
+          throw new Error("Session currency read requires its current durable owner");
+        }
+        if (request.source) {
+          assertSessionEntryCurrentNativeSource(request.source, database);
+        }
+        return {
+          entry: readSessionEntryCurrentFactsInDatabase(database, sessionKey),
+          source: {
+            agentId: database.agentId,
+            path: database.path,
+            databaseIdentity: identity.identity,
+            databaseBirthtime: identity.birthtime,
+          },
+        };
+      }),
+    { ...request.database, env: request.scope.env },
+  );
+  if (!result.found && result.reason !== "database-missing") {
+    throw new SessionMetadataUnavailableError(result.reason);
+  }
+  return {
+    kind: "session-entry-current",
+    ...(result.found ? result.value : { entry: undefined }),
+  };
+}
 
 /** Current identity and assistant bytes come from one existing-only read snapshot. */
 export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerInput) {
@@ -96,25 +152,18 @@ export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerIn
   };
 }
 
-/** Full rows share a snapshot with lifecycle fallback; backing reads retain listing admission. */
+/** Full rows share a snapshot with lifecycle fallback; list reads retain listing admission. */
 export function readExactSessionEntriesWithLifecycle(
   request: SessionExactEntriesWorkerInput,
 ): SessionExactEntriesWorkerResult {
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      request.projection === "backing" || request.projection === "list"
+      request.projection === "list"
         ? {
             kind: "session-exact-entries" as const,
-            entries:
-              request.projection === "list"
-                ? readSelectedSessionEntriesInDatabase(database, request.sessionKeys, {
-                    continuation: request.continuation,
-                  })
-                : readSessionBackingFactsInDatabase(
-                    database,
-                    request.sessionKeys,
-                    request.continuation,
-                  ),
+            entries: readSelectedSessionEntriesInDatabase(database, request.sessionKeys, {
+              continuation: request.continuation,
+            }),
             lifecycleTimestamps: {},
           }
         : withSqlitePostCommitPublications(database.db, () =>

@@ -139,7 +139,6 @@ function createReplyOperation(): TestReplyOperation {
   return Object.assign(replyOperation, {
     phase: "queued" as const,
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
-    hasOwnedSessionId: vi.fn(() => false),
     captureOwnedSessionIds: vi.fn(() => new Set()),
   });
 }

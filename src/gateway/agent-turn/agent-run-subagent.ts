@@ -34,7 +34,7 @@ export async function prepareGatewaySubagentRun(params: {
   isOneShotModelRun: boolean;
   runId: string;
   getAdmittedSessionId: () => string;
-  assertResumeAdmissionCurrent: () => void;
+  assertResumeAdmissionCurrent: () => SessionEntry | undefined;
   context: Pick<AgentTurnContext, "resolveGatewayContext"> & {
     logGateway: Pick<AgentTurnContext["logGateway"], "warn">;
   };

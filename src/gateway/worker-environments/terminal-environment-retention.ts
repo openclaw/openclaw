@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
+import { WORKER_ENVIRONMENT_TERMINAL_STATES } from "./state.js";
 import type {
   WorkerEnvironmentPruneObservation,
   WorkerEnvironmentPruneReadInput,
@@ -13,7 +14,6 @@ import type {
 
 const TERMINAL_ENVIRONMENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const TERMINAL_ENVIRONMENT_PRUNE_LIMIT = 256;
-const TERMINAL_STATES = ["destroyed", "failed", "orphaned"] as const;
 
 type RetentionDatabase = Pick<StateDatabase, "worker_environments" | "worker_session_placements">;
 
@@ -42,7 +42,7 @@ export function readTerminalWorkerEnvironmentPrunePage(
       "worker_environments.environment_id",
     )
     .selectAll("worker_environments")
-    .where("worker_environments.state", "in", [...TERMINAL_STATES])
+    .where("worker_environments.state", "in", WORKER_ENVIRONMENT_TERMINAL_STATES)
     .where("worker_environments.state_changed_at_ms", "<=", cutoffMs)
     .where("worker_session_placements.session_id", "is", null)
     .orderBy("worker_environments.state_changed_at_ms", "asc")

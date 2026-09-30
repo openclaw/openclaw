@@ -3,7 +3,8 @@ import {
   resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
 } from "../../../config/sessions.js";
-import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
@@ -41,23 +42,28 @@ export async function loadSubagentRecoverySession(params: {
   agentId: string;
   storePath: string;
   sessionEntry: InternalSessionEntry | undefined;
+  currentRead: ReturnType<typeof captureSessionEntryCurrentRead>;
   retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
 } | null> {
   const sessionKey = params.entry.childSessionKey.trim();
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
-  const sessionEntry = await withSessionEntryReadOnlyInWorker(
-    { storePath, sessionKey, projection: "list" },
+  const scope = { storePath, sessionKey, projection: "list" as const };
+  const { sessionEntry, currentRead } = await withSessionEntryReadOnlyInWorker(
+    scope,
     () => {
       if (!params.isOwnerCurrent()) {
         throw new Error("subagent recovery owner changed during session read");
       }
     },
-    async (read) => {
+    async (read, owner) => {
       if (!read.ok) {
         throw read.error;
       }
-      return read.value;
+      return {
+        sessionEntry: read.value,
+        currentRead: captureSessionEntryCurrentRead(scope, owner),
+      };
     },
   );
   const retained = retainSessionOwner(storePath, sessionKey, sessionEntry?.sessionId);
@@ -67,7 +73,7 @@ export async function loadSubagentRecoverySession(params: {
     sessionEntry?.abortedLastRun === true ||
     !isRetiredSubagentSessionOwner(params.entry, sessionEntry)
   ) {
-    return { agentId, storePath, sessionEntry, retained };
+    return { agentId, storePath, sessionEntry, currentRead, retained };
   }
   const { sessionId, lifecycleRevision, updatedAt } = sessionEntry;
   const target = { sessionKey, sessionId };
@@ -76,30 +82,33 @@ export async function loadSubagentRecoverySession(params: {
     isRetiredSubagentExecution(params.entry) &&
     listAgentRunsForSession(target).length === 0 &&
     !isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId]);
-  const interrupted = await patchSessionEntryCore(
-    { storePath, sessionKey },
-    (current) => {
+  const interrupted = await applySessionEntryExactReplacements<InternalSessionEntry | null>({
+    agentId,
+    storePath,
+    sessionKeys: [sessionKey],
+    update: (entries) => {
+      const current = entries[0]?.entry;
       if (
         !isCurrent() ||
+        !current ||
         current.sessionId !== sessionId ||
         current.lifecycleRevision !== lifecycleRevision ||
         current.updatedAt !== updatedAt ||
         !isRetiredSubagentSessionOwner(params.entry, current)
       ) {
-        return null;
+        return { result: null };
       }
       // Keep the last observed timestamp: restart must not make an old orphan fresh.
-      return { ...current, abortedLastRun: true };
+      const interruptedEntry = { ...current, abortedLastRun: true };
+      return { result: interruptedEntry, replacements: [{ sessionKey, entry: interruptedEntry }] };
     },
-    {
-      assertCommitAllowed: () => {
-        if (!isCurrent()) {
-          throw new Error("subagent orphan ownership changed before interruption commit");
-        }
-      },
-      replaceEntry: true,
-      skipMaintenance: true,
+    assertCommitAllowed: () => {
+      currentRead.assertSourceCurrent();
+      if (!isCurrent()) {
+        throw new Error("subagent orphan ownership changed before interruption commit");
+      }
     },
-  );
-  return interrupted ? { agentId, storePath, sessionEntry: interrupted } : null;
+    skipMaintenance: true,
+  });
+  return interrupted ? { agentId, storePath, sessionEntry: interrupted, currentRead } : null;
 }

@@ -455,11 +455,13 @@ import Testing
     }
 
     @Test func `remote gateway probe applies SSH host key policy`() throws {
-        let strict = try #require(RemoteGatewayProbe._testSSHCheckCommand(
+        let strict = try #require(RemoteGatewayProbe.sshCheckCommand(
             target: "gateway-alias",
+            identity: "",
             hostKeyPolicy: .strict))
-        let openssh = try #require(RemoteGatewayProbe._testSSHCheckCommand(
+        let openssh = try #require(RemoteGatewayProbe.sshCheckCommand(
             target: "gateway-alias",
+            identity: "",
             hostKeyPolicy: .openssh))
 
         #expect(strict.contains("StrictHostKeyChecking=yes"))

@@ -21,6 +21,7 @@ import { userTurnRunId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
+  chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
 } from "./chat-turn-boundary.ts";
@@ -73,6 +74,11 @@ function stampReplyAttribution(
   const stateBefore = new Map<string, ReplyState>();
   let state: ReplyState = {};
   for (const item of context) {
+    // System notices and projected/forwarded inputs own turns too. Clear the
+    // previous prompt before recording reply state for their output.
+    if (chatItemStartsUserTurn(item) && !(item.kind === "group" && item.role === "user")) {
+      state = {};
+    }
     if (item.kind === "stream") {
       stateBefore.set(item.key, state);
     }
@@ -197,7 +203,7 @@ function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<strin
   let hiddenTurn = false;
   for (const item of context) {
     if (!visible.has(item.key)) {
-      hiddenTurn ||= chatItemStartsUserTurn(item);
+      hiddenTurn ||= chatItemStartsDisplayTurn(item);
     } else if (hiddenTurn) {
       rows.add(item.key);
       hiddenTurn = false;
@@ -364,6 +370,8 @@ export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
   groups: MessageGroup[];
+  /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
+  previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
 };
 
@@ -546,6 +554,8 @@ export function collapseCompletedTurnWork(
     }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
+    const previewAfterGroup = new Map<string, string>();
+    let precedingAnswerKey: string | undefined;
     for (let index = segmentStart; index <= segmentEnd; index += 1) {
       const item = turn[index]!;
       // Only a later answer can put a failed result inside completed work.
@@ -560,12 +570,15 @@ export function collapseCompletedTurnWork(
           ))
       ) {
         groups.push(item);
+        if (precedingAnswerKey) {
+          previewAfterGroup.set(item.key, precedingAnswerKey);
+        }
       } else {
         answers.push(item);
+        precedingAnswerKey = item.key;
       }
     }
-    const firstGroup = groups[0];
-    if (!firstGroup) {
+    if (groups.length === 0) {
       result.push(...turn);
       continue;
     }
@@ -596,6 +609,7 @@ export function collapseCompletedTurnWork(
         finalReplyIndex >= 0 || !continuationBoundary ? terminalReply.key : continuationBoundary.key
       }`,
       groups,
+      ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });
     result.push(...answers, ...turn.slice(segmentEnd + 1));

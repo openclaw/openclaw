@@ -17,6 +17,8 @@ For lightweight model-reference normalization, use
 `openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
 and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
 rules without loading provider replay or transport helpers.
+Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
+model-version and local quantization suffixes.
 
 ## Live model discovery
 
@@ -462,3 +464,8 @@ takes precedence over another provider's live key; fields are never mixed
 across accounts. It returns `undefined` when no provider has auth and
 propagates lookup failures. Official plugin releases using this host export
 must require a host version that provides it in their `compat.pluginApi`.
+
+`findNormalizedProviderKey(entries, providerId)` from the private-local
+`openclaw/plugin-sdk/provider-model-metadata` surface returns the first configured
+key whose trimmed, lowercase spelling matches the provider ID. Callers that
+prefer an exact authored key must check that key first.

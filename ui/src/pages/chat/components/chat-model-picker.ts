@@ -173,8 +173,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     params.modelOptions.length + targetOptionCount > 0 ||
     targetGroups.some((group) => group.status !== "ready");
   const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
-  const commitModel = (entry: ChatModelPickerOption) => {
-    if (params.modelSelectionLocked) {
+  const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
+    event.stopPropagation();
+    // An unavailable Default row still clears a recorded pin: it commits the reset, not the model.
+    const resetsPin = entry.isDefault && params.sessionModelPinned;
+    if (params.disabled || params.modelSelectionLocked || (entry.disabled && !resetsPin)) {
+      event.preventDefault();
       return;
     }
     void params
@@ -186,16 +190,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       )
       .finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
-  };
-  const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
-    event.stopPropagation();
-    // An unavailable Default row still clears a recorded pin: it commits the reset, not the model.
-    const resetsPin = entry.isDefault && params.sessionModelPinned;
-    if (params.disabled || params.modelSelectionLocked || (entry.disabled && !resetsPin)) {
-      event.preventDefault();
-      return;
-    }
-    commitModel(entry);
     closeModelPickerAfterSelection(event);
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {

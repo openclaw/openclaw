@@ -3,8 +3,12 @@
  * A concurrent touch or competing sweep cannot delete another generation's row.
  */
 import { randomUUID } from "node:crypto";
+import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getBrowserStateRuntime } from "../browser-runtime-state.js";
+import {
+  getBrowserStateRuntime,
+  type BrowserSessionTabAuthority,
+} from "../browser-runtime-state.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
@@ -17,7 +21,6 @@ import {
   sameBrowserSessionTabRecord,
   updateBrowserSessionTab,
   withoutBrowserSessionTabCleanup,
-  type BrowserSessionTabAuthority,
 } from "./session-tab-store.js";
 import type { DurableTab } from "./session-tab-tracking.js";
 
@@ -33,7 +36,7 @@ type CloseTab = (tab: {
   route?: BrowserSessionTabRoute;
   profile?: string;
 }) => Promise<void>;
-export type CloseParams = {
+export type CloseParams = SessionEntryCurrentPreparation & {
   authority?: BrowserSessionTabAuthority;
   /** Gates new cleanup claims, without revoking an already admitted close. */
   isCurrent?: () => boolean;
@@ -190,6 +193,9 @@ export async function closeDurableTab(
   now: number,
   cleanupKind: CleanupKind,
 ): Promise<number> {
+  if (params.prepareCurrent && !(await params.prepareCurrent())) {
+    return 0;
+  }
   if (
     params.isCurrent?.() === false ||
     candidate.dashboard?.state === "active" ||
@@ -203,6 +209,7 @@ export async function closeDurableTab(
   };
   const tab = await claimCleanup(candidate, now, cleanupKind, {
     ...authority,
+    sessionEntryCurrent: params.sessionEntryCurrent,
     assertCurrent: () => {
       authority.assertCurrent?.();
       if (params.isCurrent?.() === false) {

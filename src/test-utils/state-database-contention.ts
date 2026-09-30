@@ -1,7 +1,7 @@
 import { Worker } from "node:worker_threads";
 import { createDeferred } from "../../test/helpers/promise.js";
 /** Hold a fixture's SQLite writer transaction, with release independent of its main thread. */
-export function holdStateDatabaseWriteTransaction(databasePath: string, releaseAfterMs: number) {
+export function holdStateDatabaseWriteTransaction(databasePath: string, releaseAfterMs?: number) {
   const released = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   const ready = createDeferred();
   const holder = new Worker(
@@ -21,7 +21,9 @@ export function holdStateDatabaseWriteTransaction(databasePath: string, releaseA
       db.close();
       parentPort.close();
     };
-    const timer = setTimeout(release, workerData.releaseAfterMs);
+    const timer = workerData.releaseAfterMs === undefined
+      ? undefined
+      : setTimeout(release, workerData.releaseAfterMs);
     parentPort.once("message", release);
     parentPort.postMessage("ready");
   `,

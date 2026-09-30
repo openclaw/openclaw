@@ -16,10 +16,6 @@ import {
   resolvePreviousReleaseTag,
   resolveReleaseTag,
 } from "../../scripts/generate-dependency-release-evidence.mts";
-import {
-  RELEASE_DEPENDENCY_RISK_LOCKFILES,
-  resolveReleaseDependencyRiskAcceptance,
-} from "../../scripts/lib/release-dependency-risk-acceptance.mts";
 
 async function writeJson(dir: string, fileName: string, value: unknown) {
   await writeFile(path.join(dir, fileName), `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -43,100 +39,10 @@ function expectNoNodeStack(stderr: string) {
 }
 
 describe("generate-dependency-release-evidence", () => {
-  function acceptedRiskInput(): Parameters<typeof resolveReleaseDependencyRiskAcceptance>[0] {
-    return {
-      packageVersion: "2026.9.1",
-      lockfileSha256: { ...RELEASE_DEPENDENCY_RISK_LOCKFILES },
-      blockers: [
-        ...["GHSA-58mr-gqgx-xq4g", "GHSA-qw65-cvwx-89v3"].flatMap((id) =>
-          [
-            { lockfile: "pnpm-lock.yaml", matchedVersions: ["4.1.3"] },
-            {
-              lockfile: ".github/release/vercel-cli/package-lock.json",
-              matchedVersions: ["3.1.6"],
-            },
-          ].map(({ lockfile, matchedVersions }) => ({
-            lockfile,
-            matchedVersions,
-            packageName: "fast-uri",
-            id,
-            severity: "high" as const,
-            graph: "production" as const,
-            malware: false,
-            source: "github-repository" as const,
-            title: "URI authority validation",
-            url: `https://github.com/fastify/fast-uri/security/advisories/${id}`,
-            vulnerableVersions: "<4.1.4",
-          })),
-        ),
-        {
-          lockfile: "pnpm-lock.yaml",
-          packageName: "nodemailer",
-          matchedVersions: ["9.0.4", "9.0.5"],
-          id: "GHSA-2x7j-588g-ccc2",
-          severity: "high",
-          graph: "production",
-          malware: false,
-          source: "github-repository",
-          title: "Address list denial of service",
-          url: "https://github.com/nodemailer/nodemailer/security/advisories/GHSA-2x7j-588g-ccc2",
-          vulnerableVersions: "<9.1.0",
-        },
-      ],
-    };
-  }
-
-  it("retains every accepted advisory and exact graph binding without declaring the scan clean", () => {
-    const input = acceptedRiskInput();
-    const original = structuredClone(input);
-    const acceptance = resolveReleaseDependencyRiskAcceptance(input);
-    expect(acceptance).toMatchObject({
-      kind: "operator-accepted-dependency-risk",
-      packageVersion: "2026.9.1",
-      blockers: original.blockers,
-      lockfileSha256: original.lockfileSha256,
-    });
-    expect(input).toEqual(original);
-  });
-
-  it("never carries acceptance to another release, graph, or unaccepted finding", () => {
-    const mutations = [
-      (input: ReturnType<typeof acceptedRiskInput>) => {
-        input.packageVersion = "2026.9.2";
-      },
-      (input: ReturnType<typeof acceptedRiskInput>) => {
-        input.lockfileSha256["pnpm-lock.yaml"] = "changed";
-      },
-      (input: ReturnType<typeof acceptedRiskInput>) => {
-        input.blockers[0]!.severity = "critical";
-      },
-      (input: ReturnType<typeof acceptedRiskInput>) => {
-        input.blockers[0]!.malware = true;
-      },
-      (input: ReturnType<typeof acceptedRiskInput>) => {
-        input.blockers[0]!.id = "GHSA-unaccepted";
-      },
-      (input: ReturnType<typeof acceptedRiskInput>) => {
-        input.blockers[0]!.matchedVersions = ["4.1.2"];
-      },
-      (input: ReturnType<typeof acceptedRiskInput>) => {
-        input.blockers.push({ ...input.blockers[0]! });
-      },
-      (input: ReturnType<typeof acceptedRiskInput>) => {
-        input.blockers[0] = { ...input.blockers[1]! };
-      },
-    ];
-    for (const mutate of mutations) {
-      const input = acceptedRiskInput();
-      mutate(input);
-      expect(resolveReleaseDependencyRiskAcceptance(input)).toBeNull();
-    }
-  });
-
   it("defines the release evidence command list and policy classifications", () => {
     expect(DEPENDENCY_EVIDENCE_REPORTS.map(({ command, policy }) => ({ command, policy }))).toEqual(
       [
-        { command: "pnpm deps:vuln:gate", policy: "hard-blocking" },
+        { command: "pnpm deps:vuln:gate", policy: "malware-blocking" },
         { command: "pnpm deps:transitive-risk:report", policy: "report-only" },
         { command: "pnpm deps:ownership-surface:report", policy: "report-only" },
         { command: "pnpm deps:changes:report", policy: "report-only" },
@@ -174,7 +80,7 @@ describe("generate-dependency-release-evidence", () => {
     });
   });
 
-  it("runs the npm lock report from tooling and retains it in the manifest and summaries", async () => {
+  it("records production advisories as non-blocking evidence alongside the npm lock report", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-lock-evidence-test-"));
     try {
       const source = path.join(dir, "source");
@@ -185,7 +91,18 @@ describe("generate-dependency-release-evidence", () => {
       const reportData: Record<string, unknown> = {
         "dependency-vulnerability-gate.json": {
           blockers: [],
-          findings: [],
+          findings: [
+            {
+              id: "GHSA-rfgv-xxqx-mfg5",
+              packageName: "undici",
+              severity: "high",
+              graph: "production",
+              lockfile: ".github/release/vercel-cli/package-lock.json",
+              source: "github-repository",
+              malware: false,
+              url: "https://github.com/advisories/GHSA-rfgv-xxqx-mfg5",
+            },
+          ],
           coverage: {
             npm: "checked",
             upstream: {
@@ -272,6 +189,11 @@ describe("generate-dependency-release-evidence", () => {
         expect(rendered).toContain("- npm package-lock mirrors: 2");
         expect(rendered).toContain("- Lockless packages (bundleRuntimeDependencies=false): 1");
         expect(rendered).toContain("- Partial npm package-lock mirrors (workspace omissions): 1");
+        expect(rendered).toContain("- Known malware findings (release-blocking): 0");
+        expect(rendered).toMatch(/#+ Non-blocking advisory findings\n\nAdvisories never block/u);
+        expect(rendered).toContain(
+          "- HIGH `undici` (.github/release/vercel-cli/package-lock.json; production) id=GHSA-rfgv-xxqx-mfg5 source=github-repository https://github.com/advisories/GHSA-rfgv-xxqx-mfg5",
+        );
       }
     } finally {
       await rm(dir, { force: true, recursive: true });
@@ -352,7 +274,7 @@ describe("generate-dependency-release-evidence", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "uses trusted report tooling for a separate target and retains blocking evidence",
+    "uses trusted report tooling for a separate target and retains known-malware evidence",
     async () => {
       const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-failure-test-"));
       try {
@@ -378,8 +300,8 @@ describe("generate-dependency-release-evidence", () => {
             "writeFileSync(process.env.RELEASE_TEST_MARKER, process.cwd());",
             'if (args[0] !== "deps:vuln:gate") throw new Error("Wrong report command");',
             'if (args[args.indexOf("--root") + 1] !== process.env.RELEASE_TEST_SOURCE_ROOT) throw new Error("Wrong report target");',
-            'writeFileSync(args[args.indexOf("--json") + 1], JSON.stringify({ blockers: [{ id: "GHSA-fixture" }] }));',
-            'writeFileSync(args[args.indexOf("--markdown") + 1], "# Blocking advisory evidence\\n");',
+            'writeFileSync(args[args.indexOf("--json") + 1], JSON.stringify({ blockers: [{ id: "GHSA-fixture", malware: true }] }));',
+            'writeFileSync(args[args.indexOf("--markdown") + 1], "# Known malware evidence\\n");',
             "process.exitCode = 1;",
           ].join("\n"),
           { mode: 0o755 },
@@ -416,10 +338,10 @@ describe("generate-dependency-release-evidence", () => {
         await expect(readFile(githubOutput, "utf8")).resolves.toBe(`dir=${outputDir}\n`);
         await expect(
           readFile(path.join(outputDir, "dependency-vulnerability-gate.json"), "utf8"),
-        ).resolves.toBe(JSON.stringify({ blockers: [{ id: "GHSA-fixture" }] }));
+        ).resolves.toBe(JSON.stringify({ blockers: [{ id: "GHSA-fixture", malware: true }] }));
         await expect(
           readFile(path.join(outputDir, "dependency-vulnerability-gate.md"), "utf8"),
-        ).resolves.toBe("# Blocking advisory evidence\n");
+        ).resolves.toBe("# Known malware evidence\n");
       } finally {
         await rm(dir, { force: true, recursive: true });
       }
@@ -514,18 +436,24 @@ describe("generate-dependency-release-evidence", () => {
           },
         };
         const findings = [
-          { id: "GHSA-blocker", lockfile: "pnpm-lock.yaml", source: "npm-bulk" },
+          { id: "GHSA-malware", lockfile: "pnpm-lock.yaml", source: "npm-bulk", malware: true },
           {
-            id: "GHSA-blocker",
+            id: "GHSA-malware",
             lockfile: ".github/release/vercel-cli/package-lock.json",
             source: "github-repository",
             matchedVersions: ["1.0.0", "1.1.0"],
+            malware: true,
           },
           {
             id: "GHSA-report",
+            packageName: "report-pkg",
+            severity: "high",
+            graph: "production",
             lockfile: ".github/release/clawhub-cli/package-lock.json",
             source: "github-repository",
             matchedVersions: ["2.0.0"],
+            malware: false,
+            url: null,
           },
         ];
         await writeJson(dir, "dependency-vulnerability-gate.json", {
@@ -566,8 +494,9 @@ describe("generate-dependency-release-evidence", () => {
         });
         const counts = await collectDependencyEvidenceSummaryCounts(dir);
         expect(counts).toEqual({
-          vulnerabilityBlockers: 2,
+          malwareBlockers: 2,
           vulnerabilityFindings: 3,
+          advisories: [findings[2]],
           vulnerabilityCoverage: coverage,
           upstreamOnlyVulnerabilityFindings: 2,
           transitiveRiskSignals: 17,
@@ -618,7 +547,11 @@ describe("generate-dependency-release-evidence", () => {
           expect(rendered).toContain(
             `- Upstream repositories checked: ${upstream.checkedRepositories}/2`,
           );
-          expect(rendered).toContain("- Advisory vulnerability hard blockers: 2");
+          expect(rendered).toContain("- Known malware findings (release-blocking): 2");
+          expect(rendered).toContain("- Non-blocking advisory findings: 1");
+          expect(rendered).toContain(
+            "- HIGH `report-pkg` (.github/release/clawhub-cli/package-lock.json; production) id=GHSA-report source=github-repository\n",
+          );
           expect(rendered).toContain("- Advisory vulnerability total findings: 3");
           expect(rendered).toContain("- Upstream-only vulnerability findings: 2");
           expect(rendered).toContain(`- Upstream coverage issues: ${upstream.issues.length}`);

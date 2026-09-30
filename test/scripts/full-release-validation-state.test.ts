@@ -20,6 +20,7 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   composeReleaseAttemptJobs,
+  buildReleaseValidationManifest,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
   releaseExecutionPlanSha256,
@@ -382,7 +383,7 @@ describe("full release execution plan", () => {
       role: "normalCi",
       runId: "999",
       runAttempt: 2,
-      workflowSha: "c".repeat(40),
+      workflowSha: SHA,
       workflowRef: "main",
       displayTitle: "CI full-release-validation-88-1-ci",
       sourceParentRunId: "88",
@@ -398,7 +399,7 @@ describe("full release execution plan", () => {
       runId: "999",
       runAttempt: 1,
       source: "reused",
-      workflowSha: "c".repeat(40),
+      workflowSha: SHA,
     });
     expect(hydrated.slice(1)).toEqual(original.children.slice(1));
     const sealed = { ...original, childReuse, children: hydrated };
@@ -415,7 +416,10 @@ describe("full release execution plan", () => {
         childReuse: { normalCi: { ...selection, runAttempt: 3 } },
       }),
     ).toThrow("digest");
-    const mismatched = { ...sealed, childReuse: { normalCi: { ...selection, workflowSha: SHA } } };
+    const mismatched = {
+      ...sealed,
+      childReuse: { normalCi: { ...selection, workflowSha: "c".repeat(40) } },
+    };
     mismatched.sha256 = releaseExecutionPlanSha256(mismatched);
     expect(() => validateReleaseExecutionPlanArtifact(mismatched)).toThrow("immutable plan");
     const changedTarget = {
@@ -445,6 +449,22 @@ describe("full release execution plan", () => {
         expect.objectContaining({ key: "normalCi", runId: "999", source: "reused" }),
       ]),
       blockers: [expect.objectContaining({ kind: "reused_evidence_invalid" })],
+    });
+    const differentTooling = runPlanSubprocess(
+      {
+        childPhaseVersion: 3,
+        childReuse: { normalCi: { ...selection, workflowSha: "c".repeat(40) } },
+      },
+      { PATH: `${root}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}` },
+    );
+    expect(differentTooling.result.status).toBe(2);
+    expect(JSON.parse(readFileSync(differentTooling.output, "utf8"))).toMatchObject({
+      blockers: [
+        expect.objectContaining({
+          kind: "reused_evidence_invalid",
+          message: expect.stringContaining("same tooling is required"),
+        }),
+      ],
     });
     writeFileSync(gh, "#!/bin/sh\nprintf '%s\\n' 'HTTP 503: Service unavailable' >&2\nexit 1\n");
     const unavailable = runPlanSubprocess(
@@ -1375,77 +1395,140 @@ describe("release child attempt composition", () => {
 });
 
 describe("release decision policy", () => {
-  const nativeCiJobs = [
-    "checks-windows-node-test-1",
-    "checks-windows-node-test-2",
-    "macos-swift (tests)",
-    "macos-swift (packages)",
-  ].map((name) => ({ name, conclusion: "failure", status: "completed" }));
+  const windowsJob = {
+    name: "checks-windows-node-test-2",
+    conclusion: "failure",
+    status: "completed",
+    url: "https://example.invalid/windows",
+  };
+  const ciGate = { name: "openclaw/ci-gate", conclusion: "success", status: "completed" };
 
   it.each(["beta", "stable", "full"])(
-    "blocks %s publication on Windows Node and macOS Swift failures despite a green CI aggregate",
+    "reports Windows Node failures as policy advisory for %s publication",
     (releaseProfile) => {
       const snapshot = child("normalCi", {
-        conclusion: "success",
-        jobs: [
-          ...nativeCiJobs,
-          { name: "macos-node", conclusion: "success", status: "completed" },
-          { name: "openclaw/ci-gate", conclusion: "success", status: "completed" },
-        ],
+        conclusion: "failure",
+        jobs: [windowsJob, ciGate],
         status: "completed",
       });
-      const result = classifyReleaseSnapshot({
-        children: [snapshot],
-        releaseProfile,
-        workflowRef: "main",
-      });
+      const result = classifyReleaseSnapshot({ children: [snapshot], releaseProfile });
       expect(result).toMatchObject({
-        blockers: nativeCiJobs.map(({ name }) => ({ job: name })),
-        blockerCount: nativeCiJobs.length,
+        blockers: [],
+        blockerCount: 0,
         errors: [],
-        state: "blocked_complete",
+        state: "passed",
+        advisoryJobs: [
+          {
+            class: "windows-node-ci",
+            child: "normalCi",
+            job: windowsJob.name,
+            conclusion: "failure",
+            runId: snapshot.runId,
+            url: windowsJob.url,
+          },
+        ],
       });
-      expect(terminalPolicyPass(snapshot)).toBe(false);
-      expect(
-        formatReleaseStateOutcome(
-          buildReleaseStateArtifact({
-            children: [snapshot],
-            decision: result,
-            executionPlan: { parentRunAttempt: 1, sha256: "x" },
-            expected: { parentRunAttempt: 1, parentRunId: "77", targetSha: TARGET_SHA },
-            mode: "decision",
-            releaseProfile,
-            rerunGroup: "all",
-          }),
-        ),
-      ).toContain("- Blocker: checks-windows-node-test-1 (failure)");
+      expect(terminalPolicyPass(snapshot)).toBe(true);
+      const artifact = buildReleaseStateArtifact({
+        children: [snapshot],
+        decision: result,
+        executionPlan: { parentRunAttempt: 1, sha256: "a".repeat(64) },
+        expected: { parentRunAttempt: 1, parentRunId: "77", targetSha: TARGET_SHA },
+        mode: "decision",
+        releaseProfile,
+        rerunGroup: "all",
+      });
+      expect(validateReleaseStateArtifact(artifact).advisoryJobs).toEqual(result.advisoryJobs);
+      expect(formatReleaseStateOutcome(artifact)).toContain(
+        "- Advisory [windows-node-ci]: checks-windows-node-test-2 (failure) https://example.invalid/windows",
+      );
+      expect(() => validateReleaseStateArtifact({ ...artifact, advisoryJobs: [] })).toThrow(
+        /advisory jobs differ/u,
+      );
+      const manifest = buildReleaseValidationManifest({
+        plan: executionPlan(),
+        drain: artifact,
+        context: { releaseProfile, rerunGroup: "all", validationInputs: {} },
+      });
+      expect(manifest.version).toBe(4);
+      expect(manifest.advisoryJobs).toEqual(result.advisoryJobs);
     },
   );
 
-  it.each(["checks-node-core-test-nondist-shard", "checks-fast-core"])(
-    "reports CI %s alongside every native failure",
-    (name) => {
-      const result = classifyReleaseSnapshot({
-        children: [
-          child("normalCi", {
-            conclusion: "failure",
-            jobs: [
-              ...nativeCiJobs,
-              { name, conclusion: "failure", status: "completed" },
-              { name: "openclaw/ci-gate", conclusion: "failure", status: "completed" },
-            ],
-            status: "completed",
-          }),
+  it.each([
+    ["normalCi", "macos-node"],
+    ["normalCi", "macos-swift (tests)"],
+    ["normalCi", "checks-node-core-test-nondist-shard"],
+    ["normalCi", "checks-fast-core"],
+    ["normalCi", "openclaw/ci-gate"],
+    ["normalCi", "checks-windows-packaged-install"],
+    ["releaseChecksCandidate", "checks-windows-node-test-2"],
+    ["releaseChecksCandidate", "install-smoke (linux)"],
+    ["releaseChecksCandidate", "upgrade-survivor"],
+    ["releaseChecksCandidate", "update-first-hop-compat / published driver"],
+    ["releaseChecksCandidate", "npm-pack"],
+    ["releaseChecksCandidate", "Run package acceptance / Package integrity"],
+    ["releaseChecksCandidate", "cross_os_release_checks / Linux / packaged upgrade"],
+    ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged fresh"],
+    ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged upgrade"],
+  ])("keeps %s / %s blocking alongside a Windows Node advisory", (key, name) => {
+    const failure = { name, conclusion: "failure", status: "completed" };
+    const snapshots = [
+      child("normalCi", {
+        status: "completed",
+        conclusion: "failure",
+        jobs:
+          key === "normalCi"
+            ? [windowsJob, failure, ...(name === ciGate.name ? [] : [ciGate])]
+            : [windowsJob, ciGate],
+      }),
+    ];
+    if (key !== "normalCi") {
+      snapshots.push(child(key, { status: "completed", conclusion: "failure", jobs: [failure] }));
+    }
+    const result = classifyReleaseSnapshot({ children: snapshots });
+    expect(result).toMatchObject({
+      state: "blocked_complete",
+      blockers: [{ child: key, job: name }],
+      advisoryJobs: [{ job: windowsJob.name }],
+    });
+  });
+
+  it("keeps parent npm qualification blocking alongside Windows Node advisory", () => {
+    const result = classifyReleaseSnapshot({
+      children: [
+        child("normalCi", {
+          status: "completed",
+          conclusion: "failure",
+          jobs: [windowsJob, ciGate],
+        }),
+      ],
+      localFailures: releasePlanGateFailures([
+        { name: "Qualify release npm artifacts", required: true, result: "failure" },
+      ]),
+    });
+    expect(result).toMatchObject({
+      state: "blocked_complete",
+      blockers: [{ child: "<parent>", job: "Qualify release npm artifacts" }],
+      advisoryJobs: [{ job: windowsJob.name }],
+    });
+  });
+
+  it.each(["cancelled", "missing gate", "skipped gate", "cancelled shard"])(
+    "refuses advisory-only success with %s",
+    (scenario) => {
+      const snapshot = child("normalCi", {
+        status: "completed",
+        conclusion: scenario === "cancelled" ? "cancelled" : "failure",
+        jobs: [
+          { ...windowsJob, conclusion: scenario === "cancelled shard" ? "cancelled" : "failure" },
+          ...(scenario === "missing gate"
+            ? []
+            : [{ ...ciGate, conclusion: scenario === "skipped gate" ? "skipped" : "success" }]),
         ],
-        releaseProfile: "stable",
-        workflowRef: "main",
       });
-      expect(result.blockers.map((blocker) => blocker.job)).toEqual([
-        ...nativeCiJobs.map((job) => job.name),
-        name,
-        "openclaw/ci-gate",
-      ]);
-      expect(result.state).toBe("blocked_complete");
+      expect(terminalPolicyPass(snapshot)).toBe(false);
+      expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
     },
   );
 

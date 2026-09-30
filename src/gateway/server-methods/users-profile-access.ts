@@ -32,20 +32,6 @@ export function resolveAuthenticatedProfileId(
   return ensureProfileForEmail(authenticatedUserId).id;
 }
 
-function canMutateProfile(
-  client: GatewayRequestHandlerOptions["client"],
-  profileId: string,
-): boolean {
-  if (client?.connect.scopes?.includes(ADMIN_SCOPE)) {
-    return true;
-  }
-  const authenticatedProfileId = resolveAuthenticatedProfileId(client);
-  return (
-    authenticatedProfileId !== undefined &&
-    authenticatedProfileId === resolveUserProfileId(profileId)
-  );
-}
-
 export function requireProfileMutationAccess(
   client: GatewayRequestHandlerOptions["client"],
   profileId: string,
@@ -53,7 +39,14 @@ export function requireProfileMutationAccess(
 ): boolean {
   // These methods are write-scoped so an identified caller can edit only its own profile;
   // edits targeting any other profile remain admin-only.
-  if (canMutateProfile(client, profileId)) {
+  if (client?.connect.scopes?.includes(ADMIN_SCOPE)) {
+    return true;
+  }
+  const authenticatedProfileId = resolveAuthenticatedProfileId(client);
+  if (
+    authenticatedProfileId !== undefined &&
+    authenticatedProfileId === resolveUserProfileId(profileId)
+  ) {
     return true;
   }
   respond(

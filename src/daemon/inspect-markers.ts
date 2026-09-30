@@ -46,7 +46,7 @@ export function hasGatewaySubcommandArg(programArguments: string[]): boolean {
     args = resolveCarrierCommandArgv(inner, 0, { includeExec: true }) ?? inner;
   }
   args = resolveCarrierCommandArgv(args, 0, { includeExec: true }) ?? args;
-  const position = resolveRuntimeScriptPosition(args);
+  const { position } = resolveRuntimeScriptPosition(args);
   if (typeof position !== "number" && position.kind !== "not-runtime") {
     return false;
   }

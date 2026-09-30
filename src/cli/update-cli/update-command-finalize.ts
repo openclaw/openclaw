@@ -4,6 +4,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readResolvedDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   DEFAULT_PACKAGE_CHANNEL,
@@ -306,10 +307,16 @@ async function updateFinalizeCommandInternal(
   } = prepared;
   let { configSnapshot } = prepared;
   let doctorWarnings: string[] = [];
+  const doctorWarningTimes = new Map<string, number>();
   const onDoctorWarnings = (warnings: string[]) => {
     doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
       ...new Set([...doctorWarnings, ...warnings]),
     ]);
+    for (const warning of doctorWarnings) {
+      if (!doctorWarningTimes.has(warning)) {
+        doctorWarningTimes.set(warning, Date.now());
+      }
+    }
     lifecycle.recordWarnings(doctorWarnings);
   };
 
@@ -362,6 +369,7 @@ async function updateFinalizeCommandInternal(
               options: { repair: true, nonInteractive: true, json: opts.json },
               runtime: { ...defaultRuntime, log: defaultRuntime.error },
             });
+            lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
             // Fresh Doctor owns database fences; the parent retains service custody.
             await maintenance?.releaseState();
           },
@@ -370,8 +378,8 @@ async function updateFinalizeCommandInternal(
       return await lifecycle.run(
         "plugins",
         (phase) =>
-          withPluginLifecycleLease(phase, async () => {
-            return await withCommandProcessScope(async () => {
+          withPluginLifecycleLease(phase, () =>
+            withCommandProcessScope(async () => {
               const preparedConfig = await preparePostCorePluginConfig({
                 requestedChannel,
                 preUpdateConfig: preFinalizeConfig,
@@ -400,8 +408,8 @@ async function updateFinalizeCommandInternal(
                 assertCurrent: phase.assertCurrent,
                 runtime: createNonExitingRuntime(),
               });
-            });
-          }),
+            }),
+          ),
         pluginOutcome,
       );
     });
@@ -419,6 +427,15 @@ async function updateFinalizeCommandInternal(
           json: opts.json === true,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
           onWarnings: onDoctorWarnings,
+        });
+        const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
+        phase.assertCurrent();
+        doctorWarnings = doctorWarnings.filter((warning) => {
+          const completedAtMs = resolvedWarnings.get(warning);
+          return (
+            completedAtMs === undefined ||
+            completedAtMs < (doctorWarningTimes.get(warning) ?? Infinity)
+          );
         });
         await persistValidatedDowngradeConfig(result.configSnapshot, phase.assertCurrent);
         return result;

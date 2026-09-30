@@ -108,8 +108,13 @@ fail-closed settlement.
 
 Request config custody follows committed policy publications. Equivalent snapshots
 and settings unrelated to approval auth or session routing preserve the request.
-Changes to those retained policy facts permanently revoke it, including a change
-restored before the next worker check. Handler completion releases its publication
+Until the request binds its approval's source session, the retained facts include
+the whole agent roster and session store inventory. Once bound, it retains the
+routing facts plus the stores that source resolves through, so adding, removing, or
+re-storing an unrelated agent preserves it. Shared fixed stores keep their co-tenants,
+and a retired source owner keeps the inventory its store discovery scans. Changes to
+retained facts permanently revoke the request, including a change restored before
+the next worker check. Handler completion releases its publication
 listener; worker commit checks consume the retained revocation fact without loading
 config, profiles, or session rows. Native-compatible requests retain the same
 publication fence in addition to their synchronous SDK guard.
@@ -127,10 +132,12 @@ store. Startup hydrates through the read-only worker scope; runtime mutations us
 the shared-state SQLite worker broker and re-read environment, credential, and
 placement authority inside the committing transaction. The broker rechecks live
 caller authority before commit, and the store fences changed authority until
-committed facts are installed. Diagnostic writes preserve keyed reads only when
-the worker proves that every environment and credential field except the error
-text and update timestamp is unchanged. Transfer capabilities keep their separate
-authority and lifetime checks. Attachment reads remain available during unrelated
+committed facts are installed. Environment reads remain available when the worker
+proves that the environment record is unchanged except for its error text and update
+timestamp; credential reads independently require the complete credential row to be
+unchanged, so credential-only commits fence credential reads without fencing environment
+reads. Transfer capabilities keep their separate authority and lifetime checks.
+Attachment reads remain available during unrelated
 metadata commits only when the worker proves that the complete attachment record
 is unchanged, including the activity timestamp used by idle-cleanup guards.
 Replacement, closure, and activity changes retain their publication fence.
@@ -357,6 +364,23 @@ Closing an agent, path, or matching root revokes pending discovery. Missing read
 do not create databases, and current evidence takes precedence over unknown and
 absent evidence. Incognito evidence keeps its process-held native owner.
 
+Subagent recovery checks session identity and execution ownership through that
+read worker. Each check acquires finite reader custody against its captured
+physical source and returns only the fields used by recovery policy. The native
+handle retains one last-key projection under the existing connection revision;
+foreign commits, local writes, rollback, and file replacement invalidate reuse.
+Incognito checks use the process-held owner's transaction facts.
+Missing stores remain missing: interrupted-run bookkeeping and requester settlement
+continue with child effects suppressed, and a newly appearing store invalidates
+the captured absence.
+
+Session signals, transcript failure reports, and Browser cleanup claims carry
+those restrictions through their existing native write admission. The worker
+checks the source revision again after the host grant; caller authority remains
+live through admission. Accepted writes and claimed cleanup retain their original
+settlement owners. The change adds no persistent projection, schema, retention
+rule, or update migration.
+
 A retained, already-admitted native reader can continue its committed canonical
 admission for one worker request. The canonical owner binds that continuation to
 the live source connection, physical file, policy, and readiness. Missing or revoked
@@ -544,11 +568,61 @@ invalidation before settlement. Internal service callers receive an operation-bo
 revision; intervening host writes leave the returned snapshot conservatively stale.
 Evicted revision entries fall back to the existing global publication sequence,
 and stale save receipts use a negative marker that cannot match a current revision.
-Public save signatures and return values are unchanged. Service mutations with
-commit guards, one-use authority capture, or caller preconditions retain their
-synchronous call-through to the native kernels; their worker admission remains
-separate work. Receipt-coupled transaction hooks, Doctor metadata callbacks, and synchronous diagnostic reads
-retain their current owners and execution paths.
+Public save signatures and return values are unchanged. Service add, update,
+declaration convergence, and removal use the existing retained-outcome worker
+admission. Callback functions stay with the caller; only prepared changes and
+receipt facts enter the worker. Enabled schedulers retain full replacement and
+atomic quarantine, while passive writers retain changed-row merges. The native
+transaction fences full replacements against the originally loaded definition and
+runtime rows, and independently rechecks authority sidecars. Runtime-only saves
+cannot certify newer definitions against an older service snapshot. It applies
+receipt retirement and owner fences with the job change, and retains its result
+before commit. Private drafts
+become visible only after confirmed native commit and settlement; a missing reply
+does not replay the mutation. One-use creator grants retain their original
+issuer and scope for repeated live checks without redeeming the token again.
+Effectful caller preconditions execute once, and their observed target is checked
+again by the native transaction. A refused job or receipt mutation invalidates
+the scheduler's cached observation before another edit; a foreign receipt owner
+can finish without publishing a local revision. Unchanged declaration validation
+does not mark a user mutation as committed. Ordinary removal deletes scratch in
+that same transaction. Agent-roster compensation retains its separate scratch-cleanup
+boundary until the roster outcome is known. Doctor metadata callbacks, synchronous
+diagnostic reads, and full creator-session/harness currentness predicates retain
+their existing owners and remain separate caller-migration work.
+
+Ordinary scratch and heartbeat-proposal writes use that same Cron worker. Job
+existence and scratch revision are checked in one transaction; guarded service
+writes also bind the current job definition and retain live caller authority at
+transaction and commit admission. Only an actual scratch write marks its business
+completion receipt. Unset tombstones, byte limits, source provenance and uncertain
+outcome handling are unchanged. Doctor's migration and compensation keep the same
+synchronous kernel. Ordinary scratch reads use the shared-state reader, with job
+definition and scratch in one native snapshot. The service rejects a changed
+definition, and the Gateway rechecks the caller before returning private content.
+Scratch reads and writes reuse the original projection's creation-time fallback
+for legacy rows missing that metadata; finite persisted values always win.
+Heartbeat preflight awaits scratch before selecting its session and pending events.
+First-use schema opening still belongs to the canonical mutable worker; Doctor's
+named maintenance readers remain synchronous. This changes no schema, retention
+policy, public API or installed-updater contract.
+
+Stream state, source retirement, loss counters, and external failure updates also
+use the retained-outcome Cron worker. The transaction rereads the target row and
+its runtime authority, preserves grant projections, and checks logical source
+ownership before changing source-qualified state. Counters remain monotonic across
+source replacement. The host captures its physical store, service generation, and
+default-agent resolver before waiting for the service lock, then checks them at
+transaction and commit admission. Shutdown can still retire its stream source.
+External failures retain the existing policy and do not terminalize a run receipt.
+After a known commit, the host joins the history attempt under that original source
+before publishing the finished event and alert. A lost ordinary reply does not skip
+those effects or replay the write; uncertain outcomes do not publish. A committed
+source retirement carries its exact identity through an operation failure so the
+stream owner can finish its conditional status write without replaying retirement.
+The original failure is still reported, and the final write retains its source checks. Other native
+scheduler transaction callers retain the shared row kernel and remain separate
+caller-migration work. No stored format, public method, or retention policy changes.
 
 Cron recovery observes each batch in one shared-state read-worker snapshot. Healthy
 live receipts need no writer admission. A missing receipt table uses its existing
@@ -1071,6 +1145,16 @@ Lease verification releases each read snapshot before waiting for host admission
 then rereads the exact unexpired owner from current committed state. Host scheduling
 does not pin the WAL; writes and renewals retain their transaction-held checks.
 Schemas, retention, durability, and update behavior are unchanged.
+
+Doctor imports retired MCP OAuth JSON through the same shared-state worker.
+The host retains exclusive maintenance ownership, the retired runtime's file lock,
+and the original source claim while the worker reads receipts, atomically imports
+credentials with their receipt, and records source removal. Existing SQLite
+credentials and explicit logout retain precedence. A definite pre-commit failure
+restores the source; an uncertain import keeps the Doctor claim for receipt
+verification on the next run, without replaying the write. A confirmed commit
+retains its result even when delivery fails, and reports that failure. Published
+updaters still invoke the same Doctor repair path; no schema or stored format changes.
 
 Requester MCP setup reads its sorted authorization set in one current read-worker
 operation. The worker decodes selected rows in caller order and returns only

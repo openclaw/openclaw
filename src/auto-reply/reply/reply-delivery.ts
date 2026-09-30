@@ -5,6 +5,7 @@ import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isRenderablePayload,
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -18,7 +19,6 @@ import {
   resolveReplyDispatchErrorOutcome,
   shouldRetryReplyDispatch,
 } from "./reply-dispatch-outcome.js";
-import { isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type ReplyDirectiveParseMode = "always" | "auto" | "never";

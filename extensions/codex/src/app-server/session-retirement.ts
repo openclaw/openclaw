@@ -3,7 +3,7 @@ import type {
   AgentHarnessSessionDeletionParams,
   AgentHarness,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,

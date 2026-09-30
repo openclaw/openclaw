@@ -400,13 +400,10 @@ internal class WearProxyBridge(
     try {
       sender.send(peer.nodeId, path, data)
       return true
-    } catch (err: CancellationException) {
+    } catch (err: Throwable) {
       // Custom senders may use cancellation for transport failure. Keep the actor
       // cancellation contract while retrying this peer normally.
-      currentCoroutineContext().ensureActive()
-      markPeerFailed(peer)
-      return false
-    } catch (_: Throwable) {
+      if (err is CancellationException) currentCoroutineContext().ensureActive()
       markPeerFailed(peer)
       return false
     }

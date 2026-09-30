@@ -508,6 +508,29 @@ test("sessions.reset rejects unknown selected global agents", async () => {
   });
 });
 
+test.each(["!!!", "   "])(
+  "sessions.reset rejects an unrepresentable explicit agent %j without resetting main",
+  async (agentId) => {
+    const { storePath } = await createSessionStoreDir();
+    await writeMainSessionEntry("sess-preserved");
+    const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
+    const before = loadEntry(scope);
+
+    const reset = await directSessionReq("sessions.reset", {
+      key: scope.sessionKey,
+      agentId,
+    });
+
+    expect(reset.ok).toBe(false);
+    expect(reset.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("Unknown agent id"),
+    });
+    expect(loadEntry(scope)).toEqual(before);
+    expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
+  },
+);
+
 test("sessions.reset emits inferred selected global agent scope", async () => {
   const { dir } = await createSessionStoreDir();
   await withGlobalAgentSessionStore(dir, async (globalConfig) => {

@@ -88,14 +88,12 @@ const BINDING_LEASE_RENEW_INTERVAL_MS = Math.floor(BINDING_LEASE_STALE_MS / 3);
 // retirement fence only long enough for bounded stale lease work to drain.
 const PHYSICAL_SESSION_RETIRE_TTL_MS = BINDING_LEASE_WAIT_MS;
 
-export type CodexRunSessionBindingAuthority = "current" | "ephemeral" | "superseded";
-
 /** Decides whether a run may share the durable stable-key binding owner. */
 export function resolveCodexRunSessionBindingAuthority(params: {
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
   storePath?: string;
-}): CodexRunSessionBindingAuthority {
+}) {
   return captureNativeSessionGenerationAuthority({
     ...params,
     target: params.identity,
@@ -652,26 +650,23 @@ export function createCodexAppServerBindingStore(
             }
             let binding: CodexAppServerThreadBinding;
             if (mutation.kind === "set" || mutation.kind === "replace-thread") {
-              binding = validateBindingForWrite(mutation.binding);
+              binding = mutation.binding;
             } else if (mutation.kind === "patch-pending-supervision-branch") {
-              binding = validateBindingForWrite({
+              binding = {
                 ...active!.binding,
                 pendingSupervisionBranch: mutation.pending,
-              });
-            } else if (mutation.kind === "commit-pending-supervision-branch") {
-              binding = validateBindingForWrite({
-                ...active!.binding,
-                ...mutation.patch,
-                threadId: mutation.threadId,
-                pendingSupervisionBranch: undefined,
-              });
+              };
             } else {
-              binding = validateBindingForWrite({
+              binding = {
                 ...active!.binding,
                 ...mutation.patch,
                 threadId: mutation.threadId,
-              });
+                ...(mutation.kind === "commit-pending-supervision-branch"
+                  ? { pendingSupervisionBranch: undefined }
+                  : {}),
+              };
             }
+            binding = validateBindingForWrite(binding);
             const nativeSubagentSubmissions = active
               ? preserveCodexNativeSubagentSubmissions(
                   active.binding,

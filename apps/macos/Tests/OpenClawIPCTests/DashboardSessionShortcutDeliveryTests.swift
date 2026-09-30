@@ -4,7 +4,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardSessionShortcutDeliveryTests {
     @Test(arguments: [("o", UInt16(31)), ("a", UInt16(0))], ["body", "composer"])
@@ -36,9 +36,7 @@ struct DashboardSessionShortcutDeliveryTests {
             windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         controller.show(url: server.url(), auth: auth)
-        try await self.waitUntil("dashboard document readiness") {
-            !controller.webView.isLoading && controller.canDeliverNativeCommands
-        }
+        try await DashboardTestWait.document(controller, "session shortcut document")
         let window = try #require(controller.window)
         try #require(window.makeFirstResponder(controller.webView))
         // JavaScript only selects and observes focus; it never constructs or dispatches a key event.
@@ -68,7 +66,7 @@ struct DashboardSessionShortcutDeliveryTests {
         if !window.performKeyEquivalent(with: event) {
             window.sendEvent(event)
         }
-        try await self.waitUntil("\(chord.key) delivery to \(target)") {
+        try await DashboardTestWait.state("\(chord.key) delivery to \(target)") {
             try await !self.keyEvents(in: controller.webView).isEmpty
         }
         let observed = try await self.keyEvents(in: controller.webView)
@@ -94,19 +92,5 @@ struct DashboardSessionShortcutDeliveryTests {
     private func keyEvents(in webView: WKWebView) async throws -> [KeyObservation] {
         let json = try #require(try await webView.evaluateJavaScript("JSON.stringify(window.keyEvents)") as? String)
         return try JSONDecoder().decode([KeyObservation].self, from: Data(json.utf8))
-    }
-
-    private struct WaitFailure: Error, CustomStringConvertible {
-        let description: String
-    }
-
-    private func waitUntil(_ stage: String, _ condition: () async throws -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while try await !condition() {
-            guard ContinuousClock.now < deadline else {
-                throw WaitFailure(description: "Timed out waiting for \(stage)")
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
     }
 }

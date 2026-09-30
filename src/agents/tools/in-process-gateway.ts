@@ -4,7 +4,6 @@ import {
   type CronMutationCompletion,
 } from "../../cron/mutation-completion.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
-/** In-process Gateway calls for built-in agent tools. */
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { withInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 import { readInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
@@ -33,6 +32,7 @@ import {
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
   withoutGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
@@ -445,14 +445,9 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
   method: string,
   params: Record<string, unknown>,
   creation: TrustedSessionCreation,
-  options: {
-    resolveGatewayContext?: GatewayContextResolver;
-    sessionMutationCommitGuard?: () => void;
-    signal?: AbortSignal;
-    timeoutMs?: number | null;
-  } = {},
+  options: Omit<InProcessGatewayCallOptions, "onExecution"> = {},
 ): Promise<T> {
-  const requesterProfileId = getGatewayToolCallerIdentity()?.operatorAuthority?.profileId;
+  const requesterProfileId = resolveGatewayToolOperatorSelection().operatorAuthority?.profileId;
   const trustedCreation =
     creation.via === "spawn" && requesterProfileId ? { ...creation, requesterProfileId } : creation;
   return await callInProcessGatewayToolBound(

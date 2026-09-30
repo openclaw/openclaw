@@ -657,6 +657,7 @@ function shouldRetryGoogleGemini3FirstResponse(params: {
   return isGoogleGemini3ProModel(params.model.id) || isGoogleGemini3FlashModel(params.model.id);
 }
 
+// Retry copies retain JSON wire semantics, including omitted undefined fields.
 function cloneGoogleGenerateContentRequest(
   params: GoogleGenerateContentRequest,
 ): GoogleGenerateContentRequest {
@@ -877,16 +878,10 @@ async function openGoogleSseChunks(params: {
   }
 
   const firstAttempt = await openGoogleSseAttempt({
-    guardedFetch: params.guardedFetch,
-    url: params.url,
-    headers: params.headers,
-    request: params.request,
-    videoSlots: params.videoSlots,
+    ...params,
     parentSignal: params.options?.signal,
     firstResponseTimeoutMs: retryMs,
     errorPrefix,
-    model: params.model,
-    options: params.options,
   });
   if (firstAttempt.type === "ready") {
     return firstAttempt;
@@ -899,38 +894,16 @@ async function openGoogleSseChunks(params: {
     request: params.request,
   })!;
   const retryAttempt = await openGoogleSseAttempt({
-    guardedFetch: params.guardedFetch,
-    url: params.url,
-    headers: params.headers,
+    ...params,
     request: retryRequest,
-    videoSlots: params.videoSlots,
     parentSignal: params.options?.signal,
     firstResponseTimeoutMs: 0,
     errorPrefix,
-    model: params.model,
-    options: params.options,
   });
   if (retryAttempt.type === "timeout") {
     throw new Error("Google Gemini first response retry timed out unexpectedly");
   }
   return retryAttempt;
-}
-
-async function buildGoogleTransportHeaders(params: {
-  kind: CanonicalGoogleTransportApi;
-  model: GoogleTransportModel;
-  apiKey: string | undefined;
-  optionHeaders: Record<string, string> | undefined;
-  fetchImpl?: typeof fetch;
-}): Promise<Record<string, string>> {
-  return params.kind === "google-vertex"
-    ? await buildGoogleVertexHeaders(
-        params.model,
-        params.apiKey,
-        params.optionHeaders,
-        params.fetchImpl,
-      )
-    : buildGoogleHeaders(params.model, params.apiKey, params.optionHeaders);
 }
 
 async function* parseGoogleSseChunks(
@@ -1055,13 +1028,10 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         const requestUrl = buildGoogleTransportRequestUrl(kind, model, options);
         const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
         const openSse = async (apiKeyForRequest: string | undefined) => {
-          const requestHeaders = await buildGoogleTransportHeaders({
-            kind,
-            model,
-            apiKey: apiKeyForRequest,
-            optionHeaders: options?.headers,
-            fetchImpl,
-          });
+          const requestHeaders =
+            kind === "google-vertex"
+              ? await buildGoogleVertexHeaders(model, apiKeyForRequest, options?.headers, fetchImpl)
+              : buildGoogleHeaders(model, apiKeyForRequest, options?.headers);
           return await openGoogleSseChunks({
             kind,
             model,

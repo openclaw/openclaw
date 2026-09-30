@@ -28,6 +28,7 @@ import {
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthCache } from "./server/health-state.js";
 import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 
 type GatewayRequestContextClient = GatewayClient & {
@@ -262,6 +263,8 @@ export function createGatewayRequestContext(
       return runtimeState.cronState.storePath;
     },
     getRuntimeConfig,
+    resolveSessionRequestTargets: (request) =>
+      resolveSessionRequestTargets({ ...request, context }),
     getCommittedRuntimeConfig: () =>
       runtimeState.configReloader.getCommittedRuntimeConfig?.() ?? getRuntimeConfig(),
     isConfigReloadSettled: () =>
@@ -500,12 +503,13 @@ export function createGatewayRequestContext(
         state: sharedGatewaySessionGenerationState,
       });
     },
-    enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig) => {
+    enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig, previousConfig) => {
       enforceSharedGatewaySessionGenerationForConfigWrite({
         state: sharedGatewaySessionGenerationState,
         nextConfig,
         resolveRuntimeSnapshotGeneration: resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
         clients,
+        transition: { previous: previousConfig, next: getRuntimeConfig() },
       });
       publishOperatorRoleConfigChange(context);
     },

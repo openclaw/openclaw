@@ -1,4 +1,6 @@
 import { validateToolCall } from "@openclaw/llm-core/validation";
+import { Type } from "typebox";
+import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
@@ -250,5 +252,120 @@ describe("compact OpenAI tool references", () => {
     expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual(
       normalizeToolParameterSchema(schema),
     );
+  });
+});
+
+describe("root unions with preset and custom strings", () => {
+  const presets = Type.Object({
+    action: Type.Literal("preset"),
+    value: Type.Union([Type.Literal("compact"), Type.Literal("wide")]),
+  });
+  const custom = Type.Object({ action: Type.Literal("custom"), value: Type.String() });
+
+  it.each([
+    { keyword: "anyOf", modelProvider: "openai" },
+    { keyword: "oneOf", modelProvider: "openai" },
+    { keyword: "anyOf", modelProvider: "google" },
+    { keyword: "oneOf", modelProvider: "google" },
+  ])("keeps custom strings for $modelProvider $keyword", ({ keyword, modelProvider }) => {
+    for (const branches of [
+      [presets, custom],
+      [custom, presets],
+    ]) {
+      const schema = { type: "object", [keyword]: Type.Union(branches).anyOf };
+      const original = structuredClone(schema);
+      const normalized = normalizeToolParameterSchema(schema, { modelProvider });
+      const validator = Compile(normalized);
+      for (const input of [
+        { action: "preset", value: "compact" },
+        { action: "preset", value: "wide" },
+        { action: "custom", value: "customer-layout" },
+      ]) {
+        expect(Compile(schema).Check(input)).toBe(true);
+        expect(validator.Check(input)).toBe(true);
+      }
+      expect(validator.Check({ action: "unknown", value: "compact" })).toBe(false);
+      expect(validator.Check({ action: "custom", value: 42 })).toBe(false);
+      expect(schema).toEqual(original);
+    }
+  });
+
+  it("retains a root enum when a branch allows arbitrary strings", () => {
+    const schema = {
+      type: "object",
+      properties: { value: Type.Union([Type.Literal("compact"), Type.Literal("wide")]) },
+      anyOf: Type.Union([presets, custom]).anyOf,
+    };
+    const normalized = normalizeToolParameterSchema(schema);
+    expect(Compile(normalized).Check({ action: "custom", value: "compact" })).toBe(true);
+    expect(Compile(normalized).Check({ action: "custom", value: "customer-layout" })).toBe(false);
+  });
+
+  it("does not replace a preset with a constrained string or a different type", () => {
+    for (const value of [
+      Type.String({ pattern: "^custom-" }),
+      Type.String({ minLength: 20 }),
+      Type.Number(),
+    ]) {
+      for (const branches of [
+        [presets, Type.Object({ action: Type.Literal("custom"), value })],
+        [Type.Object({ action: Type.Literal("custom"), value }), presets],
+      ]) {
+        const schema = { type: "object", anyOf: Type.Union(branches).anyOf };
+        const normalized = normalizeToolParameterSchema(schema, { modelProvider: "google" });
+        expect(Compile(schema).Check({ action: "preset", value: "compact" })).toBe(true);
+        expect(Compile(normalized).Check({ action: "preset", value: "compact" })).toBe(true);
+      }
+    }
+  });
+
+  it("keeps an annotated custom string open when a third preset follows it", () => {
+    const schema = Type.Union([
+      Type.Object({ value: Type.Literal("compact", { description: "Layout name" }) }),
+      Type.Object({
+        value: Type.String({ description: "Custom name", default: "custom", examples: ["custom"] }),
+      }),
+      Type.Object({ value: Type.Literal("wide") }),
+    ]);
+    const normalized = normalizeToolParameterSchema(schema);
+    expect(normalized).toHaveProperty("properties.value", {
+      type: "string",
+      description: "Layout name",
+      default: "custom",
+      examples: ["custom"],
+    });
+    expect(Compile(normalized).Check({ value: "customer-layout" })).toBe(true);
+  });
+
+  it("retains numeric presets when the other branch accepts strings", () => {
+    const normalized = normalizeToolParameterSchema(
+      Type.Union([Type.Object({ value: Type.Literal(42) }), Type.Object({ value: Type.String() })]),
+    );
+    expect(Compile(normalized).Check({ value: 42 })).toBe(true);
+  });
+
+  it("keeps earlier string presets when a numeric alternative follows a free string", () => {
+    const normalized = normalizeToolParameterSchema(
+      Type.Union([
+        Type.Object({ value: Type.Literal("compact") }),
+        Type.Object({ value: Type.String() }),
+        Type.Object({ value: Type.Literal(42) }),
+      ]),
+    );
+    expect(Compile(normalized).Check({ value: "compact" })).toBe(true);
+    expect(Compile(normalized).Check({ value: 42 })).toBe(true);
+  });
+
+  it("continues to merge two finite string enums", () => {
+    const schema = Type.Union([
+      Type.Object({ value: Type.Union([Type.Literal("compact"), Type.Literal("wide")]) }),
+      Type.Object({ value: Type.Union([Type.Literal("custom"), Type.Literal("compact")]) }),
+    ]);
+    const normalized = normalizeToolParameterSchema(schema);
+    const validator = Compile(normalized);
+    for (const value of ["compact", "wide", "custom"]) {
+      expect(validator.Check({ value })).toBe(true);
+    }
+    expect(validator.Check({ value: "unknown" })).toBe(false);
   });
 });

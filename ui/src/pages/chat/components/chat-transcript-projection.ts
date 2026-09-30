@@ -1,6 +1,6 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { nothing } from "lit";
+import { html, nothing } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
@@ -16,6 +16,7 @@ import {
   localParticipantIdentityKey,
   sessionParticipantIdentityKey,
 } from "../../../lib/chat/sender-label.ts";
+import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import {
   isUiGlobalScopeConfigured,
   isSubagentSessionKey,
@@ -25,6 +26,7 @@ import {
 import { agentRunFrameGroups } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
+import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -58,7 +60,7 @@ import {
   getTranscriptState,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
@@ -203,6 +205,22 @@ export function projectChatTranscript(
   } satisfies Parameters<typeof buildCachedChatItems>[0];
   const chatItems = buildCachedChatItems(chatItemsInput);
   const workingIndicator = chatItems.find((item) => item.kind === "reading-indicator");
+  const activityRunId = workingIndicator?.runId ?? props.runId;
+  const activityGroupKey =
+    props.runActive && activityRunId
+      ? chatItems.findLast(
+          (item) =>
+            item.kind === "group" &&
+            item.messages.some(
+              ({ message }) =>
+                transcriptRunId(message) === activityRunId &&
+                readPreparedActivity(message).some(
+                  (activity) =>
+                    !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
+                ),
+            ),
+        )?.key
+      : undefined;
   const runOutputTokens = workingIndicator?.runId
     ? (props.runUsageById?.get(workingIndicator.runId)?.outputTokens ?? null)
     : null;
@@ -228,6 +246,12 @@ export function projectChatTranscript(
   }
   const { messageRowKeysById, transcriptMessageKeys, loadedReplySources, positionIndex, rows } =
     projectTranscriptIndex(transcriptChain, expandedToolCards, props);
+  const workPreviews = renderWorkGroupBrowserTabPreviews(
+    transcriptItems.flatMap((item) =>
+      item.kind === "work-group" && !expandedToolCards.get(item.key) ? [item] : [],
+    ),
+    { sessionKey: props.sessionKey, latestBrowserTabs },
+  );
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
@@ -378,6 +402,8 @@ export function projectChatTranscript(
       latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
+      activityRunId,
+      activityGroupKey,
       autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
       onToggleToolMessageExpanded: toggleToolCardExpanded,
@@ -498,10 +524,7 @@ export function projectChatTranscript(
       const workExpanded = expandedToolCards.get(item.key) ?? false;
       return renderWorkGroupSummary(item, {
         expanded: workExpanded,
-        browserTabPreviews: renderBrowserTabPreviews(item.groups, {
-          sessionKey: props.sessionKey,
-          latestBrowserTabs,
-        }),
+        browserTabPreviews: workPreviews.get(item.key),
         onToggle: () => toggleToolCardExpanded(item.key, workExpanded),
       });
     }
@@ -578,7 +601,20 @@ export function projectChatTranscript(
     turnRecapByGroupKey.set(tailStatusOwner.key, turnRecap);
     turnRecapOwnerKey = tailStatusOwner.key;
   }
-  const transcriptRows: TranscriptRow<ChatRenderItem>[] = [...rows];
+  const transcriptRows: TranscriptRow<ChatRenderItem>[] = [];
+  for (const row of rows) {
+    transcriptRows.push(row);
+    const previews = workPreviews.get(row.key);
+    if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
+      transcriptRows.push({
+        kind: "content",
+        key: `work-previews:${row.key}`,
+        content: html`<div class="chat-group tool chat-group--turn-block">
+          <div class="chat-group-messages">${previews}</div>
+        </div>`,
+      });
+    }
+  }
   // Only ID-bearing voice captions need a history scan. Keep membership local
   // to this projection so history replacement and search cannot stale it.
   let persistedIds: Set<string | null> | undefined;
@@ -648,6 +684,8 @@ export function projectChatTranscript(
     showReasoning,
     props.showToolCalls,
     Boolean(props.runActive),
+    activityRunId,
+    activityGroupKey,
     Boolean(props.runWorking),
     props.startupLabel,
     Boolean(props.waitingApproval),
@@ -700,17 +738,40 @@ export function projectChatTranscript(
   );
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
-    const loaded = loadedReplySources.get(replyToId);
-    // A loaded original is revealed in place, with or without text.
+    // Search removes rows from the index, not from loaded history. Resolve the
+    // unfiltered projection only on navigation, using the same index/expansion
+    // owners as visible targets rather than requiring a history loader.
+    const targetChain = searchFiltering
+      ? projectTranscriptChain(
+          buildCachedChatItems({ ...chatItemsInput, searchOpen: false, searchQuery: "" }),
+          {
+            sessionKey: props.sessionKey,
+            runWorking: Boolean(props.runWorking),
+            searchActive: false,
+            session: activeSession,
+          },
+        )
+      : transcriptChain;
+    const targetSources =
+      targetChain === transcriptChain
+        ? loadedReplySources
+        : projectTranscriptIndex(targetChain, expandedToolCards, props).loadedReplySources;
+    const loaded = targetSources.has(replyToId);
     if (loaded) {
-      // Loaded targets also serve read-only views without reply-message access.
-      // Reveal waits for this expansion to commit before locating the bubble.
-      expandReplyTargetWork(transcriptItems, expandedToolCards, replyToId);
-      transcript.revealMessage(replyToId);
-      return;
+      expandReplyTargetWork(targetChain.transcriptItems, expandedToolCards, replyToId);
     }
     if (searchFiltering) {
       closeTranscriptSearch(state, requestUpdate);
+    }
+    if (loaded) {
+      // Closing search must commit the original's row before reveal can find it.
+      // Loaded originals also navigate in archived/read-only views.
+      if (searchFiltering) {
+        queueMicrotask(() => transcript.revealMessage(replyToId));
+      } else {
+        transcript.revealMessage(replyToId);
+      }
+      return;
     }
     props.replyMessageAccess?.open(replyToId);
   };

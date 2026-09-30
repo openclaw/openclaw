@@ -168,7 +168,11 @@ describe("cron one-shot schedule ownership", () => {
         }
         await started.promise;
 
-        await expect(cron.remove(original.id)).resolves.toEqual({ ok: true, removed: true });
+        await expect(cron.remove(original.id)).resolves.toEqual({
+          ok: true,
+          removed: true,
+          activeRunCancellationRequested: true,
+        });
         await addOneShot({
           cron,
           id: original.id,

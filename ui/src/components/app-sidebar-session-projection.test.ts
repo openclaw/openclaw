@@ -87,7 +87,6 @@ function subtitleParams(
   return {
     session,
     hasDisplay: false,
-    displaySubtitle: undefined,
     sidebarLiveActivity: true,
     showPreview: true,
     narrationLine: undefined,

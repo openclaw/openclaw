@@ -27,6 +27,11 @@ const history = [
   },
   {
     role: "user",
+    content: "The desktop controls work.",
+    __openclaw: { id: "peer-first", ...peer },
+  },
+  {
+    role: "user",
     content: "The checklist is ready.",
     __openclaw: { id: "peer-reply", ...peer, replyToId: "self-reply" },
   },
@@ -54,8 +59,9 @@ const history = [
   }),
 );
 const viewports = [
-  { width: 1440, theme: "light" },
-  { width: 390, theme: "dark" },
+  { width: 1440, height: 1000, touch: false, theme: "light" },
+  { width: 390, height: 1000, touch: true, theme: "dark" },
+  { width: 820, height: 1180, touch: true, theme: "light" },
 ];
 
 suite.define(() => {
@@ -95,14 +101,13 @@ suite.define(() => {
 
   it.each(viewports)(
     "keeps participant actions owned by their message at $width px",
-    async ({ width, theme }) => {
-      const mobile = width < 768;
+    async ({ width, height, touch, theme }) => {
       await suite.withPage(
-        { viewport: { width, height: 1000 }, locale: "en-US", hasTouch: mobile },
+        { viewport: { width, height }, locale: "en-US", hasTouch: touch },
         async ({ page }) => {
           await installMockGateway(page, {
             sessionKey,
-            historyMessages: history.slice(0, 6),
+            historyMessages: history.slice(0, 7),
             presenceUsers: [
               {
                 self: true,
@@ -118,7 +123,9 @@ suite.define(() => {
             document.documentElement.dataset.themeMode = value;
             await document.fonts.ready;
           }, theme);
+          expect(await page.evaluate(() => matchMedia("(hover: none)").matches)).toBe(touch);
           const own = page.locator('[data-entry-id="self-reply"]');
+          const first = page.locator('[data-entry-id="peer-first"]');
           const reply = page.locator('[data-entry-id="peer-reply"]');
           const last = page.locator('[data-entry-id="peer-last"]');
           await reply.waitFor();
@@ -163,19 +170,18 @@ suite.define(() => {
                   )
                   .map((owner) => owner.getAttribute("data-message-actions-for")),
               );
-          await reply.scrollIntoViewIfNeeded();
+          await first.scrollIntoViewIfNeeded();
           const resting = await geometry();
-          for (const [id, bubble] of [
-            ["peer-reply", reply],
-            ["peer-last", last],
-          ] as const) {
+          const messages = [
+            ["peer-first", first, "The desktop controls work."],
+            ["peer-reply", reply, "The checklist is ready."],
+            ["peer-last", last, "I checked the mobile controls too."],
+          ] as const;
+          // Focus must reveal every native owner without a preceding hover/tap.
+          for (const [id, bubble, content] of messages) {
             const action = await actionFor(id);
             const key = await bubble.getAttribute("data-message-id");
-            if (mobile) {
-              await bubble.locator(".chat-text").tap();
-            } else {
-              await bubble.hover();
-            }
+            await action.focus();
             await expect
               .poll(() => action.evaluate((button) => Number(getComputedStyle(button).opacity)))
               .toBeGreaterThan(0.5);
@@ -183,17 +189,14 @@ suite.define(() => {
             expect(await geometry()).toEqual(resting);
             // Earlier message rows align to their bubble; the final group footer
             // keeps its native metadata/action layout.
-            if (!mobile && id === "peer-reply") {
+            if (!touch && id !== "peer-last") {
               const actionBounds = await action.boundingBox();
               const bubbleBounds = await bubble.boundingBox();
               expect(actionBounds).not.toBeNull();
               expect(bubbleBounds).not.toBeNull();
               expect(Math.abs(actionBounds!.x - bubbleBounds!.x)).toBeLessThanOrEqual(1);
             }
-            await action.focus();
-            await expect.poll(interactiveOwners).toEqual([key]);
-            expect(await geometry()).toEqual(resting);
-            if (mobile) {
+            if (touch) {
               expect(
                 await action.evaluate((button) => {
                   const bounds = button.getBoundingClientRect();
@@ -215,18 +218,35 @@ suite.define(() => {
               .filter({ has: page.getByRole("button", { name: "Cancel reply" }) });
             await expect
               .poll(() => preview.locator(".chat-reply-preview__text").textContent())
-              .toBe(
-                id === "peer-reply"
-                  ? "The checklist is ready."
-                  : "I checked the mobile controls too.",
-              );
+              .toBe(content);
             await preview.getByRole("button", { name: "Cancel reply" }).click();
             await action.evaluate((button) => button.blur());
-            if (mobile) {
-              await bubble.locator(".chat-text").tap();
-            }
             await page.mouse.move(0, 0);
           }
+          await expect.poll(interactiveOwners).toEqual([]);
+          // Transfer directly between ordinary, reply-wrapped, and final bubbles.
+          // No intervening dismiss or action may reset the previous reveal.
+          for (const [id, bubble] of messages) {
+            const action = await actionFor(id);
+            const key = await bubble.getAttribute("data-message-id");
+            if (touch) {
+              await bubble.locator(".chat-text").tap();
+            } else {
+              await bubble.hover();
+            }
+            await expect
+              .poll(() => action.evaluate((button) => Number(getComputedStyle(button).opacity)))
+              .toBeGreaterThan(0.5);
+            await expect.poll(interactiveOwners).toEqual([key]);
+            expect(await geometry()).toEqual(resting);
+          }
+          if (touch) {
+            // Tapping the same final message still dismisses its controls.
+            await last.locator(".chat-text").tap();
+          } else {
+            await page.mouse.move(0, 0);
+          }
+          await expect.poll(interactiveOwners).toEqual([]);
         },
       );
     },

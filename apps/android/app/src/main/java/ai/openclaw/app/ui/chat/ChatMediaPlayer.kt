@@ -97,10 +97,8 @@ internal class ChatMediaPlaybackClaims<T>(
     return true
   }
 
-  fun pauseIf(predicate: (T) -> Boolean): Boolean {
-    val current = active?.takeIf(predicate) ?: return false
-    pause(current)
-    return true
+  fun pauseIf(predicate: (T) -> Boolean) {
+    active?.takeIf(predicate)?.let(pause)
   }
 
   fun releaseActive() {
@@ -128,10 +126,8 @@ internal class ChatMediaSessionLifecycle<T : Any, S : Any>(
     }
   }
 
-  fun release(owner: T): Boolean {
-    if (activeOwner !== owner) return false
-    releaseActive()
-    return true
+  fun release(owner: T) {
+    if (activeOwner === owner) releaseActive()
   }
 
   private fun releaseActive() {
@@ -262,7 +258,7 @@ private object ChatMediaPlaybackArbiter {
   }
 
   @Synchronized
-  fun pause(player: ExoPlayer): Boolean = claims.pauseIf { it.player === player }
+  fun pause(player: ExoPlayer) = claims.pauseIf { it.player === player }
 
   @Synchronized
   fun release(player: ExoPlayer): Boolean = claims.releaseIf { it.player === player }

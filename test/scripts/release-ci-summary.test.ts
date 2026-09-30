@@ -1973,7 +1973,7 @@ function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
   return { ...fixture, client, executionPlan, manifest };
 }
 
-function trustedMainChildReuseFixture() {
+function trustedMainChildReuseFixture(workflowSha?: string) {
   const fixture = trustedMainNpmFixture();
   const child = expectDefined(
     fixture.executionPlan.children.find((entry) => entry.key === "normalCi"),
@@ -1986,7 +1986,7 @@ function trustedMainChildReuseFixture() {
   const repository = { id: 1, full_name: "openclaw/openclaw" };
   Object.assign(run, {
     display_title: "CI full-release-validation-77-1-ci",
-    head_sha: "b".repeat(40),
+    head_sha: workflowSha ?? fixture.manifest.workflowSha,
     repository,
     head_repository: repository,
     html_url: `https://github.com/openclaw/openclaw/actions/runs/${run.id}`,
@@ -2059,7 +2059,7 @@ function trustedMainChildReuseFixture() {
     sourceParentRunId: "77",
     sourceParentAttempt: 1,
     workloadConclusion: "success",
-    inputs,
+    inputs: Object.fromEntries(Object.entries(inputs).filter(([, value]) => value !== "")),
     publisher: { jobId: "502", jobName: FULL_RELEASE_CHILD_EVIDENCE_JOB },
   };
   const receiptSha256 = createHash("sha256")
@@ -2874,7 +2874,7 @@ describe("release CI summary child correlation", () => {
         evidence.children.find((child: { role: string }) => child.role === "normalCi"),
       ).toMatchObject({
         runId: String(fixture.run.id),
-        workflowSha: "b".repeat(40),
+        workflowSha: fixture.manifest.workflowSha,
         parentJobId: "201",
         sourceParentRunId: "77",
         sourceParentAttempt: 1,
@@ -2892,13 +2892,16 @@ describe("release CI summary child correlation", () => {
   );
 
   it.each([
+    ["different-tooling", "same tooling is required"],
     ["expired-artifact", "artifact identity, digest, or expiry is invalid"],
     ["newer-attempt", "not the current successful attempt"],
     ["missing-adoption-witness", "reuse adoption witness mismatch"],
     ["changed-composite", "manifest child composite evidence mismatch"],
     ["unsealed-selection", "execution plan artifact digest"],
   ])("rejects independently reused final evidence with %s", async (fault, message) => {
-    const fixture = trustedMainChildReuseFixture();
+    const fixture = trustedMainChildReuseFixture(
+      fault === "different-tooling" ? "b".repeat(40) : undefined,
+    );
     if (fault === "expired-artifact") {
       fixture.artifact.expired = true;
     }
@@ -3640,6 +3643,105 @@ describe("release CI summary child correlation", () => {
     ).rejects.toThrow("does not pass release policy");
   });
 
+  it.each(["valid", "macos-failure", "cancelled-run", "forged-advisory", "omitted-advisory"])(
+    "authenticates Windows Node CI advisory evidence: %s",
+    async (scenario) => {
+      const fixture = trustedMainNpmFixture();
+      const selected = expectDefined(
+        fixture.executionPlan.children.find((child) => child.key === "normalCi"),
+        "normal CI child",
+      );
+      const run = expectDefined(
+        fixture.runs.find((candidate) => String(candidate.id) === selected.runId),
+        "normal CI run",
+      );
+      run.conclusion = scenario === "cancelled-run" ? "cancelled" : "failure";
+      const windowsJob = {
+        ...fixture.parentJob,
+        name: "checks-windows-node-test-2",
+        conclusion: "failure",
+        html_url: `https://github.com/openclaw/openclaw/actions/runs/${selected.runId}/job/501`,
+      };
+      const jobs = [
+        windowsJob,
+        { ...fixture.parentJob, name: "openclaw/ci-gate" },
+        ...(scenario === "macos-failure"
+          ? [{ ...fixture.parentJob, name: "macos-node-2", conclusion: "failure" }]
+          : []),
+      ];
+      const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+        effectiveRunAttempt: 1,
+        plannedRunAttempt: 1,
+      });
+      Object.assign(expectDefined(fixture.manifest.childEvidence.normalCi, "normal CI evidence"), {
+        jobs: composite.jobs,
+        compositeJobsSha256: composite.sha256,
+      });
+      const originalJobs = expectDefined(
+        fixture.client.getRunAttemptJobs.getMockImplementation(),
+        "live job reader",
+      );
+      fixture.client.getRunAttemptJobs.mockImplementation((runId) =>
+        runId === selected.runId ? jobs : originalJobs(runId),
+      );
+      const advisory = {
+        class: "windows-node-ci",
+        child: "normalCi",
+        job: windowsJob.name,
+        conclusion: "failure",
+        runId: selected.runId,
+        url: windowsJob.html_url,
+      };
+      if (scenario !== "omitted-advisory") {
+        Object.assign(fixture.manifest, {
+          advisoryJobs: [
+            scenario === "forged-advisory"
+              ? { ...advisory, child: "releaseChecksCandidate" }
+              : advisory,
+          ],
+        });
+      }
+      const validation = validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      );
+      if (scenario === "valid") {
+        const evidence = await validation;
+        expect(evidence.valid).toBe(true);
+        expect(evidence.conclusions.allRequiredSucceeded).toBe(true);
+        expect(evidence.children).toContainEqual(
+          expect.objectContaining({
+            role: "normalCi",
+            conclusion: "failure",
+            policyPassed: true,
+            advisoryJobs: [advisory],
+          }),
+        );
+        expect(evidence.current.manifest).toMatchObject({
+          advisoryJobs: [advisory],
+          childEvidence: {
+            normalCi: {
+              jobs: expect.arrayContaining([
+                expect.objectContaining({ name: windowsJob.name, conclusion: "failure" }),
+              ]),
+            },
+          },
+        });
+      } else {
+        await expect(validation).rejects.toThrow(
+          scenario === "forged-advisory" || scenario === "omitted-advisory"
+            ? /windows-node-ci/u
+            : /does not pass release policy/u,
+        );
+      }
+    },
+  );
+
   it.each(["", "ship"])(
     "reads published empty retry metadata without granting a waiver (%s)",
     async (laneWaiver) => {
@@ -3707,7 +3809,7 @@ describe("release CI summary child correlation", () => {
       });
       const before = JSON.stringify(manifest);
       expect(() => validateParentManifest(manifest, { runId: fixture.runId })).toThrow(
-        "no longer accepted",
+        laneWaiver ? "no longer accepted" : "windows-node-ci",
       );
       await expect(
         validateReleaseRunEvidence(

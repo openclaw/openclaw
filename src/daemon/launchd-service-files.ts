@@ -20,6 +20,7 @@ import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import {
   publishServiceFile,
+  matchesServiceFilePublication,
   readServiceFileState,
   type GatewayServiceDefinitionTransactionHooks,
 } from "./service-stage.js";
@@ -269,20 +270,12 @@ async function captureLaunchAgentFiles(paths: string[]) {
   );
   const published = new Map<string, LaunchAgentFileState>();
   const prepared = new Map<string, LaunchAgentFileState>();
-  const matchesPublication = (
-    current: LaunchAgentFileState | null,
-    expected: LaunchAgentFileState,
-  ): current is LaunchAgentFileState =>
-    current !== null &&
-    (["dev", "ino", "sha256", "mode", "size", "mtimeMs"] as const).every(
-      (key) => current[key] === expected[key],
-    );
   const verify = async (file: string) => {
     const current = await readServiceFileState(file);
     const expected = published.get(file);
     if (
       expected
-        ? !matchesPublication(current, expected)
+        ? !matchesServiceFilePublication(current, expected)
         : !isDeepStrictEqual(current, originals.get(file)?.state)
     ) {
       throw new Error(`LaunchAgent artifact changed after capture or publication: ${file}`);
@@ -294,7 +287,7 @@ async function captureLaunchAgentFiles(paths: string[]) {
     // A rename may finish before publication confirmation or directory fsync fails.
     for (const [file, pending] of prepared) {
       const current = await readServiceFileState(file);
-      if (matchesPublication(current, pending)) {
+      if (matchesServiceFilePublication(current, pending)) {
         published.set(file, current);
       } else {
         await verify(file);
@@ -329,7 +322,7 @@ async function captureLaunchAgentFiles(paths: string[]) {
       assertGatewayServiceUpdateCurrent();
       if (
         !pending ||
-        !matchesPublication(current, pending) ||
+        !matchesServiceFilePublication(current, pending) ||
         contents === null ||
         current?.sha256 !== createHash("sha256").update(contents).digest("hex")
       ) {

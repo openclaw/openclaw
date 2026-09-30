@@ -45,21 +45,8 @@ public enum ChatTranscriptExporter {
 
     private static func sanitizedFileStem(_ value: String) -> String? {
         let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters)
-        var segments: [String] = []
-        var current = ""
-
-        for scalar in value.unicodeScalars {
-            if forbidden.contains(scalar) {
-                segments.append(current)
-                current = ""
-            } else {
-                current.unicodeScalars.append(scalar)
-            }
-        }
-        segments.append(current)
-
         let edgeCharacters = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".-"))
-        let stem = segments
+        let stem = value.components(separatedBy: forbidden)
             .map { segment in
                 segment
                     .split(whereSeparator: { $0.isWhitespace })

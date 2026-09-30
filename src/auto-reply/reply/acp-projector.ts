@@ -184,10 +184,7 @@ export function createAcpReplyProjector(params: {
   };
 
   const scheduleLiveIdleFlush = () => {
-    if (settings.deliveryMode !== "live") {
-      return;
-    }
-    if (!liveBufferText) {
+    if (settings.deliveryMode !== "live" || !liveBufferText) {
       return;
     }
     clearLiveIdleTimer();
@@ -283,21 +280,15 @@ export function createAcpReplyProjector(params: {
           started: false,
           terminal: false,
         };
-        if (isTerminal && state.terminal) {
+        if (
+          (isTerminal && state.terminal) ||
+          (isStart && state.started) ||
+          state.lastRenderedHash === hash
+        ) {
           return;
         }
-        if (isStart && state.started) {
-          return;
-        }
-        if (state.lastRenderedHash === hash) {
-          return;
-        }
-        if (isStart) {
-          state.started = true;
-        }
-        if (isTerminal) {
-          state.terminal = true;
-        }
+        state.started ||= isStart;
+        state.terminal ||= isTerminal;
         state.lastRenderedHash = hash;
         toolLifecycleById.set(toolCallId, state);
       } else if (lastToolHash === hash) {

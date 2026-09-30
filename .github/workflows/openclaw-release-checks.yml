@@ -199,6 +199,9 @@ jobs:
       package_acceptance_scheduled: ${{ steps.inputs.outputs.package_acceptance_scheduled }}
       qa_parity_scheduled: ${{ steps.inputs.outputs.qa_parity_scheduled }}
     steps:
+      - name: Report release runner routing
+        if: vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
+        run: echo "::notice title=Release runner routing::OPENCLAW_CI_RUNNER_BACKEND=github moves hosted-proven release lanes to ubuntu-24.04; QA Lab runtime-pair stays pinned to Blacksmith and queues during an outage."
       - name: Require trusted workflow ref for release checks
         env:
           RELEASE_REF: ${{ inputs.ref }}
@@ -1917,7 +1920,9 @@ jobs:
     name: Run QA Lab runtime-pair lane (${{ matrix.lane }})
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
+    # Pinned: hosted ubuntu-24.04 failed the core lane in both runs after a backend flip
+    # (36639549086, 36639978260). An outage queues this lane instead of failing it.
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false

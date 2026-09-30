@@ -44,10 +44,11 @@ it.each([true, false])(
     fixture.context.getRuntimeConfig = () => current;
     fixture.context.getCommittedRuntimeConfig = () => current;
     fixture.context.resolveGatewayContext = () => fixture.context;
+    const close = vi.fn();
     const client = {
       ...createOperatorWsClient({
         scopes: fixture.client.connect.scopes,
-        socket: { close: vi.fn() },
+        socket: { close },
       }),
       connect: fixture.client.connect,
       authPolicy: captureGatewayAuthPolicy(current, {
@@ -145,9 +146,14 @@ it.each([true, false])(
         expect(authority.assertCurrent).not.toThrow();
         expect(authority.signal?.aborted).toBe(false);
         publish({ ...current, gateway: { ...current.gateway, allowRealIpFallback: true } });
-        expect(authority.signal?.aborted).toBe(true);
-        expect(authority.assertCurrent).toThrow(/authority is no longer active/);
-        expect(active.controller.signal.aborted).toBe(true);
+        expect(client.invalidated).toBe(true);
+        expect(close).toHaveBeenCalledWith(4001, "gateway policy changed");
+        expect(authority.signal?.aborted).toBe(false);
+        expect(authority.assertCurrent).not.toThrow();
+        expect(active.controller.signal.aborted).toBe(false);
+        expect(fixture.context.chatQueuedTurns.has(fixture.params.idempotencyKey)).toBe(true);
+        expect(getExistingFollowupQueue(fixture.scope.sessionKey)?.items).toHaveLength(1);
+        expect(listSessionPendingInputs(fixture.scope)).toEqual(pending);
       }
     } finally {
       clearFollowupQueue(fixture.scope.sessionKey);

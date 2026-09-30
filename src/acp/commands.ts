@@ -1,4 +1,3 @@
-/** Builds the ACP available-command list exposed to compatible clients. */
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import { THINKING_LEVELS_HELP } from "../auto-reply/thinking.shared.js";
 
@@ -41,7 +40,6 @@ const BASE_AVAILABLE_COMMANDS: AvailableCommand[] = [
   { name: "compact", description: "Compact the session history." },
 ];
 
-/** Returns the built-in ACP commands. */
 export function getAvailableCommands(): AvailableCommand[] {
   return [...BASE_AVAILABLE_COMMANDS];
 }

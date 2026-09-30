@@ -1,7 +1,7 @@
 // Proves discovery -> caller-bound RPC -> deferred archive without a model or live Gateway.
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import {
   setActiveEmbeddedRun,
@@ -77,6 +77,11 @@ function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
 }
 
 describe("scoped session archive tools", () => {
+  beforeAll(async () => {
+    // Keep the first Stop call's cold handler import outside its RPC deadline.
+    await import("./server-methods/sessions-abort.js");
+  });
+
   it("keeps archive but withholds Stop from embedded and admitted MCP collectors", async () => {
     await withSessionToolsFixture(async (cfg) => {
       const request = getPluginRuntimeGatewayRequestScope();
@@ -111,7 +116,10 @@ describe("scoped session archive tools", () => {
                   "collector archive tool",
                 );
                 expect(tool.parameters).toMatchObject({
-                  properties: { action: { enum: ["patch"] }, archived: { type: "boolean" } },
+                  properties: {
+                    action: { enum: ["patch", "assign_owner"] },
+                    archived: { type: "boolean" },
+                  },
                 });
                 expect(tool.parameters).not.toHaveProperty("properties.runId");
                 await expect(
@@ -140,12 +148,22 @@ describe("scoped session archive tools", () => {
           senderIsOwner: false,
         };
         const check = async () => {
-          for (const surface of [
-            createOpenClawCodingTools(options),
-            resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" }).tools,
-          ]) {
-            expect(surface.some((tool) => tool.name === "sessions")).toBe(false);
-          }
+          const assignment = expectDefined(
+            createOpenClawCodingTools(options).find((tool) => tool.name === "sessions"),
+            "assignment-only tool",
+          );
+          expect(assignment.parameters).toMatchObject({
+            properties: { action: { enum: ["assign_owner"] } },
+          });
+          expect(assignment.parameters).not.toHaveProperty("properties.archived");
+          await expect(
+            assignment.execute("no-archive", { action: "patch", archived: true }),
+          ).rejects.toThrow(/Only assign_owner/);
+          expect(
+            resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" }).tools.some(
+              (tool) => tool.name === "sessions",
+            ),
+          ).toBe(false);
           await expect(
             createSessionsTool({
               config: cfg,
@@ -488,7 +506,7 @@ describe("scoped session archive tools", () => {
                 );
                 expect(tool.parameters).toMatchObject({
                   properties: {
-                    action: { enum: ["patch", "stop"] },
+                    action: { enum: ["patch", "stop", "assign_owner"] },
                     archived: { type: "boolean" },
                   },
                   required: ["action"],

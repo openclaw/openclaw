@@ -39,7 +39,7 @@ import {
 } from "../app-server/config.js";
 import { ensureCodexPluginActivation } from "../app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
-import { isOpenAiCuratedMarketplace } from "../app-server/plugin-inventory.js";
+import { isOpenAiCuratedMarketplaceName } from "../app-server/plugin-inventory.js";
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
@@ -129,7 +129,6 @@ export async function applyCodexMigrationPlan(params: {
       : plan.source;
   const authSource: CodexAuthSource = {
     codexHome,
-    authPath: path.join(codexHome, "auth.json"),
     modelsCachePath: path.join(codexHome, "models_cache.json"),
   };
   const runtime = withCachedMigrationConfigRuntime(
@@ -319,7 +318,11 @@ async function requestTargetCodexAppServerJson(params: {
       ...params,
       timeoutMs: remainingMs,
     });
-    if (lastResponse.marketplaces.some(isOpenAiCuratedMarketplace)) {
+    if (
+      lastResponse.marketplaces.some((marketplace) =>
+        isOpenAiCuratedMarketplaceName(marketplace.name),
+      )
+    ) {
       return lastResponse;
     }
     if (Date.now() >= discoveryDeadline) {
@@ -386,7 +389,7 @@ async function applyCodexPluginConfigItem(
     (candidate) =>
       candidate.kind === "plugin" &&
       candidate.action === "install" &&
-      readCodexPluginPolicy(candidate) !== undefined &&
+      readCodexPluginMigrationConfigEntry(candidate, true) !== undefined &&
       !isCodexPluginConfigTerminal(candidate),
   );
   if (hasIncompletePlugin) {

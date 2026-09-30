@@ -1,9 +1,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  mockSessionReplacementForStore,
-  replaceCanonicalSessionEntries,
-} from "./subagent-control.leaf-mocks.test-support.js";
+import { mockSessionReplacementForStore } from "./subagent-control.leaf-mocks.test-support.js";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -34,6 +31,7 @@ import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import * as killSession from "./subagent-control-session.js";
 import {
   buildControlledSubagentRunsReadContext,
   killAllControlledSubagentRuns,
@@ -173,7 +171,7 @@ beforeEach(() => {
   vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
   vi.mocked(registryState.persistSubagentRunsToDisk).mockImplementation(() => {});
   vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
-  vi.mocked(registryState.restoreSubagentRunsFromDisk).mockReturnValue(0);
+  vi.mocked(registryState.restoreSubagentRunsFromDisk).mockResolvedValue(0);
   vi.mocked(resolveContextEngine).mockImplementation(async () => ({
     info: { id: "test", name: "Test" },
     assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
@@ -1114,14 +1112,8 @@ describe("controlled subagent cancellation races", () => {
     });
     addSubagentRunForTests(oldRun);
 
-    let releasePersistence!: () => void;
-    let markPersistenceStarted!: () => void;
-    const persistenceStarted = new Promise<void>((resolve) => {
-      markPersistenceStarted = resolve;
-    });
-    const persistenceRelease = new Promise<void>((resolve) => {
-      releasePersistence = resolve;
-    });
+    const persistenceStarted = createDeferred();
+    const persistenceRelease = createDeferred();
     const abort = vi.fn(() => false);
     const clearQueues = vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
     setSubagentControlDepsForTest({
@@ -1129,10 +1121,14 @@ describe("controlled subagent cancellation races", () => {
       abortEmbeddedAgentRun: abort,
       clearSessionQueues: clearQueues,
     });
-    mockSessionReplacementForStore(storePath, async (params) => {
-      markPersistenceStarted();
-      await persistenceRelease;
-      return replaceCanonicalSessionEntries(params);
+    const persistMarker = killSession.persistSubagentAbortedLastRun;
+    using markerSpy = vi.spyOn(killSession, "persistSubagentAbortedLastRun");
+    markerSpy.mockImplementation(async (params) => {
+      if (params.childSessionKey === childSessionKey && params.abortedLastRun) {
+        persistenceStarted.resolve();
+        await persistenceRelease.promise;
+      }
+      return persistMarker(params);
     });
 
     const pendingKill = killAllControlledSubagentRuns({
@@ -1140,31 +1136,35 @@ describe("controlled subagent cancellation races", () => {
       controller: controllerFor(controllerSessionKey),
       runs: [oldRun],
     });
-    await persistenceStarted;
+    try {
+      await persistenceStarted.promise;
 
-    addSubagentRunForTests({
-      ...oldRun,
-      runId: "run-persist-successor",
-      controllerSessionKey: "agent:foreign:controller",
-      requesterSessionKey: "agent:foreign:controller",
-      requesterDisplayKey: "agent:foreign:controller",
-      task: "successor persisted task",
-      generation: 2,
-      createdAt: Date.now(),
-      execution: { status: "running", startedAt: Date.now() },
-    });
-    addSubagentRunForTests({
-      ...oldRun,
-      runId: "run-persist-successor-leaf",
-      childSessionKey: descendantSessionKey,
-      controllerSessionKey: childSessionKey,
-      requesterSessionKey: childSessionKey,
-      requesterDisplayKey: childSessionKey,
-      task: "successor persisted leaf",
-      createdAt: Date.now(),
-      execution: { status: "running", startedAt: Date.now() },
-    });
-    releasePersistence();
+      addSubagentRunForTests({
+        ...oldRun,
+        runId: "run-persist-successor",
+        controllerSessionKey: "agent:foreign:controller",
+        requesterSessionKey: "agent:foreign:controller",
+        requesterDisplayKey: "agent:foreign:controller",
+        task: "successor persisted task",
+        generation: 2,
+        createdAt: Date.now(),
+        execution: { status: "running", startedAt: Date.now() },
+      });
+      addSubagentRunForTests({
+        ...oldRun,
+        runId: "run-persist-successor-leaf",
+        childSessionKey: descendantSessionKey,
+        controllerSessionKey: childSessionKey,
+        requesterSessionKey: childSessionKey,
+        requesterDisplayKey: childSessionKey,
+        task: "successor persisted leaf",
+        createdAt: Date.now(),
+        execution: { status: "running", startedAt: Date.now() },
+      });
+    } finally {
+      persistenceRelease.resolve();
+      await pendingKill;
+    }
 
     await expect(pendingKill).resolves.toMatchObject({
       status: "ok",
@@ -1173,18 +1173,14 @@ describe("controlled subagent cancellation races", () => {
     });
     expect(abort).toHaveBeenCalledOnce();
     expect(clearQueues).toHaveBeenCalledOnce();
-    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
-      runId: "run-persist-successor",
-      execution: { status: "running" },
-    });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
-    expect(getSubagentRunByChildSessionKey(descendantSessionKey)).toMatchObject({
-      runId: "run-persist-successor-leaf",
-      execution: { status: "running" },
-    });
-    expect(
-      getSubagentRunByChildSessionKey(descendantSessionKey)?.execution.endedAt,
-    ).toBeUndefined();
+    for (const [sessionKey, runId] of [
+      [childSessionKey, "run-persist-successor"],
+      [descendantSessionKey, "run-persist-successor-leaf"],
+    ] as const) {
+      const successor = getSubagentRunByChildSessionKey(sessionKey);
+      expect(successor).toMatchObject({ runId, execution: { status: "running" } });
+      expect(successor?.execution.endedAt).toBeUndefined();
+    }
   });
 
   it("does not abort or clear queues after the child session incarnation resets", async () => {

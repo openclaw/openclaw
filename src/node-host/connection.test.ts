@@ -623,3 +623,60 @@ it("negotiates disabled hosting diagnostics and retains the old declaration for 
     await connection.close();
   }
 });
+
+it.each([
+  ["linux", false],
+  ["linux", true],
+  ["win32", false],
+  ["darwin", false],
+] as const)(
+  "negotiates workspace ownership only for qualified Linux hosts (%s, Bun=%s)",
+  async (platform, bun) => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+    Object.defineProperty(process.versions, "bun", {
+      configurable: true,
+      value: bun ? "fixture" : undefined,
+    });
+    const { connection, request, start } = startConnectionFixture(true);
+    try {
+      start.mock.calls[0]![0].onRunnerCapacityChanged?.({ total: 1, available: 1 });
+      for (const supported of [false, true, false]) {
+        connection.connect({
+          ...gateway,
+          capabilities: supported
+            ? [
+                GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
+                GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
+                GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
+              ]
+            : [],
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        const declaration = request.mock.calls.findLast(
+          ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+        )?.[1];
+        expect(declaration).toEqual({
+          protocolFeatures: ["node-worker-supervisor-v6"],
+          workerHost: {
+            enabled: true,
+            capacity: { total: 1, available: 1 },
+            bundlePrewarm: 1,
+            ...(supported && platform === "linux" && !bun ? { workspaceQuiescence: 1 } : {}),
+            ...(supported ? { statusWait: 1, launchToolNames: [...WORKER_TOOL_NAMES] } : {}),
+          },
+        });
+        expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
+      }
+    } finally {
+      await connection.close();
+      Object.defineProperty(process, "platform", descriptor);
+      if (bunDescriptor) {
+        Object.defineProperty(process.versions, "bun", bunDescriptor);
+      } else {
+        delete process.versions.bun;
+      }
+    }
+  },
+);

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import * as attachmentFrameBudget from "../../shared/chat-attachment-frame-budget.js";
 import { artifactsHandlers } from "./artifacts.js";
 import {
   assistantFileMessage,
@@ -74,6 +75,43 @@ describe("artifact download lookup", () => {
     hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
     mockedMessages([resultImageMessage()]);
   });
+  it("bounds inline base64 downloads and directs oversized artifacts to HTTP", async () => {
+    const budget = vi
+      .spyOn(attachmentFrameBudget, "resolveChatAttachmentFrameBudgetBytes")
+      .mockReturnValue(3);
+    try {
+      mockedMessages([
+        assistantFileMessage({ title: "boundary.txt", data: "YQ==" }),
+        assistantFileMessage({ title: "too-large.txt", data: "aGVsbG8=" }),
+        resultImageMessage(),
+      ]);
+      const sessionKey = "agent:main:main";
+      const artifacts = expectArtifactList((await listArtifacts({ sessionKey })).calls).artifacts!;
+      const allowed = await downloadArtifact({ sessionKey, artifactId: artifacts[0]!.id });
+      expectFields(expectOkPayload(allowed.calls), { encoding: "base64", data: "YQ==" });
+
+      for (const artifact of artifacts.slice(1)) {
+        const rejected = await downloadArtifact({ sessionKey, artifactId: artifact.id });
+        expect(rejected.calls).toEqual([
+          {
+            ok: false,
+            payload: undefined,
+            error: expect.objectContaining({
+              code: "INVALID_REQUEST",
+              message: expect.stringContaining('transport: "http"'),
+              details: {
+                type: "artifact_download_unsupported",
+                artifactId: artifact.id,
+              },
+            }),
+          },
+        ]);
+      }
+    } finally {
+      budget.mockRestore();
+    }
+  });
+
   it("does not read sibling payloads when downloading an artifact", async () => {
     const messages = [
       {

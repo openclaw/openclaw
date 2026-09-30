@@ -1,9 +1,6 @@
-// Venice plugin entrypoint registers its OpenClaw integration.
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import {
-  applyModelCompatPatch,
-  type ModelCompatConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import { applyModelCompatPatch } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 import { applyVeniceConfig } from "./onboard.js";
@@ -22,12 +19,12 @@ const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
   "maxContains",
 ] as const;
 
-function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
-  return applyModelCompatPatch(model as T & { compat?: ModelCompatConfig }, {
+function applyXaiModelCompat(model: ProviderRuntimeModel): ProviderRuntimeModel {
+  return applyModelCompatPatch(model, {
     toolSchemaProfile: "xai",
     unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],
     toolCallArgumentsEncoding: "html-entities",
-  }) as T;
+  });
 }
 
 function isXaiBackedVeniceModel(modelId: string): boolean {

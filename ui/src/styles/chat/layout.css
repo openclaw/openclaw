@@ -842,6 +842,8 @@ openclaw-pending-session-create {
   transition:
     transform var(--duration-slow) var(--ease-in-out),
     opacity var(--duration-slow) var(--ease-in-out),
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
     visibility 0s linear var(--duration-slow);
 }
 
@@ -853,7 +855,16 @@ openclaw-pending-session-create {
   transition:
     transform var(--duration-normal) var(--ease-out),
     opacity var(--duration-normal) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
     visibility 0s;
+}
+
+@media (hover: hover) {
+  .chat-scroll-to-bottom:hover {
+    background: var(--panel-hover);
+    border-color: var(--border-hover);
+  }
 }
 
 @starting-style {

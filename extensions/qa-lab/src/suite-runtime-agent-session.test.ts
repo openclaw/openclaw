@@ -17,6 +17,7 @@ import {
   readEffectiveTools,
   readRawQaSessionStore,
   readSessionTranscriptSummary,
+  readSessionToolActivity,
   readSkillStatus,
   seedQaSessionEntries,
   seedQaSessionTranscript,
@@ -529,7 +530,7 @@ describe("qa suite runtime agent session helpers", () => {
         runId: "run-1",
         scopeId: "scope-1",
         afterEntryId: null,
-        startOrder: 0,
+        startOrder: toolCallId === "nested-ok" ? 0 : 1,
         parentToolCallId: execCallId,
         toolCallId,
         toolName: "web_fetch",
@@ -546,8 +547,8 @@ describe("qa suite runtime agent session helpers", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: execCallId, name: "exec", arguments: { code: "" } }],
       },
-      nestedActivity("nested-ok", false),
       nestedActivity("nested-failed", true),
+      nestedActivity("nested-ok", false),
       {
         role: "toolResult",
         toolCallId: execCallId,
@@ -561,14 +562,136 @@ describe("qa suite runtime agent session helpers", () => {
     }
 
     await expect(transcript.read()).resolves.toMatchObject({
-      assistantToolCallCounts: { exec: 1, web_fetch: 2 },
-      completedToolCallCounts: { exec: 1, web_fetch: 2 },
-      successfulToolCallCounts: { exec: 1, web_fetch: 1 },
+      assistantToolCallCounts: { web_fetch: 2 },
+      completedToolCallCounts: { web_fetch: 2 },
+      successfulToolCallCounts: { web_fetch: 1 },
+      successfulToolCallEvents: [{ name: "web_fetch", timestamp: 150, toolCallId: "nested-ok" }],
+    });
+    const activity = await readSessionToolActivity({ gateway: { tempRoot } }, sessionKey);
+    expect(activity.filter((call) => call.kind === "tool").map((call) => call.toolCallId)).toEqual([
+      "nested-ok",
+      "nested-failed",
+    ]);
+    const wireSummary = await transcript.read({ includeCodeModeControl: true });
+    expect(wireSummary.assistantToolCallCounts).toEqual({ exec: 1, web_fetch: 2 });
+    expect(wireSummary.completedToolCallCounts).toEqual({ exec: 1, web_fetch: 2 });
+    expect(wireSummary.successfulToolCallCounts).toEqual({ exec: 1, web_fetch: 1 });
+  });
+
+  it("counts physical shell results without Code Mode wrappers or failed exits", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-shell-accounting-");
+    const transcript = await createQaTranscript({
+      tempRoot,
+      sessionKey: "agent:qa:shell-accounting",
+      sessionId: "session-shell-accounting",
+    });
+    for (const [index, exitCode] of [1, 0, 0].entries()) {
+      const wrapperId = `wrapper-${index}`;
+      await transcript.append(
+        assistantToolCall(wrapperId, "exec", { code: "await exec({ command: 'proof' });" }),
+      );
+      const nested = {
+        role: "custom",
+        customType: "openclaw.nested-tool.v1",
+        display: true,
+        excludeFromContext: true,
+        content: "",
+        details: {
+          runId: "run-shell",
+          scopeId: `scope-${index}`,
+          afterEntryId: null,
+          startOrder: 0,
+          parentToolCallId: wrapperId,
+          toolCallId: `shell-${index}`,
+          toolName: "exec",
+          input: { command: "proof" },
+          result: { content: [], details: { status: "completed", exitCode } },
+          isError: false,
+          startedAt: 100 + index * 10,
+          timestamp: 105 + index * 10,
+        },
+        timestamp: 105 + index * 10,
+      };
+      await transcript.append(nested);
+      await transcript.append(nested);
+      await transcript.append({
+        ...toolResult(wrapperId, "exec", { status: "completed" }),
+        timestamp: 109 + index * 10,
+      });
+    }
+    await transcript.append(assistantToolCall("direct-failed", "exec", { command: "proof" }));
+    await transcript.append({
+      ...toolResult("direct-failed", "exec", { status: "completed", exitCode: 1 }),
+      timestamp: 200,
+    });
+
+    await expect(transcript.read()).resolves.toMatchObject({
+      assistantToolCallCounts: { exec: 4 },
+      completedToolCallCounts: { exec: 4 },
+      successfulToolCallCounts: { exec: 2 },
       successfulToolCallEvents: [
-        { name: "web_fetch", timestamp: 150, toolCallId: "nested-ok" },
-        { name: "exec", timestamp: 200, toolCallId: execCallId },
+        { name: "exec", timestamp: 115, toolCallId: "shell-1" },
+        { name: "exec", timestamp: 125, toolCallId: "shell-2" },
       ],
     });
+  });
+
+  it("retains persisted append boundaries for tied serial and overlapping nested tools", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-causal-tools-");
+    const sessionKey = "agent:qa:causal-tools";
+    const transcript = await createQaTranscript({
+      tempRoot,
+      sessionKey,
+      sessionId: "session-causal-tools",
+    });
+    const wrapper = await transcript.append({
+      ...assistantToolCall("wrapper", "exec", { code: "dispatch task tools" }),
+      timestamp: 100,
+    });
+    if (!wrapper) {
+      throw new Error("missing persisted wrapper");
+    }
+    const appendNested = (toolCallId: string, startOrder: number, afterEntryId: string) =>
+      transcript.append({
+        role: "custom",
+        customType: "openclaw.nested-tool.v1",
+        display: true,
+        excludeFromContext: true,
+        content: "",
+        timestamp: 100,
+        details: {
+          runId: "causal-run",
+          scopeId: "causal-scope",
+          afterEntryId,
+          startOrder,
+          parentToolCallId: "wrapper",
+          toolCallId,
+          toolName: "read",
+          input: { path: "task.md" },
+          result: { content: [{ type: "text", text: "completed" }] },
+          isError: false,
+          startedAt: 100,
+          timestamp: 100,
+        },
+      });
+    await appendNested("first", 0, wrapper.messageId);
+    const overlap = await appendNested("overlap", 1, wrapper.messageId);
+    if (!overlap) {
+      throw new Error("missing persisted overlapping result");
+    }
+    await appendNested("serial", 2, overlap.messageId);
+
+    const activity = await readSessionToolActivity({ gateway: { tempRoot } }, sessionKey);
+    const [wrapperActivity, firstActivity, overlapActivity, serialActivity] = activity;
+    if (!wrapperActivity || !firstActivity || !overlapActivity || !serialActivity) {
+      throw new Error("missing projected causal tool activity");
+    }
+    expect(activity).toMatchObject([
+      { toolCallId: "wrapper", startAfterIndex: wrapperActivity.callIndex - 1 },
+      { toolCallId: "first", startAfterIndex: wrapperActivity.callIndex },
+      { toolCallId: "overlap", startAfterIndex: wrapperActivity.callIndex },
+      { toolCallId: "serial", startAfterIndex: overlapActivity.resultIndex },
+    ]);
   });
 
   it("matches pending Code Mode waits to the exec checkpoint that created their run", async () => {
@@ -614,6 +737,108 @@ describe("qa suite runtime agent session helpers", () => {
         pendingCodeModeExecNeedle: "CHECKPOINT-2",
       }),
     ).resolves.toMatchObject({ hasPendingCodeModeWait: true });
+  });
+
+  it.each(["guest", "native-text", "native-blocks"] as const)(
+    "separates %s cell controls from unmatched waits and physical exec",
+    async (dialect) => {
+      const tempRoot = await makeTempDir("qa-session-transcript-cell-controls-");
+      const sessionKey = "agent:qa:cell-controls";
+      const transcript = await createQaTranscript({
+        tempRoot,
+        sessionKey,
+        sessionId: "session-cell-controls",
+      });
+      const native = dialect !== "guest";
+      const waitInput = (id: string) =>
+        native ? { arguments: JSON.stringify({ cell_id: id }) } : { runId: id };
+      const header = "Script running with cell ID cell-owned\nWall time 0.1 seconds\nOutput:\n";
+      const wrapperText =
+        dialect === "native-blocks"
+          ? JSON.stringify([{ type: "input_text", text: header }])
+          : header;
+      for (const message of [
+        assistantToolCall(
+          "wrapper",
+          "exec",
+          native ? { input: "await work();" } : { code: "await work();" },
+        ),
+        assistantToolCall("early-wait", "wait", waitInput("cell-owned")),
+        toolResult("early-wait", "wait", {}),
+        {
+          ...toolResult(
+            "wrapper",
+            "exec",
+            native ? {} : { status: "waiting", runId: "cell-owned" },
+          ),
+          content: [{ type: "text", text: wrapperText }],
+        },
+        assistantToolCall("matched-wait", "wait", waitInput("cell-owned")),
+        toolResult("matched-wait", "wait", {}),
+        assistantToolCall("shell", "exec", { command: "printf proof" }),
+        {
+          ...toolResult("shell", "exec", { status: "completed", exitCode: 0 }),
+          content: [{ type: "text", text: header.replace("cell-owned", "cell-unmatched") }],
+        },
+        assistantToolCall("unmatched-wait", "wait", waitInput("cell-unmatched")),
+        toolResult("unmatched-wait", "wait", {}),
+      ]) {
+        await transcript.append(message);
+      }
+      const summary = await transcript.read();
+      expect(summary.assistantToolCallCounts).toEqual({ exec: 1, wait: 2 });
+      expect(summary.successfulToolCallCounts).toEqual({ exec: 1, wait: 2 });
+      const activity = await readSessionToolActivity({ gateway: { tempRoot } }, sessionKey);
+      expect(
+        activity.filter((call) => call.kind === "code-mode-control").map((call) => call.toolCallId),
+      ).toEqual(["wrapper", "matched-wait"]);
+      const wireSummary = await transcript.read({ includeCodeModeControl: true });
+      expect(wireSummary.assistantToolCallCounts).toEqual({ exec: 2, wait: 3 });
+    },
+  );
+
+  it("rejects ambiguous receipts and unfinished shell polls while preserving domain statuses", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-outcomes-");
+    const transcript = await createQaTranscript({
+      tempRoot,
+      sessionKey: "agent:qa:outcomes",
+      sessionId: "session-outcomes",
+    });
+    for (const [id, name, input, details] of [
+      ["running", "process", { action: "poll" }, { status: "running" }],
+      ["failed", "process", { action: "poll" }, { status: "completed", exitCode: 1 }],
+      ["ok", "process", { action: "poll" }, { status: "completed", exitCode: 0 }],
+      ["write", "process", { action: "write" }, { status: "running" }],
+      ["domain", "progress_card", {}, { status: "running" }],
+      ["unavailable", "exec", { command: "proof" }, { status: "unavailable" }],
+      [
+        "gateway-failed",
+        "gateway_exec",
+        { command: "proof" },
+        { status: "completed", exitCode: 1 },
+      ],
+      ["gateway-poll", "gateway_process", { action: "poll" }, { status: "running" }],
+      ["conflict", "exec", { command: "proof" }, { status: "completed", exitCode: 0 }],
+    ] as const) {
+      await transcript.append(assistantToolCall(id, name, input));
+      await transcript.append({ ...toolResult(id, name, details), timestamp: 100 });
+    }
+    await transcript.append({
+      ...toolResult("conflict", "exec", { status: "completed", exitCode: 1 }),
+      timestamp: 101,
+    });
+    const summary = await transcript.read();
+    expect(summary).toMatchObject({
+      assistantToolCallCounts: {
+        process: 4,
+        progress_card: 1,
+        exec: 2,
+        gateway_exec: 1,
+        gateway_process: 1,
+      },
+      completedToolCallCounts: { process: 3, progress_card: 1, exec: 1, gateway_exec: 1 },
+    });
+    expect(summary.successfulToolCallCounts).toEqual({ process: 2, progress_card: 1 });
   });
 
   it("only exposes authenticated successful tool results with finite owner timestamps", async () => {

@@ -30,33 +30,19 @@ enum OpenClawConfigFile {
     private nonisolated(unsafe) static var configObservationCount = 0
     #endif
 
-    private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
-        self.fileLock.lock()
-        defer { self.fileLock.unlock() }
-        return try body()
-    }
-
     #if DEBUG
     static func withTestingFileLock<T>(_ body: () throws -> T) rethrows -> T {
-        try self.withFileLock(body)
+        try self.fileLock.withLock(body)
     }
 
     static func testingConfigObservationCount() -> Int {
-        self.withFileLock { self.configObservationCount }
+        self.fileLock.withLock { self.configObservationCount }
     }
     #endif
 
-    static func url() -> URL {
-        OpenClawPaths.configURL
-    }
-
-    static func stateDirURL() -> URL {
-        OpenClawPaths.stateDirURL
-    }
-
     static func loadDict() -> [String: Any] {
-        self.withFileLock {
-            let url = self.url()
+        self.fileLock.withLock {
+            let url = OpenClawPaths.configURL
             guard FileManager().fileExists(atPath: url.path) else { return [:] }
             do {
                 let data = try Data(contentsOf: url)
@@ -82,12 +68,12 @@ enum OpenClawConfigFile {
         allowGatewayModeRemoval: Bool = false)
         -> Bool
     {
-        self.withFileLock {
+        self.fileLock.withLock {
             // Nix mode disables config writes in production, but tests rely on saving temp configs.
             if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests {
                 return false
             }
-            let url = self.url()
+            let url = OpenClawPaths.configURL
             var pathInfo = stat()
             let configMissing: Bool
             if lstat(url.path, &pathInfo) == 0 {
@@ -222,7 +208,7 @@ enum OpenClawConfigFile {
     /// Beta macOS builds wrote this retired key after core moved it to SQLite.
     /// Repair only that app-owned shape before local Gateway validation can reject it.
     static func migrateRetiredAppMetadataForGatewayStart() -> Bool {
-        self.withFileLock {
+        self.fileLock.withLock {
             let root = self.loadDict()
             guard let meta = root["meta"] as? [String: Any],
                   meta.keys.contains("lastTouchedAt")
@@ -492,7 +478,7 @@ extension OpenClawConfigFile {
     }
 
     private static func configAuditLogURL() -> URL {
-        self.stateDirURL()
+        OpenClawPaths.stateDirURL
             .appendingPathComponent("logs", isDirectory: true)
             .appendingPathComponent(self.configAuditFileName, isDirectory: false)
     }

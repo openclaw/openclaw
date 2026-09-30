@@ -31,9 +31,6 @@ function getSessionWatchCursorKysely(db: DatabaseSync) {
 }
 
 function hasLegacyAmbientWatchSentinels(db: DatabaseSync): boolean {
-  if (!tableExists(db, "session_watch_cursors")) {
-    return false;
-  }
   return (
     executeSqliteQueryTakeFirstSync(
       db,

@@ -112,20 +112,6 @@ enum OverlayPanelFactory {
     @MainActor
     static func animateDismissAndHide(
         window: NSWindow,
-        offsetX: CGFloat = 6,
-        offsetY: CGFloat = 6,
-        duration: TimeInterval = 0.16,
-        onHidden: @escaping @MainActor () -> Void)
-    {
-        self.animateDismiss(window: window, offsetX: offsetX, offsetY: offsetY, duration: duration) {
-            window.orderOut(nil)
-            onHidden()
-        }
-    }
-
-    @MainActor
-    static func animateDismissAndHide(
-        window: NSWindow,
         to target: NSRect,
         duration: TimeInterval,
         onHidden: @escaping @MainActor () -> Void)

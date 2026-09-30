@@ -26,46 +26,29 @@ export type DispatchProcessedOptions = {
   error?: string;
 };
 
-function resolveCompletedInboundAuditReason(
-  reason: string | undefined,
-): AuditInboundMessageCompletedReasonCode | undefined {
-  switch (reason) {
-    case "fast_abort":
-      return "fast_abort";
-    case "plugin-bound-handled":
-      return "plugin_bound_handled";
-    case "plugin-bound-fallback-missing-plugin":
-    case "plugin-bound-fallback-no-handler":
-      return "plugin_bound_unavailable";
-    case "plugin-bound-declined":
-      return "plugin_bound_declined";
-    case "before_dispatch_handled":
-      return "before_dispatch_handled";
-    case "acp_dispatch":
-      return "acp_dispatch_completed";
-    case "acp_empty_prompt":
-      return "acp_dispatch_empty";
-    case "active_run_injected":
-      return "active_run_injected";
-    default:
-      return undefined;
-  }
-}
+const completedInboundAuditReasons = new Map<
+  string | undefined,
+  AuditInboundMessageCompletedReasonCode
+>([
+  ["fast_abort", "fast_abort"],
+  ["plugin-bound-handled", "plugin_bound_handled"],
+  ["plugin-bound-fallback-missing-plugin", "plugin_bound_unavailable"],
+  ["plugin-bound-fallback-no-handler", "plugin_bound_unavailable"],
+  ["plugin-bound-declined", "plugin_bound_declined"],
+  ["before_dispatch_handled", "before_dispatch_handled"],
+  ["acp_dispatch", "acp_dispatch_completed"],
+  ["acp_empty_prompt", "acp_dispatch_empty"],
+  ["active_run_injected", "active_run_injected"],
+]);
 
-function resolveSkippedInboundAuditReason(
-  reason: string | undefined,
-): AuditInboundMessageSkippedReasonCode | undefined {
-  switch (reason) {
-    case "duplicate":
-      return "duplicate";
-    case "reply-operation-active":
-      return "reply_operation_active";
-    case "reply_operation_aborted":
-      return "reply_operation_aborted";
-    default:
-      return undefined;
-  }
-}
+const skippedInboundAuditReasons = new Map<
+  string | undefined,
+  AuditInboundMessageSkippedReasonCode
+>([
+  ["duplicate", "duplicate"],
+  ["reply-operation-active", "reply_operation_active"],
+  ["reply_operation_aborted", "reply_operation_aborted"],
+]);
 
 function resolveInboundMessageAuditTerminal(
   outcome: DispatchProcessedOutcome,
@@ -104,7 +87,7 @@ function resolveInboundMessageAuditTerminal(
     };
   }
   if (outcome === "completed") {
-    const reasonCode = resolveCompletedInboundAuditReason(reason);
+    const reasonCode = completedInboundAuditReasons.get(reason);
     return {
       status: "succeeded",
       outcome: "completed",
@@ -112,7 +95,7 @@ function resolveInboundMessageAuditTerminal(
     };
   }
   if (outcome === "skipped") {
-    const reasonCode = resolveSkippedInboundAuditReason(reason);
+    const reasonCode = skippedInboundAuditReasons.get(reason);
     return {
       status: "blocked",
       outcome: "skipped",

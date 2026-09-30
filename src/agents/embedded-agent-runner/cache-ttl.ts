@@ -64,15 +64,10 @@ function matchesCacheTtlContext(
   if (!context) {
     return true;
   }
-  const expectedProvider = normalizeOptionalLowercaseString(context.provider);
-  if (expectedProvider && normalizeOptionalLowercaseString(data?.provider) !== expectedProvider) {
-    return false;
-  }
-  const expectedModelId = normalizeOptionalLowercaseString(context.modelId);
-  if (expectedModelId && normalizeOptionalLowercaseString(data?.modelId) !== expectedModelId) {
-    return false;
-  }
-  return true;
+  return (["provider", "modelId"] as const).every((key) => {
+    const expected = normalizeOptionalLowercaseString(context[key]);
+    return !expected || normalizeOptionalLowercaseString(data?.[key]) === expected;
+  });
 }
 
 export function readLastCacheTtlTimestamp(

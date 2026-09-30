@@ -75,10 +75,6 @@ function mantleEndpoint(region: string): string {
   return `https://bedrock-mantle.${region}.api.aws`;
 }
 
-function isSupportedRegion(region: string): boolean {
-  return (MANTLE_SUPPORTED_REGIONS as readonly string[]).includes(region);
-}
-
 type MantleBearerTokenProvider = () => Promise<string>;
 type MantleBearerTokenProviderFactory = (opts?: {
   region?: string;
@@ -233,14 +229,10 @@ export async function resolveMantleRuntimeBearerToken(params: {
 }
 interface OpenAIModelEntry {
   id: string;
-  object?: string;
-  owned_by?: string;
-  created?: number;
 }
 
 interface OpenAIModelsResponse {
   data: OpenAIModelEntry[];
-  object?: string;
 }
 
 /** Model ID substrings that indicate reasoning/thinking support. */
@@ -381,7 +373,7 @@ export async function resolveImplicitMantleProvider(params: {
   const region = resolveMantleRegion(env);
   const explicitBearerToken = resolveMantleBearerToken(env);
 
-  if (!isSupportedRegion(region)) {
+  if (!MANTLE_SUPPORTED_REGIONS.some((supported) => supported === region)) {
     log.debug?.("Mantle not available in region", { region });
     return null;
   }
@@ -496,24 +488,5 @@ export async function resolveImplicitMantleProvider(params: {
     auth: "api-key",
     apiKey: explicitBearerToken ? "env:AWS_BEARER_TOKEN_BEDROCK" : MANTLE_IAM_TOKEN_MARKER,
     models: models.length === 0 ? [] : allModels,
-  };
-}
-
-/** Merge an implicit Mantle provider catalog with explicit user config. */
-export function mergeImplicitMantleProvider(params: {
-  existing: ModelProviderConfig | undefined;
-  implicit: ModelProviderConfig;
-}): ModelProviderConfig {
-  const { existing, implicit } = params;
-  if (!existing) {
-    return implicit;
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
   };
 }

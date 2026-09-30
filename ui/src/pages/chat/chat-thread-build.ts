@@ -299,9 +299,7 @@ export function buildChatItems(
     (props.stream !== null || queuedSends.some(shouldRenderQueuedSendInThread)
       ? resolveProgress().runId
       : null);
-  const historyTurnBounds = findCurrentTurnBounds(
-    items.filter((item) => !hiddenHistoryKeys.has(item.key)),
-  );
+  const historyTurnBounds = findCurrentTurnBounds(items);
   const { pendingKeys, historicalKeys, hiddenKeys, activeInputKey } = placeChatInputs(
     items,
     history,
@@ -309,10 +307,6 @@ export function buildChatItems(
     inputOrder,
     currentRunId,
   );
-  // Search hides rows, not transcript facts: reply attribution still reads every row.
-  const replyContextItems =
-    hiddenHistoryKeys.size > 0 ? items.filter((item) => !hiddenKeys.has(item.key)) : undefined;
-  items = items.filter((item) => !hiddenHistoryKeys.has(item.key) && !hiddenKeys.has(item.key));
   const executionItems = () => items.filter((item) => !historicalKeys.has(item.key));
   const canvasRunBounds = createRunTurnLookup(executionItems());
   const currentTurnBounds =
@@ -635,8 +629,15 @@ export function buildChatItems(
       ...optionalBoundaryIdentity(activeBoundaryRunId ?? workingRunId),
     });
   }
-  return groupMessages(coalesceToolActivityMessages(items), {
-    items: replyContextItems && coalesceToolActivityMessages(replyContextItems),
+  // Place output against the complete transcript before search hides any rows.
+  // Pending/local inputs contribute people and turn boundaries just like history;
+  // queued future inputs must remain after the live output they do not own.
+  const hidden =
+    hiddenHistoryKeys.size > 0 || hiddenKeys.size > 0
+      ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
+      : undefined;
+  return groupMessages(coalesceToolActivityMessages(items, hidden), {
+    items: hidden ? coalesceToolActivityMessages(items) : undefined,
     people: props.replyPeople,
     localPerson: props.replyLocalPerson,
   });

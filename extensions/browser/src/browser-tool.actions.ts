@@ -115,17 +115,14 @@ function formatTabsToolResult(result: {
   running: boolean;
   tabs: unknown[];
 }): AgentToolResult<unknown> {
-  const formattedTabs = result.tabs.map((tab) => formatAgentTab(tab));
+  const formattedTabs = result.tabs.map(formatAgentTab);
   const wrapped = wrapBrowserExternalJson({
     kind: "tabs",
     payload: { running: result.running, tabs: formattedTabs },
     includeWarning: false,
   });
-  const content: AgentToolResult<unknown>["content"] = [
-    { type: "text", text: wrapped.wrappedText },
-  ];
   return {
-    content,
+    content: [{ type: "text", text: wrapped.wrappedText }],
     details: {
       ...wrapped.safeDetails,
       running: result.running,
@@ -153,43 +150,12 @@ export function formatBrowserExternalToolResult(params: {
   };
 }
 
-function formatConsoleToolResult(result: {
-  targetId?: string;
-  url?: string;
-  messages?: unknown[];
-}): AgentToolResult<unknown> {
-  const wrapped = wrapBrowserExternalJson({
-    kind: "console",
-    payload: result,
-    includeWarning: false,
-  });
-  return {
-    content: [{ type: "text" as const, text: wrapped.wrappedText }],
-    details: {
-      ...wrapped.safeDetails,
-      targetId: readStringValue(result.targetId),
-      url: readStringValue(result.url),
-      messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
-    },
-  };
-}
-
 function isChromeStaleTargetError(usesChromeMcp: boolean, err: unknown): boolean {
   const status =
     err && typeof err === "object" && "status" in err ? (err as { status?: unknown }).status : null;
   const msg = String(err);
   const isTabNotFound = (status === 404 || msg.includes("404:")) && msg.includes("tab not found");
   return usesChromeMcp && isTabNotFound;
-}
-
-function replaceStaleTargetIdInActRequest(
-  request: BrowserActRequest,
-  targetId: string,
-): BrowserActRequest | null {
-  if (!normalizeOptionalString(request.targetId) || !targetId) {
-    return null;
-  }
-  return { ...request, targetId };
 }
 
 function canRetryChromeActAfterSoleTargetRefresh(request: BrowserActRequest): boolean {
@@ -272,16 +238,26 @@ export async function executeConsoleAction(params: {
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
-  const query = {
+  const result = await browserConsoleMessages(proxyRequest ?? baseUrl, {
     level: normalizeOptionalString(input.level),
     targetId: normalizeOptionalString(input.targetId),
-  };
-  const result = await browserConsoleMessages(proxyRequest ?? baseUrl, {
-    ...query,
     profile,
     signal: params.signal,
   });
-  return formatConsoleToolResult(result);
+  const wrapped = wrapBrowserExternalJson({
+    kind: "console",
+    payload: result,
+    includeWarning: false,
+  });
+  return {
+    content: [{ type: "text", text: wrapped.wrappedText }],
+    details: {
+      ...wrapped.safeDetails,
+      targetId: readStringValue(result.targetId),
+      url: readStringValue(result.url),
+      messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
+    },
+  };
 }
 
 /** Read browser debug logs, keeping counts aligned with the bounded payload. */
@@ -390,15 +366,12 @@ export async function executeEmulateAction(
 }
 
 /** Execute explicit Browser download operations through the local or node-host path. */
-export async function executeDownloadAction(params: {
-  action: "download" | "waitfordownload";
-  input: Record<string, unknown>;
-  baseUrl?: string;
-  profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
-  signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
-}): Promise<AgentToolResult<unknown>> {
+export async function executeDownloadAction(
+  params: Parameters<typeof executeConsoleAction>[0] & {
+    action: "download" | "waitfordownload";
+    onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
+  },
+): Promise<AgentToolResult<unknown>> {
   const { action, input, baseUrl, profile, proxyRequest } = params;
   const targetId = normalizeOptionalString(input.targetId);
   const timeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
@@ -499,17 +472,14 @@ export async function executeActAction(params: {
         tabs.length === 1
           ? readStringValue((tabs[0] as { targetId?: unknown } | undefined)?.targetId)
           : undefined;
-      const retryRequest = freshTargetId
-        ? replaceStaleTargetIdInActRequest(effectiveRequest, freshTargetId)
-        : null;
+      const retryRequest =
+        freshTargetId && normalizeOptionalString(effectiveRequest.targetId)
+          ? { ...effectiveRequest, targetId: freshTargetId }
+          : null;
       // This is same-agent continuity, not identity recovery: only target-independent
       // waits may retry, against the one freshly listed tab. Ref-scoped and scripted
       // operations require explicit fresh selection (and a fresh snapshot for refs).
-      if (
-        retryRequest &&
-        canRetryChromeActAfterSoleTargetRefresh(effectiveRequest) &&
-        tabs.length === 1
-      ) {
+      if (retryRequest && canRetryChromeActAfterSoleTargetRefresh(effectiveRequest)) {
         const retried = await dispatchAct(retryRequest);
         return await finishActResult(retried.result, retried.targetId);
       }
