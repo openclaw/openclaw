@@ -60,11 +60,15 @@ describe("plugin service reload", () => {
     );
     const first = configFor("https://first.example");
     const next = configFor("https://next.example");
+    const final = configFor("https://final.example");
     const handle = await startPluginServices({ registry, config: first, broadcastPluginEvent });
     handles.add(handle);
-    await handle.reload(next, new Set(["exporter"]));
-    expect(contexts.map((ctx) => ctx.config)).toEqual([first, next]);
-    expect(stops).toEqual([first]);
+    await Promise.all([
+      handle.reload(next, new Set(["exporter"])),
+      handle.reload(final, new Set(["exporter"])),
+    ]);
+    expect(contexts.map((ctx) => ctx.config)).toEqual([first, next, final]);
+    expect(stops).toEqual([first, next]);
     expect(siblingStart).toHaveBeenCalledOnce();
     expect(registry.httpRoutes).toHaveLength(1);
     expect(() => contexts[0]?.gatewayEvents?.emit("late", {}, { scope: "operator.read" })).toThrow(
@@ -75,10 +79,13 @@ describe("plugin service reload", () => {
       { pluginId: "sibling", error: "unrelated service failure" },
     ]);
     siblingContext?.gatewayEvents?.emit("still_alive", {}, { scope: "operator.read" });
-    contexts[1]?.gatewayEvents?.emit("replacement", {}, { scope: "operator.read" });
+    expect(() => contexts[1]?.gatewayEvents?.emit("late", {}, { scope: "operator.read" })).toThrow(
+      "no longer active",
+    );
+    contexts[2]?.gatewayEvents?.emit("replacement", {}, { scope: "operator.read" });
     expect(broadcastPluginEvent).toHaveBeenCalledTimes(2);
     await handle.stop();
-    expect(stops).toEqual([first, next]);
+    expect(stops).toEqual([first, next, final]);
     expect(registry.httpRoutes).toEqual([]);
   });
 
@@ -481,6 +488,49 @@ describe("plugin service transfer", () => {
       }
     },
   );
+
+  it("keeps unchanged services with the issued handle when a candidate cannot start", async () => {
+    const sibling = { id: "sibling", start: vi.fn(), stop: vi.fn() };
+    const oldRegistry = createRegistry([sibling], "sibling");
+    const previous = await startPluginServices({
+      registry: oldRegistry,
+      config: {},
+    });
+    const broken = {
+      id: "broken",
+      start: () => {
+        throw new Error("candidate failed");
+      },
+      stop: vi.fn(),
+    };
+    const nextRegistry = createRegistry([broken], "broken");
+    nextRegistry.services.push(...oldRegistry.services);
+    let issued: PluginServicesHandle | undefined;
+    try {
+      await expect(
+        startPluginServices({
+          registry: nextRegistry,
+          config: {},
+          previous,
+          onHandle: (handle) => {
+            issued = handle;
+          },
+          throwOnStartError: true,
+        }),
+      ).rejects.toThrow("plugin services failed to start");
+      expect(issued).toBeDefined();
+      expect(broken.stop).toHaveBeenCalledOnce();
+      expect(sibling.start).toHaveBeenCalledOnce();
+      expect(sibling.stop).not.toHaveBeenCalled();
+      await previous.stop();
+      expect(sibling.stop).not.toHaveBeenCalled();
+      await issued?.stop();
+      expect(sibling.stop).toHaveBeenCalledOnce();
+    } finally {
+      await issued?.stop();
+      await previous.stop();
+    }
+  });
 
   it("transfers an unchanged service without restarting it and stops only the replaced owner", async () => {
     let dependencyReady = false;

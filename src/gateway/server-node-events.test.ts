@@ -744,6 +744,35 @@ describe("agent request events", () => {
     expect(agentCommandMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["wrong owner", { agentHarnessId: "other", modelSelectionLocked: true }],
+    ["missing session id", { agentHarnessId: "codex", modelSelectionLocked: true, sessionId: "" }],
+  ] as const)(
+    "rejects a harness-owned agent request with %s before side effects",
+    async (_label, entry) => {
+      const sessionKey = `agent:main:harness:codex:supervision:invalid-request-${_label.replaceAll(" ", "-")}`;
+      loadSessionEntryMock.mockReturnValueOnce(buildSessionLookup(sessionKey, entry));
+
+      await handleNodeEvent(
+        buildCtx(),
+        "node-harness-request-invalid",
+        nodeEvent("agent.request", {
+          message: "do not dispatch this",
+          sessionKey,
+          attachments: [{ type: "image", mimeType: "image/png", content: "aGVsbG8=" }],
+        }),
+      );
+
+      expect(runtimeMocks.resolveSessionAgentId).not.toHaveBeenCalled();
+      expect(runtimeMocks.resolveSessionModelRef).not.toHaveBeenCalled();
+      expect(runtimeMocks.resolveGatewayModelSupportsImages).not.toHaveBeenCalled();
+      expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
+      expect(upsertSessionEntryMock).not.toHaveBeenCalled();
+      expect(persistInboundImagesForTranscriptMock).not.toHaveBeenCalled();
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps an accepted detached agent dispatch visible to suspension", async () => {
     const dispatch = createDeferred<never>();
     agentCommandMock.mockImplementationOnce(() => dispatch.promise);

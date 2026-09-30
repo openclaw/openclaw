@@ -342,12 +342,14 @@ describe("RealtimeCallHandler lifecycle", () => {
     expect(replacementGreeting).toHaveBeenCalledWith("replacement remains connected");
   });
 
-  it("ends an idle realtime call after the media inactivity grace", async () => {
+  it.each([false, true])("ends the call after inactivity with media renewal=%s", async (renew) => {
     const bridgeStarted = createDeferred<void>();
+    const mediaReceived = createDeferred<void>();
+    const sendAudio = vi.fn(() => mediaReceived.resolve());
     const closeBridge = vi.fn();
     const { call, handler, endCall, processEvent } = createCarrierLifecycleHarness(() => {
       bridgeStarted.resolve();
-      return createBridge(closeBridge);
+      return createBridge(closeBridge, { sendAudio });
     });
     const { ws } = await connectCarrierStream(handler);
 
@@ -356,7 +358,20 @@ describe("RealtimeCallHandler lifecycle", () => {
       sendCarrierStart(ws, "MZ-inactivity", call.providerCallId);
       await bridgeStarted.promise;
 
+      if (renew) {
+        await vi.advanceTimersByTimeAsync(29_999);
+        ws.send(
+          JSON.stringify({
+            event: "media",
+            media: { payload: Buffer.from([0xff]).toString("base64") },
+          }),
+        );
+        await mediaReceived.promise;
+      }
       await vi.advanceTimersByTimeAsync(30_000);
+      expect(sendAudio).toHaveBeenCalledTimes(renew ? 1 : 0);
+      expect(endCall).not.toHaveBeenCalled();
+      expect(ws.readyState).toBe(WebSocket.OPEN);
       expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
         0,
       );
@@ -746,55 +761,68 @@ describe("RealtimeCallHandler lifecycle", () => {
     expect(new Set(events.map((event) => event.id)).size).toBe(4);
   });
 
-  it("waits for provider transcript durability before ending the call", async () => {
-    const disposed = createDeferred<void>();
-    const persisted = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
-    const providerClose = vi.fn(() => disposed.promise);
-    let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
-    const { call, handler, endCall, processEvent } = createCarrierLifecycleHarness((request) => {
-      callbacks = request;
-      return createBridge(providerClose);
-    });
-    const { ws } = await connectCarrierStream(handler);
-    let closing: Promise<void> | undefined;
-    try {
-      sendCarrierStart(ws, "MZ-durable-final", call.providerCallId);
-      await vi.waitFor(() => expect(callbacks).toBeDefined());
-      processEvent.mockImplementation(async (event) =>
-        event.type === "call.assistant-speech" ? persisted.promise : { kind: "processed" },
-      );
-      const closed = waitForClose(ws);
-      callbacks?.onTranscript?.("assistant", "Final received answer", true);
-      callbacks?.onClose?.("completed");
-      closing = handler.close();
-      let settled = false;
-      const completion = closing
-        .catch((error: unknown) => error)
-        .finally(() => {
-          settled = true;
-        });
-      await closed;
-      await vi.waitFor(() => expect(providerClose).toHaveBeenCalledOnce());
-      expect(processEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "call.assistant-speech",
-          transcript: "Final received answer",
-        }),
-      );
-      disposed.resolve();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
+  it.each(["provider", "shutdown"] as const)(
+    "waits for transcript durability during %s close",
+    async (source) => {
+      const disposed = createDeferred<void>();
+      const persisted = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
+      const providerClose = vi.fn(() => disposed.promise);
+      let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
+      const { call, handler, endCall, processEvent } = createCarrierLifecycleHarness((request) => {
+        callbacks = request;
+        return createBridge(providerClose);
       });
-      expect(endCall).not.toHaveBeenCalled();
-      expect(settled).toBe(false);
-      persisted.resolve({ kind: "processed" });
-      expect(await completion).toBeUndefined();
-      expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "completed" });
-      expect(providerClose).toHaveBeenCalledOnce();
-    } finally {
-      disposed.resolve();
-      persisted.resolve({ kind: "processed" });
-      await closing?.catch(() => undefined);
-    }
-  });
+      const { ws } = await connectCarrierStream(handler);
+      let closing: Promise<void> | undefined;
+      try {
+        sendCarrierStart(ws, "MZ-durable-final", call.providerCallId);
+        await vi.waitFor(() => expect(callbacks).toBeDefined());
+        processEvent.mockImplementation(async (event) =>
+          event.type === "call.assistant-speech" ? persisted.promise : { kind: "processed" },
+        );
+        const closed = waitForClose(ws);
+        if (source === "provider") {
+          callbacks?.onTranscript?.("assistant", "Final received answer", true);
+          callbacks?.onClose?.("completed");
+        }
+        closing = handler.close();
+        let settled = false;
+        const completion = closing
+          .catch((error: unknown) => error)
+          .finally(() => {
+            settled = true;
+          });
+        await closed;
+        await vi.waitFor(() => expect(providerClose).toHaveBeenCalledOnce());
+        if (source === "shutdown") {
+          callbacks?.onTranscript?.("assistant", "Final received answer", true);
+          await vi.waitFor(() =>
+            expect(processEvent).toHaveBeenCalledWith(
+              expect.objectContaining({ type: "call.assistant-speech" }),
+            ),
+          );
+        }
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.assistant-speech",
+            transcript: "Final received answer",
+          }),
+        );
+        disposed.resolve();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(endCall).not.toHaveBeenCalled();
+        expect(settled).toBe(false);
+        persisted.resolve({ kind: "processed" });
+        expect(await completion).toBeUndefined();
+        expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "completed" });
+        expect(providerClose).toHaveBeenCalledOnce();
+      } finally {
+        disposed.resolve();
+        persisted.resolve({ kind: "processed" });
+        await closing?.catch(() => undefined);
+      }
+    },
+  );
 });
