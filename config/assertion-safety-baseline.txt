@@ -850,7 +850,6 @@ extensions/reef/src/registration-state.ts	3
 extensions/reef/src/setup.ts	3
 extensions/reef/src/state.ts	3
 extensions/reef/src/transport.ts	3
-extensions/searxng/src/config.ts	1
 extensions/signal/src/accounts.ts	3
 extensions/signal/src/approval-handler.runtime.ts	2
 extensions/signal/src/approval-reactions.ts	1
@@ -928,7 +927,6 @@ extensions/synology-chat/src/setup-surface.ts	3
 extensions/synology-chat/src/test-http-utils.ts	6
 extensions/synology-chat/src/webhook-handler.ts	1
 extensions/talk-voice/index.ts	1
-extensions/tavily/src/config.ts	1
 extensions/teams-meetings/src/transports/teams-meetings-urls.ts	1
 extensions/telegram/src/account-selection.ts	1
 extensions/telegram/src/account-throttler.ts	2
@@ -1287,7 +1285,6 @@ src/agents/agent-run-terminal-receipt.ts	1
 src/agents/agent-runtime-config.ts	1
 src/agents/agent-scope-config.ts	3
 src/agents/agent-tool-definition-adapter.ts	4
-src/agents/agent-tool-metadata.ts	2
 src/agents/agent-tools.abort.ts	1
 src/agents/agent-tools.before-tool-call.diagnostics.ts	1
 src/agents/agent-tools.before-tool-call.wrapper.ts	3
@@ -1814,7 +1811,7 @@ src/cli/capability-cli/embedding.ts	3
 src/cli/capability-cli/image.ts	10
 src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/tts.ts	6
-src/cli/capability-cli/video.ts	7
+src/cli/capability-cli/video.ts	6
 src/cli/capability-cli/web.ts	5
 src/cli/channel-auth.ts	4
 src/cli/channel-options.ts	1
@@ -1822,12 +1819,10 @@ src/cli/channels-cli.ts	5
 src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2
 src/cli/command-config-resolution.ts	2
-src/cli/command-format.ts	1
 src/cli/command-options.ts	1
 src/cli/command-secret-targets.ts	1
 src/cli/completion-runtime.ts	2
-src/cli/config-cli-input.ts	1
-src/cli/config-cli-path.ts	5
+src/cli/config-cli-path.ts	4
 src/cli/config-cli-runner.ts	2
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	4
@@ -1838,7 +1833,7 @@ src/cli/cron-cli/register.cron-add.ts	1
 src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
-src/cli/cron-cli/shared.ts	8
+src/cli/cron-cli/shared.ts	7
 src/cli/devices-cli.runtime.ts	10
 src/cli/directory-cli.ts	2
 src/cli/dns-cli.ts	3
@@ -2937,7 +2932,6 @@ src/worker/node-workspace-protocol.ts	1
 src/worker/worker-connection-admission.ts	2
 src/worker/worker-connection-frames.ts	4
 src/worker/worker-process.ts	1
-src/worker/worker-session-tools.ts	4
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/app-navigation.ts	1
 ui/src/app-routes.ts	1

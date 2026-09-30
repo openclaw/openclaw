@@ -211,8 +211,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     ...buildConversationContext(),
     agentId: attempt.sandboxAgentId ?? params.setup.sessionAgentId,
     conversationToolPolicy: attempt.conversationToolPolicy,
-    isCanonicalWorkspace: attempt.isCanonicalWorkspace,
-    promptMode: attempt.promptMode,
     sandboxToolPolicy: params.setup.sandbox?.tools,
     inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,

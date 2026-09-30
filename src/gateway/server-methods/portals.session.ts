@@ -5,6 +5,11 @@ import {
   validateSessionPortalListParams,
   validateSessionPortalOpenParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  createPortalOperations,
+  redactPortalSummary,
+  type GatewayPortalService,
+} from "../portals/portal-service.js";
 import { captureSessionPortalTarget } from "../worker-environments/session-portal-target.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
@@ -42,14 +47,49 @@ function sessionPortalOwner(options: GatewayRequestHandlerOptions, environmentId
     binding.sessionLifecycleRevision ?? null,
     binding.generation,
   ]);
-  return {
-    ...target,
-    resourceOwnerKey,
-    environments,
+  return createPortalOperations(
     service,
-    access,
-    assertAllowed: assertInvocationCurrent,
-  };
+    {
+      ...binding,
+      resourceOwnerKey,
+      assertCurrent: assertInvocationCurrent,
+      ownershipError: "Portal does not belong to this conversation's attached environment",
+      async prepareTarget(remotePort) {
+        await target.touch();
+        assertInvocationCurrent();
+        const session = access.retainSession();
+        try {
+          session.assertCurrent();
+          const connection = await environments.openNodePortal({
+            environmentId: binding.environmentId,
+            ownerEpoch: binding.ownerEpoch,
+            remotePort,
+          });
+          return {
+            assertCurrent: () => session.assertCurrent(),
+            ownerSignal: AbortSignal.any([session.signal, target.signal]),
+            // Bearer connections retain resource authority, not the initiating actor or turn.
+            connect: () =>
+              connection.connect(() => {
+                session.assertCurrent();
+                target.assertCurrent();
+              }, target.touch),
+            close: async () => {
+              try {
+                await connection.close();
+              } finally {
+                session.release();
+              }
+            },
+          };
+        } catch (error) {
+          session.release();
+          throw error;
+        }
+      },
+    },
+    () => broadcastPortalChange(options.context, service),
+  );
 }
 
 function fail(options: GatewayRequestHandlerOptions, error: unknown) {
@@ -63,14 +103,15 @@ function fail(options: GatewayRequestHandlerOptions, error: unknown) {
   );
 }
 
-function changed(options: GatewayRequestHandlerOptions) {
+export function broadcastPortalChange(
+  context: Pick<GatewayRequestHandlerOptions["context"], "broadcast">,
+  service: GatewayPortalService,
+) {
   // Keep bearer credentials out of broad events. Existing authorized clients refetch them.
-  options.context.broadcast(
+  context.broadcast(
     "portal.changed",
     {
-      portals: options.context
-        .portalService!.list()
-        .map(({ url: _url, tokenQuery: _token, ...portal }) => portal),
+      portals: service.list().map(redactPortalSummary),
     },
     { dropIfSlow: true },
   );
@@ -82,14 +123,8 @@ export const sessionPortalHandlers: GatewayRequestHandlers = {
     validateSessionPortalListParams,
     (options) => {
       try {
-        const owner = sessionPortalOwner(options, options.params.environmentId);
-        const portals = owner.service.listWorkerPortals(
-          owner.binding.environmentId,
-          owner.binding.ownerEpoch,
-          owner.resourceOwnerKey,
-        );
-        owner.assertAllowed();
-        options.respond(true, { portals });
+        const portals = sessionPortalOwner(options, options.params.environmentId);
+        options.respond(true, portals.list());
       } catch (error) {
         fail(options, error);
       }
@@ -100,62 +135,8 @@ export const sessionPortalHandlers: GatewayRequestHandlers = {
     validateSessionPortalOpenParams,
     async (options) => {
       try {
-        const request = options.params;
-        const owner = sessionPortalOwner(options, request.environmentId);
-        await owner.touch();
-        owner.assertAllowed();
-        const session = owner.access.retainSession();
-        let connection: Awaited<ReturnType<typeof owner.environments.openNodePortal>>;
-        try {
-          session.assertCurrent();
-          connection = await owner.environments.openNodePortal({
-            environmentId: owner.binding.environmentId,
-            ownerEpoch: owner.binding.ownerEpoch,
-            remotePort: request.port,
-          });
-        } catch (error) {
-          session.release();
-          throw error;
-        }
-        const close = async () => {
-          try {
-            await connection.close();
-          } finally {
-            session.release();
-          }
-        };
-        try {
-          owner.assertAllowed();
-          session.assertCurrent();
-        } catch (error) {
-          await close();
-          throw error;
-        }
-        const opened = await owner.service.open({
-          targetPort: request.port,
-          resourceOwnerKey: owner.resourceOwnerKey,
-          assertCurrent: owner.assertAllowed,
-          ownerSignal: AbortSignal.any([session.signal, owner.signal]),
-          target: {
-            kind: "worker",
-            environmentId: owner.binding.environmentId,
-            ownerEpoch: owner.binding.ownerEpoch,
-            remotePort: request.port,
-            // Bearer connections retain resource authority, not the initiating actor or turn.
-            connect: () =>
-              connection.connect(() => {
-                session.assertCurrent();
-                owner.assertCurrent();
-              }, owner.touch),
-          },
-          onClose: close,
-          ...(request.title !== undefined ? { title: request.title } : {}),
-          ...(request.description !== undefined ? { description: request.description } : {}),
-          ...(request.path !== undefined ? { path: request.path } : {}),
-        });
-        changed(options);
-        owner.assertAllowed();
-        options.respond(true, opened);
+        const portals = sessionPortalOwner(options, options.params.environmentId);
+        options.respond(true, await portals.open(options.params));
       } catch (error) {
         fail(options, error);
       }
@@ -166,22 +147,8 @@ export const sessionPortalHandlers: GatewayRequestHandlers = {
     validateSessionPortalCloseParams,
     async (options) => {
       try {
-        const owner = sessionPortalOwner(options, options.params.environmentId);
-        if (
-          !owner.service
-            .listWorkerPortals(
-              owner.binding.environmentId,
-              owner.binding.ownerEpoch,
-              owner.resourceOwnerKey,
-            )
-            .some(({ id }) => id === options.params.id)
-        ) {
-          throw new Error("Portal does not belong to this conversation's attached environment");
-        }
-        await owner.service.close(options.params.id, owner.assertAllowed);
-        changed(options);
-        owner.assertAllowed();
-        options.respond(true, { closed: true });
+        const portals = sessionPortalOwner(options, options.params.environmentId);
+        options.respond(true, await portals.close(options.params.id));
       } catch (error) {
         fail(options, error);
       }

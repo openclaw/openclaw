@@ -312,11 +312,12 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         // Prime config/toolchain/topology before starting even an uncached owner.
         before.signature(unit.config, args, [], unit.outputRoot);
         if (
-          before.matches(
+          before.matchesReceipt(
             previous,
             unit.config,
             args,
             [...unit.required, inputReceipt],
+            inputReceipt,
             unit.outputRoot,
           )
         ) {

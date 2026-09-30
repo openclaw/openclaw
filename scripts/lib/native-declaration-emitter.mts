@@ -194,7 +194,13 @@ export async function compileNativeProject({
       }
     }
     for (const file of await project.program.getSourceFileNames()) {
-      view.inputs.add(admit(file));
+      const accepted = admit(file);
+      if (assertInput && !view.inputs.has(accepted)) {
+        throw new Error(
+          `Native compiler source was not observed through its filesystem: ${accepted}`,
+        );
+      }
+      view.inputs.add(accepted);
     }
     view.assertValid();
     await api.close();
@@ -206,7 +212,7 @@ export async function compileNativeProject({
     }
     const after = snapshot();
     after.seal(admittedConfig, args, inputs, before, preparationStartedAt, stage, producedFiles);
-    return { inputs, outputFiles };
+    return { inputs, outputFiles, lookups: view.getLookups() };
   } catch (error) {
     view?.assertValid();
     throw error;

@@ -269,9 +269,9 @@ describe("worker placement terminal persistence", () => {
     await advanceToActive();
     const { claim, pending } = await pendingResult();
     const binding = claim;
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "call-pending-send",
@@ -291,7 +291,7 @@ describe("worker placement terminal persistence", () => {
     ]);
 
     expect(
-      store.completeWorkerSessionToolOperation({
+      await store.completeWorkerSessionToolOperation({
         sourceSessionId: claim.sessionId,
         sourceClaimId: claim.claimId,
         toolCallId: "call-pending-send",

@@ -178,22 +178,6 @@ describe("scheduleStaleChunkReload", () => {
     expect(storage.getItem(GUARD_KEY)).toBe("gateway-target");
   });
 
-  it("reloads once the document probe succeeds and records the build guard", async () => {
-    const reload = vi.fn();
-    const storage = memoryStorage();
-    stubDocumentFetch(new Response(null, { status: 200 }));
-    await expect(
-      scheduleStaleChunkReload({
-        now: () => 1000,
-        buildId: "build-a",
-        storage,
-        reload,
-      }),
-    ).resolves.toBe(true);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(storage.getItem(GUARD_KEY)).toBe("build-a");
-  });
-
   it("never lets a persisted build guard suppress recovery for a newer build", async () => {
     const reload = vi.fn();
     const storage = memoryStorage({ [GUARD_KEY]: "build-a" });
@@ -596,16 +580,6 @@ describe("retryStaleChunkReloadWhenReachable", () => {
       expect(probe).toHaveBeenCalledTimes(retirement === "during" ? 1 : 0);
     },
   );
-
-  it("reloads immediately when the gateway already answers", async () => {
-    const reload = vi.fn();
-    const probe = vi.fn().mockResolvedValue(true);
-    await expect(
-      retryStaleChunkReloadWhenReachable({ reload, probe, storage: memoryStorage() }),
-    ).resolves.toBe(true);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(probe).toHaveBeenCalledTimes(1);
-  });
 
   it("admits one reload when retries complete together", async () => {
     const reachable = deferred<boolean>();

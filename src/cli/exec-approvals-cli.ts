@@ -920,6 +920,20 @@ function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
   defaultRuntime.log(muted(`Precedence: ${params.report.note}`));
 }
 
+function renderApprovalsSummary(rows: Array<{ Field: string; Value: string }>, width: number) {
+  defaultRuntime.log(isRich() ? theme.heading("Approvals") : "Approvals");
+  defaultRuntime.log(
+    renderTerminalSafeTable({
+      width,
+      columns: [
+        { key: "Field", header: "Field", minWidth: 8 },
+        { key: "Value", header: "Value", minWidth: 24, flex: true },
+      ],
+      rows,
+    }).trimEnd(),
+  );
+}
+
 function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
   if (isNativeApprovalsSnapshot(snapshot)) {
     renderNativeApprovalsSnapshot(snapshot, targetLabel);
@@ -991,17 +1005,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     { Field: "MCP tool grants", Value: String(mcpToolRows.length) },
   ];
 
-  defaultRuntime.log(heading("Approvals"));
-  defaultRuntime.log(
-    renderTerminalSafeTable({
-      width: tableWidth,
-      columns: [
-        { key: "Field", header: "Field", minWidth: 8 },
-        { key: "Value", header: "Value", minWidth: 24, flex: true },
-      ],
-      rows: summaryRows,
-    }).trimEnd(),
-  );
+  renderApprovalsSummary(summaryRows, tableWidth);
 
   defaultRuntime.log("");
   if (allowlistRows.length > 0) {
@@ -1057,17 +1061,7 @@ function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, ta
     },
     { Field: "Rules", Value: String(rules.length) },
   ];
-  defaultRuntime.log(heading("Approvals"));
-  defaultRuntime.log(
-    renderTerminalSafeTable({
-      width: getTerminalTableWidth(),
-      columns: [
-        { key: "Field", header: "Field", minWidth: 8 },
-        { key: "Value", header: "Value", minWidth: 24, flex: true },
-      ],
-      rows: summaryRows,
-    }).trimEnd(),
-  );
+  renderApprovalsSummary(summaryRows, getTerminalTableWidth());
   if (rules.length === 0) {
     defaultRuntime.log("");
     defaultRuntime.log(muted("No host-native rules."));

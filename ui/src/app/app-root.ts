@@ -53,6 +53,7 @@ function isRouteNotFound(result: ChatRouteData | RouteNotFound): result is Route
 }
 
 export class OpenClawApp extends OpenClawLightDomElement {
+  @state() private startupPending = false;
   // Pinned while a connect submitted from the visible login gate is in
   // flight, so a failed manual attempt cannot flash the shell in between.
   @state() private loginGatePinned = false;
@@ -126,6 +127,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
     void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
+    const runtime = this.runtime;
+    this.startupPending = true;
     const focusTarget = this.focusTarget;
     if (focusTarget) {
       this.requestLazyDocument(
@@ -152,8 +155,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
     // The runtime is created after controller hostConnected hooks run. Ensure
     // their lazy source getters bind on both the initial mount and reconnect.
     this.requestUpdate();
-    void this.runtime
+    void runtime
       .start()
+      .finally(() => {
+        if (this.runtime === runtime) {
+          this.startupPending = false;
+        }
+      })
       .then(() => this.resolveFocusDashboard())
       .catch((error: unknown) => {
         console.error("[openclaw] application start failed", error);
@@ -588,7 +596,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
     const initialConnectPending =
       runtime.documentMode === null &&
       gatewaySnapshot.lastError === null &&
-      (gatewaySnapshot.phase === "starting" ||
+      // Route warming can yield before gateway.start() enters connecting.
+      ((this.startupPending && gatewaySnapshot.phase === "stopped") ||
+        gatewaySnapshot.phase === "starting" ||
         (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
     const warmConnectPending = initialConnectPending && runtime.warmBoot && !this.loginGatePinned;
     if (initialConnectPending && !warmConnectPending) {
