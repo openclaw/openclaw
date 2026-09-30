@@ -57,6 +57,7 @@ struct ChatSessionSidebar: View {
             in: self.rosterData?.queryRows ?? self.viewModel.sessions, now: now)
         let projectedRows = sections.flatMap(\.nodes).flatMap(\.previewSessions)
         let ownership = self.ownership(for: projectedRows)
+        let rosterIDs = (self.rosterData?.rows ?? self.viewModel.sessions).map(OpenClawChatSessionSidebarData.identity)
         let previewRequest = ChatSessionSidebarPreviews.Request(
             viewModel: self.viewModel,
             sessions: projectedRows)
@@ -127,9 +128,9 @@ struct ChatSessionSidebar: View {
         }
         .onChange(of: self.viewModel.sidebarData?.scopeRevision) { _, _ in self.batch.reset() }
         .onChange(of: self.rosterData?.query) { _, _ in self.batch.reset(clearConnection: false) }
-        .onChange(of: self.viewModel.sessionKey) { _, _ in self.batch.selection = .init() }
+        .onChange(of: self.viewModel.currentSessionTarget) { _, _ in self.batch.selection = .init() }
         .task(id: self.viewModel.sidebarData?.scopeRevision) { await self.watchPinOrder() }
-        .onChange(of: (self.rosterData?.rows ?? self.viewModel.sessions).map(\.key), initial: true) { _, keys in
+        .onChange(of: rosterIDs, initial: true) { _, keys in
             self.observedOrder.observe(keys)
         }
         .onChange(of: self.query, initial: true) { _, value in

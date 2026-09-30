@@ -56,6 +56,18 @@ private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
         self.responder = responder
     }
 
+    nonisolated func scoped(toAgentID _: String) -> (any OpenClawChatTransport)? {
+        self
+    }
+
+    func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
+        OpenClawChatSessionSettingsRouteLease { key, agentID, patch in
+            let response = try await self.send(OpenClawChatGatewayRequests.patchSessionSettings(
+                sessionKey: key, agentID: agentID, model: patch.model))
+            return try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: response)
+        }
+    }
+
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
         throw CancellationError()
     }
@@ -244,7 +256,96 @@ struct ChatSessionSidebarQueryTests {
         }
     }
 
-    @Test func `view model enables offline projection and dispatches selected and all agent scopes`() async throws {
+    @Test(arguments: [("global", String?.none), ("global", "ops"), ("agent:ops:main", "ops")])
+    func `model selection preserves one global placeholder until its roster row arrives`(
+        _ input: (String, String?)) async throws
+    {
+        let (key, agentID) = input
+        let suite = "ChatSessionSidebarQueryTests.ModelPlaceholder.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let transport = SidebarQueryTransport()
+        await transport.replyAutomatically(with: self.modelReply())
+        let vm = OpenClawChatViewModel(
+            sessionKey: key, transport: transport, activeAgentId: agentID,
+            sessionRoutingContract: agentID == nil ? nil : "global|main|main",
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { vm.detachTransport() }
+        vm.enableSidebarData()
+        #expect(vm.sessions.isEmpty)
+        let target = vm.currentModelPatchTarget()
+        vm.selectModel("fixture/next")
+        await vm.waitForPendingSessionSettings(for: target)
+        #expect(vm.errorText == nil)
+        let owner = try #require(vm.sidebarData)
+        let sessions = owner.isQueryEnabled ? owner.rows : vm.sessions
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.model == "next")
+        #expect(sessions.first?.agentId == agentID)
+        for hasHome in agentID == nil ? [false] : [false, true] {
+            let rows = ChatSessionSidebarModel.sections(
+                sessions: sessions, currentSessionKey: vm.sessionKey,
+                mainSessionKey: vm.selectedAgentMainSessionKey, activeAgentID: owner.query.agentID,
+                excludesMainSession: hasHome, query: "", sessionRoutingContract: vm.sessionRoutingContract,
+                viewOptions: .init(selectedAgentID: vm.selectedAgentID))
+                .flatMap(\.nodes).map(\.session)
+            #expect(rows == (hasHome ? [] : sessions))
+        }
+    }
+
+    private func modelReply() -> Data {
+        Data(#"""
+        {"ok":true,"key":"global","entry":{"model":"next","modelProvider":"fixture"}}
+        """#.utf8)
+    }
+
+    @Test func `late model acknowledgement cannot update a different explicit global owner`() async throws {
+        let suite = "ChatSessionSidebarQueryTests.ModelOwner.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let transport = SidebarQueryTransport()
+        let vm = OpenClawChatViewModel(
+            sessionKey: "global", transport: transport, activeAgentId: "ops",
+            sessionRoutingContract: "global|main|main", modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { vm.detachTransport() }
+        vm.enableSidebarData()
+        let target = vm.currentModelPatchTarget()
+        vm.selectModel("fixture/next")
+        let pending = await transport.next("sessions.patch")
+        #expect(pending.request.params["agentId"]?.value as? String == "ops")
+        let owner = try #require(vm.sidebarData)
+        let research = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
+        {"key":"global","agentId":"research","sessionId":"research","model":"current","modelProvider":"fixture"}
+        """#.utf8))
+        owner.receive([research], read: owner.beginRead(), replacingAgent: "research")
+        vm.switchSession(to: "global", agentID: "research")
+        #expect(vm.currentSessionSnapshot().deliveryAgentID == "research")
+        #expect(vm.activeAgentId == "ops")
+        pending.reply.resume(returning: self.modelReply())
+        await vm.waitForPendingSessionSettings(for: target)
+        #expect(owner.row(key: "global", agentID: "research")?.model == "current")
+        #expect(owner.row(key: "global", agentID: "ops") == nil)
+    }
+
+    @Test func `model acknowledgement retains shared defaults without the sidebar opt in`() async throws {
+        let suite = "ChatSessionSidebarQueryTests.LegacyModel.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let transport = SidebarQueryTransport()
+        await transport.replyAutomatically(with: self.modelReply())
+        let vm = OpenClawChatViewModel(
+            sessionKey: "global", transport: transport, activeAgentId: "ops",
+            sessionRoutingContract: "global|main|main", modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { vm.detachTransport() }
+        let target = vm.currentModelPatchTarget()
+        vm.selectModel("fixture/next")
+        await vm.waitForPendingSessionSettings(for: target)
+        #expect(vm.modelSelectionID == "fixture/next")
+        #expect(vm.sessions.count == 1)
+        #expect(vm.sessions.first?.agentId == nil)
+    }
+
+    @Test func `view model enables offline query projection and dispatches selected and all agent scopes`() async throws {
         let suite = "ChatSessionSidebarQueryTests.EntryPoint.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }

@@ -20,7 +20,7 @@ extension ChatSessionSidebar {
             sessions: pageSummary?.sessions ?? node.previewSessions,
             agentID: self.sessionAgentID(session),
             now: now)
-        let targetID = "session:\(session.key)"
+        let targetID = "session:\(self.interactionIdentity(session))"
         let agentID = OpenClawChatSessionKey.agentID(from: session.key) ??
             self.viewModel.sessionMutationTarget(key: session.key, agentID: session.agentId).agentID
         let facts = ChatSessionSidebarRowFacts(
@@ -46,6 +46,7 @@ extension ChatSessionSidebar {
             viewModel: self.viewModel,
             node: node,
             isChild: isChild,
+            targetID: targetID,
             facts: facts,
             attribution: attribution,
             wakeDescription: (self.sessionStatus == .snoozed || self.sessionStatus == .all) &&
@@ -141,6 +142,7 @@ private struct ChatSidebarRow: View {
     let viewModel: OpenClawChatViewModel
     let node: ChatSessionSidebarModel.Node
     let isChild: Bool
+    let targetID: String
     let facts: ChatSessionSidebarRowFacts
     let attribution: ChatSidebarOwnership.Attribution?
     let wakeDescription: String?
@@ -252,7 +254,7 @@ private struct ChatSidebarRow: View {
                 ChatSidebarAgentAvatar(agent: pageAgent, size: 22).help(pageAgent.displayName)
             } else if let attention = self.attention, !self.node.session.isArchived {
                 OpenClawChatAttentionBadge(
-                    summary: attention, targetID: "session:\(self.node.id)", presentation: self.$presentedAttention)
+                    summary: attention, targetID: self.targetID, presentation: self.$presentedAttention)
                     .accessibilityValue(self.leadingUnreadValue)
             } else if let glyph = self.facts.glyph {
                 self.graphic(glyph)

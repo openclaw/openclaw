@@ -102,6 +102,8 @@ clears its snooze. Archived, child, and protected main or sentinel threads
 cannot be snoozed.
 
 The sidebar loads threads in pages; choose **Load more** to reach older threads.
+In **All agents**, conversations with the same short key remain separate and keep
+their owning agent when selected or changed.
 Command-click or Shift-click to select several root threads, then choose
 **Actions → Move to group → New group…** to create a group and move the selection.
 If some moves fail, the group and completed moves remain; affected rows show

@@ -1570,9 +1570,14 @@ extension OpenClawChatViewModel {
             selectionID: selectionID,
             patchResult: patchResult,
             target: target)
-        if target.canonicalSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global",
-           let targetAgentID = target.agentID,
-           targetAgentID != activeAgentId
+        let modelStateKey = sessionEntryKey ?? target.canonicalSessionKey
+        let capturedAgentID = OpenClawChatSessionKey.agentID(from: target.canonicalSessionKey) ?? target.agentID
+        if self.sidebarData != nil {
+            // A global ACK can outlive an explicit owner switch without changing the Gateway's default agent.
+            if modelStateKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global",
+               capturedAgentID != self.currentSessionSnapshot().deliveryAgentID { return }
+        } else if target.canonicalSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global",
+                  let targetAgentID = target.agentID, targetAgentID != activeAgentId
         {
             return
         }
@@ -1583,11 +1588,11 @@ extension OpenClawChatViewModel {
         } else {
             self.resolvedSessionModelIdentity(forSelectionID: selectionID)
         }
-        let modelStateKey = sessionEntryKey ?? target.canonicalSessionKey
         updateCurrentSessionModel(
             modelID: resolved.modelID,
             modelProvider: resolved.modelProvider,
             sessionKey: modelStateKey,
+            agentID: capturedAgentID,
             syncSelection: syncSelection)
         if let thinkingLevels = patchResult?.thinkingLevels {
             updateCurrentSessionThinkingLevels(thinkingLevels, sessionKey: modelStateKey)
