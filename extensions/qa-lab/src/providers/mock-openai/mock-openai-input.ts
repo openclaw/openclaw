@@ -181,7 +181,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
         kind: settled ? "settled" : "completion",
         text: event,
         caseName:
-          /^task:\s*qa-terminal-(visible|silent|empty|restart|fallback|private)(?:-(?:first|second))?\s*$/imu
+          /^task:\s*qa-terminal-(visible|silent|empty|restart|fallback|race|private)(?:-(?:first|second))?\s*$/imu
             .exec(event)?.[1]
             ?.toLowerCase(),
       };

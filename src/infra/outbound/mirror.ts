@@ -1,4 +1,4 @@
-import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript.js";
+import type { InternalSessionTranscriptDeliveryMirror } from "../../config/sessions/transcript.js";
 
 /**
  * Transcript append data emitted after an outbound send completes.
@@ -10,7 +10,12 @@ export type OutboundMirror = {
   mediaUrls?: string[];
   idempotencyKey?: string;
   expectedSessionId?: string;
-  deliveryMirror?: SessionTranscriptDeliveryMirror;
+  deliveryMirror?: InternalSessionTranscriptDeliveryMirror;
+  /**
+   * Append behind work already admitted to the session lane. For senders that
+   * never own this session's transcript writer; the send does not wait for it.
+   */
+  deferToSessionLane?: boolean;
 };
 
 /**

@@ -18,6 +18,7 @@ import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-deliv
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import { SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
@@ -309,6 +310,7 @@ function resolveTextCompletionDirectFallback(
 export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
+  requesterSessionId?: string;
   requesterAgentId?: string;
   directIdempotencyKey: string;
   deliveryTarget: {
@@ -384,10 +386,14 @@ export async function deliverCompletionDirect(params: {
           // Bookkeeping failure cannot make a fully sent result retryable.
         });
       },
+      // This send runs after the requester lane is released to its next queued turn.
       mirror: {
         sessionKey: params.requesterSessionKey,
         agentId,
         idempotencyKey,
+        ...(params.requesterSessionId ? { expectedSessionId: params.requesterSessionId } : {}),
+        deliveryMirror: { kind: SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND },
+        deferToSessionLane: true,
       },
     });
     if (committedDelivery) {

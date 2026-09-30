@@ -965,7 +965,11 @@ async function buildResponsesPayload(
       ].join("\n"),
     );
   }
-  if (terminalWorkerCase === "visible" || terminalWorkerCase === "restart") {
+  if (
+    terminalWorkerCase === "visible" ||
+    terminalWorkerCase === "restart" ||
+    terminalWorkerCase === "race"
+  ) {
     return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS[terminalWorkerCase]);
   }
   if (terminalCompletionCase && terminalTurn?.kind === "kickoff") {
@@ -2185,6 +2189,11 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
                 ? repeatedRequestStalledResponsePauseMs
                 : repeatedRequestResponsePauseMs,
           }
+        : {}),
+      // Hold the silent requester completion so a queued follow-up turn is
+      // admitted behind it before direct fallback mirrors the child result.
+      ...(subagentTurn?.kind === "completion" && subagentTurn.caseName === "race"
+        ? { responsePauseMs: 5_000 }
         : {}),
     };
   };

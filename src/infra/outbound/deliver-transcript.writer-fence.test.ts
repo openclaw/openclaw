@@ -1,6 +1,14 @@
 // Mirror fence tests cover which session's writer claim a delivery mirror carries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
 import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
@@ -29,11 +37,14 @@ function payload(text: string): NormalizedOutboundPayload {
   return { text, mediaUrls: [] };
 }
 
-async function mirrorInto(sessionKey: string): Promise<void> {
+async function mirrorInto(
+  sessionKey: string,
+  options: { deferToSessionLane?: boolean } = {},
+): Promise<void> {
   await mirrorDeliveredPayloads({
     delivery: {
       cfg: {},
-      mirror: { agentId: "wolf", sessionKey },
+      mirror: { agentId: "wolf", sessionKey, ...options },
     } as unknown as DeliverOutboundPayloadsCoreParams,
     payloads: [payload("delivered to the user")],
     channel: "discord",
@@ -101,5 +112,30 @@ describe("outbound delivery mirror writer fence", () => {
     const args = appendedArgs();
     expect(args).toMatchObject({ sessionKey: RUNNING_SESSION_KEY });
     expect(args).not.toHaveProperty("expectedWriterRunId");
+  });
+
+  it("keeps the delivering Gateway root open until a lane-deferred mirror appends", async () => {
+    const sessionLane = resolveSessionLane(OTHER_SESSION_KEY);
+    const turnEntered = createDeferredCore();
+    const releaseTurn = createDeferredCore();
+    const turn = enqueueCommandInLane(sessionLane, async () => {
+      turnEntered.resolve();
+      await releaseTurn.promise;
+    });
+    await turnEntered.promise;
+
+    await runWithGatewayIndependentRootWorkAdmission(
+      () => mirrorInto(OTHER_SESSION_KEY, { deferToSessionLane: true }),
+      "direct-delivery",
+    );
+
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["direct-delivery"]);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+
+    releaseTurn.resolve();
+    await turn;
+    await enqueueCommandInLane(sessionLane, async () => {});
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(appendedArgs()).toMatchObject({ sessionKey: OTHER_SESSION_KEY });
   });
 });

@@ -20,6 +20,7 @@ import {
   OPENCLAW_DELIVERY_MIRROR_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+  SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND,
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -100,7 +101,7 @@ export type SessionTranscriptDeliveryMirror =
       sourceMessageId?: string;
     };
 
-type InternalSessionTranscriptDeliveryMirror =
+export type InternalSessionTranscriptDeliveryMirror =
   | SessionTranscriptDeliveryMirror
   | {
       kind: "message-tool-source-reply";
@@ -110,6 +111,9 @@ type InternalSessionTranscriptDeliveryMirror =
     }
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
+    }
+  | {
+      kind: typeof SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND;
     };
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {

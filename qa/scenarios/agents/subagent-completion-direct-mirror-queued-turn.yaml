@@ -1,0 +1,217 @@
+title: Direct completion mirror behind a queued turn
+
+scenario:
+  id: subagent-completion-direct-mirror-queued-turn
+  surface: subagents
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-delivery
+    secondary:
+      - channels.qa-channel-final-reply
+  objective: Prove a direct-fallback child result mirror waits behind the queued requester turn that holds the session lane, so that turn replies.
+  gatewayConfigPatch:
+    messages:
+      queue:
+        mode: collect
+    # Model fallback would retry a failed follow-up candidate and hide the race.
+    agents:
+      defaults:
+        model:
+          fallbacks: []
+      entries:
+        qa:
+          model:
+            fallbacks: []
+  successCriteria:
+    - The child result reaches the QA DM once through direct fallback.
+    - The follow-up that queued behind the silent requester completion replies once.
+    - The requester transcript records the direct-fallback mirror after the follow-up reply.
+    - The Gateway never reports a keyed user outside the current turn or a transcript change during context read.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/agents/subagents/announce/subagent-announce-completion-delivery.ts
+    - src/agents/sessions/session-manager-entries.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    providerMode: mock-openai
+    retryCount: 0
+    summary: Hold the silent requester completion in mock-openai, queue a follow-up DM behind it, and read the requester transcript order after direct fallback.
+    config:
+      requiredProviderMode: mock-openai
+      childMarker: QA-SUBAGENT-TERMINAL-RACE-OK
+      followUpMarker: QA-RACE-FOLLOWUP-OK
+      parentAcknowledgment: Worker started.
+
+flow:
+  steps:
+    - name: orders a direct child result mirror behind the queued turn
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 120000
+        - set: conversationId
+          value:
+            expr: "`race-${randomUUID().slice(0, 8)}`"
+        - set: requestCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: conversationId
+            senderName: QA Race Operator
+            text: "Subagent terminal reply QA check: race. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP."
+        # mock-openai records the requester completion before holding its reply.
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: |
+                  (async () => {
+                    await env.mock?.terminalRequesters?.settle(env.gateway);
+                    const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`);
+                    return requests.find((request) => {
+                      const body = JSON.stringify(request.body ?? '');
+                      return body.includes('Internal task completion event') && body.includes('qa-terminal-race');
+                    });
+                  })().catch(() => undefined)
+            - 90000
+            - 100
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: conversationId
+            senderName: QA Race Operator
+            text:
+              expr: "`Race follow-up QA check. Reply exactly \\`${config.followUpMarker}\\`.`"
+        - set: followUpRequests
+          value:
+            lambda:
+              async: true
+              expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`)).filter((request) => String(request.allInputText ?? '').includes('Race follow-up QA check'))"
+        - set: outboundTexts
+          value:
+            lambda:
+              expr: "state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId && !message.deleted).map((message) => String(message.text ?? '').trim())"
+        - set: keyedTurnErrors
+          value:
+            lambda:
+              expr: "(env.gateway.logs?.().split('\\n') ?? []).filter((line) => /keyed user is outside the current turn/.test(line))"
+        - set: contextFenceErrors
+          value:
+            lambda:
+              expr: "(env.gateway.logs?.().split('\\n') ?? []).filter((line) => /Session transcript changed during context read/.test(line))"
+        - set: followUpSettled
+          value:
+            expr: "await waitForCondition(() => { const texts = outboundTexts(); return texts.includes(config.childMarker) && texts.length >= 3 ? texts : undefined; }, 60000, 250).then(() => true, () => false)"
+        - call: waitForCondition
+          saveAs: raceTask
+          args:
+            - lambda:
+                async: true
+                expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks?.find((task) => task.title === 'qa-terminal-race' && task.deliveryStatus === 'delivered')"
+            - 30000
+            - 250
+        - set: mirrorKey
+          value:
+            expr: "`announce:v1:${raceTask.childSessionKey}:${raceTask.runId}:text-direct`"
+        - set: readHistory
+          value:
+            lambda:
+              async: true
+              expr: "(await env.gateway.call('chat.history', { agentId: 'qa', sessionKey: raceTask.sessionKey, limit: 100, maxChars: 20000 }, { timeoutMs: 10000 })).messages ?? []"
+        # Delivery settles before the lane-ordered mirror append.
+        - set: history
+          value:
+            expr: "await waitForCondition(async () => { const messages = await readHistory(); return messages.some((message) => message.__openclaw?.idempotencyKey === mirrorKey) ? messages : undefined; }, 20000, 250).catch(() => readHistory())"
+        - set: textOf
+          value:
+            lambda:
+              params: [message]
+              expr: "typeof message.content === 'string' ? message.content : (message.content ?? []).filter((block) => block.type === 'text').map((block) => block.text).join('')"
+        - set: followUpUserIndex
+          value:
+            expr: "history.findIndex((message) => message.role === 'user' && textOf(message).includes('Race follow-up QA check'))"
+        - set: mirrorIndex
+          value:
+            expr: "history.findIndex((message) => message.role === 'assistant' && message.model === 'delivery-mirror' && message.__openclaw?.idempotencyKey === mirrorKey)"
+        - set: followUpReplyIndex
+          value:
+            expr: "history.findIndex((message) => message.role === 'assistant' && message.model !== 'delivery-mirror' && textOf(message).trim() === config.followUpMarker)"
+        - set: trace
+          value:
+            expr: |-
+              ({
+                order: { followUpUserIndex, mirrorIndex, followUpReplyIndex },
+                followUpSettled,
+                followUpModels: (await followUpRequests()).map((request) => request.model),
+                keyedTurnErrorCount: keyedTurnErrors().length,
+                contextFenceErrorCount: contextFenceErrors().length,
+                outbound: outboundTexts(),
+                transcript: history.slice(-8).map((message) => ({
+                  role: message.role,
+                  model: message.model,
+                  timestamp: message.timestamp,
+                  openclaw: message.__openclaw,
+                  idempotencyKey: message.__openclaw?.idempotencyKey ?? message.idempotencyKey ?? null,
+                  text: textOf(message).slice(0, 160)
+                })),
+                requests: (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`)).map((request) => ({
+                  cursor: request.cursor, model: request.model, requestKind: request.requestKind, outcome: request.outcome,
+                  prompt: String(request.prompt ?? '').slice(0, 140), tool: request.plannedToolName ?? null
+                })),
+                gatewayLog: (env.gateway.logs?.().split('\n') ?? []).filter((line) => /fallback|keyed|announce|queue|followup|collect|model|mirror|direct/i.test(line)).slice(-60).map((line) => line.slice(0, 300))
+              })
+        - set: publishTrace
+          value:
+            expr: |
+              await (async () => {
+                const { publishQaSuiteArtifactFiles } = await qaImport('./suite-artifacts.js');
+                const { redactQaGatewayDebugText } = await qaImport('./gateway-log-redaction.js');
+                const filePath = path.join(env.outputDir, 'direct-mirror-queued-turn-trace.json');
+                await publishQaSuiteArtifactFiles({ outputDir: env.outputDir, files: [{ filePath, content: redactQaGatewayDebugText(JSON.stringify(trace, null, 2)) }] });
+              })()
+        - assert:
+            expr: "keyedTurnErrors().length === 0"
+            message:
+              expr: "`queued turn lost its keyed user to the direct mirror: ${JSON.stringify(trace)}`"
+        - assert:
+            expr: "contextFenceErrors().length === 0"
+            message:
+              expr: "`queued turn lost its context read to the direct mirror: ${JSON.stringify(trace)}`"
+        - assert:
+            expr: "followUpUserIndex >= 0 && followUpReplyIndex > followUpUserIndex && outboundTexts().filter((text) => text === config.followUpMarker).length === 1"
+            message:
+              expr: "`queued follow-up did not reply once: ${JSON.stringify(trace)}`"
+        - assert:
+            expr: "mirrorIndex > followUpReplyIndex"
+            message:
+              expr: "`direct mirror was written while the queued turn held the session lane: ${JSON.stringify(trace)}`"
+        - assert:
+            expr: "outboundTexts().filter((text) => text === config.childMarker).length === 1"
+            message:
+              expr: "`child result did not reach the DM exactly once: ${JSON.stringify(trace)}`"
+      detailsExpr: "JSON.stringify(trace, null, 2)"
