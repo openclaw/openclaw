@@ -77,6 +77,32 @@ private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
 
 @MainActor
 struct ChatSessionSidebarQueryTests {
+    @Test(arguments: [false, true])
+    func `owner tree context retains only currently linked loaded descendants`(allAgents: Bool) async throws {
+        let transport = SidebarQueryTransport()
+        let agentID = allAgents ? nil : "main"
+        let owner = self.owner(transport, query: .init(agentID: agentID))
+        let parent = #"{"key":"agent:main:parent","sessionId":"parent","owner":{"actor":{"type":"human","id":"alice"}},"childSessions":["agent:main:child"]}"#
+        let child = #"{"key":"agent:main:child","sessionId":"child","owner":{"actor":{"type":"human","id":"bob"}},"unread":true,"status":"failed"}"#
+        _ = await self.load(owner, transport, self.page([parent, child]))
+        if owner.setQuery(.init(agentID: agentID, ownerId: "alice")) {
+            _ = await self.load(owner, transport, self.page([parent]))
+        }
+        #expect(owner.rows.map(\.sessionId) == ["parent"])
+        #expect(owner.rowsIncludingLoadedDescendants.map(\.sessionId) == ["parent", "child"])
+        var updated = try #require(owner.rows.first)
+        updated.childSessions = []
+        owner.receive([updated], read: owner.beginRead())
+        #expect(owner.rowsIncludingLoadedDescendants.map(\.sessionId) == ["parent"])
+        updated.childSessions = ["agent:main:child"]
+        owner.receive([updated], read: owner.beginRead())
+        #expect(owner.rowsIncludingLoadedDescendants.count == 2)
+        owner.setQuery(.init(agentID: agentID, search: "parent", ownerId: "alice"))
+        #expect(owner.rowsIncludingLoadedDescendants == owner.rows)
+        owner.setQuery(.init(agentID: agentID, involvingMe: true))
+        #expect(owner.rowsIncludingLoadedDescendants == owner.rows)
+    }
+
     @Test func `paging and retained refresh preserve enrichment beyond the Gateway response cap`() async {
         let transport = SidebarQueryTransport()
         let owner = self.owner(transport)
@@ -95,6 +121,7 @@ struct ChatSessionSidebarQueryTests {
             }
             return try JSONSerialization.data(withJSONObject: [
                 "sessions": rows, "hasMore": end < 205, "nextOffset": end, "totalCount": 205,
+                "owners": [["type": "human", "id": "owner"]],
             ])
         }
         await owner.load()
@@ -105,6 +132,7 @@ struct ChatSessionSidebarQueryTests {
         await owner.load()
         #expect(owner.rows.count == 205)
         #expect(owner.rows.allSatisfy { $0.derivedTitle != nil && $0.lastMessagePreview != nil })
+        #expect(owner.owners?.map(\.id) == ["owner"])
         #expect(await transport.requests.allSatisfy { ($0.params["limit"]?.value as? Int ?? 0) <= 100 })
     }
 
@@ -384,17 +412,19 @@ struct ChatSessionSidebarQueryTests {
         let list = await transport.next(), transcript = await transport.next("sessions.search")
         #expect(list.request.params["limit"]?.value as? Int == 10)
         #expect(transcript.request.params["limit"]?.value as? Int == 25)
-        oldList.reply.resume(returning: self.page([self.row("old", label: "Old query")]))
+        oldList.reply.resume(returning: self.page(
+            [self.row("old", label: "Old query")], paging: #""owners":[{"type":"human","id":"stale-owner"}]"#))
         oldTranscript.reply.resume(returning: Data(
             #"{"results":[],"sessions":[],"indexing":true,"archivedTranscriptsExcluded":3}"#.utf8))
         await oldLoad.value
         #expect(owner.isLoading)
         #expect(owner.rows.isEmpty)
+        #expect(owner.owners == nil)
         list.reply.resume(returning: self.page([
             self.row("prefix", label: "New plans"), self.row("exact", label: " NEW "),
             self.row("server", label: "Opaque title"), self.row("substring", label: "A new topic"),
             self.row("recent", label: "Another new topic", updatedAt: 20),
-        ]))
+        ], paging: #""owners":[{"type":"human","id":"current-owner"}]"#))
         transcript.reply.resume(returning: Data(#"""
         {"results":[
           {"sessionKey":"agent:main:server","sessionId":"server","messageId":"m1",
@@ -409,6 +439,12 @@ struct ChatSessionSidebarQueryTests {
         #expect(owner.isSettled)
         #expect(!owner.searchIndexing)
         #expect(owner.archivedTranscriptsExcluded == 0)
+        #expect(owner.owners?.map(\.id) == ["current-owner"])
+        owner.setQuery(.init(agentID: "main", status: .archived, search: "new"))
+        #expect(owner.owners == nil)
+        await transport.replyAutomatically(with: Data(#"{"sessions":[],"results":[],"owners":[]}"#.utf8))
+        await owner.load()
+        #expect(owner.owners == [])
     }
 
     @Test func `hidden metadata matches cannot evict visible transcript results before the sidebar limit`() async {

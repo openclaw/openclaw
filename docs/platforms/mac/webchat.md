@@ -130,9 +130,18 @@ and tool activity do not gain timestamp footers.
 ## Thread view options
 
 Open **View options** at the right of the native sidebar's **Threads** heading.
+The **Filters** panel stays open as you change options. Choose **Active**,
+**Archived**, or **All** threads. When multiple sharing identities are available,
+expand **Owners** to search owners, select yourself, or choose **Involving me**.
+The button counts active owner and status filters; **Reset** restores the defaults.
+
+**Group by** offers **Category**, **Project**, **Person**, and **None**; **Person**
+appears when the Gateway supports multiple owners. **Hide empty groups** can hide
+empty destinations **When filtering** by owner, **Always**, or **Never**.
 **Sort → Created** is the default, with newest threads first; threads without a
 creation date follow dated threads. Choose **Last updated** to sort by recent
-activity instead. Pinned threads keep their pin order.
+activity instead, or **People** to sort by owner when available. Pinned threads
+keep their pin order. These choices are saved locally for the app profile.
 
 Rows place unread, running, queued, and attention indicators before the title.
 Linked channel names stay visible when previews are off.
