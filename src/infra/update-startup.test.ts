@@ -710,6 +710,19 @@ describe("update-startup", () => {
     expectStableAutoRolloutStatePreserved();
   });
 
+  it("skips all extended-stable work in Nix mode", async () => {
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runExtendedStableUpdateCheck({ isNixMode: true, runAutoUpdate });
+
+    expect(resolveOpenClawPackageRoot).not.toHaveBeenCalled();
+    expect(checkUpdateStatus).not.toHaveBeenCalled();
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(readPersistedUpdateCheckState()).toBeNull();
+  });
+
   it("announces and applies a dev git campaign without consulting npm", async () => {
     mockDevGitStatus({
       branch: "HEAD",
@@ -1354,7 +1367,7 @@ describe("update-startup", () => {
         upstreamSha: remoteFetchFinished ? "upstream-sha" : null,
         ahead: remoteFetchFinished ? 0 : null,
         behind: remoteFetchFinished ? 2 : null,
-        fetchOk: remoteFetchFinished,
+        fetchOk: isRemoteFetch ? remoteFetchFinished : null,
       });
       if (!isRemoteFetch) {
         return Promise.resolve(status);
@@ -1742,6 +1755,29 @@ describe("update-startup", () => {
     } finally {
       campaign.clear();
     }
+  });
+
+  it("disables all automatic update traffic when checkOnStart is false", async () => {
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+    const log = { info: vi.fn() };
+
+    await runGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig({ checkOnStart: false }),
+      runAutoUpdate,
+      log,
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(log.info).not.toHaveBeenCalled();
+    expect(readPersistedUpdateCheckState()).toBeNull();
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    expect(checkUpdateStatus).not.toHaveBeenCalled();
+    expect(getUpdateAvailable()).toBeNull();
+    expect(getUpdateSchedule()).toMatchObject({ channel: "beta", autoEnabled: false });
   });
 
   it("disables update notices, telemetry, and auto-update with OPENCLAW_NO_AUTO_UPDATE", async () => {

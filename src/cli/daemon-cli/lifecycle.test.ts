@@ -1027,6 +1027,26 @@ describe("runDaemonRestart health checks", () => {
       expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
     });
 
+    it("does not touch state when lock ownership changes before delivery", async () => {
+      const gatewayLockIdentity = createGatewayLockIdentity();
+      readActiveGatewayLockIdentity
+        .mockResolvedValueOnce(gatewayLockIdentity)
+        .mockResolvedValueOnce(gatewayLockIdentity)
+        .mockResolvedValue({
+          ...gatewayLockIdentity,
+          pid: 4300,
+          ownerId: "gateway-owner-new",
+          createdAt: "2026-07-16T12:00:01.000Z",
+        });
+
+      await expectExternalRestartFailure("gateway lock owner changed");
+
+      expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+      expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
+      expect(callGatewayCli).not.toHaveBeenCalled();
+      expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    });
+
     it("rejects a legacy generic restart acknowledgement", async () => {
       callGatewayCli.mockResolvedValue({
         ok: true,

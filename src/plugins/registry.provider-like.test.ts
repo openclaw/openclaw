@@ -45,8 +45,13 @@ describe("plugin registry provider-like registrations", () => {
 });
 
 const reservationCases = [
-  ["text", "providers"],
-  ["speech", "speechProviders"],
+  ["text", "providers", "text"],
+  ["speech", "speechProviders", "voice"],
+  ["transcription", "realtimeTranscriptionProviders", "voice"],
+  ["realtime", "realtimeVoiceProviders", "voice"],
+  ["image", "imageGenerationProviders", "image_generation"],
+  ["video", "videoGenerationProviders", "video_generation"],
+  ["music", "musicGenerationProviders", "music_generation"],
 ] as const;
 
 function registerReservedProvider(
@@ -69,6 +74,36 @@ function registerReservedProvider(
       });
     case "speech":
       return api.registerSpeechProvider({ ...provider, isConfigured: unused, synthesize: unused });
+    case "transcription":
+      return api.registerRealtimeTranscriptionProvider({
+        ...provider,
+        isConfigured: unused,
+        createSession: unused,
+      });
+    case "realtime":
+      return api.registerRealtimeVoiceProvider({
+        ...provider,
+        isConfigured: unused,
+        createBridge: unused,
+      });
+    case "image":
+      return api.registerImageGenerationProvider({
+        ...provider,
+        capabilities: { generate: { maxCount: 1 }, edit: { enabled: false } },
+        generateImage: unused,
+      });
+    case "video":
+      return api.registerVideoGenerationProvider({
+        ...provider,
+        capabilities: { generate: { maxDurationSeconds: 4 } },
+        generateVideo: unused,
+      });
+    case "music":
+      return api.registerMusicGenerationProvider({
+        ...provider,
+        capabilities: { generate: { maxTracks: 1 } },
+        generateMusic: unused,
+      });
   }
 }
 
@@ -201,6 +236,21 @@ describe("text catalog composition", () => {
 });
 
 describe("catalog reservation lifecycle", () => {
+  it("reserves each capability's catalog kind through its public registrar", () => {
+    for (const [family, registryKey, kind] of reservationCases) {
+      const builder = createTestRegistry();
+      const { api } = createCatalogOwner(builder, "owner");
+      registerReservedProvider(api, family, "catalog-provider", async () => null);
+
+      expect(builder.registry[registryKey]).toMatchObject([
+        { pluginId: "owner", provider: { id: "catalog-provider" } },
+      ]);
+      expect(catalogOwners(builder)).toEqual([
+        { pluginId: "owner", provider: "catalog-provider", kinds: [kind] },
+      ]);
+    }
+  });
+
   it.each(["none", "static", "live"] as const)("reserves text only when eligible (%s)", (mode) => {
     const builder = createTestRegistry();
     const { api } = createCatalogOwner(builder, "owner");
@@ -237,6 +287,9 @@ describe("catalog reservation lifecycle", () => {
     expect(catalogOwners(builder)).toEqual([
       { pluginId: "alpha", provider: "catalog-provider", kinds: ["text", "voice"] },
       { pluginId: "alpha", provider: "catalog-provider", kinds: ["voice"] },
+      { pluginId: "alpha", provider: "catalog-provider", kinds: ["image_generation"] },
+      { pluginId: "alpha", provider: "catalog-provider", kinds: ["video_generation"] },
+      { pluginId: "alpha", provider: "catalog-provider", kinds: ["music_generation"] },
       { pluginId: "beta", provider: "other-provider", kinds: ["voice"] },
     ]);
     expect(registryContainsRuntimePluginIds(builder.registry, ["alpha", "beta"])).toBe(true);

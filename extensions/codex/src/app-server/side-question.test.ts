@@ -226,6 +226,41 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(persistedBindings.read(current)).toEqual(parent);
   });
 
+  it("rejects a waiting side question when its app-server client closes", async () => {
+    const client = createFakeClient({ completeTurn: false });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    const controller = new AbortController();
+    let outcome: unknown;
+    const run = runCodexAppServerSideQuestion(
+      sideParams({ opts: { abortSignal: controller.signal } }),
+    ).catch((error: unknown) => {
+      outcome = error;
+    });
+    try {
+      await vi.waitFor(() =>
+        expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+      );
+      client.close(new Error("app-server transport disconnected"));
+      await vi.waitFor(
+        () =>
+          expect(outcome).toEqual(
+            expect.objectContaining({
+              message: expect.stringContaining("closed"),
+            }),
+          ),
+        { timeout: 200 },
+      );
+      expect(outcome).toBeInstanceOf(AggregateError);
+      expect(outcome).toMatchObject({
+        message: expect.stringContaining("cleanup could not confirm the side turn stopped"),
+        cause: { message: expect.stringContaining("closed") },
+      });
+    } finally {
+      controller.abort("test cleanup");
+      await run;
+    }
+  });
+
   it("cancels an active side tool when its app-server request is cancelled", async () => {
     const client = createFakeClient({ completeTurn: false });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
@@ -467,8 +502,11 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });
 
-  it("clamps stale full access to a guarded session without a recorded root", async () => {
-    const root = "/tmp/workspace";
+  it.each([
+    { boundary: "recorded root", sessionRoot: "/tmp/workspace/guarded" },
+    { boundary: "agent workspace", sessionRoot: undefined },
+  ])("clamps stale full access to the guarded session $boundary", async ({ sessionRoot }) => {
+    const root = sessionRoot ?? "/tmp/workspace";
     readCodexAppServerBindingMock.mockReturnValue({
       threadId: "parent-thread",
       cwd: "/tmp/outside-session-root",
@@ -490,6 +528,7 @@ describe("runCodexAppServerSideQuestion", () => {
             sessionFile: "/tmp/session-1.jsonl",
             updatedAt: 1,
             permissionMode: "guarded",
+            ...(sessionRoot ? { sessionRoot } : {}),
           },
         }),
       ),

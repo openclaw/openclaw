@@ -151,6 +151,19 @@ describe("buildGuardedModelFetch", () => {
     }
   });
 
+  it("does not force the debug proxy onto plain HTTP local transports", async () => {
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "http://127.0.0.1:7799");
+    try {
+      await (await request({}, localModel)).text();
+      expect(resolveProviderRequestPolicyConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({ request: { proxy: undefined } }),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each([false, true])(
     "scopes provider DNS trust with an explicit dispatcher=%s",
     async (explicit) => {
@@ -304,9 +317,10 @@ describe("buildGuardedModelFetch", () => {
 
   it("accepts a large batch of small SSE events followed by a large split event", async () => {
     const count = 5_000;
+    const refreshTimeout = vi.fn();
     const payload = { text: "x".repeat(70 * 1024) };
-    mockResponse(
-      new Response(
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
         responseStream([
           'data: {"ok":true}\n\n'.repeat(count),
           `data: ${JSON.stringify(payload)}`,
@@ -314,11 +328,15 @@ describe("buildGuardedModelFetch", () => {
         ]).stream,
         { headers: { "content-type": "text/event-stream" } },
       ),
-    );
+      finalUrl: `${model.baseUrl}/responses`,
+      release: vi.fn(async () => {}),
+      refreshTimeout,
+    });
     const items = await parseSse(await request());
     expect(items).toHaveLength(count + 1);
     expect(items.slice(0, count)).toEqual(Array.from({ length: count }, () => ({ ok: true })));
     expect(items.at(-1)).toEqual(payload);
+    expect(refreshTimeout).toHaveBeenCalledTimes(3);
   });
 
   it.each([
