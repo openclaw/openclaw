@@ -602,6 +602,55 @@ describe("canonical transcript archive batch transactions", () => {
     }
   });
 
+  it("carries original publication across a sibling transform after a failed batch", async () => {
+    const f = fixture();
+    try {
+      const prepareFile = (archivePath: string) => {
+        if (!fs.existsSync(archivePath)) {
+          fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+          fs.writeFileSync(archivePath, originalContent);
+        }
+      };
+      await expect(
+        f.migrate({
+          transformContent: (content) => ({
+            changed: content.includes("old"),
+            content: content.replace("old", "middle"),
+          }),
+          onArchive: prepareFile,
+          writeCursor: () => {
+            throw new Error("first migration cursor failed");
+          },
+        }),
+      ).rejects.toThrow("first migration cursor failed");
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(1);
+
+      const sibling = await f.migrate({
+        transformContent: (content) => ({
+          changed: content.includes("middle"),
+          content: content.replace("middle", "new"),
+        }),
+      });
+      expect(sibling.rewrittenArchives).toBe(3);
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
+      for (let index = 0; index < 3; index++) {
+        const sessionId = `s${String(index).padStart(5, "0")}`;
+        const blob = archiveBlob(f.database, sessionId);
+        expect(blob.toString()).toContain("new");
+        expect(
+          f.database
+            .prepare("SELECT published_at FROM session_transcript_archives WHERE session_id = ?")
+            .get(sessionId)?.published_at,
+        ).toBe(123);
+        expect(fs.readFileSync(path.join(f.archiveDirectory, `archive-${index}.jsonl`))).toEqual(
+          blob,
+        );
+      }
+    } finally {
+      f.close();
+    }
+  });
+
   it("rejects archive paths outside the artifact directory", async () => {
     const f = fixture();
     try {

@@ -110,7 +110,6 @@ async function migrateAgentDatabase(params: {
       agentId: params.agentId,
       database,
       pathname: params.pathname,
-      recoveryKey: "historical-media-canonical-archive-recovery-v1",
       start: { generation: "", sessionId: "" },
       // Imports and restores can introduce legacy media after any successful pass.
       // Reuse archive repair without persisting the directive migration's cursor.

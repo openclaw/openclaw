@@ -30,7 +30,7 @@ import {
 } from "./state-migrations.transcript-directives-transform.js";
 
 export const TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE = 32;
-const DIRECTIVE_ARCHIVE_RECOVERY_KEY = "historical-transcript-directive-archive-recovery-v1";
+const ARCHIVE_RECOVERY_KEY = "historical-canonical-transcript-archive-recovery-v1";
 
 type TranscriptArchiveMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -48,7 +48,6 @@ type ArchiveMigrationOptions = {
   agentId: string;
   database: DatabaseSync;
   pathname: string;
-  recoveryKey?: string;
   start: ArchiveCursor;
   writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
 };
@@ -283,7 +282,7 @@ export function transcriptDirectiveArchivesNeedMigration(
   database: DatabaseSync,
   start: ArchiveCursor,
 ): boolean {
-  if (readArchiveRecoveryJournal(database, DIRECTIVE_ARCHIVE_RECOVERY_KEY)) {
+  if (readArchiveRecoveryJournal(database, ARCHIVE_RECOVERY_KEY)) {
     return true;
   }
   let cursor = start;
@@ -532,7 +531,7 @@ export async function migrateCanonicalTranscriptArchives(
   },
 ): Promise<ArchiveMigrationResult> {
   let rewrittenArchives = 0;
-  const recoveryKey = params.recoveryKey ?? DIRECTIVE_ARCHIVE_RECOVERY_KEY;
+  const recoveryKey = ARCHIVE_RECOVERY_KEY;
   let cursor = params.start;
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
     agentId: params.agentId,
