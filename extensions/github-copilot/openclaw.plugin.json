@@ -42,7 +42,8 @@
             "api": "anthropic-messages",
             "reasoning": true,
             "input": ["text", "image"],
-            "contextWindow": 1000000,
+            "contextWindow": 328000,
+            "contextTokens": 200000,
             "maxTokens": 128000,
             "cost": { "input": 4, "output": 20, "cacheRead": 0.2, "cacheWrite": 5 },
             "compat": {
@@ -72,7 +73,8 @@
             "api": "anthropic-messages",
             "reasoning": true,
             "input": ["text", "image"],
-            "contextWindow": 1000000,
+            "contextWindow": 328000,
+            "contextTokens": 200000,
             "maxTokens": 128000,
             "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
             "compat": { "codeMode": "capable" }
