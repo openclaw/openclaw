@@ -105,3 +105,9 @@ Retained legacy backups may instead live under
 `<state-dir>/skill-workshop/collection-backups/<workspace-hash>/<backup-id>/`
 and contain a `workspace/` subtree. Preserve that original layout in inspection
 copies; do not rewrite the manifest to make an old backup look current.
+
+Doctor retains the legacy source after importing a history-only copy. Once it
+verifies a matching archive and saved workspace contents in a configured agent's
+backup directory, later runs stop reporting that backup as pending, even if the
+original workspace is no longer configured. Missing, incomplete, or mismatched
+copies still require review; the original source remains intact.

@@ -1,3 +1,8 @@
+export type CronAgentScope = {
+  agentId?: string | null;
+  sessionKey?: string | null;
+};
+
 /** Optional dynamic-cadence bounds for one cron job. */
 export type CronPacing = {
   min?: string;

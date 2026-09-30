@@ -263,6 +263,10 @@ jobs:
 
           cat .local/plugin-clawhub-release-plan.json
           jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
+          if jq -e '.missingTrustedPublisher[]? | select(.publication.state == "pending" or .publication.state == "failed")' .local/plugin-clawhub-release-plan.json >/dev/null; then
+            echo "::error::Pending or failed ClawHub publications cannot be bootstrapped again. Wait for pending publication or use the release plan's operator recovery instructions."
+            exit 1
+          fi
 
           bootstrap_candidate_count="$(jq -r '(.bootstrapCandidates | length) + (.missingTrustedPublisher | length)' .local/plugin-clawhub-release-plan.json)"
           selected_count="$(jq -r '.all | length' .local/plugin-clawhub-release-plan.json)"

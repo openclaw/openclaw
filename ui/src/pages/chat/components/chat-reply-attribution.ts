@@ -32,21 +32,6 @@ export const NO_REPLY_LINE: ReplyLine = { state: "hidden" };
 
 type ReplyContext = Pick<MessageGroup, "replyShared" | "replyTurnSource" | "runId">;
 
-// Transcript rows are immutable; re-renders reuse their normalized form.
-const normalizedMessages = new WeakMap<object, NormalizedMessage>();
-
-function normalizeReplyMessage(message: unknown): NormalizedMessage {
-  if (!message || typeof message !== "object") {
-    return normalizeMessage(message);
-  }
-  let normalized = normalizedMessages.get(message);
-  if (!normalized) {
-    normalized = normalizeMessage(message);
-    normalizedMessages.set(message, normalized);
-  }
-  return normalized;
-}
-
 function foundPreview(result: ReturnType<ReplyPreviewLookup>) {
   return result && !("pending" in result || "missing" in result || "oversized" in result)
     ? result
@@ -183,11 +168,11 @@ export function resolveGroupReplyLine(
   if (group.role !== "assistant") {
     return NO_REPLY_LINE;
   }
-  const targets = group.messages.map(({ message }) => normalizeReplyMessage(message).replyTarget);
+  const targets = group.messages.map(({ message }) => normalizeMessage(message).replyTarget);
   const explicit = targets.find((target) => target?.kind === "id");
   if (explicit?.kind === "id") {
     const previews = replyMessages
-      .map(({ message }) => normalizeReplyMessage(message))
+      .map(({ message }) => normalizeMessage(message))
       .filter(({ replyTarget }) => replyTarget?.kind === "id" && replyTarget.id === explicit.id)
       .map(({ replyPreview }) => replyPreview);
     // Prefer a snapshot that names its sender: the name alone paints the line.
@@ -201,7 +186,7 @@ export function resolveGroupReplyLine(
     // reply_to_current resolves only through the prompt that started this run,
     // never the latest prompt; in 1:1 its own turn's prompt adds nothing.
     const source = group.replyCurrentSource;
-    const sender = source && normalizeReplyMessage(source.message).sender;
+    const sender = source && normalizeMessage(source.message).sender;
     return source &&
       (sender || !group.replyShared) &&
       (group.replyShared || source.key !== group.replyTurnSource?.key)

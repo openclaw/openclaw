@@ -74,9 +74,9 @@ describe("cron jobs with unresolved owners", () => {
     });
 
     try {
-      const sql = includeOwned ? undefined : observeMainThreadSql();
+      const sql = observeMainThreadSql();
       try {
-        sql?.calibrate();
+        sql.calibrate();
         await cron.start();
         if (phase !== "startup") {
           currentOwner = undefined;
@@ -84,11 +84,9 @@ describe("cron jobs with unresolved owners", () => {
           expect((await cron.listPage({ agentId: "main" })).jobs).toEqual([]);
           await clock.advanceBy(1_000);
         }
-        if (sql) {
-          expect(sql.count(), `${phase} ownerless SQL stays off the caller thread`).toBe(0);
-        }
+        expect(sql.count(), `${phase} scheduler SQL stays off the caller thread`).toBe(0);
       } finally {
-        sql?.restore();
+        sql.restore();
       }
       if (includeOwned) {
         expect(onEvent).toHaveBeenCalledWith(

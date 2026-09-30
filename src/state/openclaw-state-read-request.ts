@@ -99,6 +99,15 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
       },
     };
   }
+  if (command.type === "cron.currentReceipt") {
+    const { receiptId, storeKey, jobId, agentId, ownerPid, ownerStartTime } = command.handle;
+    return {
+      type: command.type,
+      handle: { receiptId, storeKey, jobId, agentId, ownerPid, ownerStartTime },
+      includeJob: command.includeJob,
+      includeAvailability: command.includeAvailability,
+    };
+  }
   if (command.type === "cron.observeRunRecovery") {
     return {
       type: command.type,
@@ -303,6 +312,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         0,
       )
     );
+  }
+  if (command.type === "cron.currentReceipt") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.handle), "utf8") + 2;
   }
   if (command.type === "cron.observeRunRecovery") {
     return command.proposals.reduce(

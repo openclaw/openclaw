@@ -25,7 +25,10 @@ import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-
 import { readCronScratchSnapshotInDatabase } from "../cron/scratch-read.kernel.js";
 import { readCronJobNamesInDatabase } from "../cron/store/job-name.js";
 import { resolveCronJobsStorePath } from "../cron/store/paths.js";
-import { readActiveCronRunReceiptOwnersInDatabase } from "../cron/store/run-receipt-read.js";
+import {
+  readActiveCronRunReceiptOwnersInDatabase,
+  readCronRunReceiptCurrentFactsInDatabase,
+} from "../cron/store/run-receipt-read.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import {
   readSharedGitHubPublicationRequestInDatabase,
@@ -340,6 +343,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 observation: observeCronRunRecoveryInDatabase(db, command),
+              };
+            }
+            if (command.type === "cron.currentReceipt") {
+              return {
+                type: command.type,
+                facts: readCronRunReceiptCurrentFactsInDatabase(db, command),
               };
             }
             if (command.type === "cron.scratch") {

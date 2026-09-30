@@ -96,9 +96,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
         await resumeScheduledTaskAutoStartAfterUpdate(params.serviceEnv, {
           assertCurrent: () => params.assertCurrent?.("restore"),
           beforeMutation: async () => {
-            params.assertCurrent?.("restore");
-            await guard?.();
-            params.assertCurrent?.("restore");
+            await assertCurrentService("restore");
             // Repair cancellation fences activation, while compensation retains its service guard.
             assertCurrent?.();
             if (closed || !restoreAllowed) {

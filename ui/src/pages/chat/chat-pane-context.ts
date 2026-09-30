@@ -148,7 +148,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     };
     const params = {
       client: scope.client,
-      connectionGeneration: scope.generation,
       gatewaySnapshot: scope.context.gateway.snapshot,
       mode,
       pendingKey: this[pendingProperty],
@@ -178,7 +177,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     };
     const params = {
       client: scope.client,
-      connectionGeneration: scope.generation,
       gatewaySnapshot: scope.context.gateway.snapshot,
       reclaimingKey: this.headerPlacementReclaimingKey,
       placementStartup: scope.context.placementStartup,

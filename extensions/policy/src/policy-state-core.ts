@@ -1,4 +1,3 @@
-// Policy plugin channel, model, MCP, and network evidence.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -221,23 +220,15 @@ function isModelSettingKey(key: string): boolean {
 }
 
 function pushModelRef(refs: PolicyModelRefEvidence[], ref: string, source: string): void {
-  const parsed = parseModelRef(ref);
-  if (parsed === undefined) {
-    return;
-  }
-  refs.push({ ref, provider: parsed.provider, model: parsed.model, source });
-}
-
-function parseModelRef(
-  ref: string,
-): { readonly provider: string; readonly model: string } | undefined {
   const trimmed = ref.trim();
   const slash = trimmed.indexOf("/");
   if (slash <= 0 || slash >= trimmed.length - 1) {
-    return undefined;
+    return;
   }
-  return {
+  refs.push({
+    ref,
     provider: normalizeProviderId(trimmed.slice(0, slash)),
     model: trimmed.slice(slash + 1),
-  };
+    source,
+  });
 }

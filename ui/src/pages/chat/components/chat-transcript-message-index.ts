@@ -1,9 +1,8 @@
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
+import { agentRunFrameActiveStatusParts, chatItemGroups } from "../chat-agent-run-grouping.ts";
 import {
-  agentRunFrameGroups,
   assistantGroupCanOwnActiveRunStatus,
   type buildCachedChatItems,
   coalesceActivityRuns,
@@ -12,6 +11,7 @@ import {
   collapseCompletedTurnWork,
   findLiveStreamIndex,
   getExpansionStateVersion,
+  getChatItemsGeneration,
   persistedMessageEntryId,
   setExpansionState,
 } from "../chat-thread.ts";
@@ -23,11 +23,13 @@ import { projectChatPositions, type ChatPositionIndex } from "./chat-position-pr
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 
 type TranscriptChain = {
   searchActive: boolean;
+  workGroups: readonly Extract<ChatRenderItem, { kind: "work-group" }>[];
   collapsedItems: readonly ChatRenderItem[];
   transcriptItems: readonly ChatRenderItem[];
   /** Active status parts shown inside the preceding reply, keyed by that reply's group. */
@@ -41,6 +43,8 @@ type TranscriptIndex = {
   positionIndex: ChatPositionIndex;
   rows: readonly TranscriptRow<ChatRenderItem>[];
 };
+
+type TranscriptIndexSource = Pick<TranscriptChain, "searchActive" | "transcriptItems">;
 
 type LiveStream = Extract<ReturnType<typeof buildCachedChatItems>[number], { kind: "stream" }>;
 type StreamOwner = Extract<ChatRenderItem, { kind: "stream-run" | "agent-run-frame" }>;
@@ -66,7 +70,7 @@ type ChainEntry = {
   live?: LiveSlot;
 };
 type BaseIndex = {
-  chain: TranscriptChain;
+  chain: TranscriptIndexSource;
   index: TranscriptIndex;
   ownerRowIndex: number;
 };
@@ -74,9 +78,9 @@ type BaseIndex = {
 // Structural inputs and terminal outcomes invalidate the full projection. A live
 // slot replacement derives immutable tail updates from that structural entry.
 const chains = new WeakMap<object, ChainEntry>();
-const liveChains = new WeakMap<TranscriptChain, LiveProjection>();
-const indexes = new WeakMap<object, { key: readonly unknown[]; value: TranscriptIndex }>();
-const baseIndexes = new WeakMap<object, { key: readonly unknown[]; value: BaseIndex }>();
+const liveChains = new WeakMap<TranscriptIndexSource, LiveProjection>();
+const indexes = createTranscriptMemo<TranscriptIndex>();
+const baseIndexes = createTranscriptMemo<BaseIndex>();
 
 // Fold only the final presentation, after causal run/turn ownership is settled.
 // Every original message and its reply identity remains in chronological order.
@@ -168,21 +172,6 @@ function replaceOwnerStream(
       };
 }
 
-function memoize<T>(
-  cache: WeakMap<object, { key: readonly unknown[]; value: T }>,
-  owner: object,
-  key: readonly unknown[],
-  build: () => T,
-): T {
-  const cached = cache.get(owner);
-  if (cached?.key.every((value, index) => Object.is(value, key[index]))) {
-    return cached.value;
-  }
-  const value = build();
-  cache.set(owner, { key, value });
-  return value;
-}
-
 export function projectTranscriptChain(
   chatItems: ReturnType<typeof buildCachedChatItems>,
   options: {
@@ -194,6 +183,7 @@ export function projectTranscriptChain(
 ): TranscriptChain {
   const { session } = options;
   const key = [
+    getChatItemsGeneration(chatItems),
     options.sessionKey,
     options.runWorking,
     options.searchActive,
@@ -222,6 +212,7 @@ export function projectTranscriptChain(
       const value = {
         collapsedItems,
         transcriptItems,
+        workGroups: cached.value.workGroups,
         continuations: cached.value.continuations,
         searchActive: cached.value.searchActive,
       };
@@ -271,7 +262,13 @@ export function projectTranscriptChain(
       continuations.set(previous.key, activeStatusParts);
       return false;
     });
-    return { collapsedItems, transcriptItems, continuations, searchActive: options.searchActive };
+    return {
+      collapsedItems,
+      transcriptItems,
+      workGroups: transcriptItems.filter((item) => item.kind === "work-group"),
+      continuations,
+      searchActive: options.searchActive,
+    };
   };
   const value = build();
   const index = findLiveStreamIndex(chatItems);
@@ -300,7 +297,7 @@ export function projectTranscriptChain(
 }
 
 export function projectTranscriptIndex(
-  chain: TranscriptChain,
+  chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
   props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName">,
 ): TranscriptIndex {
@@ -311,7 +308,7 @@ export function projectTranscriptIndex(
     props.userId,
     props.userName,
   ];
-  return memoize(indexes, chain, key, () => {
+  return indexes(chain, key, () => {
     const live = liveChains.get(chain);
     if (!live) {
       return buildTranscriptIndex(chain, expandedToolCards, props);
@@ -323,7 +320,7 @@ export function projectTranscriptIndex(
       chain.searchActive,
     );
     const visible = tail.markerIdsByMessageId.has(live.item.key);
-    const base = memoize(baseIndexes, live.structuralChain, [...key, visible], () => {
+    const base = baseIndexes(live.structuralChain, [...key, visible], () => {
       const index = buildTranscriptIndex(chain, expandedToolCards, props);
       const ownerRowIndex = index.rows.findLastIndex((row) => row.key === live.owner.item.key);
       if (ownerRowIndex < 0) {
@@ -359,7 +356,7 @@ export function projectTranscriptIndex(
 }
 
 function buildTranscriptIndex(
-  chain: TranscriptChain,
+  chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
   props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName">,
 ): TranscriptIndex {
@@ -427,14 +424,7 @@ function projectTranscriptMessageIndex(
   const transcriptMessageKeys = new Map<string, string>();
   for (const item of transcriptItems) {
     const parts = item.kind === "agent-run-frame" ? item.parts : [item];
-    const groups =
-      item.kind === "agent-run-frame"
-        ? agentRunFrameGroups(item)
-        : item.kind === "group"
-          ? [item]
-          : item.kind === "work-group" || item.kind === "activity-run"
-            ? item.groups
-            : [];
+    const groups = chatItemGroups(item);
     const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
     // The anchor owner uses the first key, so keep stream and persisted keys
     // in their actual presentation order, including within a mixed run frame.
@@ -448,18 +438,8 @@ function projectTranscriptMessageIndex(
       } else if (part.kind === "stream") {
         transcriptMessageKeys.set(part.key, item.key);
       }
-      const partGroups =
-        part.kind === "group"
-          ? [part]
-          : part.kind === "work-group" || part.kind === "activity-run"
-            ? part.groups
-            : [];
-      for (const group of partGroups) {
-        const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, {
-          assistantName: props.assistantName,
-          userId: props.userId,
-          userName: props.userName,
-        });
+      for (const group of chatItemGroups(part)) {
+        const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, props);
         const rowKey =
           item.kind === "work-group" && expandedToolCards.get(item.key)
             ? item.key + ":" + group.key

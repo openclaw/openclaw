@@ -21,6 +21,10 @@ export function dispatchCronNotification(
   state: CronServiceState,
   notification: CronNotificationIntent,
 ): void {
+  if (notification.kind === "failure-repair") {
+    requestFailureRepair(state, notification);
+    return;
+  }
   let routing = notification.routing ? { ...notification.routing } : undefined;
   if (!routing) {
     const hasOwner =
@@ -39,6 +43,34 @@ export function dispatchCronNotification(
   } else {
     transportFailureAlert(state, notification, routing);
   }
+}
+
+/**
+ * Starts the repair turn in the conversation that owns the job. A lost request needs no
+ * fallback here: the incident records it, so the job's next failure sends the normal alert.
+ */
+function requestFailureRepair(
+  state: CronServiceState,
+  notification: Extract<CronNotificationIntent, { kind: "failure-repair" }>,
+): void {
+  const jobId = notification.job.id;
+  const owner = state.store?.jobs.find((job) => job.id === jobId)?.owner;
+  const sessionKey = owner?.sessionKey?.trim();
+  const repairId = notification.job.state.lastFailureNotificationId;
+  if (!sessionKey || !repairId || !state.deps.runCronFailureRepair) {
+    return;
+  }
+  void state.deps
+    .runCronFailureRepair({
+      jobId,
+      repairId,
+      agentId: owner?.agentId,
+      sessionKey,
+      message: notification.text,
+    })
+    .catch((err: unknown) => {
+      state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
+    });
 }
 
 type FailureAlertCycle = {

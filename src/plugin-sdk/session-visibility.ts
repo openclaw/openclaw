@@ -210,13 +210,10 @@ function matchesCompiledWildcard(
   pattern: Extract<CompiledAgentAllowPattern, { kind: "wildcard" }>,
   lower: string,
 ): boolean {
-  let pos = 0;
-  if (pattern.first) {
-    if (!lower.startsWith(pattern.first)) {
-      return false;
-    }
-    pos = pattern.first.length;
+  if (!lower.startsWith(pattern.first)) {
+    return false;
   }
+  let pos = pattern.first.length;
 
   const endBound = pattern.last ? lower.length - pattern.last.length : lower.length;
   if (pattern.last && (!lower.endsWith(pattern.last) || endBound < pos)) {
@@ -261,15 +258,9 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
       return matchesCompiledWildcard(pattern, lowerAgentId);
     });
   };
-  const isAllowed = (requesterAgentId: string, targetAgentId: string) => {
-    if (requesterAgentId === targetAgentId) {
-      return true;
-    }
-    if (!enabled) {
-      return false;
-    }
-    return matchesAllow(requesterAgentId) && matchesAllow(targetAgentId);
-  };
+  const isAllowed = (requesterAgentId: string, targetAgentId: string) =>
+    requesterAgentId === targetAgentId ||
+    (enabled && matchesAllow(requesterAgentId) && matchesAllow(targetAgentId));
   return { enabled, matchesAllow, isAllowed };
 }
 

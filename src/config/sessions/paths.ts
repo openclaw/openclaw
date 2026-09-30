@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../../infra/boundary-path.js";
-import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import { expandHomePrefix, resolveRequiredHomeDir, resolveUserPath } from "../../infra/home-dir.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -352,7 +352,7 @@ export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
-  return resolveSessionStorePathWithContext(store, opts, { cwd: process.cwd() });
+  return resolveSessionStorePathWithContext(store, opts, { cwd: resolveUserPath(".") });
 }
 
 /** Internal async readers capture their relative-path base before yielding. */

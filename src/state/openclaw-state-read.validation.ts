@@ -84,6 +84,19 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.storePath === undefined || typeof input.command.storePath === "string") &&
         Array.isArray(input.command.jobIds) &&
         input.command.jobIds.every((id) => typeof id === "string")) ||
+      (input.command.type === "cron.currentReceipt" &&
+        isRecord(input.command.handle) &&
+        typeof input.command.handle.receiptId === "string" &&
+        typeof input.command.handle.storeKey === "string" &&
+        typeof input.command.handle.jobId === "string" &&
+        typeof input.command.handle.agentId === "string" &&
+        typeof input.command.handle.ownerPid === "number" &&
+        Number.isFinite(input.command.handle.ownerPid) &&
+        (input.command.handle.ownerStartTime === null ||
+          (typeof input.command.handle.ownerStartTime === "number" &&
+            Number.isFinite(input.command.handle.ownerStartTime))) &&
+        typeof input.command.includeJob === "boolean" &&
+        typeof input.command.includeAvailability === "boolean") ||
       (input.command.type === "cron.observeRunRecovery" &&
         typeof input.command.storeKey === "string" &&
         Array.isArray(input.command.proposals) &&

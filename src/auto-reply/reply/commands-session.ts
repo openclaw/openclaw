@@ -99,14 +99,6 @@ function formatSessionExpiry(expiresAt: number) {
   return timestampMsToIsoString(expiresAt) ?? "n/a";
 }
 
-function resolveSessionBindingDurationMs(
-  binding: SessionBindingRecord,
-  key: "idleTimeoutMs" | "maxAgeMs",
-  fallbackMs: number,
-): number {
-  return resolveNonNegativeIntegerOption(binding.metadata?.[key], fallbackMs);
-}
-
 function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): number {
   const raw = asDateTimestampMs(binding.metadata?.lastActivityAt);
   if (raw === undefined) {
@@ -411,16 +403,15 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     }
   }
 
-  const idleTimeoutMs = resolveSessionBindingDurationMs(
-    activeBinding,
-    "idleTimeoutMs",
+  const idleTimeoutMs = resolveNonNegativeIntegerOption(
+    activeBinding.metadata?.idleTimeoutMs,
     24 * 60 * 60 * 1000,
   );
   const idleExpiresAt = resolveSessionBindingExpiryAt(
     resolveSessionBindingLastActivityAt(activeBinding),
     idleTimeoutMs,
   );
-  const maxAgeMs = resolveSessionBindingDurationMs(activeBinding, "maxAgeMs", 0);
+  const maxAgeMs = resolveNonNegativeIntegerOption(activeBinding.metadata?.maxAgeMs, 0);
   const maxAgeExpiresAt = resolveSessionBindingExpiryAt(activeBinding.boundAt, maxAgeMs);
   const isIdle = action === SESSION_ACTION_IDLE;
   const settingLabel = isIdle ? "Idle timeout" : "Max age";

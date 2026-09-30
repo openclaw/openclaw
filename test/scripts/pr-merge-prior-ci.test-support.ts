@@ -51,6 +51,7 @@ export function createPriorCiFixtureState(head: string) {
     unsupportedNoLazy: false,
     localOnlyFailureOid: "",
     localOnlyFailureStderr: "",
+    localOnlyQueryFault: "",
     adminRevokedDuringMainFetch: false,
     evidencePath: "",
     mutateEvidence: false,
