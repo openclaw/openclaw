@@ -15,7 +15,7 @@
       "id": "memory-recall",
       "title": "Memory recall",
       "order": 10,
-      "properties": ["enabled", "mode"]
+      "properties": ["enabled", "mode", "escalationDecision"]
     },
     {
       "id": "conversations",
@@ -81,6 +81,7 @@
         "type": "string",
         "enum": ["escalate", "always", "off"]
       },
+      "escalationDecision": { "type": "boolean" },
       "agents": {
         "type": "array",
         "items": { "type": "string" }
@@ -164,6 +165,10 @@
     "mode": {
       "label": "Recall Mode",
       "help": "Escalate runs deep recall only for recall-intent messages without a strong deterministic hit. Always preserves blocking recall on every eligible turn. Off disables deep recall while keeping deterministic trigger recall available."
+    },
+    "escalationDecision": {
+      "label": "Use Decision Model for Escalation",
+      "help": "In escalate mode, ask the agent's Decision model whether a turn without a strong deterministic hit needs deep recall. Requires Decision assistance and a selected Decision model; hosted models receive the bounded latest message and search query. Unavailable, failed, late, or invalid answers fall back to the built-in intent matcher."
     },
     "agents": {
       "label": "Target Agents",

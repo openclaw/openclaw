@@ -52,6 +52,19 @@ describe("active-memory manifest config schema", () => {
     expect(normalizePluginConfig({}).mode).toBe("escalate");
   });
 
+  it("accepts and normalizes the escalation decision opt-in", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.escalation-decision",
+      value: { mode: "escalate", escalationDecision: true },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(normalizePluginConfig({}).escalationDecision).toBe(false);
+    expect(normalizePluginConfig({ escalationDecision: true }).escalationDecision).toBe(true);
+    expect(normalizePluginConfig({ escalationDecision: "yes" }).escalationDecision).toBe(false);
+  });
+
   it.each([
     // Mode-only payloads must stay valid for partial configuration updates.
     ["escalate mode", { mode: "escalate" }, true],

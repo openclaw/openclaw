@@ -1,5 +1,26 @@
 import type { ActiveMemoryMode } from "./types.js";
 
+/**
+ * Upper bound for one escalation decision. The hook preflight budget can
+ * lower it further; an overdue answer never replaces the built-in matcher.
+ */
+export const ACTIVE_MEMORY_ESCALATION_DECISION_TIMEOUT_MS = 1_000;
+
+export type RecallEscalationDeciderResult = "recall" | "skip" | "abstain";
+
+/** Replaces only the built-in intent matcher for one escalate-mode turn. */
+export type RecallEscalationDecider = {
+  decide(params: {
+    /** Bounded projection of the latest user text. */
+    message: string;
+    /** Bounded search query; may add one prior user turn for short follow-ups. */
+    searchQuery: string;
+    signal: AbortSignal;
+    /** Remaining decision budget after the preflight reserve. */
+    timeoutMs: number;
+  }): RecallEscalationDeciderResult | Promise<RecallEscalationDeciderResult>;
+};
+
 const RECALL_INTENT_PATTERNS = [
   /\b(?:previously|earlier|last time|used to)\b/iu,
   /\b(?:do|can|could|would)\s+you\s+(?:remember|recall)\b/iu,
@@ -65,7 +86,12 @@ export function hasRecallIntent(message: string): boolean {
   );
 }
 
-type RecallEscalationDecision = "recall" | "mode-off" | "strong-lane-one-hit" | "no-recall-intent";
+export type RecallEscalationDecision =
+  | "recall"
+  | "mode-off"
+  | "strong-lane-one-hit"
+  | "no-recall-intent"
+  | "decision-skip";
 
 export function resolveRecallEscalationDecision(params: {
   mode: ActiveMemoryMode;
@@ -82,4 +108,85 @@ export function resolveRecallEscalationDecision(params: {
     return "strong-lane-one-hit";
   }
   return hasRecallIntent(params.message) ? "recall" : "no-recall-intent";
+}
+
+export type RecallEscalationFallbackReason = "abstain" | "invalid-result" | "timeout";
+
+/**
+ * Gives an opted-in decider one bounded chance to replace the built-in intent
+ * matcher. Overdue, invalid, or abstaining answers keep the matcher; rejected
+ * authority and caller cancellation stop the hook instead of starting fallback.
+ */
+export async function resolveRecallEscalationDecisionWithDecider(params: {
+  mode: ActiveMemoryMode;
+  /** Full message used only by the existing built-in matcher. */
+  message: string;
+  /** Optional bounded projection exposed to the decider. */
+  deciderMessage?: string;
+  searchQuery: string;
+  hasStrongLaneOneHit: boolean;
+  decider?: RecallEscalationDecider;
+  signal: AbortSignal;
+  timeoutMs?: number;
+  onDeciderFallback?: (reason: RecallEscalationFallbackReason) => void;
+}): Promise<RecallEscalationDecision> {
+  params.signal.throwIfAborted();
+  const builtInDecision = resolveRecallEscalationDecision(params);
+  if (params.mode !== "escalate" || params.hasStrongLaneOneHit || !params.decider) {
+    return builtInDecision;
+  }
+
+  const timeoutMs = Math.max(
+    1,
+    Math.min(
+      ACTIVE_MEMORY_ESCALATION_DECISION_TIMEOUT_MS,
+      params.timeoutMs ?? ACTIVE_MEMORY_ESCALATION_DECISION_TIMEOUT_MS,
+    ),
+  );
+  const deadline = performance.now() + timeoutMs;
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
+  const signal = AbortSignal.any([params.signal, timeoutController.signal]);
+  const aborted = Symbol("active-memory-escalation-decider-aborted");
+  const abortPromise = new Promise<typeof aborted>((resolve) => {
+    if (signal.aborted) {
+      resolve(aborted);
+      return;
+    }
+    signal.addEventListener("abort", () => resolve(aborted), { once: true });
+  });
+
+  try {
+    const decisionPromise = Promise.resolve(
+      params.decider.decide({
+        message: params.deciderMessage ?? params.message,
+        searchQuery: params.searchQuery,
+        signal,
+        timeoutMs,
+      }),
+    );
+    // A late rejection after the race has settled must not surface as unhandled.
+    decisionPromise.catch(() => {});
+    const result = await Promise.race([decisionPromise, abortPromise]);
+    params.signal.throwIfAborted();
+    if (result === aborted || signal.aborted || performance.now() >= deadline) {
+      timeoutController.abort();
+      params.onDeciderFallback?.("timeout");
+      return builtInDecision;
+    }
+    if (result === "recall") {
+      return "recall";
+    }
+    if (result === "skip") {
+      return "decision-skip";
+    }
+    if (result === "abstain") {
+      params.onDeciderFallback?.("abstain");
+      return builtInDecision;
+    }
+    params.onDeciderFallback?.("invalid-result");
+    return builtInDecision;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

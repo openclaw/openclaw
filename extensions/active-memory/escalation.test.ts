@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { hasRecallIntent, resolveRecallEscalationDecision } from "./escalation.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  hasRecallIntent,
+  resolveRecallEscalationDecision,
+  resolveRecallEscalationDecisionWithDecider,
+} from "./escalation.js";
 
 describe("active-memory escalation", () => {
   it.each([
@@ -136,5 +140,211 @@ describe("active-memory escalation", () => {
         hasStrongLaneOneHit: false,
       }),
     ).toBe("mode-off");
+  });
+
+  it.each([
+    ["recall", "Explain the current configuration", "recall"],
+    ["skip", "What did we decide last time?", "decision-skip"],
+    ["abstain", "What did we decide last time?", "recall"],
+    ["abstain", "Explain the current configuration", "no-recall-intent"],
+  ] as const)(
+    "lets a decider result of %s resolve %j as %s",
+    async (deciderResult, message, expected) => {
+      const signal = new AbortController().signal;
+      await expect(
+        resolveRecallEscalationDecisionWithDecider({
+          mode: "escalate",
+          message,
+          searchQuery: `recent context\n${message}`,
+          hasStrongLaneOneHit: false,
+          decider: {
+            decide: async (params) => {
+              expect(params).toEqual({
+                message,
+                searchQuery: `recent context\n${message}`,
+                signal: expect.any(AbortSignal),
+                timeoutMs: 1_000,
+              });
+              expect(params.signal.aborted).toBe(false);
+              return deciderResult;
+            },
+          },
+          signal,
+        }),
+      ).resolves.toBe(expected);
+    },
+  );
+
+  it("accepts a synchronous decider result", async () => {
+    await expect(
+      resolveRecallEscalationDecisionWithDecider({
+        mode: "escalate",
+        message: "Explain the current configuration",
+        searchQuery: "Explain the current configuration",
+        hasStrongLaneOneHit: false,
+        decider: { decide: () => "recall" },
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBe("recall");
+  });
+
+  it.each(["synchronous", "asynchronous"] as const)(
+    "rejects an overdue %s decision before the timeout callback runs",
+    async (kind) => {
+      const now = vi.spyOn(performance, "now").mockReturnValue(0);
+      const fallbacks: string[] = [];
+      let deciderSignal: AbortSignal | undefined;
+      try {
+        await expect(
+          resolveRecallEscalationDecisionWithDecider({
+            mode: "escalate",
+            message: "What did we decide last time?",
+            searchQuery: "What did we decide last time?",
+            hasStrongLaneOneHit: false,
+            decider: {
+              decide: ({ signal }) => {
+                deciderSignal = signal;
+                // Computation advances the clock without yielding to timers.
+                now.mockReturnValue(1_001);
+                return kind === "asynchronous" ? Promise.resolve("skip" as const) : "skip";
+              },
+            },
+            signal: new AbortController().signal,
+            onDeciderFallback: (reason) => fallbacks.push(reason),
+          }),
+        ).resolves.toBe("recall");
+        expect(fallbacks).toEqual(["timeout"]);
+        expect(deciderSignal?.aborted).toBe(true);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    ["off", false, "mode-off"],
+    ["always", false, "recall"],
+    ["escalate", true, "strong-lane-one-hit"],
+  ] as const)(
+    "does not call the decider in mode=%s with strongLaneOne=%s",
+    async (mode, hasStrongLaneOneHit, expected) => {
+      let calls = 0;
+      await expect(
+        resolveRecallEscalationDecisionWithDecider({
+          mode,
+          message: "What did we decide last time?",
+          searchQuery: "What did we decide last time?",
+          hasStrongLaneOneHit,
+          decider: {
+            decide: async () => {
+              calls += 1;
+              return "skip" as const;
+            },
+          },
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toBe(expected);
+      expect(calls).toBe(0);
+    },
+  );
+
+  it.each([
+    ["invalid", async () => "invalid" as never, "invalid-result"],
+    [
+      "times out",
+      async ({ signal }: { signal: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return "skip" as const;
+      },
+      "timeout",
+    ],
+    ["ignores abort", async () => await new Promise<"skip">(() => {}), "timeout"],
+  ] as const)(
+    "falls back to the built-in matcher when the decider %s",
+    async (_label, decide, expectedReason) => {
+      const fallbacks: string[] = [];
+      await expect(
+        resolveRecallEscalationDecisionWithDecider({
+          mode: "escalate",
+          message: "What did we decide last time?",
+          searchQuery: "What did we decide last time?",
+          hasStrongLaneOneHit: false,
+          decider: { decide },
+          signal: new AbortController().signal,
+          timeoutMs: 5,
+          onDeciderFallback: (reason) => fallbacks.push(reason),
+        }),
+      ).resolves.toBe("recall");
+      expect(fallbacks).toEqual([expectedReason]);
+    },
+  );
+
+  it.each(["synchronous", "asynchronous", "caller-abort"] as const)(
+    "does not start fallback after %s rejection",
+    async (kind) => {
+      const controller = new AbortController();
+      const error = new Error("Decision consumer authority closed.");
+      const onFallback = vi.fn();
+      await expect(
+        resolveRecallEscalationDecisionWithDecider({
+          mode: "escalate",
+          message: "What did we decide last time?",
+          searchQuery: "earlier decision",
+          hasStrongLaneOneHit: false,
+          signal: controller.signal,
+          onDeciderFallback: onFallback,
+          decider: {
+            decide: () => {
+              if (kind === "caller-abort") {
+                controller.abort(error);
+                return "abstain";
+              }
+              if (kind === "asynchronous") {
+                return Promise.reject(error);
+              }
+              throw error;
+            },
+          },
+        }),
+      ).rejects.toBe(error);
+      expect(onFallback).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the full message for built-in fallback while bounding decider input", async () => {
+    const fullMessage = `${"context ".repeat(70)} What did we decide last time?`;
+    const deciderMessage = fullMessage.slice(0, 480);
+    let observedMessage: string | undefined;
+
+    await expect(
+      resolveRecallEscalationDecisionWithDecider({
+        mode: "escalate",
+        message: fullMessage,
+        deciderMessage,
+        searchQuery: deciderMessage,
+        hasStrongLaneOneHit: false,
+        decider: {
+          decide: async ({ message }) => {
+            observedMessage = message;
+            return "abstain" as const;
+          },
+        },
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBe("recall");
+    expect(observedMessage).toBe(deciderMessage);
+
+    await expect(
+      resolveRecallEscalationDecisionWithDecider({
+        mode: "escalate",
+        message: fullMessage,
+        deciderMessage,
+        searchQuery: deciderMessage,
+        hasStrongLaneOneHit: false,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBe("recall");
   });
 });

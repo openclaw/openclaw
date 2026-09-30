@@ -13,7 +13,11 @@ import {
   normalizePluginConfig,
   readActiveMemoryConfig,
 } from "./config.js";
-import { resolveRecallEscalationDecision } from "./escalation.js";
+import { createActiveMemoryTurnEscalationDecider } from "./decision-escalation.js";
+import {
+  ACTIVE_MEMORY_ESCALATION_DECISION_TIMEOUT_MS,
+  resolveRecallEscalationDecisionWithDecider,
+} from "./escalation.js";
 import { buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
 import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
 import { forgetActiveRecallRun, toSingleLineErrorMessage } from "./recall-state.js";
@@ -331,6 +335,9 @@ export default definePluginEntry({
               latestUserMessage: currentUserMessage,
               recentTurns,
             });
+            const escalationMessage = buildSearchQuery({
+              latestUserMessage: currentUserMessage,
+            });
             const memorySlot = normalizePluginsConfig(liveConfig.plugins).slots.memory;
             const memoryCapabilityRegistration = getMemoryCapabilityRegistration();
             const memoryCapability =
@@ -424,16 +431,40 @@ export default definePluginEntry({
               await skipRecall("destination-not-allowed");
               return laneOneContext ? { prependContext: laneOneContext } : undefined;
             }
-            const escalationDecision = resolveRecallEscalationDecision({
+            const escalationDecider = createActiveMemoryTurnEscalationDecider({
+              requested:
+                invocationConfig.mode === "escalate" &&
+                !laneOne.hasStrongHit &&
+                invocationConfig.escalationDecision,
+              agentId: effectiveAgentId,
+              target: { chatType, privateDestination, destination: destinationContext },
+              config: liveConfig,
+              readCurrentConfig,
+              decisions: api.runtime.decisions,
+              logger: api.logger,
+            });
+            const escalationDecisionBudgetMs = Math.min(
+              ACTIVE_MEMORY_ESCALATION_DECISION_TIMEOUT_MS,
+              Math.max(0, hookDeadline.remainingMs() - TRIGGER_LOOKUP_SETTLE_RESERVE_MS),
+            );
+            const escalationDecision = await resolveRecallEscalationDecisionWithDecider({
               mode: invocationConfig.mode,
               message: currentUserMessage,
+              deciderMessage: escalationMessage,
+              searchQuery,
               hasStrongLaneOneHit: laneOne.hasStrongHit,
+              decider: escalationDecisionBudgetMs > 0 ? escalationDecider : undefined,
+              signal: deadlineController.signal,
+              timeoutMs: Math.max(1, escalationDecisionBudgetMs),
+              onDeciderFallback: (reason) => {
+                api.logger.debug?.(`active-memory: escalation decision fallback reason=${reason}`);
+              },
             });
             if (escalationDecision !== "recall") {
               // Ordinary turns intentionally skip recall in the default escalation mode.
               api.logger.debug?.(`active-memory: recall skipped reason=${escalationDecision}`);
               const outcomeContext =
-                escalationDecision === "no-recall-intent"
+                escalationDecision === "no-recall-intent" || escalationDecision === "decision-skip"
                   ? buildRecallOutcomePrefix("skipped-no-recall-intent")
                   : undefined;
               const prependContext = [laneOneContext, outcomeContext].filter(Boolean).join("\n");

@@ -60,9 +60,11 @@ that default.
 
 ## Decision assistance
 
-**Foundation only:** this Labs entry saves intent but connects no automatic
-Decision consumers. Turning it on does not start inference, enable consumer
-modes, select a provider, provision credentials, or download models.
+**Foundation only:** this Labs entry saves intent. Turning it on does not start
+inference, enable consumer modes, select a provider, provision credentials, or
+download models. Automatic consumers also require their own opt-in; the first
+is Active Memory's
+[`escalationDecision`](/concepts/active-memory/enabling#decision-model-escalation).
 
 The switch and manually authored config use the same global Boolean:
 

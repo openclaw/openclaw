@@ -106,6 +106,7 @@ What the key fields do:
 
 - `plugins.entries.active-memory.enabled: true` turns the plugin on
 - `config.mode: "escalate"` runs deep recall only for recall intent without a strong deterministic hit
+- `config.escalationDecision: true` (optional) asks the agent's [Decision model](/concepts/decision-models) for that intent decision
 - `config.agents: ["main"]` opts only the `main` agent in
 - `config.allowedChatTypes: ["direct"]` scopes it to direct-message sessions (opt in groups/channels explicitly)
 - `config.model` (optional) pins a dedicated recall model; unset inherits the current session model
@@ -113,3 +114,41 @@ What the key fields do:
 - `config.fastMode` optionally overrides fast mode for recall without changing the main agent
 - `config.promptStyle: "balanced"` is the default for `recent` mode
 - active memory still runs only for eligible interactive persistent chat sessions (see [When it runs](/concepts/active-memory/how-it-works#when-it-runs))
+
+### Decision model escalation
+
+In `mode: "escalate"`, Active Memory can ask the agent's
+[Decision model](/concepts/decision-models), with
+[Decision assistance](/concepts/experimental-features) enabled, whether a turn needs deep recall
+instead of relying only on the built-in intent matcher:
+
+```json5
+{
+  agents: {
+    defaults: {
+      experimental: { decisionAssistance: true },
+      decisionModel: "onnx/gliclass-edge-v3.0",
+    },
+  },
+  plugins: {
+    entries: {
+      "active-memory": {
+        enabled: true,
+        config: { mode: "escalate", escalationDecision: true },
+      },
+    },
+  },
+}
+```
+
+Active Memory asks one Boolean question (`deepRecall`) for purpose
+`active-memory/escalation`, only after deterministic recall has not produced a
+strong hit. A `probabilityTrue` of at least 0.5 runs deep recall; a lower value
+skips it. The request carries only the bounded latest user message and search
+query, and it must answer within the remaining preflight budget (at most one
+second); a late answer never replaces the matcher. Without Decision assistance
+or a selected Decision model, and when the model is unavailable, fails, times
+out, or returns an invalid answer, the built-in intent matcher decides as
+before. Active Memory keeps rechecking both opt-ins while a question is pending: withdrawing either cancels the request before it is sent when possible and discards any answer that still arrives. Modes `"off"` and `"always"` never ask. Hosted Decision models receive
+that bounded text and may charge for each evaluation; prefer a local model for
+per-turn use.

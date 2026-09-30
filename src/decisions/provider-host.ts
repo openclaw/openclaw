@@ -7,9 +7,11 @@ import {
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry-types.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import { createDecisionAdmission } from "./admission.js";
 import {
   decisionDebugEnabled,
   logDecisionEvaluation,
@@ -250,6 +252,10 @@ export class DecisionProviderHost {
     consumerId?: string,
   ): Promise<DecisionOutcome> {
     options.signal.throwIfAborted();
+    const admitted = createDecisionAdmission(options.admit);
+    if (!admitted()) {
+      return this.unavailable("disabled");
+    }
     const instance = getPluginInstance(this.record);
     if (this.retired || this.reloadPause || !instance?.acceptingCalls || instance.owner?.revoked) {
       return this.unavailable("retiring");
@@ -285,6 +291,7 @@ export class DecisionProviderHost {
       settle = resolve;
     });
     this.pending.set(controller, { consumerId, done });
+    let dispatchRejection: DecisionOutcome | undefined;
     const interrupted = (): DecisionOutcome | undefined => {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
@@ -296,6 +303,14 @@ export class DecisionProviderHost {
         controller.signal.reason === "decision-provider-retired"
       ) {
         return this.unavailable("retiring");
+      }
+      // Consumer withdrawal is not a provider failure, even if transport cleanup
+      // settles after the deadline or translates the dispatch assertion error.
+      if (dispatchRejection) {
+        return dispatchRejection;
+      }
+      if (!admitted()) {
+        return this.unavailable("disabled");
       }
       if (
         controller.signal.reason === "decision-deadline" ||
@@ -319,6 +334,13 @@ export class DecisionProviderHost {
       }
       return undefined;
     };
+    const assertDispatch = () => {
+      const stopped = interrupted();
+      if (stopped) {
+        dispatchRejection = stopped;
+        throw new Error("Decision dispatch is no longer admitted.");
+      }
+    };
     try {
       // Await physical settlement. A callback that ignores abort keeps its native lease
       // and is fenced by normal failed-drain recovery, never detached as "disposed".
@@ -329,15 +351,19 @@ export class DecisionProviderHost {
         questions = structuredClone(submitted.questions);
         outcome = await instance.runInRegistry(
           registry,
-          () => {
-            facts.dispatched = true;
-            return this.provider.evaluate(submitted, {
-              model,
-              ...(options.agentId ? { agentId: options.agentId } : {}),
-              signal,
-              deadlineMonotonicMs,
-            });
-          },
+          () =>
+            // Reuse the network owner so lazy imports and DNS preparation cannot
+            // separate live consent from the final guarded HTTP request. The scope
+            // also closes retained callbacks when this provider physically settles.
+            withGuardedFetchRequestAuthority(assertDispatch, async () => {
+              facts.dispatched = true;
+              return await this.provider.evaluate(submitted, {
+                model,
+                ...(options.agentId ? { agentId: options.agentId } : {}),
+                signal,
+                deadlineMonotonicMs,
+              });
+            }),
           // The provider callback's physical settlement is already tracked by
           // `done`. Do not make its lease await instance disposal: disposal
           // invokes host.stop(), which itself waits for `done`.

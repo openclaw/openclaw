@@ -161,6 +161,7 @@ export function normalizePluginConfig(
   return {
     enabled: raw.enabled !== false,
     mode: resolveChoice(raw.mode, ["always", "off", "escalate"], DEFAULT_ACTIVE_MEMORY_MODE),
+    escalationDecision: raw.escalationDecision === true,
     agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
     model: normalizeOptionalString(raw.model),
     modelFallback: normalizeOptionalString(raw.modelFallback),
