@@ -46,6 +46,7 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case triggerChime = "voice.triggerChime"
     case sendChime = "voice.sendChime"
     case microphone = "voice.microphone"
+    case systemVoiceID = "voice.systemVoiceId"
     case localePrimary = "voice.locale.primary"
     case localeAdditional = "voice.locale.additional"
     case automaticUpdates = "updates.automatic"
@@ -55,9 +56,9 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
         case .cookieSyncDomains, .localeAdditional:
             guard let values = raw as? [String] else { return nil }
             return .strings(values)
-        case .microphone where raw is NSNull:
+        case .microphone where raw is NSNull, .systemVoiceID where raw is NSNull:
             return .null
-        case .cookieSyncTargetProfile, .localePrimary, .microphone,
+        case .cookieSyncTargetProfile, .localePrimary, .microphone, .systemVoiceID,
              .computerControlProvider, .locationMode, .iconStyle, .appearance:
             guard let value = raw as? String else { return nil }
             if self == .computerControlProvider, !["peekaboo", "cua"].contains(value) { return nil }
@@ -463,6 +464,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public let triggerChime: Bool?
         public let sendChime: Bool?
         public let microphone: Microphone?
+        public let systemVoice: SystemVoice?
         public let locale: Locale?
         public let talkEnabled: Bool?
         public let talkButtonEnabled: Bool?
@@ -480,6 +482,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             triggerChime: Bool? = nil,
             sendChime: Bool? = nil,
             microphone: Microphone? = nil,
+            systemVoice: SystemVoice? = nil,
             locale: Locale? = nil,
             talkEnabled: Bool? = nil,
             talkButtonEnabled: Bool? = nil,
@@ -496,6 +499,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             self.triggerChime = triggerChime
             self.sendChime = sendChime
             self.microphone = microphone
+            self.systemVoice = systemVoice
             self.locale = locale
             self.talkEnabled = talkEnabled
             self.talkButtonEnabled = talkButtonEnabled
@@ -521,6 +525,29 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
                 var values = encoder.container(keyedBy: CodingKeys.self)
                 try values.encode(self.selectedId, forKey: .selectedId)
                 try values.encode(self.devices, forKey: .devices)
+            }
+        }
+
+        /// Installed on-device TTS voices, pre-filtered by the host's resolved synthesis language.
+        public struct SystemVoice: Encodable, Sendable {
+            public let selectedId: String?
+            public let available: [Option]
+
+            public init(
+                selectedId: String? = nil,
+                available: [Option])
+            {
+                self.selectedId = selectedId
+                self.available = available
+            }
+
+            enum CodingKeys: CodingKey { case selectedId, available }
+
+            public func encode(to encoder: Encoder) throws {
+                var values = encoder.container(keyedBy: CodingKeys.self)
+                // The wire contract requires this key even when no explicit voice is picked.
+                try values.encode(self.selectedId, forKey: .selectedId)
+                try values.encode(self.available, forKey: .available)
             }
         }
 

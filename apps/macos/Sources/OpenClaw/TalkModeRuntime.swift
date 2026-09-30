@@ -1074,10 +1074,12 @@ extension TalkModeRuntime {
         // Use app locale as fallback when no explicit language is set (e.g. system voice without ElevenLabs directive).
         let appLocale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
         let ttsLanguage = input.language ?? appLocale
+        let systemVoiceID = await MainActor.run { AppStateStore.shared.talkSystemVoiceID }
         do {
             try await TalkSystemSpeechSynthesizer.shared.speak(
                 text: input.cleanedText,
-                language: ttsLanguage)
+                language: ttsLanguage,
+                voiceIdentifier: systemVoiceID.isEmpty ? nil : systemVoiceID)
             self.ttsLogger.info("talk system voice done")
         } catch {
             self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
