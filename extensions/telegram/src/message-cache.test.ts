@@ -188,6 +188,29 @@ describe("telegram message cache", () => {
     ]);
   });
 
+  it("keeps a cached dice roll readable as a reply target", async () => {
+    // The cache derives its own body rather than reusing the inbound one. Before dice was handled
+    // here, replying to a roll produced a cached node with an empty body, so the roll never
+    // reached the agent as reply context.
+    const cache = createTelegramMessageCache();
+    const roll = message(9100, "Ada", {
+      from: sender(2, "Ada"),
+      dice: { emoji: "\u{1F3B2}", value: 4 },
+    });
+    await record(cache, roll);
+
+    const chain = await replyChain(
+      cache,
+      message(9101, "Grace", {
+        text: "what did it land on?",
+        from: sender(3, "Grace"),
+        reply_to_message: roll,
+      }),
+    );
+
+    expect(chain).toMatchObject([{ messageId: "9100", body: "[Dice \u{1F3B2} = 4]" }]);
+  });
+
   it("prefers exact stored ancestors over stale embedded content and topic metadata", async () => {
     const cache = createTelegramMessageCache();
     await record(
