@@ -57,10 +57,7 @@ vi.mock("./commands-session-store.js", () => ({
 }));
 
 vi.mock("./reply-run-registry.js", () => ({
-  replyRunRegistry: {
-    abort: vi.fn(),
-    resolveSessionId: vi.fn(() => undefined),
-  },
+  resolveReplyOperationsForSession: vi.fn(() => []),
 }));
 
 function buildAbortParams(): HandleCommandsParams {

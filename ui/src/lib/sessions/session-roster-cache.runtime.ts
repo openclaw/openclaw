@@ -1,19 +1,13 @@
 import { clearBootRecords } from "../../app/boot-record.ts";
-import { isPrimarySessionListQuery } from "./session-list-query.ts";
 import {
   openSessionRosterDatabase,
-  parseSessionRosterRecord,
   resetSessionRosterDatabase,
   rosterRequestResult,
   rosterTransactionDone,
-  sessionRosterQuery,
-  isPersistableSessionRow,
-  stripVolatileSessionRowFields,
-} from "./session-roster-cache.reader.ts";
+} from "./session-roster-cache-database.ts";
 import {
   invalidateSessionRosterCache,
   SESSION_ROSTER_MAX_AGE_MS,
-  SESSION_ROSTER_MAX_BYTES,
   SESSION_ROSTER_STORE_NAME,
   sessionRosterCacheGeneration,
   type SessionRosterRecord,
@@ -24,33 +18,12 @@ const latestPublications = new Map<string, number>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let writeChain = Promise.resolve();
 
-function boundedRecord(record: SessionRosterRecord): SessionRosterRecord | null {
-  try {
-    if (!isPrimarySessionListQuery(record.query)) {
-      return null;
-    }
-    const stripped = {
-      ...record,
-      query: sessionRosterQuery(record.query),
-      result: {
-        ...record.result,
-        sessions: record.result.sessions
-          .filter(isPersistableSessionRow)
-          .map(stripVolatileSessionRowFields),
-      },
-    };
-    const json = JSON.stringify(stripped, (key, value: unknown) =>
-      key === "avatarUrl" || key === "channelAvatarUrl" ? undefined : value,
-    );
-    return new TextEncoder().encode(json).byteLength <= SESSION_ROSTER_MAX_BYTES
-      ? parseSessionRosterRecord(JSON.parse(json))
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 async function writeRecords(records: SessionRosterRecord[], generation: number): Promise<void> {
+  if (generation !== sessionRosterCacheGeneration) {
+    return;
+  }
+  const { boundSessionRosterRecord, parseSessionRosterRecord } =
+    await import("./session-roster-cache.reader.ts");
   if (generation !== sessionRosterCacheGeneration) {
     return;
   }
@@ -77,7 +50,7 @@ async function writeRecords(records: SessionRosterRecord[], generation: number):
       next.set(record.scope, record);
     }
     for (const value of records) {
-      const record = boundedRecord(value);
+      const record = boundSessionRosterRecord(value);
       if (record) {
         store.put(record);
         next.set(record.scope, record);
@@ -136,8 +109,16 @@ export async function clearCachedBootState(): Promise<void> {
   }
   pending.clear();
   latestPublications.clear();
+  // A successor write must wait for deletion as well as the retired writer's lazy load.
+  const precedingWrites = writeChain;
+  writeChain = (async () => {
+    try {
+      await precedingWrites;
+    } finally {
+      await resetSessionRosterDatabase();
+    }
+  })();
   await writeChain;
-  await resetSessionRosterDatabase();
 }
 
 if (

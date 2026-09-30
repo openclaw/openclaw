@@ -417,10 +417,7 @@ export async function runCliFallbackCandidate(
             bootstrapContextMode: turn.opts?.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             bootstrapPromptWarningSignaturesSeen: params.bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature:
-              params.bootstrapPromptWarningSignaturesSeen[
-                params.bootstrapPromptWarningSignaturesSeen.length - 1
-              ],
+            bootstrapPromptWarningSignature: params.bootstrapPromptWarningSignaturesSeen.at(-1),
             images: params.currentTurnImages.images,
             imageOrder: params.currentTurnImages.imageOrder,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,

@@ -347,7 +347,7 @@ function buildQueryTokens(queryLower: string): string[] {
   return [
     ...new Set(
       queryLower
-        .split(/[^a-z0-9@._-]+/i)
+        .split(/[^\p{L}\p{N}\p{M}@._-]+/u)
         .map((token) => token.trim())
         .filter((token) => token.length >= 2),
     ),
