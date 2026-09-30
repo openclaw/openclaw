@@ -900,6 +900,81 @@ describe("FRV same-parent recovery", () => {
     expect(parentReruns).toBe(1);
   });
 
+  it("reports waiting transitions, bounded heartbeats, and exact started attempts on stderr", async () => {
+    vi.useFakeTimers();
+    const started = Date.now();
+    const selected = child("normalCi", "101");
+    const childRuns = new Map<string, { attempt: number; conclusion: string | null }>([
+      ["101", { attempt: 1, conclusion: null }],
+    ]);
+    const parent = { attempt: 1, conclusion: null as string | null };
+    const base = controllerClient([selected], childRuns, parent);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const stdout = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const client = {
+      ...base,
+      getRun: async (runId: string) => {
+        const elapsed = Date.now() - started;
+        const current = childRuns.get("101")!;
+        current.conclusion =
+          elapsed >= 390_000
+            ? "success"
+            : elapsed >= 360_000 && current.attempt === 1
+              ? "failure"
+              : null;
+        parent.conclusion =
+          elapsed >= 450_000
+            ? "success"
+            : elapsed >= 420_000 && parent.attempt === 1
+              ? "failure"
+              : null;
+        const run = await base.getRun(runId);
+        return runId === "101" && elapsed >= 30_000 && elapsed < 360_000
+          ? { ...run, status: "queued" }
+          : run;
+      },
+      rerunFailed: vi.fn(async () => {
+        childRuns.get("101")!.attempt = 2;
+      }),
+      rerunParent: vi.fn(async () => {
+        parent.attempt = 2;
+      }),
+      verify: vi.fn(async () => "{}"),
+    };
+    try {
+      const result = continueFailed(plan([selected]), "77", client);
+      await Promise.all([result, vi.advanceTimersByTimeAsync(480_000)]);
+      const lines = stderr.mock.calls.map(([line]) => String(line));
+      expect(
+        lines.filter((line) => line.includes("waiting for normalCi run 101 attempt 1 in_progress")),
+      ).toHaveLength(1);
+      expect(
+        lines.filter((line) => line.includes("waiting for normalCi run 101 attempt 1 queued")),
+      ).toHaveLength(2);
+      expect(lines).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("normalCi run 101 attempt 1 completed failure"),
+          expect.stringContaining(
+            "normalCi run 101 attempt 2 started https://github.com/openclaw/openclaw/actions/runs/101/attempts/2",
+          ),
+          expect.stringContaining("waiting for normalCi run 101 attempt 2 in_progress"),
+          expect.stringContaining("waiting for parent 77 attempt 1 in_progress"),
+          expect.stringContaining(
+            "parent 77 attempt 2 started https://github.com/openclaw/openclaw/actions/runs/77/attempts/2",
+          ),
+          expect.stringContaining("parent 77 attempt 2 completed success"),
+        ]),
+      );
+      expect(lines.filter((line) => line.includes(" started "))).toHaveLength(2);
+      expect(client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
+      expect(client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
+      expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("retries each terminal child while the parent and other child attempts are still active", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");

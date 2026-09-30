@@ -169,9 +169,14 @@ Manual tag creation remains the fallback. The push may print a
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`
 and, only if missing, create it with
 `gh api -X POST repos/openclaw/openclaw/git/refs -f ref=refs/tags/<tag> -f sha=<tooling-sha>`.
+Run the candidate from a clean tracked worktree whose HEAD is the Release SHA,
+with its frozen dependencies installed. The helper creates and relaunches trusted
+Tooling SHA code itself; starting in the tooling checkout fails the target HEAD check.
 Then consume existing validation against the untagged Release SHA:
 
 ```bash
+git worktree add --detach /private/tmp/openclaw-candidate-<version> <release-sha>
+cd /private/tmp/openclaw-candidate-<version> && pnpm install --frozen-lockfile
 pnpm release:candidate -- \
   --tag <tag> \
   --target-sha <release-sha> \
@@ -183,6 +188,12 @@ pnpm release:candidate -- \
   --plugin-sdk-api-acknowledgement <reviewed-8-character-digest> \
   --skip-dispatch
 ```
+
+If `pnpm` stalls on the global store lock, check for another agent running
+`pnpm store prune` (`pgrep -fl 'pnpm.*store.*prune'`). With dependencies already
+installed, bypass the pnpm launcher using `node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts ...`
+or `node --import ./scripts/tsx.mjs scripts/release-publish-preflight.mts ...`
+with the same helper arguments. A dependency install still needs the lock.
 
 Match channel, route, and profile to the frozen validation selection. The
 channel and route default to `beta` and `normal`; final versions require
