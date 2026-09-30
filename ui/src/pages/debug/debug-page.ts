@@ -138,9 +138,8 @@ class DebugPage extends OpenClawLightDomElement {
         this.eventLog = gateway.eventLog;
       },
     )
-    .watch(
+    .watchStore(
       () => this.context?.settingsAgentSelection,
-      (selection, notify) => selection.subscribe(notify),
       (selection) => {
         const agentId = selection.state.selectedId;
         if (agentId === this.diagnosticsAgentId) {

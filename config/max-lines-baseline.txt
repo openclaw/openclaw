@@ -586,7 +586,6 @@ src/logging/redact.ts
 src/media-understanding/apply.test.ts
 src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
-src/media-understanding/runner.vision-skip.test.ts
 src/media/fetch.test.ts
 src/media/web-media.test.ts
 src/media/web-media.ts

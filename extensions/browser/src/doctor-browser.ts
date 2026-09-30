@@ -13,7 +13,15 @@ import {
   resolveBrowserExecutableForPlatform,
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
-import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME, resolveBrowserConfig } from "./browser/config.js";
+import {
+  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  getManagedBrowserMissingDisplayError,
+  isLocalManagedProfile,
+  resolveBrowserConfig,
+  resolveProfile,
+  type ResolvedBrowserConfig,
+} from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 import { movePathToTrash } from "./browser/trash.js";
 
 const CHROME_MCP_MIN_MAJOR = 144;
@@ -23,11 +31,6 @@ const REMOTE_DEBUGGING_PAGES = [
   "brave://inspect/#remote-debugging",
   "edge://inspect/#remote-debugging",
 ].join(", ");
-
-type ExistingSessionProfile = {
-  name: string;
-  userDataDir?: string;
-};
 
 export type LegacyClawdBrowserProfileResidue = {
   legacyProfileDir: string;
@@ -41,27 +44,24 @@ type BrowserDoctorFilesystemDeps = {
   movePathToTrash?: (targetPath: string) => Promise<string>;
 };
 
-function collectBrowserDoctorProfiles(cfg: OpenClawConfig) {
+function collectBrowserDoctorProfiles(cfg: OpenClawConfig, resolved: ResolvedBrowserConfig) {
   const browser = asNullableRecord(cfg.browser);
-  const managed = new Map<string, ExistingSessionProfile>();
-  const chromeMcp = new Map<string, ExistingSessionProfile>();
+  const names = new Set(Object.keys(asNullableRecord(browser?.profiles) ?? {}));
   const defaultProfile = normalizeOptionalString(browser?.defaultProfile);
   if (defaultProfile) {
-    (defaultProfile === "user" ? chromeMcp : managed).set(defaultProfile, {
-      name: defaultProfile,
-    });
+    names.add(defaultProfile);
   }
-  for (const [name, rawProfile] of Object.entries(asNullableRecord(browser?.profiles) ?? {})) {
-    const profile = asNullableRecord(rawProfile);
-    if (normalizeOptionalString(profile?.driver) === "existing-session") {
-      chromeMcp.set(name, { name, userDataDir: normalizeOptionalString(profile?.userDataDir) });
-    } else {
-      managed.set(name, { name });
-    }
-  }
+  const profiles = [...names]
+    .flatMap((name) => {
+      const profile = resolveProfile(resolved, name);
+      return profile ? [profile] : [];
+    })
+    .toSorted((left, right) => left.name.localeCompare(right.name));
   return {
-    managed: [...managed.values()].toSorted((a, b) => a.name.localeCompare(b.name)),
-    chromeMcp: [...chromeMcp.values()].toSorted((a, b) => a.name.localeCompare(b.name)),
+    managed: profiles.filter(isLocalManagedProfile),
+    chromeMcp: profiles.filter(
+      (profile) => getBrowserProfileCapabilities(profile).usesChromeMcp && !profile.cdpUrl,
+    ),
   };
 }
 
@@ -162,9 +162,12 @@ export async function noteChromeMcpBrowserReadiness(
   const resolveChromeExecutable =
     deps?.resolveChromeExecutable ?? resolveGoogleChromeExecutableForPlatform;
   const readVersion = deps?.readVersion ?? readBrowserVersion;
-  const { managed: managedProfiles, chromeMcp: profiles } = collectBrowserDoctorProfiles(cfg);
-  const managedProfileLabel = managedProfiles.map((profile) => profile.name).join(", ");
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const { managed: managedProfiles, chromeMcp: profiles } = collectBrowserDoctorProfiles(
+    cfg,
+    resolved,
+  );
+  const managedProfileLabel = managedProfiles.map((profile) => profile.name).join(", ");
   if (resolved.enabled && resolved.extensionRelay.allowLegacyAuth) {
     noteFn(
       [
@@ -207,21 +210,30 @@ export async function noteChromeMcpBrowserReadiness(
       "Browser",
     );
   }
-  const browserExecutable =
-    managedProfiles.length > 0 ? resolveManagedExecutable(resolved, platform) : null;
-  const missingDisplay =
-    platform === "linux" &&
-    managedProfiles.length > 0 &&
-    !resolved.headless &&
-    !normalizeOptionalString(env.DISPLAY) &&
-    !normalizeOptionalString(env.WAYLAND_DISPLAY);
+  const managedExecutables = new Map<
+    string | undefined,
+    ReturnType<typeof resolveManagedExecutable>
+  >();
+  const missingExecutableProfiles = managedProfiles.filter((profile) => {
+    const executablePath = profile.executablePath;
+    if (!managedExecutables.has(executablePath)) {
+      managedExecutables.set(
+        executablePath,
+        resolveManagedExecutable({ ...resolved, executablePath }, platform),
+      );
+    }
+    return !managedExecutables.get(executablePath);
+  });
+  const missingDisplay = managedProfiles
+    .map((profile) => getManagedBrowserMissingDisplayError(resolved, profile, { platform, env }))
+    .filter((error) => error !== null);
   const shouldWarnRootNoSandbox =
     platform === "linux" && managedProfiles.length > 0 && !resolved.noSandbox && getUid() === 0;
 
-  if (!browserExecutable && managedProfiles.length > 0) {
+  if (missingExecutableProfiles.length > 0) {
     noteFn(
       [
-        `- OpenClaw-managed browser profile(s) are configured: ${managedProfileLabel}.`,
+        `- OpenClaw-managed browser profile(s) are configured: ${missingExecutableProfiles.map((profile) => profile.name).join(", ")}.`,
         "- No Chromium-based browser executable was found on this host for OpenClaw-managed launch.",
         "- Install Chrome, Chromium, Brave, Edge, or set browser.executablePath explicitly.",
       ].join("\n"),
@@ -229,11 +241,15 @@ export async function noteChromeMcpBrowserReadiness(
     );
   }
 
-  if (missingDisplay || shouldWarnRootNoSandbox) {
+  if (missingDisplay.length > 0 || shouldWarnRootNoSandbox) {
     const lines = [`- OpenClaw-managed browser profile(s) are configured: ${managedProfileLabel}.`];
-    if (missingDisplay) {
+    if (missingDisplay.length > 0) {
       lines.push(
-        "- No DISPLAY or WAYLAND_DISPLAY is set, and browser.headless is false. Managed browser launch needs a desktop session, Xvfb, or browser.headless: true.",
+        ...(missingDisplay.every((error) => error.headlessSource === "config")
+          ? [
+              "- No DISPLAY or WAYLAND_DISPLAY is set, and browser.headless is false. Managed browser launch needs a desktop session, Xvfb, or browser.headless: true.",
+            ]
+          : missingDisplay.map((error) => `- ${error.message}`)),
       );
     }
     if (shouldWarnRootNoSandbox) {

@@ -35,8 +35,9 @@ export function withCodexAppServerFastModeServiceTier(
   configuredAppServer: Pick<CodexAppServerRuntimeOptions, "serviceTier"> = appServer,
 ): CodexAppServerRuntimeOptions {
   const fastMode = typeof params.fastMode === "function" ? params.fastMode() : params.fastMode;
+  // Ultrafast starts from Fast; the actual turn revalidates native account/model access.
   const serviceTier =
-    fastMode === undefined ? configuredAppServer.serviceTier : fastMode ? "priority" : undefined;
+    fastMode === undefined ? configuredAppServer.serviceTier : fastMode ? "priority" : null;
   if (serviceTier === appServer.serviceTier) {
     return appServer;
   }

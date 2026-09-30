@@ -1,4 +1,3 @@
-// Defines anonymous feature-usage consent and its generated field metadata.
 import { z } from "zod";
 import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { configUiMetadata } from "./zod-schema.sensitive.js";

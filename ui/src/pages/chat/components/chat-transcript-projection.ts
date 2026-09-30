@@ -352,6 +352,7 @@ export function projectChatTranscript(
       agents: props.agents,
       senderAgentAvatars: props.senderAgentAvatars,
       mainKey: props.mainKey,
+      basePath: props.basePath,
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       showOwnSenderName,

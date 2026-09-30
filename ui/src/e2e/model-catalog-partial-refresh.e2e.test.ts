@@ -157,7 +157,7 @@ suite.define(() => {
               thinkingLevel: "ultra",
             });
           }
-          const speed = composer.getByRole("switch", { name: /Fast responses/ });
+          const speed = composer.getByRole("radio", { name: "Fast", exact: true });
           await expect.poll(() => speed.isEnabled()).toBe(true);
           await page.screenshot({
             path: path.join(suite.artifactDir, `${route}-effort.png`),

@@ -44,8 +44,8 @@ import {
   resolveSidebarLayoutForBoard,
 } from "./chat-pane-sidebar-layout.ts";
 import {
+  chatSubmitState,
   dismissChatError,
-  initialHistorySubmitState,
   resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
 import { ChatProviderReviewController } from "./chat-provider-review-controller.ts";
@@ -235,7 +235,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     const historyHasMore = catalogKey
       ? Boolean(this.catalogCursor)
       : state.chatHistoryPagination.hasMore;
-    const fetchLinkFavicon = resolveChatLinkFaviconFetcher(state);
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       state,
@@ -339,7 +338,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     const composerAvailability = {
       canCompose: composerAccess.canCompose && composerAvailable,
       canSend: composerAccess.canSend && composerAvailable,
-      ...initialHistorySubmitState(state, initialHistoryUnavailable),
+      ...chatSubmitState(state, initialHistoryUnavailable, !catalog && !suggestionViewer),
       modelRequiredReason,
       disabledReason:
         catalogDisabledReason ??
@@ -569,6 +568,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       githubPublication: this.githubPublication?.view(),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
+      onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,
       onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
@@ -576,7 +576,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       // so an active follow lock stays pinned to the latest message.
       onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
-      onDraftChange: state.handleChatDraftChange,
       onRequestUpdate: state.requestUpdate,
       onHistoryKeydown: state.handleChatInputHistoryKey,
       onSlashIntent: () => refreshChatCommands(state),
@@ -676,7 +675,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       connectionEpoch: state.connectionEpoch,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
-      fetchLinkFavicon,
+      fetchLinkFavicon: resolveChatLinkFaviconFetcher(state),
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveControlUiAuthToken(state),

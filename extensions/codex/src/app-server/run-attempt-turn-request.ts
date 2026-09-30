@@ -155,6 +155,7 @@ export async function prepareCodexAttemptTurnRequest(
       connection.assertCurrent();
       liveThreadOwnership?.assertCurrent();
       if (
+        resourceState.client !== turnClient ||
         resourceState.thread !== selectedThread ||
         selectedThread.threadId !== threadId ||
         selectedThread.liveThreadOwnership !== liveThreadOwnership ||
@@ -206,7 +207,8 @@ export async function prepareCodexAttemptTurnRequest(
       ),
     });
     const serviceTier = await resolveCodexUltrafastServiceTier({
-      enabled: turnAppServer.enableUltrafast === true && fastMode !== false,
+      enabled:
+        fastMode === "ultrafast" || (turnAppServer.enableUltrafast === true && fastMode !== false),
       serviceTier: turnStartParams.serviceTier,
       model: turnStartParams.model ?? model,
       modelProvider,

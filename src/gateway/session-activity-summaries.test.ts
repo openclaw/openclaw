@@ -22,6 +22,7 @@ import {
   getSessionColdStorageStatus,
   runSessionColdStorageMaintenance,
 } from "../config/sessions/session-cold-storage.js";
+import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
@@ -153,6 +154,8 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       lifecycleRevision: "lifecycle-1",
       updatedAt: 1,
     });
+    // Cleanup closes each test's database handle even when the worker survives.
+    await prewarmSessionHistoryWorker({ agentId: scope.agentId, env: testState.env });
     service = createService();
   });
   afterEach(async () => {

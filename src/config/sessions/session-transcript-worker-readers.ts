@@ -113,6 +113,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-title-fields", ...input }),
       (value) => value.fields,
     ),
+    readActivitySummarySource: reader(
+      "session-activity-summary-source",
+      "an Activity recap source",
+      (input) => ({ kind: "session-activity-summary-source", ...input }),
+      (value) => value.source,
+    ),
     readRowBackfill: reader(
       "session-row-backfill",
       "transcript fields",

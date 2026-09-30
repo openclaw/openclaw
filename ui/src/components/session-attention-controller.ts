@@ -51,9 +51,8 @@ export class SessionAttentionController implements ReactiveController {
     this.attentionSubscriptions = new SubscriptionsController(host);
     this.questionPromptState = createQuestionPromptState(this.invalidate);
     this.attentionSubscriptions
-      .watch(
+      .watchStore(
         () => host.sessionAttentionContext?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeAttentionGateway(gateway),
       )
       .effect(
@@ -63,11 +62,7 @@ export class SessionAttentionController implements ReactiveController {
             handleQuestionPromptEvent(this.questionPromptState, event);
           }),
       )
-      .watch(
-        () => host.sessionAttentionContext?.overlays,
-        (overlays, notify) => overlays.subscribe(notify),
-        this.invalidate,
-      );
+      .watchStore(() => host.sessionAttentionContext?.overlays, this.invalidate);
   }
 
   private readonly invalidate = () => {

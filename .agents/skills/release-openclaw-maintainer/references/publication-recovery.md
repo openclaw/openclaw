@@ -82,6 +82,12 @@ attempts and required approvals. Do not substitute a manual child approval for
 the parent's authorization. See `$release-openclaw-ci` Publish children for
 stale-child cleanup.
 
+The parent waits up to 50 minutes for its own `sync_beta_to_stable` run
+(`RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS`). If it is still running at the
+deadline, the parent reports its URL and stops before verification judges the
+beta floor. Inspect that existing run before resuming; do not dispatch another
+sync merely because the parent's wait expired.
+
 Follow the [release policy](../../../../docs/reference/RELEASING.md): once a beta tag has been pushed, use the
 next beta number rather than deleting or recreating it, even before npm
 publication. Published npm versions and final stable/extended-stable tags remain

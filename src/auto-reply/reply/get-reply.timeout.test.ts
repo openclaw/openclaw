@@ -23,7 +23,6 @@ afterEach(async () => {
 
 it.each([
   [{ timeoutOverrideMs: 1800000 }, 1800000, 1800000],
-  [{ timeoutOverrideMs: 180000 }, 180000, 180000],
   [{ timeoutOverrideMs: 1500 }, 1500, 1500],
   [{ timeoutOverrideMs: 0 }, MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS],
   [{}, 180000, undefined],

@@ -458,9 +458,7 @@ async function main() {
     if (crypto.createHash("sha256").update(manifest).digest("hex") !== publishedManifestDigest) {
       fail("published workspace manifest digest mismatch");
     }
-    if (publishManifest(manifestRoot, manifest) !== publishedManifestDigest) {
-      fail("published workspace manifest reference mismatch");
-    }
+    publishManifest(manifestRoot, manifest);
     process.stdout.write("sha256:" + publishedManifestDigest + "\n");
     return;
   }

@@ -63,7 +63,7 @@ export function runReplyDispatchHook(
                 recordProcessed: state.recordProcessed,
                 markIdle: state.markIdle,
               },
-              options.isTailDispatch ? undefined : state.assertCurrentBindingRoute,
+              options.isTailDispatch ? undefined : { prepare: state.assertCurrentBindingRoute },
             ),
           ),
         state.trackDispatchLifecycleWork,

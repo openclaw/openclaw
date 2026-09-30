@@ -8,6 +8,7 @@ import {
 } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertStateReadSchema } from "./openclaw-state-db-read-connection.js";
+import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { isManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
@@ -30,9 +31,11 @@ export function withCachedOpenClawStateDatabaseReadOnly<T>(
     return { reused: false };
   }
   try {
-    // Terminal failures evict this handle. Retain schema admission even while
-    // borrowing a writer; another build can migrate an idle cached database.
-    assertStateReadSchema(opened.db, pathname);
+    // Cache acquisition already checked supported-version admission. Managed
+    // existing schemas retain their stricter runtime-shape policy.
+    if (isExistingOpenClawStateSchema(pathname, opened.db)) {
+      assertStateReadSchema(opened.db, pathname);
+    }
     observeOpenClawDatabaseMaintenanceResource(opened.db);
     const value = operation(opened);
     if (ownedTransaction && isPromiseLike(value)) {

@@ -1,4 +1,3 @@
-// Shared Zod leaves for bundled channel messaging configuration.
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { NativeExecApprovalEnableModeSchema } from "./zod-schema.approvals.js";
 import {

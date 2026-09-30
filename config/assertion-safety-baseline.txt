@@ -571,7 +571,6 @@ extensions/memory-core/src/cli-index-search.runtime.ts	1
 extensions/memory-core/src/cli-rem.runtime.ts	1
 extensions/memory-core/src/cli-runtime-common.ts	2
 extensions/memory-core/src/cli-status.runtime.ts	2
-extensions/memory-core/src/cli.ts	1
 extensions/memory-core/src/concept-vocabulary.ts	1
 extensions/memory-core/src/dreaming.ts	1
 extensions/memory-core/src/memory/hybrid.ts	1
@@ -811,7 +810,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
 extensions/qa-lab/src/providers/mock-openai/server.ts	6
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	2
-extensions/qa-lab/src/runtime-parity.ts	2
+extensions/qa-lab/src/runtime-parity.ts	1
 extensions/qa-lab/src/runtime-tool-fixture.ts	2
 extensions/qa-lab/src/scenario-catalog.ts	1
 extensions/qa-lab/src/scenario-flow-runner.ts	5
@@ -820,7 +819,7 @@ extensions/qa-lab/src/suite-launch.runtime.ts	1
 extensions/qa-lab/src/suite-planning.ts	2
 extensions/qa-lab/src/suite-run-standard.ts	1
 extensions/qa-lab/src/suite-runtime-agent-process.ts	6
-extensions/qa-lab/src/suite-runtime-agent-session.ts	5
+extensions/qa-lab/src/suite-runtime-agent-session.ts	4
 extensions/qa-lab/src/suite-runtime-agent-tools.ts	1
 extensions/qa-lab/src/suite-runtime-gateway.ts	2
 extensions/qa-lab/src/suite-summary.ts	4
@@ -920,7 +919,7 @@ extensions/slack/src/target-parsing.ts	1
 extensions/sms/src/accounts.ts	1
 extensions/sms/src/channel.ts	5
 extensions/sms/src/status.ts	1
-extensions/sms/src/twilio.ts	4
+extensions/sms/src/twilio.ts	3
 extensions/synology-chat/src/accounts.ts	1
 extensions/synology-chat/src/client.ts	1
 extensions/synology-chat/src/inbound-event.ts	1
@@ -1034,7 +1033,7 @@ extensions/voice-call/src/manager/store.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/providers/shared/response-body.ts	1
-extensions/voice-call/src/providers/twilio/api.ts	3
+extensions/voice-call/src/providers/twilio/api.ts	2
 extensions/voice-call/src/response-generator.ts	3
 extensions/voice-call/src/runtime.ts	1
 extensions/voice-call/src/tts-provider-voice.ts	1
@@ -1331,7 +1330,7 @@ src/agents/bundle-mcp-config.ts	5
 src/agents/cache-trace.ts	3
 src/agents/cli-auth-epoch.ts	1
 src/agents/cli-backends.ts	1
-src/agents/cli-credentials.ts	9
+src/agents/cli-credentials.ts	7
 src/agents/cli-executable-identity.ts	3
 src/agents/cli-output-records.ts	1
 src/agents/cli-runner.ts	1
@@ -1484,7 +1483,7 @@ src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts	3
 src/agents/main-session-recovery/main-session-restart-recovery-resume-policy.ts	18
 src/agents/mcp-app-model-context.ts	1
 src/agents/mcp-auth-profile.ts	1
-src/agents/mcp-codex-tool-approval.ts	4
+src/agents/mcp-codex-tool-approval.ts	1
 src/agents/mcp-http-fetch.ts	3
 src/agents/mcp-json-schema-validator.ts	4
 src/agents/mcp-transport-config.ts	5

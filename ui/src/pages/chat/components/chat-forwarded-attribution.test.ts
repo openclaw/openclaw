@@ -1,8 +1,15 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderChatThread } from "./chat-thread.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+  threadProps,
+} from "./chat-transcript.test-support.ts";
 
 let container: HTMLDivElement;
 afterEach(() => {
@@ -108,4 +115,63 @@ it.each(
       : null,
   );
   expect(attributionText).toBe(`From ${prefix ? `${prefix} ` : ""}${chipText}`);
+});
+
+it("routes forwarded cron runs with primary and keyboard activation, preserving native modified clicks", ({
+  onTestFinished,
+}) => {
+  installTranscriptDomMocks();
+  onTestFinished(resetTranscriptTestDom);
+  const onNavigate = vi.fn();
+  const onOpenSessionLink = vi.fn();
+  const props = {
+    ...threadProps("pane-cron-run-link", "agent:main:main", [
+      {
+        role: "assistant",
+        content: "Daily report",
+        senderSession: {
+          sessionKey: "agent:main:cron:daily:run:first",
+          label: "Daily report",
+        },
+        timestamp: 1_000,
+      },
+    ]),
+    basePath: "/control",
+    onNavigate,
+    onOpenSessionLink,
+  };
+  const transcript = createTestTranscript();
+  onTestFinished(() => transcript.hostDisconnected());
+  container = document.body.appendChild(document.createElement("div"));
+  render(renderChatThread(props, transcript), container);
+  const link = container.querySelector<HTMLAnchorElement>(".chat-reply-attribution a")!;
+  expect(link).not.toBeNull();
+  expect(link.getAttribute("href")).toBe("/control/automations?job=daily&run=first");
+  link.focus();
+  expect(document.activeElement).toBe(link);
+  for (const event of [
+    new MouseEvent("click", { bubbles: true, cancelable: true }),
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
+  ]) {
+    link.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("cron", {
+      search: "?job=daily&run=first",
+    });
+    onNavigate.mockClear();
+  }
+  for (const init of [
+    { ctrlKey: true },
+    { metaKey: true },
+    { shiftKey: true },
+    { altKey: true },
+    { button: 1 },
+  ]) {
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...init });
+    link.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  }
+  expect(onNavigate).not.toHaveBeenCalled();
+  expect(onOpenSessionLink).not.toHaveBeenCalled();
 });

@@ -139,6 +139,31 @@ it("tracks an outstanding end command after same-key row measurement grows the e
   expect(geometry.overhang).toBeLessThanOrEqual(0);
 });
 
+it("follows measured growth after a smooth no-op finishes without a scroll event", async () => {
+  const { host, thread, extent, distance } = await mountEndFollowFixture();
+  thread.scrollTop = 0;
+  await settleFrames();
+  await new Promise<void>((resolve) => {
+    const stop = subscribeTranscriptScroll(thread, (event) => {
+      if (event.type === "offset" && !event.scrolling && distance() === 0) {
+        stop();
+        resolve();
+      }
+    });
+    host.transcript.scrollToEnd();
+  });
+
+  host.transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+  await settleFrames();
+  await commitTask(host, () => {
+    host.lastRowHeight += 35;
+  });
+  await expect.poll(() => extent.offsetHeight).toBe(1335);
+  await settleFrames();
+
+  expect(distance()).toBe(0);
+});
+
 it("does not yank a reader who left the end programmatically", async () => {
   const { host, thread, extent, distance } = await mountEndFollowFixture();
   host.transcript.scrollToEnd();

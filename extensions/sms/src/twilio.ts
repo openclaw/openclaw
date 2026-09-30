@@ -12,6 +12,8 @@ import {
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
@@ -100,19 +102,14 @@ function firstStringish(value: unknown): string {
 }
 
 function parseTwilioApiError(text: string): ParsedTwilioApiError {
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    const record = parsed as Record<string, unknown>;
-    return {
-      code: typeof record.code === "number" ? record.code : undefined,
-      message: typeof record.message === "string" ? record.message : undefined,
-    };
-  } catch {
+  const record = asNullableObjectRecord(safeParseJson<unknown>(text));
+  if (!record) {
     return {};
   }
+  return {
+    code: typeof record.code === "number" ? record.code : undefined,
+    message: typeof record.message === "string" ? record.message : undefined,
+  };
 }
 
 function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
