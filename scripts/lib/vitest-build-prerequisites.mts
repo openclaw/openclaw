@@ -139,16 +139,23 @@ const runtimeConsumers = [
   },
   ...[
     "src/agents/agent-command-local.test.ts",
-    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
-    "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
-    "src/agents/prepared-model-catalog-worker.integration.test.ts",
-    // Compiled catalog workers load the fixture's public SDK through built host artifacts.
-    "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
     "src/agents/runtime-plugins.context-engine.integration.test.ts",
     "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.agents-core.config.ts", "test/vitest/vitest.agents.config.ts"],
+    mode: "runtime" as const,
+    dir: "src/agents",
+  })),
+  ...[
+    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
+    // Compiled catalog workers load the fixture's public SDK through built host artifacts.
+    "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.infra.config.ts"],
     mode: "runtime" as const,
     dir: "src/agents",
   })),
@@ -266,7 +273,6 @@ const runtimeConsumers = [
     "src/commands/doctor-config-preflight.test.ts",
     "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.refusal.process.test.ts",
-    "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
     "src/commands/doctor-plugin-install-config.process.test.ts",
   ].map((file) => ({
     file,

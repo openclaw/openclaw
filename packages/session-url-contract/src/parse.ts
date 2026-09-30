@@ -1,5 +1,4 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import {
   isReservedSessionRest,
   normalizeControlUiBasePath,
@@ -55,14 +54,6 @@ function decodePathSegment(segment: string): string | null {
   }
 }
 
-function literalSessionKey(agentId: string, restSegments: readonly string[]): string | null {
-  const normalizedAgentId = normalizeNullableString(agentId);
-  if (!normalizedAgentId || restSegments.length === 0 || restSegments.some((segment) => !segment)) {
-    return null;
-  }
-  return `agent:${normalizeAgentId(normalizedAgentId)}:${restSegments.join(":")}`;
-}
-
 export function parseControlUiSessionPath(
   pathname: string,
   basePath = "",
@@ -85,18 +76,14 @@ export function parseControlUiSessionPath(
     }
     const forceLiteral = rawSegments[1] === "~key";
     const restSegments = rawSegments.slice(forceLiteral ? 2 : 1).map(decodePathSegment);
-    if (restSegments.some((segment) => segment === null)) {
+    if (restSegments.length === 0 || !restSegments.every((segment) => segment !== null)) {
       return null;
     }
-    const literalRestSegments = restSegments as string[];
-    const sessionKey = literalSessionKey(agentId, literalRestSegments);
-    if (!sessionKey) {
-      return null;
-    }
-    if (forceLiteral || literalRestSegments.length !== 1) {
+    const sessionKey = `agent:${agentId}:${restSegments.join(":")}`;
+    if (forceLiteral || restSegments.length !== 1) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }
-    const segment = literalRestSegments[0] ?? "";
+    const segment = restSegments[0] ?? "";
     if (isReservedSessionRest(segment, mainKey)) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }

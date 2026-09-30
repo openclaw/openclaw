@@ -48,10 +48,6 @@ import {
 } from "./scheduled-app-authority.js";
 import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 
-function isAuthorityResolutionOperationAbort(error: unknown, signal: AbortSignal | undefined) {
-  return signal?.aborted === true && error === signal.reason;
-}
-
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
     connection,
@@ -258,7 +254,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
               // same live turn. Substantive discovery/auth/policy failures stay cached.
               if (
                 creatorAuthorityPromise === pending &&
-                isAuthorityResolutionOperationAbort(error, options?.signal)
+                options?.signal?.aborted === true &&
+                error === options.signal.reason
               ) {
                 creatorAuthorityPromise = undefined;
               }

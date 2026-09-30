@@ -1,4 +1,3 @@
-// Destructive session deletion and lifecycle cleanup.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -76,7 +75,7 @@ export async function deleteGatewaySession({
   const cfg = context.getRuntimeConfig();
   const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
   if (!requestedAgent.ok) {
-    return { ok: false, error: requestedAgent.error };
+    return requestedAgent;
   }
   const requestedAgentId = requestedAgent.agentId;
   const target = resolveGatewaySessionStoreTarget({ cfg, key, agentId: requestedAgentId });
@@ -178,7 +177,6 @@ export async function deleteGatewaySession({
     expectedSessionId,
   ];
   let drain: SessionLifecycleDrain | undefined;
-  let deletedWorktreeId: string | undefined;
   let worktreePreserved: PreservedSessionWorktree | undefined;
   const deleteCurrent = async () => {
     try {
@@ -266,7 +264,7 @@ export async function deleteGatewaySession({
             agentId: requestedAgentId,
           });
           const postCleanupEntry = postCleanupTarget.entry;
-          deletedWorktreeId = normalizeOptionalString(postCleanupEntry?.worktree?.id);
+          const deletedWorktreeId = normalizeOptionalString(postCleanupEntry?.worktree?.id);
           commitGuard();
           const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
           const incognito =
@@ -346,19 +344,15 @@ export async function deleteGatewaySession({
     }
     return { ok: false, error: error.error };
   }
-  const deleted = deletion.deleted;
-  const archivedTranscripts = deletion.archivedTranscripts;
-  const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
-
   const response: SessionsDeleteResult = {
     ok: true,
     key: target.canonicalKey,
-    deleted,
-    archived,
+    deleted: deletion.deleted,
+    archived: deletion.archivedTranscripts.map((entry) => entry.archivedPath),
     ...(worktreePreserved ? { worktreePreserved } : {}),
   };
   onDeleted?.(response);
-  if (deleted) {
+  if (deletion.deleted) {
     emitSessionsChanged(context, {
       sessionKey: target.canonicalKey,
       sessionId: deletion.deletedSessionId,

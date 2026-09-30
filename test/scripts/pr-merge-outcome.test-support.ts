@@ -253,6 +253,7 @@ export function createMergeOutcomeFixtureHarness() {
       admin: false,
       priorCi: createPriorCiFixtureState(sourceCommits[0]!),
       audit: false,
+      auditParent: "",
       gates: "pass",
       requiredCheckName: "CI",
       refusalCapture: "error: string rewrite protection blocked unsafe input\n",
@@ -346,7 +347,7 @@ if(s.restMainReads>0&&args[0]==="api"&&args.includes("repos/fixture/repo/pulls/1
 }
 const quotaRead=s.quotaAt==="checks"&&args[0]==="pr"&&args[1]==="checks"||
   s.quotaAt==="preview"&&args.some(arg=>arg.includes("viewerMergeBodyText"))||
-  s.quotaAt==="observe"&&s.observationReads>=s.quotaAfterObservations&&args.includes("graphql")&&!args.includes("--input")&&!args.some(arg=>arg.includes("viewerMergeBodyText"));
+  s.quotaAt==="observe"&&s.observationReads>=s.quotaAfterObservations&&args.includes(${JSON.stringify(landingSnapshotQuery)});
 if(quotaRead&&s.quotaFailuresRemaining!==0) {
   if(s.quotaFailuresRemaining!==null) s.quotaFailuresRemaining--;
   quota();
@@ -687,7 +688,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
   out(commits.map(oid=>({sha:oid,commit:{author:{name:git(["show","-s","--format=%an",oid]),email:git(["show","-s","--format=%ae",oid])}},author:{login:s.pr.author.login,type:"User"}})));
 } else if(args.some(x=>x.includes("/commits/"))) {
   if(s.audit) fail("audit unavailable");
-  out({parents:[{sha:git(["rev-parse",s.pr.mergeCommit.oid+"^1"])}]});
+  out({parents:[{sha:s.auditParent||git(["rev-parse",s.pr.mergeCommit.oid+"^1"])}]});
 } else fail("unexpected gh "+args.join(" "));
 save();
 `,

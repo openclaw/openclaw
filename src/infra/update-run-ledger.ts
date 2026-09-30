@@ -13,6 +13,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
+import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import {
   inspectUpdateRepairDriverAdmission,
   isStaleIdentitylessUpdateRun,
@@ -43,6 +44,7 @@ import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { readRecoveries } from "./update-run-recovery-store.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
+  applyUpdateRunStep,
   mutateRun,
   mutateRunInTransaction,
   persistRun,
@@ -344,18 +346,7 @@ export function recordUpdateRunStep(
   { reason, ...step }: UpdateRunStep & { reason?: string },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
-  return mutateRun(
-    runId,
-    (record) => {
-      if (record.status === "running") {
-        upsertStep(record, step);
-        if (reason !== undefined) {
-          record.reason = reason;
-        }
-      }
-    },
-    options,
-  );
+  return mutateRun(runId, (record) => applyUpdateRunStep(record, { ...step, reason }), options);
 }
 
 export function recordUpdateRunRepairContinuation(
@@ -507,13 +498,10 @@ export function finishInterruptedUpdateBeforeActivation(
     throw new Error("Update interruption requires its live pre-activation transaction");
   }
   const recoveryTable = "config_machine_state";
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${recoveryTable} (`);
-  const marker = ") STRICT;";
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
-  if (start < 0 || end < 0) {
-    throw new Error("Interrupted update schema is unavailable.");
-  }
-  const recoverySchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length);
+  const recoverySchema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, recoveryTable, {
+    endMarker: ") STRICT;",
+    errorMessage: "Interrupted update schema is unavailable.",
+  });
   assertCurrent();
   runExistingOpenClawStateWriteTransaction(
     ({ db, path: pathname }) => {

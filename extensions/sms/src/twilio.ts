@@ -1,4 +1,3 @@
-// Sms plugin module implements twilio behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
@@ -365,19 +364,6 @@ async function readTwilioApiResponseText(response: Response): Promise<string> {
   return new TextDecoder().decode(body);
 }
 
-function normalizeRequestHeaders(headers: HeadersInit | undefined): Record<string, string> {
-  if (!headers) {
-    return {};
-  }
-  if (headers instanceof Headers) {
-    return Object.fromEntries(headers.entries());
-  }
-  if (Array.isArray(headers)) {
-    return Object.fromEntries(headers.map(([key, value]) => [key, value]));
-  }
-  return Object.fromEntries(Object.entries(headers));
-}
-
 function assertTwilioRequestCredentialsAvailable(account: ResolvedSmsAccount): void {
   try {
     assertSmsCredentialOwnerAvailable(account);
@@ -393,14 +379,14 @@ async function requestTwilioApi(params: {
   url: string;
   account: ResolvedSmsAccount;
   allowedHostname: string;
-  init?: RequestInit;
+  init?: Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }): Promise<TwilioApiResponse> {
   const init = {
     ...params.init,
     headers: {
-      ...normalizeRequestHeaders(params.init?.headers),
+      ...params.init?.headers,
       authorization: basicAuthHeader(params.account),
     },
   } satisfies RequestInit;

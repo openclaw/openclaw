@@ -16,7 +16,6 @@ import {
   buildStageSplitPlanWithWorker,
   buildSummaryChunksWithWorker,
 } from "./compaction-planning-worker.js";
-import "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import type {
@@ -28,14 +27,7 @@ import type {
 import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary } from "./sessions/index.js";
-export {
-  BASE_CHUNK_RATIO,
-  computeAdaptiveChunkRatio,
-  estimateMessagesTokens,
-  MIN_CHUNK_RATIO,
-  SAFETY_MARGIN,
-  SUMMARIZATION_OVERHEAD_TOKENS,
-} from "./compaction-planning.js";
+export { estimateMessagesTokens, SUMMARIZATION_OVERHEAD_TOKENS } from "./compaction-planning.js";
 
 const log = createSubsystemLogger("compaction");
 

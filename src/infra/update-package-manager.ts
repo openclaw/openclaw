@@ -147,6 +147,10 @@ async function bootstrapPnpmViaNpm(params: {
   }
 }
 
+export function parsePnpmPackageManagerVersion(pin: string | null): string | undefined {
+  return /^pnpm@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\+.*)?$/u.exec(pin ?? "")?.[1];
+}
+
 /** Resolve the package manager and environment to use for an update build. */
 export async function resolveUpdateBuildManager(
   commandRunner: PackageManagerCommandRunner,
@@ -160,7 +164,7 @@ export async function resolveUpdateBuildManager(
     commandRunner(argv, { ...options, cwd: root });
   const preferred = (await detectPackageManager(root)) ?? "npm";
   const pin = await readPackageManagerSpec(root);
-  const pnpmVersion = /^pnpm@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\+.*)?$/u.exec(pin ?? "")?.[1];
+  const pnpmVersion = parsePnpmPackageManagerVersion(pin);
   if (preferred === "pnpm") {
     if (await isManagerAvailable(runCommand, "pnpm", timeoutMs, baseEnv, pnpmVersion)) {
       return { kind: "resolved", manager: "pnpm", preferred, fallback: false };

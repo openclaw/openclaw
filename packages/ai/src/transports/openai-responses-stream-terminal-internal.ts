@@ -55,6 +55,15 @@ export type ResponsesThinkingBlock = ThinkingContent & {
 type TerminalOutput = AssistantMessage & {
   usage: Usage & { reasoningTokens?: number };
 };
+type TerminalOptions = Pick<
+  ResponsesStreamOptions,
+  | "serviceTier"
+  | "resolveServiceTier"
+  | "applyServiceTierPricing"
+  | "reasoningReplayMetadata"
+  | "resolveResponseModel"
+>;
+
 function splitToolCallId(id: string): [string, string | undefined] {
   const separator = id.indexOf("|");
   return separator === -1 ? [id, undefined] : [id.slice(0, separator), id.slice(separator + 1)];
@@ -107,7 +116,7 @@ export function createResponsesTerminalController(params: {
   output: TerminalOutput;
   stream: ResponsesEventSink;
   model: Model;
-  options?: ResponsesStreamOptions;
+  options?: TerminalOptions;
   outputs: ResponsesOutputTracker;
   toolCalls: Pick<
     ReturnType<typeof createResponsesToolCallTracker<ResponsesToolCallState & { block: ToolCall }>>,

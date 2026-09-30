@@ -60,7 +60,6 @@ type TelegramFinalDelivery = {
 };
 
 type TelegramExecApprovalHandlerDeps = {
-  nowMs?: () => number;
   sendTyping?: typeof sendTypingTelegram;
   sendMessage?: typeof sendMessageTelegram;
   editMessage?: typeof editMessageTelegram;

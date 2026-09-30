@@ -3,7 +3,6 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-// Models gateway methods expose prepared, cached, and explicitly refreshed catalog views.
 import {
   ErrorCodes,
   errorShape,

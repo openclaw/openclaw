@@ -17,6 +17,7 @@ import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
+import { writeQaCliReport } from "./cli-report.js";
 import {
   buildQaConfidenceReport,
   readQaConfidenceManifestFile,
@@ -58,6 +59,7 @@ import {
   QA_FRONTIER_PARITY_CANDIDATE_LABEL,
 } from "./providers/live-frontier/parity.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
+import { QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY } from "./qa-channel-transport.js";
 import {
   addQaCredentialSet,
   diagnoseQaCredentialBroker,
@@ -68,7 +70,6 @@ import {
 } from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import {
-  defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
   qaTransportSupportsModuleFlows,
   type QaTransportId,
@@ -1055,7 +1056,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   // servers bounded even when a caller requests a larger suite concurrency.
   const liveConcurrencyLimit =
     liveAdapterFactory?.isolatesInstances === true
-      ? defaultQaSuiteConcurrencyForTransport(transportId)
+      ? QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY
       : undefined;
   const runtimeResult = await runQaSuite({
     repoRoot,
@@ -1161,14 +1162,12 @@ export async function runQaParityReportCommand(opts: {
     const summaryPath = path.resolve(repoRoot, opts.summary);
     const summary = (await readCompletedQaSuiteSummaryFile(summaryPath)) as QaParitySuiteSummary;
     const reportPayload: QaRuntimeParityReport = buildQaRuntimeParityReport({ summary });
-    const report = renderQaRuntimeParityMarkdownReport(reportPayload);
-    const reportPath = path.join(outputDir, "qa-runtime-parity-report.md");
-    const runtimeSummaryPath = path.join(outputDir, "qa-runtime-parity-summary.json");
-    await fs.writeFile(reportPath, report, "utf8");
-    await fs.writeFile(runtimeSummaryPath, `${JSON.stringify(reportPayload, null, 2)}\n`, "utf8");
-
-    process.stdout.write(`QA runtime parity report: ${reportPath}\n`);
-    process.stdout.write(`QA runtime parity summary: ${runtimeSummaryPath}\n`);
+    await writeQaCliReport(
+      outputDir,
+      "qa-runtime-parity",
+      renderQaRuntimeParityMarkdownReport(reportPayload),
+      reportPayload,
+    );
     process.stdout.write(`QA runtime parity verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
 
     let tokenEfficiencyPass = true;
@@ -1177,13 +1176,12 @@ export async function runQaParityReportCommand(opts: {
         summary,
       });
       tokenEfficiencyPass = tokenPayload.pass;
-      const tokenReport = renderTokenEfficiencyMarkdownReport(tokenPayload);
-      const tokenReportPath = path.join(outputDir, "qa-runtime-token-efficiency-report.md");
-      const tokenSummaryPath = path.join(outputDir, "qa-runtime-token-efficiency-summary.json");
-      await fs.writeFile(tokenReportPath, tokenReport, "utf8");
-      await fs.writeFile(tokenSummaryPath, `${JSON.stringify(tokenPayload, null, 2)}\n`, "utf8");
-      process.stdout.write(`QA runtime token efficiency report: ${tokenReportPath}\n`);
-      process.stdout.write(`QA runtime token efficiency summary: ${tokenSummaryPath}\n`);
+      await writeQaCliReport(
+        outputDir,
+        "qa-runtime-token-efficiency",
+        renderTokenEfficiencyMarkdownReport(tokenPayload),
+        tokenPayload,
+      );
       process.stdout.write(
         `QA runtime token efficiency verdict: ${tokenPayload.status === "skipped" ? "skipped" : tokenPayload.pass ? "pass" : "fail"}\n`,
       );
@@ -1215,14 +1213,12 @@ export async function runQaParityReportCommand(opts: {
     candidateSummary,
     baselineSummary,
   });
-  const report = renderQaAgenticParityMarkdownReport(comparison);
-  const reportPath = path.join(outputDir, "qa-agentic-parity-report.md");
-  const summaryPath = path.join(outputDir, "qa-agentic-parity-summary.json");
-  await fs.writeFile(reportPath, report, "utf8");
-  await fs.writeFile(summaryPath, `${JSON.stringify(comparison, null, 2)}\n`, "utf8");
-
-  process.stdout.write(`QA parity report: ${reportPath}\n`);
-  process.stdout.write(`QA parity summary: ${summaryPath}\n`);
+  await writeQaCliReport(
+    outputDir,
+    "qa-agentic-parity",
+    renderQaAgenticParityMarkdownReport(comparison),
+    comparison,
+  );
   process.stdout.write(`QA parity verdict: ${comparison.pass ? "pass" : "fail"}\n`);
   if (!comparison.pass) {
     process.exitCode = 1;
@@ -1251,13 +1247,12 @@ export async function runQaConfidenceReportCommand(opts: {
     strictZeroUnknowns: opts.strictZeroUnknowns === true,
     strictGlobalPass: opts.strictGlobalPass === true,
   });
-  const report = renderQaConfidenceMarkdownReport(reportPayload);
-  const reportPath = path.join(outputDir, "qa-confidence-report.md");
-  const summaryPath = path.join(outputDir, "qa-confidence-summary.json");
-  await fs.writeFile(reportPath, report, "utf8");
-  await fs.writeFile(summaryPath, `${JSON.stringify(reportPayload, null, 2)}\n`, "utf8");
-  process.stdout.write(`QA confidence report: ${reportPath}\n`);
-  process.stdout.write(`QA confidence summary: ${summaryPath}\n`);
+  await writeQaCliReport(
+    outputDir,
+    "qa-confidence",
+    renderQaConfidenceMarkdownReport(reportPayload),
+    reportPayload,
+  );
   process.stdout.write(`QA confidence verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
   if (!reportPayload.pass) {
     process.exitCode = 1;
@@ -1377,13 +1372,12 @@ export async function runQaJsonlReplayCommand(opts: {
     runtimePair: runtimePair as JsonlReplayInput["runtimePair"],
     transcripts: result.transcripts,
   };
-  const report = renderJsonlReplayMarkdownReport(reportPayload);
-  const reportPath = path.join(outputDir, "qa-jsonl-replay-report.md");
-  const summaryPath = path.join(outputDir, "qa-jsonl-replay-summary.json");
-  await fs.writeFile(reportPath, report, "utf8");
-  await fs.writeFile(summaryPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
-  process.stdout.write(`QA JSONL replay report: ${reportPath}\n`);
-  process.stdout.write(`QA JSONL replay summary: ${summaryPath}\n`);
+  await writeQaCliReport(
+    outputDir,
+    "qa-jsonl-replay",
+    renderJsonlReplayMarkdownReport(reportPayload),
+    result,
+  );
 }
 
 export async function runQaCharacterEvalCommand(opts: {

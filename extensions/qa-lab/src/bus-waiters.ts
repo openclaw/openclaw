@@ -7,7 +7,7 @@ import type {
   QaBusWaitForInput,
 } from "./runtime-api.js";
 
-export const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
+const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
 
 export function throwQaBusClosed(): never {
   throw new Error("qa-bus closed");

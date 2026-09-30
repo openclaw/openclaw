@@ -207,14 +207,7 @@ export function createNodeWorkspaceTransferHttpCallback(
           }
           if (route.kind === "blob") {
             const blob = service.blob(authorization);
-            if (
-              !blob ||
-              !(await service.verifyBlob({
-                path: blob.path,
-                size: blob.size,
-                sha256: blob.sha256,
-              }))
-            ) {
+            if (!blob || !(await service.verifyBlob(blob))) {
               sendOpaqueNotFound(res);
               return;
             }

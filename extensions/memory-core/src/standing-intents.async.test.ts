@@ -27,7 +27,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
-import { createStandingIntentTool } from "./standing-intents-tool.js";
+import { createStandingIntentExecutor } from "./standing-intents-tool.js";
 import {
   createStandingIntent,
   listStandingIntents,
@@ -305,13 +305,13 @@ describe("standing-intent admitted operations", () => {
       const existing = await seed(action === "list");
       failStandingIntentWrites(action);
       const held = await holdWriter();
-      const tool = createStandingIntentTool({
+      const execute = createStandingIntentExecutor({
         agentId: "main",
         provider: "webchat",
         senderId: "owner",
       });
       const work = keep(
-        tool.execute("intent-call", {
+        execute("intent-call", {
           action,
           id: existing.id,
           description: "Check migration.",

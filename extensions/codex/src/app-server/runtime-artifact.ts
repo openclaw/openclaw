@@ -1,10 +1,11 @@
 /** Local executable or configured-service identity for verified Codex turns. */
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside, sha256File } from "openclaw/plugin-sdk/file-access-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { resolveWindowsExecutablePath } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -84,15 +85,6 @@ export type CodexAppServerRuntimeArtifactCapture =
       contentFingerprint: string;
     }>;
 
-type StableBigIntFileStat = Readonly<{
-  dev: bigint;
-  ino: bigint;
-  mode: bigint;
-  size: bigint;
-  mtimeNs: bigint;
-  ctimeNs: bigint;
-}>;
-
 type ArtifactHashBudget = {
   fileCount: number;
   totalBytes: bigint;
@@ -102,11 +94,10 @@ function getRuntimeArtifactBindings(): WeakMap<
   CodexAppServerClient,
   AgentHarnessRuntimeArtifactBinding
 > {
-  const globalState = globalThis as typeof globalThis & {
-    [ARTIFACT_BINDINGS_SYMBOL]?: WeakMap<CodexAppServerClient, AgentHarnessRuntimeArtifactBinding>;
-  };
-  globalState[ARTIFACT_BINDINGS_SYMBOL] ??= new WeakMap();
-  return globalState[ARTIFACT_BINDINGS_SYMBOL];
+  return resolveGlobalSingleton(
+    ARTIFACT_BINDINGS_SYMBOL,
+    () => new WeakMap<CodexAppServerClient, AgentHarnessRuntimeArtifactBinding>(),
+  );
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -126,7 +117,7 @@ function normalizeRelativePath(filePath: string): string {
   return filePath.split(path.sep).join("/");
 }
 
-function sameOpenedFile(left: StableBigIntFileStat, right: StableBigIntFileStat): boolean {
+function sameOpenedFile(left: BigIntStats, right: BigIntStats): boolean {
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&

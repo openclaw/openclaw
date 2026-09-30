@@ -35,7 +35,6 @@ export function createAgentRunEventHandler(params: {
   sourceRepliesAreToolOnly: boolean;
   provider: string;
   model: string;
-  runId: string;
   effectiveSessionId?: string;
   notifyUserAboutCompaction: boolean;
   onCompactionCompleted: () => number;
@@ -57,26 +56,6 @@ export function createAgentRunEventHandler(params: {
       await deliver(noticePayload);
     } catch (err) {
       logVerbose(`compaction ${label} notice delivery failed (non-fatal): ${String(err)}`);
-    }
-  };
-  const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
-    await deliverCompactionNoticePayload(
-      createCompactionNoticePayload({
-        phase,
-        currentMessageId,
-        applyReplyToMode: params.turn.applyReplyToMode,
-      }),
-      phase,
-    );
-  };
-  const sendCompactionHookMessages = async (messages: string[]) => {
-    const noticePayload = createCompactionHookNoticePayload({
-      messages,
-      currentMessageId,
-      applyReplyToMode: params.turn.applyReplyToMode,
-    });
-    if (noticePayload) {
-      await deliverCompactionNoticePayload(noticePayload, "hook");
     }
   };
 
@@ -244,10 +223,24 @@ export function createAgentRunEventHandler(params: {
     const hookMessages = readCompactionHookMessages(evt.data.messages);
     const sendCompactionUserNotices = async (noticePhase: "start" | "end" | "incomplete") => {
       if (hookMessages.length > 0) {
-        await sendCompactionHookMessages(hookMessages);
+        const noticePayload = createCompactionHookNoticePayload({
+          messages: hookMessages,
+          currentMessageId,
+          applyReplyToMode: params.turn.applyReplyToMode,
+        });
+        if (noticePayload) {
+          await deliverCompactionNoticePayload(noticePayload, "hook");
+        }
       }
       if (params.notifyUserAboutCompaction) {
-        await sendCompactionNotice(noticePhase);
+        await deliverCompactionNoticePayload(
+          createCompactionNoticePayload({
+            phase: noticePhase,
+            currentMessageId,
+            applyReplyToMode: params.turn.applyReplyToMode,
+          }),
+          noticePhase,
+        );
       }
     };
     if (phase === "start") {

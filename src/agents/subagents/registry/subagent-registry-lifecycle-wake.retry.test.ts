@@ -5,11 +5,20 @@ import {
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import {
-  SubagentLifecycleController,
-  type SubagentLifecycleOptions,
-} from "./subagent-registry-lifecycle.js";
+import { mockBlockedCompletionDeliveryOwner } from "./subagent-registry-lifecycle-completion.test-support.js";
+import { createLifecycleControllerFixture } from "./subagent-registry-lifecycle-controller.test-support.js";
+import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+const completionDeliveryMocks = vi.hoisted(() => ({
+  blockSubagentCompletionDelivery: vi.fn(),
+  settleRequesterCompletionBatch: vi.fn(),
+  mutateRequesterSettleWakeBatch: vi.fn(),
+  ownersByEntry: new WeakMap<
+    SubagentRunRecord,
+    Pick<SubagentLifecycleOptions, "runs" | "persistAsyncOrThrow">
+  >(),
+}));
 
 // Keep completion, session cleanup, and transport outside this retry-owner proof.
 vi.mock("./subagent-registry-lifecycle-completion.js", () => ({
@@ -33,8 +42,9 @@ vi.mock("./subagent-registry-lifecycle-delivery.js", () => ({
   refreshFrozenResultFromSession: vi.fn(),
 }));
 vi.mock("../completion/subagent-completion-admission.store.js", () => ({
-  blockSubagentCompletionDelivery: vi.fn(),
-  settleRequesterCompletionBatch: vi.fn(),
+  blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
+  settleRequesterCompletionBatch: completionDeliveryMocks.settleRequesterCompletionBatch,
+  mutateRequesterSettleWakeBatch: completionDeliveryMocks.mutateRequesterSettleWakeBatch,
 }));
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntimeForSessionKey: vi.fn(),
@@ -46,9 +56,6 @@ vi.mock("../requester-cron-authority.js", () => ({
   revokeRequesterCronAuthorityBatch: vi.fn(),
 }));
 vi.mock("../../../runtime.js", () => ({ defaultRuntime: { log: vi.fn() } }));
-vi.mock("../../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn() }),
-}));
 
 type WakeParams = Parameters<
   SubagentLifecycleOptions["maybeWakeRequesterAfterAllChildrenSettled"]
@@ -112,37 +119,45 @@ describe("requester settle retry lifetime", () => {
       };
       const warn = vi.fn();
       let rejectNextCompletion = rejectCompletion;
-      const controller = new SubagentLifecycleController({
-        runs,
-        resumedRuns: new Set(),
-        subagentAnnounceTimeoutMs: 1_000,
-        getRuntimeConfig: () => ({}),
-        persist: vi.fn(),
-        persistAsyncOrThrow: unexpected,
-        persistOrThrow: () => {
-          if (rejectNextCompletion && !entry.requesterSettleWake) {
-            rejectNextCompletion = false;
-            throw new Error("no-wake persistence unavailable");
-          }
-          persistedWakes.push(structuredClone(entry.requesterSettleWake));
+      mockBlockedCompletionDeliveryOwner(completionDeliveryMocks);
+      const controller = createLifecycleControllerFixture(
+        {
+          entry,
+          runs,
+          resumedRuns: new Set(),
+          subagentAnnounceTimeoutMs: 1_000,
+          getRuntimeConfig: () => ({}),
+          persist: vi.fn(),
+          persistOrThrow: () => {
+            if (rejectNextCompletion && !entry.requesterSettleWake) {
+              rejectNextCompletion = false;
+              throw new Error("no-wake persistence unavailable");
+            }
+            persistedWakes.push(structuredClone(entry.requesterSettleWake));
+          },
+          clearPendingLifecycleError: vi.fn(),
+          countPendingDescendantRuns: async () => 0,
+          getLatestRunForChildSession: () => null,
+          suppressAnnounceForSteerRestart: () => false,
+          shouldEmitEndedHookForRun: () => false,
+          emitSubagentEndedHookForRun: unexpected,
+          emitSubagentProgressEndedForRun: unexpected,
+          notifyContextEngineSubagentEnded: unexpected,
+          retireSupersededRun: unexpected,
+          resumeSubagentRun: vi.fn(),
+          callGateway: unexpected,
+          captureSubagentCompletionReply: unexpected,
+          cleanupBrowserSessionsForLifecycleEnd: unexpected,
+          runSubagentAnnounceFlow: unexpected,
+          maybeWakeRequesterAfterAllChildrenSettled: wake,
+          warn,
         },
-        clearPendingLifecycleError: vi.fn(),
-        countPendingDescendantRuns: () => 0,
-        getLatestRunForChildSession: () => null,
-        suppressAnnounceForSteerRestart: () => false,
-        shouldEmitEndedHookForRun: () => false,
-        emitSubagentEndedHookForRun: unexpected,
-        emitSubagentProgressEndedForRun: unexpected,
-        notifyContextEngineSubagentEnded: unexpected,
-        retireSupersededRun: unexpected,
-        resumeSubagentRun: vi.fn(),
-        callGateway: unexpected,
-        captureSubagentCompletionReply: unexpected,
-        cleanupBrowserSessionsForLifecycleEnd: unexpected,
-        runSubagentAnnounceFlow: unexpected,
-        maybeWakeRequesterAfterAllChildrenSettled: wake,
-        warn,
-      });
+        {
+          callGateway: unexpected,
+          cleanupBrowserSessionsForLifecycleEnd: unexpected,
+          ownersByEntry: completionDeliveryMocks.ownersByEntry,
+        },
+      );
 
       try {
         origin.run(() => controller.resumeRequesterSettleWake(entry.runId, entry));

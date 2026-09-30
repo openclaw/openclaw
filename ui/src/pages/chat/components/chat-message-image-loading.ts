@@ -1,9 +1,10 @@
-import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../../../app/browser-http.ts";
+import { buildChatMediaFetchHeaders } from "./chat-media-playback.ts";
 import {
   isManagedOutgoingMediaSource,
   resolveManagedOutgoingMediaSessionKey,
 } from "./chat-message-attachment-availability.ts";
+import { applyResourceBasePath } from "./chat-message-local-media.ts";
 import {
   cacheManagedImageBlob,
   clearChatMediaResourceRefresh,
@@ -154,14 +155,10 @@ function buildManagedOutgoingImageVariantUrl(
     if (/^https?:\/\//iu.test(source)) {
       return parsed.href;
     }
-    const normalizedBasePath = normalizeBasePath(resourceBasePath ?? "");
-    const pathname =
-      normalizedBasePath &&
-      (parsed.pathname === normalizedBasePath ||
-        parsed.pathname.startsWith(`${normalizedBasePath}/`))
-        ? parsed.pathname
-        : `${normalizedBasePath}${parsed.pathname}`;
-    return `${pathname}${parsed.search}${parsed.hash}`;
+    return applyResourceBasePath(
+      `${parsed.pathname}${parsed.search}${parsed.hash}`,
+      resourceBasePath,
+    );
   } catch {
     return source.replace(/\/(?:full|thumbnail)(?=$|[?#])/u, `/${variant}`);
   }
@@ -199,11 +196,8 @@ async function fetchManagedImageBlob(
   const requestUrl = isManagedOutgoingMediaSource(imageSource)
     ? buildManagedOutgoingImageVariantUrl(imageSource, variant, opts?.resourceBasePath)
     : imageSource;
-  const headers = new Headers({ Accept: "image/*" });
-  const authToken = opts?.authToken?.trim();
-  if (!artifactDownload && authToken) {
-    headers.set("Authorization", `Bearer ${authToken}`);
-  }
+  const headers = buildChatMediaFetchHeaders(artifactDownload ? undefined : opts?.authToken);
+  headers.set("Accept", "image/*");
   if (!artifactDownload && requesterSessionKey) {
     headers.set("x-openclaw-requester-session-key", requesterSessionKey);
   }

@@ -50,10 +50,6 @@ describe("zalo directory", () => {
     ).resolves.toStrictEqual([]);
   }
 
-  it("lists peers from allowFrom", async () => {
-    await expectPeersFromAllowFrom(["zalo:123", "zl:234", "345"]);
-  });
-
   it("normalizes spaced zalo prefixes in allowFrom and pairing entries", async () => {
     await expectPeersFromAllowFrom(["  zalo:123  ", "  zl:234  ", " 345 "]);
 

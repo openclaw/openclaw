@@ -140,9 +140,7 @@ export async function processResponsesStream<TApi extends Api>(
     }
     return undefined;
   };
-  const materializeDeferredTextSlot = (
-    slot: Extract<ResponsesOutputSlot, { type: "text" }>,
-  ): void => {
+  const materializeDeferredTextSlot = (slot: TextOutputSlot): void => {
     if (slot.block || slot.pendingText === null) {
       return;
     }
@@ -425,44 +423,36 @@ export async function processResponsesStream<TApi extends Api>(
         ) {
           slot.item.content.push(event.part);
         }
-      } else if (event.type === "response.output_text.delta") {
+      } else if (
+        event.type === "response.output_text.delta" ||
+        isAzureResponsesTextDeltaEvent(event) ||
+        event.type === "response.refusal.delta"
+      ) {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
           continue;
         }
         slot.item.content ||= [];
         let lastPart = slot.item.content[slot.item.content.length - 1];
-        if (!isResponsesTextContentPartType(lastPart?.type)) {
-          lastPart = { type: "output_text", text: "", annotations: [] };
-          slot.item.content.push(lastPart);
+        if (event.type === "response.refusal.delta") {
+          if (lastPart?.type !== "refusal") {
+            lastPart = { type: "refusal", refusal: "" };
+            slot.item.content.push(lastPart);
+          }
+          lastPart.refusal += event.delta;
+        } else {
+          const azure = isAzureResponsesTextDeltaEvent(event);
+          if (
+            !isResponsesTextContentPartType(lastPart?.type) ||
+            (azure && lastPart.type !== "text")
+          ) {
+            lastPart = azure
+              ? { type: "text", text: "" }
+              : { type: "output_text", text: "", annotations: [] };
+            slot.item.content.push(lastPart);
+          }
+          lastPart.text += event.delta;
         }
-        lastPart.text += event.delta;
-        projectTextDelta(slot, event.delta);
-      } else if (isAzureResponsesTextDeltaEvent(event)) {
-        const slot = outputSlots.resolve(event, "text");
-        if (!slot) {
-          continue;
-        }
-        slot.item.content = slot.item.content || [];
-        let lastPart = slot.item.content[slot.item.content.length - 1];
-        if (lastPart?.type !== "text") {
-          lastPart = { type: "text", text: "" };
-          slot.item.content.push(lastPart);
-        }
-        lastPart.text += event.delta;
-        projectTextDelta(slot, event.delta);
-      } else if (event.type === "response.refusal.delta") {
-        const slot = outputSlots.resolve(event, "text");
-        if (!slot) {
-          continue;
-        }
-        slot.item.content ||= [];
-        let lastPart = slot.item.content[slot.item.content.length - 1];
-        if (lastPart?.type !== "refusal") {
-          lastPart = { type: "refusal", refusal: "" };
-          slot.item.content.push(lastPart);
-        }
-        lastPart.refusal += event.delta;
         projectTextDelta(slot, event.delta);
       } else if (event.type === "response.function_call_arguments.delta") {
         const toolCall = streamingToolCalls.resolve(event);

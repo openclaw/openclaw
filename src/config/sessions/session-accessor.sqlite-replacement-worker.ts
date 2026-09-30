@@ -56,6 +56,7 @@ export async function withSessionEntryWorker<T>(
     facts: unknown,
   ) => void,
   retainedExecution?: OpenClawAgentDatabaseExecution,
+  signal?: AbortSignal,
 ): Promise<T> {
   const execution =
     retainedExecution ??
@@ -128,7 +129,12 @@ export async function withSessionEntryWorker<T>(
     },
   };
   try {
-    return await runOpenClawAgentWorkerWrite(options, () => run(execution, source, context));
+    return await runOpenClawAgentWorkerWrite(
+      options,
+      () => run(execution, source, context),
+      undefined,
+      signal,
+    );
   } finally {
     if (!retainedExecution) {
       await execution.release();

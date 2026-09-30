@@ -3,7 +3,7 @@
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderConfigForm } from "../../components/config-form.ts";
-import { memorySchemaKeysForTab, memoryTabForRoute, narrowMemorySchema } from "./memory-schema.ts";
+import { memoryTabForRoute, narrowMemorySchema } from "./memory-schema.ts";
 import { renderMemory } from "./memory.ts";
 
 /** The view is the only public surface, so its props type comes from its signature. */
@@ -222,15 +222,6 @@ describe("memoryTabForRoute", () => {
       }),
     ).toBe("dreams");
     expect(memoryTabForRoute({ pathname: "/settings/memory" })).toBe("overview");
-  });
-});
-
-describe("memorySchemaKeysForTab", () => {
-  it("shows builtin memory settings only on Settings", () => {
-    expect(memorySchemaKeysForTab("overview")).toEqual([]);
-    expect(memorySchemaKeysForTab("memories")).toEqual([]);
-    expect(memorySchemaKeysForTab("dreams")).toEqual([]);
-    expect(memorySchemaKeysForTab("settings")).toEqual(["citations", "search"]);
   });
 });
 

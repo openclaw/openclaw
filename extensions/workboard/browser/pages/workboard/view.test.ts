@@ -224,7 +224,7 @@ describe("renderWorkboard", () => {
         "workboard.cards.update": { card: saved },
       });
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         agentsList: {
           defaultId: "main",
           agents: [
@@ -305,7 +305,7 @@ describe("renderWorkboard", () => {
         card: { ...second, agentId: "main", updatedAt: second.updatedAt + 1 },
       });
     const { state, container, renderView } = createWorkboardView({
-      client: { request, addEventListener: () => () => undefined },
+      client: { request },
       connected: true,
       canWrite: true,
       agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
@@ -373,7 +373,7 @@ describe("renderWorkboard", () => {
         .mockImplementationOnce(() => firstWrite.promise)
         .mockResolvedValue({ card: { ...second, agentId: "main" } });
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         connected: true,
         canWrite: true,
         agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
@@ -433,7 +433,7 @@ describe("renderWorkboard", () => {
       const pending = createDeferred<{ card: typeof first }>();
       const request = vi.fn().mockImplementation(() => pending.promise);
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         canWrite: true,
         agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
       });
@@ -494,7 +494,7 @@ describe("renderWorkboard", () => {
       const pending = createDeferred<{ card: typeof first }>();
       const request = vi.fn().mockImplementation(() => pending.promise);
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         canWrite: true,
         scopeAgentId: scope === "agent" ? "writer" : undefined,
         agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
@@ -572,7 +572,7 @@ describe("renderWorkboard", () => {
         return { deleted: true };
       });
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         canWrite: true,
       });
       state.cards = [parent, child];
@@ -623,7 +623,7 @@ describe("renderWorkboard", () => {
           });
         });
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         canWrite: true,
       });
       state.cards = [first, second];
@@ -695,7 +695,7 @@ describe("renderWorkboard", () => {
         .mockImplementationOnce(() => firstWrite.promise)
         .mockResolvedValue({ deleted: true });
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         connected: true,
         canWrite: true,
       });
@@ -1103,7 +1103,6 @@ describe("renderWorkboard", () => {
     const { state, container, renderView } = createWorkboardView();
     state.loading = true;
     state.lastRefreshAt = new Date("2026-06-03T18:47:00Z").getTime();
-    state.lastRefreshStartedAt = Date.now();
     renderView();
 
     expect(buttonByLabel(container, "Compact")).not.toBeNull();

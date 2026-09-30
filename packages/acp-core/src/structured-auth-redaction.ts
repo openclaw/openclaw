@@ -27,14 +27,17 @@ function skipHorizontalWhitespace(value: string, start: number): number {
   return cursor;
 }
 
-function readSerializedLineEnd(value: string, start: number): number | null {
+function skipSerializedBackslashes(value: string, start: number): number {
   let cursor = start;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
+  while (cursor - start < 64 && value[cursor] === "\\") {
     cursor += 1;
   }
-  if (slashCount === 0) {
+  return cursor;
+}
+
+function readSerializedLineEnd(value: string, start: number): number | null {
+  const cursor = skipSerializedBackslashes(value, start);
+  if (cursor === start) {
     return null;
   }
   if (value[cursor] === "n") {
@@ -43,23 +46,13 @@ function readSerializedLineEnd(value: string, start: number): number | null {
   if (value[cursor] !== "r") {
     return null;
   }
-  cursor += 1;
-  slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
-  return slashCount > 0 && value[cursor] === "n" ? cursor + 1 : null;
+  const lineEnd = skipSerializedBackslashes(value, cursor + 1);
+  return lineEnd > cursor + 1 && value[lineEnd] === "n" ? lineEnd + 1 : null;
 }
 
 function readSerializedTabEnd(value: string, start: number): number | null {
-  let cursor = start;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
-  return slashCount > 0 && value[cursor] === "t" ? cursor + 1 : null;
+  const cursor = skipSerializedBackslashes(value, start);
+  return cursor > start && value[cursor] === "t" ? cursor + 1 : null;
 }
 
 function skipAuthWhitespace(value: string, start: number): number {
@@ -118,15 +111,11 @@ function isAuthHeaderStart(value: string, index: number): boolean {
     return false;
   }
 
-  let cursor = index + name.length;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
+  const quoteStart = index + name.length;
+  let cursor = skipSerializedBackslashes(value, quoteStart);
   if (value[cursor] === '"' || value[cursor] === "'") {
     cursor += 1;
-  } else if (slashCount > 0) {
+  } else if (cursor > quoteStart) {
     return false;
   }
   cursor = skipHorizontalWhitespace(value, cursor);

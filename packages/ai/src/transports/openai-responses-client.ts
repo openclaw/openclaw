@@ -115,13 +115,7 @@ function resolveNativeOpenAIResponsesWebSocketMode(
   if (getAiTransportHost().requiresManagedTransport(model)) {
     return undefined;
   }
-  return supportsNativeOpenAIResponsesEndpoint({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-  })
-    ? transport
-    : undefined;
+  return supportsNativeOpenAIResponsesEndpoint(model) ? transport : undefined;
 }
 
 function combineWebSocketTimeoutSignal(
@@ -263,10 +257,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           params = sanitizeResponsesImagePayload(
             params as Record<string, unknown>,
           ) as typeof params;
-          if (
-            (options as { openclawCodeModeToolSurface?: unknown } | undefined)
-              ?.openclawCodeModeToolSurface === true
-          ) {
+          if (responsesOptions?.openclawCodeModeToolSurface === true) {
             const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
             const allowedHostedToolTypes = responsesOptions?.openclawCodeModeAllowedHostedToolTypes;
             enforceCodeModeResponsesToolSurface(
@@ -325,11 +316,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           config.httpContinuation &&
           !websocketMode &&
           !getAiTransportHost().requiresManagedTransport(model) &&
-          (supportsNativeOpenAIResponsesEndpoint({
-            provider: model.provider,
-            api: model.api,
-            baseUrl: model.baseUrl,
-          }) ||
+          (supportsNativeOpenAIResponsesEndpoint(model) ||
             resolveOpenAIResponsesPayloadPolicy(model).explicitContinuationOptIn);
         if (
           httpContinuationEligible &&
@@ -679,19 +666,15 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
     firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
     createClient: createAzureOpenAIClient,
     buildRequest: (model, context, options, metadata, replayMode) => {
-      const deploymentName = resolveAzureDeploymentName(model);
+      const deploymentName = resolveAzureDeploymentNameFromMap({
+        modelId: model.id,
+        deploymentMap: process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP,
+      });
       const params = buildOpenAIResponsesParams(model, context, options, metadata, replayMode);
       params.model = deploymentName;
       delete params.store;
       return params;
     },
-  });
-}
-
-function resolveAzureDeploymentName(model: Model): string {
-  return resolveAzureDeploymentNameFromMap({
-    modelId: model.id,
-    deploymentMap: process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP,
   });
 }
 

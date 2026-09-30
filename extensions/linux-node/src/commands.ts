@@ -5,13 +5,13 @@ import type {
   OpenClawPluginNodeHostCommandAvailabilityContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { asFiniteNumber as readFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { clamp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   assertToolResult,
-  clamp,
   isCapabilityEnabledForHost,
   parseParams,
-  readFiniteNumber,
   type RunCommand,
 } from "./command-utils.js";
 import type { ResolvedLinuxNodePluginConfig } from "./config.js";

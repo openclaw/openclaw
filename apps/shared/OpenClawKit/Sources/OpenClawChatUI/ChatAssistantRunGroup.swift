@@ -30,10 +30,7 @@ struct ChatAssistantRunGroup: Identifiable {
 
         var timestamp: Double? {
             switch self {
-            case let .row(.message(message)): message.timestamp
-            case let .row(.systemNotice(notice)): notice.timestamp
-            case let .row(.historyDivider(divider)): divider.timestamp
-            case .row(.completedWork): nil
+            case let .row(row): row.timestamp
             case let .tool(tool): tool.startedAt
             }
         }

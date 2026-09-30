@@ -171,13 +171,10 @@ async function resolveSignalReplyOptions(params: {
 }
 
 function inferSignalTargetChatType(rawTo: string) {
-  let to = rawTo.trim();
-  if (!to) {
-    return undefined;
-  }
-  if (/^signal:/i.test(to)) {
-    to = to.replace(/^signal:/i, "").trim();
-  }
+  const to = rawTo
+    .trim()
+    .replace(/^signal:/i, "")
+    .trim();
   if (!to) {
     return undefined;
   }

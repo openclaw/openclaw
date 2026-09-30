@@ -50,12 +50,6 @@ function mergeOpenRouterAuthHeaders(options: Parameters<StreamFn>[2]): Parameter
   if (!headers.has("authorization")) {
     headers.set("Authorization", `Bearer ${apiKey}`);
   }
-  if (!headers.has("http-referer")) {
-    headers.set("HTTP-Referer", "https://openclaw.ai");
-  }
-  if (!headers.has("x-openrouter-title")) {
-    headers.set("X-OpenRouter-Title", "OpenClaw");
-  }
   return {
     ...options,
     headers: Object.fromEntries(headers.entries()),
@@ -74,10 +68,6 @@ function createOpenRouterAuthHeaderWrapper(
       context,
       isVerifiedOpenRouterRoute(model) ? mergeOpenRouterAuthHeaders(options) : options,
     );
-}
-
-function assistantMessageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
-  return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
 }
 
 function isEnabledReasoningValue(value: unknown): boolean {
@@ -110,28 +100,24 @@ function isOpenRouterReasoningPayloadEnabled(payload: Record<string, unknown>): 
 
 function injectOpenRouterRouting(
   baseStreamFn: StreamFn | undefined,
-  providerRouting?: Record<string, unknown>,
+  providerRouting: Record<string, unknown>,
   sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
 ): StreamFn | undefined {
-  if (!providerRouting) {
-    return baseStreamFn;
-  }
-  const routedStreamFn: StreamFn = (model, context, options) =>
-    (
-      baseStreamFn ??
-      ((nextModel) => {
-        throw new Error(
-          `OpenRouter routing wrapper requires an underlying streamFn for ${nextModel.id}.`,
-        );
-      })
-    )(
+  const routedStreamFn: StreamFn = (model, context, options) => {
+    if (!baseStreamFn) {
+      throw new Error(
+        `OpenRouter routing wrapper requires an underlying streamFn for ${model.id}.`,
+      );
+    }
+    return baseStreamFn(
       {
         ...model,
         compat: { ...model.compat, openRouterRouting: providerRouting },
-      } as typeof model,
+      },
       context,
       options,
     );
+  };
   return createPayloadPatchStreamWrapper(
     routedStreamFn,
     ({ payload }) => {
@@ -199,7 +185,8 @@ function createOpenRouterDeepSeekV4ReplayWrapper(
         // DeepSeek defaults on; omitted effort is not a request to discard its required replay.
         thinkingEnabled:
           payload.reasoning === undefined || isOpenRouterReasoningPayloadEnabled(payload),
-        shouldBackfillAssistantMessage: (message) => !assistantMessageHasOpenAIToolCalls(message),
+        shouldBackfillAssistantMessage: (message) =>
+          !Array.isArray(message.tool_calls) || message.tool_calls.length === 0,
       });
     },
     {

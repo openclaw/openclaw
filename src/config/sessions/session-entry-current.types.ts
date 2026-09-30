@@ -33,3 +33,17 @@ export type SessionEntryCurrentAdmissionFacts = {
   entry: SessionEntryCurrentFacts | undefined;
   domainFacts: unknown;
 };
+
+export type CapturedSessionEntryCurrentRead =
+  | {
+      kind: "file";
+      source: SessionEntryCurrentSource;
+      assertSourceCurrent(this: void): void;
+      readCurrent(): Promise<SessionEntryCurrentFacts | undefined>;
+    }
+  | {
+      kind: "native" | "missing";
+      source?: undefined;
+      assertSourceCurrent(this: void): void;
+      readCurrent(): SessionEntryCurrentFacts | undefined;
+    };

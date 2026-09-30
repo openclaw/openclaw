@@ -129,20 +129,8 @@ function buildOpenAIResponsesInstructionsText(context: Context): string | undefi
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
-// A Responses-API request whose route honors `instructions` carries the
-// system prompt there, never as an `input` message: `input` is what HTTP
-// continuation (openai-responses-continuation.ts) compares byte-for-byte
-// against the cached previous request to decide whether it can reuse
-// previous_response_id. The embedded runner rebuilds the system prompt fresh
-// on every attempt from live runtime state (active background processes,
-// watched sessions, active-memory context) -- if that text sat inside
-// `input`, ordinary state churn between two turns would make the comparison
-// fail and permanently defeat continuation. `instructions` sits outside the
-// compared `input` array, so it can vary freely per turn with no effect on
-// continuation eligibility. Routes that opt out via `compat.supportsInstructions:
-// false` (see openai-responses-payload-policy.ts) get no instructions field at
-// all -- request construction embeds the prompt back into
-// `input` for those instead.
+// Continuation compares input prefixes, so keep the changing system prompt in
+// instructions on routes that support it. Other routes embed it in input.
 function resolveOpenAIResponsesInstructions(
   model: Model,
   context: Context,
@@ -160,13 +148,8 @@ function resolveOpenAIResponsesInstructions(
     : undefined;
 }
 
-// xAI's server-side `/responses/compact` endpoint (see
-// postOpenAIResponsesCompaction in openai-responses-client.ts) predates and
-// does not accept `instructions`: per
-// https://docs.x.ai/developers/advanced-api-usage/context-compaction the
-// system prompt must be the first `input` message, unlike the main streaming
-// endpoint. Build that message on demand so the compact request body can
-// re-embed the same text the streaming path now carries via `instructions`.
+// xAI /responses/compact needs the system prompt first in input, not instructions:
+// https://docs.x.ai/developers/advanced-api-usage/context-compaction
 export function buildOpenAIResponsesCompactSystemMessage(model: Model, instructions: string) {
   // SAFETY: only reached from postOpenAIResponsesCompaction (Responses-API compact endpoint), so model is always OpenAI-mode here.
   const compat = getCompat(model as OpenAIModeModel);

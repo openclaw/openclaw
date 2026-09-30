@@ -210,17 +210,12 @@ function buildResponsesFailedEventSummary(
   code?: string,
   observation?: ResponsesFailedNoDetailsObservation,
 ): ResponsesFailedEventSummary {
-  const summary: ResponsesFailedEventSummary = { message };
-  if (responseId) {
-    summary.responseId = responseId;
-  }
-  if (code) {
-    summary.code = code;
-  }
-  if (observation) {
-    summary.observation = observation;
-  }
-  return summary;
+  return {
+    message,
+    ...(responseId ? { responseId } : {}),
+    ...(code ? { code } : {}),
+    ...(observation ? { observation } : {}),
+  };
 }
 
 function isResponseFailedIdentifierKey(key: string): boolean {
@@ -253,42 +248,24 @@ function collectResponseFailedIdentifierHashes(
     return out;
   }
   seen.add(value);
-  if (Array.isArray(value)) {
-    for (const [index, item] of value.entries()) {
-      if (index >= 8 || out.length >= 12) {
-        break;
-      }
-      const itemString =
-        typeof item === "string" || typeof item === "number" ? String(item).trim() : "";
-      if (identifierKey && isResponseFailedIdentifierKey(identifierKey) && itemString) {
-        out.push(`${path}[${index}]=${redactIdentifier(itemString, { len: 12 })}`);
-        continue;
-      }
-      collectResponseFailedIdentifierHashes(item, {
-        path: `${path}[${index}]`,
-        depth: depth + 1,
-        identifierKey,
-        out,
-        seen,
-      });
-    }
-    return out;
-  }
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (out.length >= 12) {
+  const entries = Array.isArray(value) ? value.entries() : Object.entries(value);
+  for (const [key, child] of entries) {
+    if (out.length >= 12 || (typeof key === "number" && key >= 8)) {
       break;
     }
-    const childPath = path ? `${path}.${key}` : key;
+    const childPath = typeof key === "number" ? `${path}[${key}]` : path ? `${path}.${key}` : key;
+    const childIdentifierKey = typeof key === "number" ? identifierKey : key;
+    const isIdentifier = isResponseFailedIdentifierKey(childIdentifierKey);
     const childString =
       typeof child === "string" || typeof child === "number" ? String(child).trim() : "";
-    if (isResponseFailedIdentifierKey(key) && childString) {
+    if (isIdentifier && childString) {
       out.push(`${childPath}=${redactIdentifier(childString, { len: 12 })}`);
       continue;
     }
     collectResponseFailedIdentifierHashes(child, {
       path: childPath,
       depth: depth + 1,
-      identifierKey: isResponseFailedIdentifierKey(key) ? key : undefined,
+      identifierKey: isIdentifier ? childIdentifierKey : undefined,
       out,
       seen,
     });

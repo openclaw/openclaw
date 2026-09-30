@@ -40,13 +40,7 @@ final class RemindersService: RemindersServicing {
                     }
                 }
                 let payload = filtered.prefix(limit).map { reminder in
-                    let due = Self.date(fromDueComponents: reminder.dueDateComponents)
-                    return OpenClawReminderPayload(
-                        identifier: reminder.calendarItemIdentifier,
-                        title: reminder.title,
-                        dueISO: due.map { formatter.string(from: $0) },
-                        completed: reminder.isCompleted,
-                        listName: reminder.calendar.title)
+                    Self.payload(from: reminder, formatter: formatter)
                 }
                 cont.resume(returning: payload)
             }
@@ -85,16 +79,17 @@ final class RemindersService: RemindersServicing {
 
         try store.save(reminder, commit: true)
 
-        let formatter = ISO8601DateFormatter()
-        let due = Self.date(fromDueComponents: reminder.dueDateComponents)
-        let payload = OpenClawReminderPayload(
+        return OpenClawRemindersAddPayload(reminder: Self.payload(from: reminder, formatter: ISO8601DateFormatter()))
+    }
+
+    static func payload(from reminder: EKReminder, formatter: ISO8601DateFormatter) -> OpenClawReminderPayload {
+        let due = reminder.dueDateComponents?.date
+        return OpenClawReminderPayload(
             identifier: reminder.calendarItemIdentifier,
             title: reminder.title,
             dueISO: due.map { formatter.string(from: $0) },
             completed: reminder.isCompleted,
             listName: reminder.calendar.title)
-
-        return OpenClawRemindersAddPayload(reminder: payload)
     }
 
     static func applyDueISO(
@@ -123,10 +118,6 @@ final class RemindersService: RemindersServicing {
         reminder.startDateComponents = components
         reminder.dueDateComponents = components
         reminder.addAlarm(EKAlarm(absoluteDate: dueDate))
-    }
-
-    static func date(fromDueComponents components: DateComponents?) -> Date? {
-        components?.date
     }
 
     private static func resolveList(

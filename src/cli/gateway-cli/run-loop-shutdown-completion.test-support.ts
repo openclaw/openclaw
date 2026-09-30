@@ -1,12 +1,113 @@
-/** Registers shutdown completion deadlines in the original run-loop signal fixture. */
+/** Registers shutdown joins and deadlines in the original run-loop signal fixture. */
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { expect, it, vi, type Mock } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
 import {
   setPlatform,
   withIsolatedSignals,
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
+
+export function registerGracefulGatewayShutdownTest({
+  acquireGatewayLock,
+  createSignaledLoopHarness,
+  hasManagedProviderLocalServices,
+  stopManagedProviderLocalServices,
+  flushLogger,
+  requestGatewayRestartWithSignalAdmission,
+  armShutdownHardExitWatchdog,
+}: Pick<
+  UpdateRespawnFixtures,
+  | "acquireGatewayLock"
+  | "createSignaledLoopHarness"
+  | "hasManagedProviderLocalServices"
+  | "stopManagedProviderLocalServices"
+  | "flushLogger"
+> & {
+  requestGatewayRestartWithSignalAdmission: Mock;
+  armShutdownHardExitWatchdog: Mock;
+}): void {
+  it("exits 0 on SIGTERM after graceful close", async () => {
+    vi.clearAllMocks();
+    const gatewayStateOwner = { release: vi.fn(async () => {}) };
+    acquireGatewayLock.mockResolvedValueOnce(gatewayStateOwner);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, runtime, exited } = await createSignaledLoopHarness();
+      let finishLocalServiceStop: (() => void) | undefined;
+      const localServiceStopStarted = new Promise<void>((resolveStarted) => {
+        stopManagedProviderLocalServices.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolveStop) => {
+              finishLocalServiceStop = resolveStop;
+              resolveStarted();
+            }),
+        );
+      });
+      hasManagedProviderLocalServices.mockReturnValueOnce(true);
+      const sigterm = captureSignal("SIGTERM");
+      const { emitDiagnosticsTimelineEvent, flushDiagnosticsTimeline } =
+        await import("../../infra/diagnostics-timeline.js");
+      const tempDirs = createTempDirTracker();
+      const timelinePath = join(tempDirs.make("openclaw-gateway-stop-"), "timeline.jsonl");
+      let timelineAtLogFlush: string | undefined;
+      close.mockImplementationOnce(async () => {
+        emitDiagnosticsTimelineEvent(
+          { type: "mark", name: "gateway.stop" },
+          {
+            env: {
+              OPENCLAW_DIAGNOSTICS: "timeline",
+              OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+            },
+          },
+        );
+      });
+      flushLogger.mockImplementationOnce(async () => {
+        expect(runtime.exit).not.toHaveBeenCalled();
+        timelineAtLogFlush = existsSync(timelinePath)
+          ? readFileSync(timelinePath, "utf8")
+          : undefined;
+      });
+
+      try {
+        sigterm();
+        await localServiceStopStarted;
+
+        expect(close).toHaveBeenCalledWith({
+          reason: "gateway stopping",
+          restartExpectedMs: null,
+        });
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(flushLogger).not.toHaveBeenCalled();
+        if (!finishLocalServiceStop) {
+          throw new Error("managed local service stop did not start");
+        }
+        finishLocalServiceStop();
+
+        await expect(exited).resolves.toBe(0);
+        expect(start).toHaveBeenCalledWith({
+          processStartedAt: expect.any(Number),
+          startupStartedAt: expect.any(Number),
+          requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
+          hostLifecycle: expect.objectContaining({ request: expect.any(Function) }),
+          startupOperation: expect.any(Function),
+          gatewayStateOwner,
+        });
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+        expect(flushLogger).toHaveBeenCalledOnce();
+        expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
+        expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
+      } finally {
+        flushDiagnosticsTimeline();
+        tempDirs.cleanup();
+      }
+    });
+  });
+}
 
 export function registerShutdownCompletionTests({
   hasManagedProviderLocalServices,

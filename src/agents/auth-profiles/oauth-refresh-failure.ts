@@ -189,13 +189,12 @@ function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
   return cause;
 }
 
-/** Refresh failure that preserves a redacted refreshed store and credential. */
+/** Refresh failure with a redacted public cause and private refreshed store. */
 export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
   override readonly profileId: string;
   readonly code?: string;
   readonly lockPath?: string;
   readonly #refreshedStore: AuthProfileStore;
-  readonly #credential: OAuthCredential;
 
   constructor(params: {
     credential: OAuthCredential;
@@ -231,7 +230,6 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
         : undefined,
     });
     this.name = "OAuthManagerRefreshError";
-    this.#credential = params.credential;
     this.profileId = params.profileId;
     this.#refreshedStore = params.refreshedStore;
     if (isSettledOAuthRefreshFailure(params.cause)) {
@@ -254,10 +252,6 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
 
   getRefreshedStore(): AuthProfileStore {
     return this.#refreshedStore;
-  }
-
-  getCredential(): OAuthCredential {
-    return this.#credential;
   }
 
   toJSON(): { name: string; message: string; profileId: string; provider: string } {

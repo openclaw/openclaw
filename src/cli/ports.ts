@@ -87,14 +87,8 @@ function isRecoverableLsofError(err: unknown): boolean {
 }
 
 function parseFuserPidList(output: string): number[] {
-  if (!output) {
-    return [];
-  }
   const values = new Set<number>();
   for (const token of output.split(/\s+/)) {
-    if (!token) {
-      continue;
-    }
     const pid = parseStrictPositiveInteger(token);
     if (pid !== undefined) {
       values.add(pid);

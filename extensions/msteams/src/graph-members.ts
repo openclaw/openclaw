@@ -9,18 +9,6 @@ type GetMemberInfoMSTeamsParams = {
   currentRequesterId?: string | null;
 };
 
-type GetMemberInfoMSTeamsResult = {
-  user: {
-    id: string | undefined;
-    displayName: string | undefined;
-    mail: string | undefined;
-    jobTitle: string | undefined;
-    userPrincipalName: string | undefined;
-    officeLocation: string | undefined;
-    roles: string[];
-  };
-};
-
 type GraphConversationMember = {
   displayName?: string;
   userId?: string;
@@ -78,9 +66,7 @@ async function findStandardChannelMember(params: {
 /**
  * Fetch a user profile from Microsoft Graph by user ID.
  */
-export async function getMemberInfoMSTeams(
-  params: GetMemberInfoMSTeamsParams,
-): Promise<GetMemberInfoMSTeamsResult> {
+export async function getMemberInfoMSTeams(params: GetMemberInfoMSTeamsParams) {
   const isCurrentRequester =
     normalizeUserId(params.userId) === normalizeUserId(params.currentRequesterId);
   if (isCurrentRequester && resolveConversationPath(params.to).kind === "chat") {

@@ -1,4 +1,4 @@
-// Gateway RPC handlers for text-to-speech status, preferences, and conversion.
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -37,12 +37,6 @@ import { inferSpeechMimeType } from "./speech-mime.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-function yieldBeforeTtsStatusSetup(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 function resolveTtsGatewayStatusFacts(cfg: OpenClawConfig) {
   const settings = resolveTtsSettingsSnapshot({ cfg });
   const speechProviders = listSpeechProviders(cfg);
@@ -70,11 +64,10 @@ function setTtsEnabledHandler(enabled: boolean): GatewayRequestHandler {
   };
 }
 
-/** Gateway request handlers for TTS status, preference mutation, and synthesis. */
 export const ttsHandlers: GatewayRequestHandlers = {
   "tts.status": async ({ respond, context }) => {
     await respondUnavailableOnThrow(respond, async () => {
-      await yieldBeforeTtsStatusSetup();
+      await yieldToEventLoop();
       const cfg = context.getRuntimeConfig();
       const { configuredByProvider, provider, settings, speechProviders } =
         resolveTtsGatewayStatusFacts(cfg);

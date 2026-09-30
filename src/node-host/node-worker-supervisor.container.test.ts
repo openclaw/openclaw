@@ -11,7 +11,7 @@ import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpo
 import { buildWorkerProcessTurn } from "../worker/worker-process-protocol.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
-import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
+import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import { sendNodeWorkerInput } from "./node-worker-launch-transport.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -23,7 +23,10 @@ import {
   hostLabel,
   launchLabel,
 } from "./node-worker-supervisor.container.test-support.js";
-import { waitForNodeWorkerTerminal as waitForTerminal } from "./node-worker-supervisor.fixture.test-support.js";
+import {
+  observeNodeWorkerAdapters,
+  waitForNodeWorkerTerminal as waitForTerminal,
+} from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   testNodeWorkerEnvironmentIdentity,
@@ -130,6 +133,24 @@ describe("node worker supervisor container isolation", () => {
       },
     });
     const input = testWorkerLaunchInput(fixture.workspaceDir, "container-success");
+    const dispatches: Array<{ data: string; admission: NodeWorkerLaunchReceipt | undefined }> = [];
+    const recordAdmission = vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning");
+    const captureAdapter = observeNodeWorkerAdapters((adapter) => {
+      const stdin = adapter.stdin;
+      if (!stdin) {
+        throw new Error("missing container worker stdin");
+      }
+      const write = stdin.write.bind(stdin);
+      vi.spyOn(stdin, "write").mockImplementation((data, callback) => {
+        // Observe dispatch before the fake engine can wait for journal readiness.
+        const result = recordAdmission.mock.settledResults.at(-1);
+        dispatches.push({
+          data: data.toString(),
+          admission: result?.type === "fulfilled" ? result.value : undefined,
+        });
+        write(data, callback);
+      });
+    });
 
     try {
       const running = await fixture.supervisor.launch(input, endpoint);
@@ -194,11 +215,23 @@ describe("node worker supervisor container isolation", () => {
         "--interactive",
         running.container!.containerId,
       ]);
-      expect(started?.journal).toMatchObject({
-        state: "running",
-        container_json: JSON.stringify(running.container),
+      expect(dispatches).toEqual([
+        {
+          data: expect.any(String),
+          admission: expect.objectContaining({
+            ...testNodeWorkerLaunchIdentity(input),
+            state: "running",
+            container: running.container,
+          }),
+        },
+      ]);
+      expect(JSON.parse(dispatches[0]!.data)).toMatchObject({
+        type: "turn",
+        turnId: input.launchId,
       });
     } finally {
+      captureAdapter.mockRestore();
+      recordAdmission.mockRestore();
       await fixture.supervisor.close();
     }
   });
@@ -883,11 +916,23 @@ describe("node worker supervisor container isolation", () => {
     }
   });
 
-  it("never executes a container worker when its durable identity cannot be recorded", async () => {
+  it("never dispatches a turn when its durable container identity cannot be recorded", async () => {
     const fixture = containerFixture();
     const input = testWorkerLaunchInput(fixture.workspaceDir, "container-journal-failure", "wait");
     vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(async () => {
       throw new Error("injected durable container identity failure");
+    });
+    const writes: string[] = [];
+    observeNodeWorkerAdapters((adapter) => {
+      const stdin = adapter.stdin;
+      if (!stdin) {
+        throw new Error("missing container worker stdin");
+      }
+      const write = stdin.write.bind(stdin);
+      vi.spyOn(stdin, "write").mockImplementation((data, callback) => {
+        writes.push(data.toString());
+        write(data, callback);
+      });
     });
 
     try {
@@ -897,7 +942,7 @@ describe("node worker supervisor container isolation", () => {
 
       const create = fixture.events().find((event) => event.argv[0] === "create");
       expect(create?.container?.id).toMatch(/^[a-f0-9]{64}$/u);
-      expect(fixture.events().some((event) => event.argv[0] === "start")).toBe(false);
+      expect(writes).toEqual([]);
       expect(fixture.events().some((event) => event.argv[0] === "rm")).toBe(true);
       expect(fixture.exists(create!.container!.id)).toBe(false);
     } finally {

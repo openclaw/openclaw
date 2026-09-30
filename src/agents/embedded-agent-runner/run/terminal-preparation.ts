@@ -198,11 +198,8 @@ export function prepareEmbeddedRunTerminal(input: {
       ? attempt.lastAssistant
       : input.currentAttemptCompletedAssistant;
   const payloads = buildEmbeddedRunPayloads({
-    assistantTexts: attempt.assistantTexts,
-    answerSegments: attempt.answerSegments,
+    ...attempt,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
-    assistantTranscriptOwned: attempt.assistantTranscriptOwned,
-    assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
     // A clean yield is a handoff, not a terminal tool failure. Keep the error
@@ -222,10 +219,7 @@ export function prepareEmbeddedRunTerminal(input: {
     reasoningLevel: runParams.reasoningLevel,
     thinkingLevel: runParams.thinkLevel,
     toolResultFormat: input.resolvedToolResultFormat,
-    didSendViaMessagingTool: attempt.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool: resolveSourceReplyDelivery(attempt) === "delivered",
-    messagingToolSentTargets: attempt.messagingToolSentTargets,
-    messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
     agentId: runParams.agentId,
     runId: runParams.runId,
@@ -236,8 +230,6 @@ export function prepareEmbeddedRunTerminal(input: {
     runStopReason: input.terminalState.outcome.stopReason,
     deferAssistantTimeoutError:
       timedOutDuringPrompt && (!hasMessagingToolDeliveryEvidence(attempt) || timeoutFinal),
-    didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-    heartbeatToolResponse: attempt.heartbeatToolResponse,
   }).map((payload) => applyPreparedReplyMedia(payload, attempt.preparedReplyMedia ?? []));
   const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
   const payloadsWithToolMedia = mergeToolMedia(
@@ -297,10 +289,7 @@ export function prepareEmbeddedRunTerminal(input: {
     !attempt.didSendDeterministicApprovalPrompt &&
     !attempt.lastToolError &&
     (attempt.toolMetas?.length ?? 0) === 0;
-  const attemptToolSummary = buildTraceToolSummary({
-    toolMetas: attempt.toolMetas,
-    lastToolError: attempt.lastToolError,
-  });
+  const attemptToolSummary = buildTraceToolSummary(attempt);
   const failureSignal = resolveEmbeddedRunFailureSignal({
     trigger: runParams.trigger,
     lastToolError: attempt.lastToolError,

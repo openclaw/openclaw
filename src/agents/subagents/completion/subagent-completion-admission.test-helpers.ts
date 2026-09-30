@@ -109,7 +109,7 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     persistAsyncOrThrow: (context, callbacks, ...runIds) =>
       persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, runIds, { context, ...callbacks }),
     clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: () => 0,
+    countPendingDescendantRuns: async () => 0,
     getLatestRunForChildSession: getLatestLiveSubagentRunByChildSessionKey,
     suppressAnnounceForSteerRestart: () => false,
     shouldEmitEndedHookForRun: () => false,

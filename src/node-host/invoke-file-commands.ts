@@ -1,19 +1,9 @@
 import { listHostDirectories } from "../infra/host-directory-listing.js";
 import { NODE_FS_LIST_DIR_COMMAND, NODE_TERMINAL_UPLOAD_COMMAND } from "../infra/node-commands.js";
 import { stageTerminalUpload } from "../infra/terminal-file-upload.js";
+import { decodeNodeInvokeParams } from "./invoke-payload.js";
 
 type NodeFileCommandResult = { payload: unknown } | { error: unknown };
-
-function decodeParams(raw?: string | null): Record<string, unknown> {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  try {
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
-  }
-}
 
 /** Handles bounded node-host filesystem commands before plugin dispatch. */
 export async function invokeNodeFileCommand(
@@ -24,7 +14,7 @@ export async function invokeNodeFileCommand(
     return null;
   }
   try {
-    const params = decodeParams(paramsJSON);
+    const params = decodeNodeInvokeParams<Record<string, unknown>>(paramsJSON);
     if (command === NODE_FS_LIST_DIR_COMMAND) {
       if (params.path !== undefined && typeof params.path !== "string") {
         throw new Error("INVALID_REQUEST: path must be a string");

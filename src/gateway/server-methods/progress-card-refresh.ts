@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
@@ -26,9 +26,7 @@ export async function requestProgressCardRefresh(
   idempotencyKey: string,
   readCard: () => Promise<ProgressCard | null>,
 ): Promise<void> {
-  const runId = `progress-card-refresh:${createHash("sha256")
-    .update(JSON.stringify([target.agentId, target.sessionKey, idempotencyKey]))
-    .digest("hex")}`;
+  const runId = `progress-card-refresh:${sha256Hex(JSON.stringify([target.agentId, target.sessionKey, idempotencyKey]))}`;
   const receiptKey = `progressCard.refresh:${runId}`;
   let response: Parameters<RespondFn> | undefined;
   await handleTrustedInternalChatSend(

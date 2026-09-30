@@ -383,7 +383,7 @@ flow:
                 args:
                   - ref: env
                   - expr: privateRuns[0].requesterSessionKey
-                  - expr: "({ afterEventCursor: privateTranscriptBefore.eventCursor })"
+                  - expr: "({ afterEventCursor: privateTranscriptBefore.eventCursor, includeCodeModeControl: true })"
               - set: privateSpawnReceipts
                 value:
                   expr: "privateSpawns.map((request) => privateTranscript.successfulToolCallEvents?.find((event) => event.name === (request.plannedWireToolName ?? request.plannedToolName) && event.toolCallId === (env.runtimeId !== 'codex' && request.plannedToolItemId ? `${request.plannedToolCallId}|${request.plannedToolItemId}` : request.plannedToolCallId)))"

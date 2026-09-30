@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-/** Doctor repairs for legacy auth profile storage and retired provider identifiers. */
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";

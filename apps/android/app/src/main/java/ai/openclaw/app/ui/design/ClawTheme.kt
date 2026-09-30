@@ -325,30 +325,16 @@ internal fun clawColorsForTheme(
 }
 
 private val LocalClawColors = staticCompositionLocalOf { ClawDarkColors }
-private val LocalClawSpacing = staticCompositionLocalOf { ClawSpacing() }
-private val LocalClawRadii = staticCompositionLocalOf { ClawRadii() }
-private val LocalClawTypography = staticCompositionLocalOf { clawTypography(clawFontFamily) }
 
 internal object ClawTheme {
+  val spacing = ClawSpacing()
+  val radii = ClawRadii()
+  val type = clawTypography(clawFontFamily)
+
   val colors: ClawColors
     @Composable
     @ReadOnlyComposable
     get() = LocalClawColors.current
-
-  val spacing: ClawSpacing
-    @Composable
-    @ReadOnlyComposable
-    get() = LocalClawSpacing.current
-
-  val radii: ClawRadii
-    @Composable
-    @ReadOnlyComposable
-    get() = LocalClawRadii.current
-
-  val type: ClawTypography
-    @Composable
-    @ReadOnlyComposable
-    get() = LocalClawTypography.current
 }
 
 @Composable
@@ -359,22 +345,16 @@ internal fun ClawDesignTheme(
   content: @Composable () -> Unit,
 ) {
   val colors = clawColorsForTheme(dark = dark, family = family, accentArgb = accentArgb)
-  val typography = clawTypography(clawFontFamily)
-
-  val spacing = ClawSpacing()
 
   CompositionLocalProvider(
     LocalClawColors provides colors,
-    LocalClawSpacing provides spacing,
-    LocalClawRadii provides ClawRadii(),
-    LocalClawTypography provides typography,
     // Keep Material controls on the same accessibility floor as Claw controls while
     // their smaller painted geometry stays independent from the hit area.
-    LocalMinimumInteractiveComponentSize provides spacing.touchTarget,
+    LocalMinimumInteractiveComponentSize provides ClawTheme.spacing.touchTarget,
   ) {
     MaterialTheme(
       colorScheme = clawMaterialColorScheme(colors, dark),
-      typography = materialTypography(typography),
+      typography = materialTypography(ClawTheme.type),
       shapes = Shapes(),
       content = content,
     )

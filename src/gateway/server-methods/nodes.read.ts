@@ -60,16 +60,8 @@ function safeNodeReadProjection(
     : safeNode;
 }
 
-function nodeReadCallerDeviceId(client: GatewayClient | null): string | undefined {
-  return normalizeOptionalString(client?.connect?.device?.id);
-}
-
 function respondRunnerInventoryRetry(respond: RespondFn, message: string): void {
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
-}
-
-function isVisibleNode(node: NodeListNode | null): node is NodeListNode {
-  return node !== null;
 }
 
 async function listNodesForClient(params: {
@@ -97,7 +89,7 @@ async function listNodesForClient(params: {
     return null;
   });
   const catalogNodes = params.nodeId
-    ? [getKnownNode(catalog, params.nodeId)].filter(isVisibleNode)
+    ? [getKnownNode(catalog, params.nodeId)].filter((node) => node !== null)
     : listKnownNodes(catalog);
   const nodes = catalogNodes.map((node) =>
     node.nodeId === localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
@@ -105,9 +97,11 @@ async function listNodesForClient(params: {
   if (nodeInvokePolicy.canReadPendingNodePairing(params.client)) {
     return { nodes, connectedNodes };
   }
-  const ownDeviceId = nodeReadCallerDeviceId(params.client);
+  const ownDeviceId = normalizeOptionalString(params.client?.connect?.device?.id);
   return {
-    nodes: nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode),
+    nodes: nodes
+      .map((node) => safeNodeReadProjection(node, ownDeviceId))
+      .filter((node) => node !== null),
     connectedNodes,
   };
 }
@@ -366,7 +360,7 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       return;
     }
     const connId = client?.connId;
-    const currentSession = nodeId ? context.nodeRegistry.get(nodeId) : undefined;
+    const currentSession = context.nodeRegistry.get(nodeId);
     const pairingGeneration =
       currentSession && currentSession.connId === connId
         ? currentSession.pairingGeneration
@@ -375,9 +369,9 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       // A registered session without a pairing generation usually means the
       // node's capability surface is still awaiting operator approval; name
       // that state and the exact approve command instead of a generic retry.
-      const pendingSurface = nodeId
-        ? (await listNodePairing()).pending.find((entry) => entry.nodeId === nodeId)
-        : undefined;
+      const pendingSurface = (await listNodePairing()).pending.find(
+        (entry) => entry.nodeId === nodeId,
+      );
       respondRunnerInventoryRetry(
         respond,
         pendingSurface

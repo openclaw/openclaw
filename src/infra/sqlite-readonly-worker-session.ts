@@ -41,6 +41,7 @@ export function isSameSqliteReadOnlyWorkerLaunch(
 }
 
 type SqliteReadOnlyWorkerSession = {
+  readonly closed: Promise<void>;
   readonly notStarted: boolean;
   createNativeReplacement: () => SqliteReadOnlyWorkerSession;
   isRetired: () => boolean;
@@ -122,6 +123,7 @@ export function createSqliteReadOnlyWorkerSession(
     void retainSnapshotWork(closed, () => retire(new Error("SQLite snapshot owner stopped")));
   }
   let spawned = false;
+  let nativeClosed = false;
   child.once("spawn", () => {
     spawned = true;
   });
@@ -139,6 +141,7 @@ export function createSqliteReadOnlyWorkerSession(
     ),
   );
   child.once("close", (code, signal) => {
+    nativeClosed = true;
     retired = true;
     if (pending) {
       const request = pending;
@@ -240,11 +243,12 @@ export function createSqliteReadOnlyWorkerSession(
     }
   });
   return {
+    closed,
     isRetired() {
       return retired;
     },
     get notStarted() {
-      return child instanceof BrokerChild && child.notStarted;
+      return child instanceof BrokerChild ? child.notStarted : nativeClosed && !spawned;
     },
     createNativeReplacement() {
       return createSqliteReadOnlyWorkerSession({

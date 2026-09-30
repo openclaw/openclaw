@@ -12,6 +12,14 @@ const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTranspor
   stdio: "stdio",
 };
 
+/** Explicit runtime transport takes precedence over a legacy CLI type alias. */
+export function resolveConfiguredMcpTransport(server: unknown): string | undefined {
+  if (!isRecord(server)) {
+    return undefined;
+  }
+  return normalizeMcpString(server.transport) || resolveOpenClawMcpTransportAlias(server.type);
+}
+
 /** Maps CLI-native MCP type aliases to OpenClaw HTTP transport names. */
 export function resolveOpenClawMcpTransportAlias(
   value: unknown,

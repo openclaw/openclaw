@@ -41,7 +41,11 @@ const DOCKER_E2E_CHUNKS = [
     // Six 3500s first-hop lanes need two waves at npm weight limit 5; the 20m
     // survivor (weight 3) overlaps. 2 x 3500s + 10m setup/artifacts ~= 127m => 130m.
     timeout_minutes: 130,
-    profiles: "beta minimum stable full",
+    // Dropped from stable for 2026.9.7 by the release lead under Peter's 2026-09-29
+    // decision: six-way first-hop contention in one job fails deterministically
+    // (jobs 109446149023, 109482109194) while every lane in it passes as a separate
+    // targeted lane. Restore "stable" with the waves change (5aed4315) and #161257.
+    profiles: "beta minimum full",
   },
   {
     chunk_id: "plugins-runtime-plugins",
@@ -206,7 +210,10 @@ const LIVE_DOCKER_SUITES = [
       'OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    profiles: "stable full",
+    // Waived from stable for 2026.9.7: MiniMax-M3 intermittently misses the Code Mode
+    // tool-read probe (model behavior, not a tool-result regression). Evidence: FRV
+    // 36534008742, job 109300784027. Restore "stable full" when #161072 is fixed.
+    profiles: "full",
   },
   {
     suite_id: "live-gateway-advisory-docker-deepseek-fireworks",

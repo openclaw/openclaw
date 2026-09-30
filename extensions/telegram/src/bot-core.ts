@@ -100,19 +100,14 @@ export async function createTelegramBotCore(
 
   const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
   const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
-  const client: ApiClientOptions | undefined =
-    finalFetch || normalizedApiRoot
-      ? {
-          ...(finalFetch ? { fetch: asTelegramClientFetch(finalFetch) } : {}),
-          ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
-        }
-      : undefined;
-
-  const botConfig =
-    client || opts.botInfo
-      ? { ...(client ? { client } : {}), ...(opts.botInfo ? { botInfo: opts.botInfo } : {}) }
-      : undefined;
-  const bot = new Bot(opts.token, botConfig);
+  const client: ApiClientOptions = {
+    fetch: asTelegramClientFetch(finalFetch),
+    ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
+  };
+  const bot = new Bot(opts.token, {
+    client,
+    ...(opts.botInfo ? { botInfo: opts.botInfo } : {}),
+  });
   const accountThrottler = getOrCreateAccountThrottler(opts.token, apiThrottler);
   bot.api.config.use(accountThrottler.transformer);
   const sendChatActionHandler: TelegramSendChatActionHandler = {

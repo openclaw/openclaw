@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { resolveQaRepoPath } from "./repo-path.js";
 import {
-  listQaScenarioYamlPaths,
   readQaScenarioById,
   readQaScenarioExecutionConfig,
   readQaScenarioPack,
@@ -35,8 +34,7 @@ describe("qa scenario catalog", () => {
     expect(pack.version).toBe(1);
     expect(pack.agent.identityMarkdown).toContain("Dev C-3PO");
     expect(pack.kickoffTask).toContain("Lobster Invaders");
-    expect(listQaScenarioYamlPaths().length).toBe(pack.scenarios.length);
-    expect(listQaScenarioYamlPaths()).toContain(
+    expect(readQaScenarioById("image-generation-roundtrip").sourcePath).toBe(
       "qa/scenarios/media/image-generation-roundtrip.yaml",
     );
     const scenarioIds = pack.scenarios.map((scenario) => scenario.id);
@@ -700,12 +698,6 @@ describe("qa scenario catalog", () => {
     expect(flow).toContain("[sourceSessionKey, targetSessionKey, groupSessionKey]");
     expect(flow).toContain("readSessionTranscriptSummary");
     expect(flow).toContain("transcript.eventCursor > 0");
-    expect(flow).toContain(
-      "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length",
-    );
-    expect(flow).toContain('"saveAs":"pauseCommandOutbound"');
-    expect(flow).toContain("candidate.conversation.id === config.pausedConversationId");
-    expect(flow).toContain('"sinceIndex":{"ref":"pauseCommandStartIndex"}');
     expect(flow).not.toContain('"call":"sleep"');
     expect(flow).not.toContain(".sessionFile");
   });

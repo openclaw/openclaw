@@ -1,4 +1,3 @@
-/** Prepares queued follow-up payloads for source-channel delivery. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
@@ -517,6 +516,7 @@ export async function deliverFollowupDecision(params: {
     logVerbose(`followup queue: delivery suppressed (${decision.reason})`);
     return { kind: "completed", payloads: [] };
   }
+  let payloads: ReplyPayload[];
   if (decision.kind === "retry-source-delivery") {
     warnPrivateMessageToolFinal({
       sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
@@ -556,7 +556,7 @@ export async function deliverFollowupDecision(params: {
     if (enqueued) {
       return { kind: "source-retry" };
     }
-    const diagnosticPayloads = resolveFollowupDeliveryPayloads({
+    payloads = resolveFollowupDeliveryPayloads({
       cfg: turn.config,
       payloads: [buildStrandedReplyDeliveryFailurePayload()],
       messageProvider: turn.queued.run.messageProvider,
@@ -567,24 +567,18 @@ export async function deliverFollowupDecision(params: {
       originatingTo: turn.queued.originatingTo,
       originatingThreadId: turn.queued.originatingThreadId,
     });
-    const payloads = await sendFollowupPayloads({
-      payloads: diagnosticPayloads,
-      turn,
-      defaults,
-      runId: params.runId,
-      kind: params.kind ?? "final",
-      resolved: decision.resolved,
-    });
-    return { kind: "completed", payloads };
+  } else {
+    payloads = decision.payloads;
   }
-  const payloads = await sendFollowupPayloads({
-    payloads: decision.payloads,
+  const delivered = await sendFollowupPayloads({
+    payloads,
     turn,
     defaults,
     runId: params.runId,
     kind: params.kind ?? "final",
-    mirror: params.kind && params.kind !== "final" ? false : undefined,
+    mirror:
+      decision.kind === "deliver" && params.kind && params.kind !== "final" ? false : undefined,
     resolved: decision.resolved,
   });
-  return { kind: "completed", payloads };
+  return { kind: "completed", payloads: delivered };
 }

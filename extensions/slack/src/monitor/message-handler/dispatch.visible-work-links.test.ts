@@ -242,12 +242,10 @@ function preparedMessage(native: boolean): PreparedSlackMessage {
       Surface: "slack",
       ChatType: "channel",
     }),
-    turn: { storePath: "/unused/slack-work-links", record: {} },
+    turn: { record: {} },
     replyToMode: "all",
-    requireMention: false,
     isDirectMessage: false,
     isRoomish: true,
-    preview: "",
     ackReactionValue: "",
     ackReactionPromise: null,
   };

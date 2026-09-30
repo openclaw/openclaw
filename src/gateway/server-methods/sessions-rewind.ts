@@ -28,6 +28,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { readSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
@@ -503,7 +504,13 @@ async function mutateSessionAtMessage(
         return;
       }
       let result: MessageCutMutationResult;
-      let forkRepositoryWorkspaceId: string | undefined;
+      let forkRepository:
+        | {
+            workspaceId: string;
+            store: ReturnType<typeof getSessionRepositoryWorkspaceStore>;
+            source: ReturnType<typeof captureOpenClawStateWorkerContext>;
+          }
+        | undefined;
       const mutationParams = {
         agentId: current.target.agentId,
         commitGuard,
@@ -514,8 +521,11 @@ async function mutateSessionAtMessage(
       try {
         if (action === "fork" && current.entry.repositoryWorkspaceId) {
           const repositories = getSessionRepositoryWorkspaceStore();
-          const source = repositories.get(current.entry.repositoryWorkspaceId);
+          const repositorySource = captureOpenClawStateWorkerContext({ path: repositories.path });
+          const preparedSource = await repositories.prepare(current.entry.repositoryWorkspaceId);
+          const source = preparedSource.workspace;
           const assertRepositoryCurrent = () => {
+            repositorySource.admission.assertCurrent();
             commitGuard();
             const sourceEntry = loadAccessorSessionEntryForGatewayTarget({
               key: current.canonicalKey,
@@ -529,7 +539,7 @@ async function mutateSessionAtMessage(
               sourceEntry?.sessionId !== initialSessionId ||
               sourceEntry.lifecycleRevision !== initialLifecycleRevision ||
               sourceEntry.repositoryWorkspaceId !== source.workspaceId ||
-              repositories.get(source.workspaceId)?.revision !== source.revision
+              preparedSource.current()?.revision !== source.revision
             ) {
               throw new Error("Repository workspace changed before session fork");
             }
@@ -541,7 +551,11 @@ async function mutateSessionAtMessage(
             sessionKey: targetKey,
             assertCurrent: assertRepositoryCurrent,
           });
-          forkRepositoryWorkspaceId = forked.workspaceId;
+          forkRepository = {
+            workspaceId: forked.workspaceId,
+            store: repositories,
+            source: repositorySource,
+          };
           mutationParams.commitGuard = assertRepositoryCurrent;
         }
         result = await (action === "fork"
@@ -550,7 +564,7 @@ async function mutateSessionAtMessage(
                 ...mutationParams,
                 entryId,
                 targetKey,
-                repositoryWorkspaceId: forkRepositoryWorkspaceId,
+                repositoryWorkspaceId: forkRepository?.workspaceId,
                 forkWorkspace: forkWorkspace?.value,
                 creation: { ...creation, sandbox },
               },
@@ -574,18 +588,20 @@ async function mutateSessionAtMessage(
         );
         return;
       } finally {
-        if (forkRepositoryWorkspaceId) {
+        if (forkRepository) {
+          const { workspaceId, store, source } = forkRepository;
           const forkEntry = () =>
             loadAccessorSessionEntryForGatewayTarget({
               key: targetKey,
               cfg,
               agentId: current.target.agentId,
             }).entry;
-          if (forkEntry()?.repositoryWorkspaceId !== forkRepositoryWorkspaceId) {
-            await getSessionRepositoryWorkspaceStore().delete({
-              workspaceId: forkRepositoryWorkspaceId,
+          if (forkEntry()?.repositoryWorkspaceId !== workspaceId) {
+            await store.delete({
+              workspaceId,
               assertCurrent: () => {
-                if (forkEntry()?.repositoryWorkspaceId === forkRepositoryWorkspaceId) {
+                source.admission.assertCurrent();
+                if (forkEntry()?.repositoryWorkspaceId === workspaceId) {
                   throw new Error("Repository fork was committed before cleanup");
                 }
               },
@@ -617,22 +633,15 @@ async function mutateSessionAtMessage(
       }
       respond(
         true,
-        action === "fork"
-          ? {
-              sessionKey: result.key,
+        action === "switch"
+          ? {}
+          : {
+              ...(action === "fork" ? { sessionKey: result.key } : {}),
               ...("editorText" in result && result.editorText
                 ? { editorText: result.editorText }
                 : {}),
               ...(editorAttachments.length > 0 ? { editorAttachments } : {}),
-            }
-          : action === "rewind"
-            ? {
-                ...("editorText" in result && result.editorText
-                  ? { editorText: result.editorText }
-                  : {}),
-                ...(editorAttachments.length > 0 ? { editorAttachments } : {}),
-              }
-            : {},
+            },
         undefined,
       );
       emitSessionsChanged(context, {

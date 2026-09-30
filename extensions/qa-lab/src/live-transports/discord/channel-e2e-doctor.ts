@@ -1,13 +1,7 @@
 import { DiscordApiError } from "@openclaw/discord/api.js";
 import type { QaChannelE2eDoctorResult } from "../shared/channel-e2e.types.js";
+import type { DiscordQaRuntimeEnv } from "./discord-live.runtime.js";
 
-export type DiscordE2eRuntimeEnv = {
-  guildId: string;
-  channelId: string;
-  driverBotToken: string;
-  sutBotToken: string;
-  sutApplicationId: string;
-};
 export type DiscordE2eChannel = {
   id: string;
   guild_id?: string;
@@ -17,7 +11,7 @@ export type DiscordE2eChannel = {
 };
 
 export async function inspectDiscordE2eReadiness(params: {
-  runtimeEnv: DiscordE2eRuntimeEnv;
+  runtimeEnv: DiscordQaRuntimeEnv;
   driverId: string;
   sutId: string;
   request: <T>(route: string, options?: { token?: string }) => Promise<T>;

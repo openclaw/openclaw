@@ -1,4 +1,6 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { InboxEntry, ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
 
 type ResolveAgentRouteParams = Parameters<
@@ -68,7 +70,7 @@ export class ReefReceiptNotifier {
   private readonly completed = new Set<string>();
   private readonly inFlight = new Set<string>();
   private readonly peerStates = new Map<string, ReefPeerNoticeState>();
-  private readonly peerQueues = new Map<string, Promise<void>>();
+  private readonly peerQueues = new KeyedAsyncQueue();
 
   constructor(
     private readonly notify: (notice: ReefRejectionNotice) => Promise<void>,
@@ -79,7 +81,7 @@ export class ReefReceiptNotifier {
   async notifyRejections(rejections: readonly ReefDeliveryRejection[]): Promise<void> {
     this.seedRecoveredStates(rejections);
     for (const rejection of rejections) {
-      await this.runForPeer(rejection.peer, () => this.notifyRejection(rejection, 0));
+      await this.peerQueues.enqueue(rejection.peer, () => this.notifyRejection(rejection, 0));
     }
   }
 
@@ -222,23 +224,7 @@ export class ReefReceiptNotifier {
   private rememberPeerState(peer: string, state: ReefPeerNoticeState): void {
     this.peerStates.delete(peer);
     this.peerStates.set(peer, state);
-    if (this.peerStates.size > MAX_REJECTION_TRACKED) {
-      const oldest = this.peerStates.keys().next().value;
-      if (oldest !== undefined) {
-        this.peerStates.delete(oldest);
-      }
-    }
-  }
-
-  private runForPeer(peer: string, task: () => Promise<void>): Promise<void> {
-    const previous = this.peerQueues.get(peer) ?? Promise.resolve();
-    const current = previous.then(task, task);
-    this.peerQueues.set(peer, current);
-    return current.finally(() => {
-      if (this.peerQueues.get(peer) === current) {
-        this.peerQueues.delete(peer);
-      }
-    });
+    pruneMapToMaxSize(this.peerStates, MAX_REJECTION_TRACKED);
   }
 
   private async notifyOnce(notice: ReefRejectionNotice, receiptId: string): Promise<boolean> {
@@ -287,7 +273,7 @@ export class ReefReceiptNotifier {
     try {
       schedule(
         () =>
-          this.runForPeer(rejection.peer, async () => {
+          this.peerQueues.enqueue(rejection.peer, async () => {
             if (this.options.signal?.aborted) {
               this.inFlight.delete(this.rejectionKey(rejection));
               return;

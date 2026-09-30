@@ -8,6 +8,28 @@ export function currentTelegramRun() {
   return scope;
 }
 
+export async function fetchWithLease(
+  url,
+  init,
+  lease,
+  fetchImpl = fetch,
+  consume = (response) => response.json(),
+) {
+  const scope = currentTelegramRun();
+  scope.assertActive();
+  lease.assertHealthy();
+  const work = (async () => {
+    const signal = init.signal ? AbortSignal.any([scope.signal, init.signal]) : scope.signal;
+    const response = await fetchImpl(url, { ...init, signal });
+    scope.assertActive();
+    const payload = await consume(response);
+    scope.assertActive();
+    lease.assertHealthy();
+    return { response, payload };
+  })();
+  return await scope.trackIo(work);
+}
+
 class TelegramRunScope {
   controller = new AbortController();
   children = new Map();

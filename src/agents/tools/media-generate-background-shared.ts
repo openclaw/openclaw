@@ -31,7 +31,6 @@ import {
   type RequiredCompletionTerminalResult,
 } from "../completion-result.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
-import type { AgentInternalEvent } from "../internal-events.js";
 import {
   clearGeneratedMediaTaskActivity,
   createMediaGenerationOperation,
@@ -40,6 +39,11 @@ import {
   updateMediaGenerationOperation,
 } from "../media-generation-activity.js";
 import { MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS } from "../media-generation-task-status-shared.js";
+import {
+  IMAGE_GENERATION_TASK_KIND,
+  MUSIC_GENERATION_TASK_KIND,
+  VIDEO_GENERATION_TASK_KIND,
+} from "../media-generation-task-status.js";
 import { tryResolveSubagentRequesterAgentId } from "../subagents/announce/subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "../subagents/announce/subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "../subagents/announce/subagent-requester-store-key.js";
@@ -95,6 +99,7 @@ export type MediaGenerationExecutionResult = {
 
 type CreateMediaGenerationTaskRunParams = {
   sessionKey?: string;
+  requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
@@ -105,7 +110,6 @@ type CreateMediaGenerationTaskRunParams = {
 type RecordMediaGenerationTaskProgressParams = {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
-  eventSummary?: string;
 };
 
 type CompleteMediaGenerationTaskRunParams = {
@@ -207,7 +211,6 @@ async function createMediaGenerationTaskRun(
   params: CreateMediaGenerationTaskRunParams & {
     toolName: string;
     taskKind: string;
-    label: string;
     queuedProgressSummary: string;
   },
 ): Promise<MediaGenerationTaskHandle | null> {
@@ -215,6 +218,7 @@ async function createMediaGenerationTaskRun(
   if (!sessionKey) {
     return null;
   }
+  const requesterRunSessionKey = params.requesterRunSessionKey?.trim() || sessionKey;
   const runId = `tool:${params.toolName}:${crypto.randomUUID()}`;
   const assertCurrent = captureMediaGenerationAdmission(params.assertCurrent);
   const env = captureSessionTranscriptStorageEnvironment(process.env);
@@ -223,8 +227,16 @@ async function createMediaGenerationTaskRun(
     // Pin the complete requester route when detached work starts. Completion-time
     // session state can move to another peer while generation is still running.
     const cfg = getRuntimeConfig();
-    const agentId = tryResolveSubagentRequesterAgentId(cfg, sessionKey, params.requesterAgentId);
-    const canonicalKey = resolveRequesterStoreKey(cfg, sessionKey, params.requesterAgentId);
+    const agentId = tryResolveSubagentRequesterAgentId(
+      cfg,
+      requesterRunSessionKey,
+      params.requesterAgentId,
+    );
+    const canonicalKey = resolveRequesterStoreKey(
+      cfg,
+      requesterRunSessionKey,
+      params.requesterAgentId,
+    );
     const storePath = agentId
       ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
       : undefined;
@@ -236,9 +248,10 @@ async function createMediaGenerationTaskRun(
               storePath,
               env,
               sessionKey:
-                sessionKey === "main" || sessionKey === normalizeMainKey(cfg.session?.mainKey)
+                requesterRunSessionKey === "main" ||
+                requesterRunSessionKey === normalizeMainKey(cfg.session?.mainKey)
                   ? canonicalKey
-                  : sessionKey,
+                  : requesterRunSessionKey,
               hydrateSkillPromptRefs: false,
             },
             assertCurrent,
@@ -338,7 +351,6 @@ function clearMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle): 
 async function withMediaGenerationTaskKeepalive<T>(params: {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
-  eventSummary?: string;
   run: () => Promise<T>;
 }): Promise<T> {
   if (!params.handle) {
@@ -348,7 +360,6 @@ async function withMediaGenerationTaskKeepalive<T>(params: {
     recordMediaGenerationTaskProgress({
       handle: params.handle,
       progressSummary: params.progressSummary,
-      eventSummary: params.eventSummary,
     });
   }, MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS);
   interval.unref?.();
@@ -634,17 +645,16 @@ export function scheduleMediaGenerationTaskCompletion<
   params.scheduleBackgroundWork(() => runWithoutOwnedSessionTranscriptWrites(runBackgroundWork));
 }
 
-export function createMediaGenerationTaskLifecycle(params: {
-  toolName: string;
-  taskKind: string;
-  label: string;
-  queuedProgressSummary: string;
-  generatedLabel: string;
-  failureProgressSummary: string;
-  eventSource: AgentInternalEvent["source"];
-  announceType: string;
-  completionLabel: string;
-}) {
+export function createMediaGenerationTaskLifecycle(kind: "image" | "music" | "video") {
+  const taskKind = (
+    {
+      image: IMAGE_GENERATION_TASK_KIND,
+      music: MUSIC_GENERATION_TASK_KIND,
+      video: VIDEO_GENERATION_TASK_KIND,
+    } as const
+  )[kind];
+  const toolName = `${kind}_generate`;
+  const title = `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
   return {
     createTaskRun(
       this: void,
@@ -652,10 +662,9 @@ export function createMediaGenerationTaskLifecycle(params: {
     ): Promise<MediaGenerationTaskHandle | null> {
       return createMediaGenerationTaskRun({
         ...runParams,
-        toolName: params.toolName,
-        taskKind: params.taskKind,
-        label: params.label,
-        queuedProgressSummary: params.queuedProgressSummary,
+        toolName,
+        taskKind,
+        queuedProgressSummary: `Queued ${kind} generation`,
       });
     },
 
@@ -664,24 +673,24 @@ export function createMediaGenerationTaskLifecycle(params: {
     completeTaskRun(completionParams: CompleteMediaGenerationTaskRunParams) {
       completeMediaGenerationTaskRun({
         ...completionParams,
-        generatedLabel: params.generatedLabel,
+        generatedLabel: kind === "music" ? "track" : kind,
       });
     },
 
     failTaskRun(failureParams: FailMediaGenerationTaskRunParams) {
       failMediaGenerationTaskRun({
         ...failureParams,
-        progressSummary: params.failureProgressSummary,
+        progressSummary: `${title} generation failed`,
       });
     },
 
     async wakeTaskCompletion(completionParams: WakeMediaGenerationTaskCompletionParams) {
       return await wakeMediaGenerationTaskCompletion({
         ...completionParams,
-        eventSource: params.eventSource,
-        announceType: params.announceType,
-        toolName: params.toolName,
-        completionLabel: params.completionLabel,
+        eventSource: taskKind,
+        announceType: `${kind} generation task`,
+        toolName,
+        completionLabel: kind,
       });
     },
   };

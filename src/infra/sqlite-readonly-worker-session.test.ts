@@ -103,8 +103,10 @@ describe("SQLite read-only session operation custody", () => {
       child.emit("error", failure);
       await nextTurn();
       expect(settled()).toBe(false);
+      expect(session.notStarted).toBe(false);
       child.emit("close", -1, null);
       const error = await observed;
+      expect(session.notStarted).toBe(!spawned);
       if (spawned) {
         expect(error).toBe(failure);
       } else {

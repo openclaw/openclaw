@@ -4,44 +4,16 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-/// One-shot wake-up for a main-actor test event. Cancellation resumes a pending
-/// wait, so the test's time limit still ends a wait whose event never arrives.
-@MainActor
-private final class DashboardEventSignal {
-    private var fired = false
-    private var continuation: CheckedContinuation<Void, Error>?
-
-    func fire() {
-        self.fired = true
-        self.continuation?.resume()
-        self.continuation = nil
-    }
-
-    func wait() async throws {
-        guard !self.fired else { return }
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { self.continuation = $0 }
-        } onCancel: {
-            Task { @MainActor in self.cancel() }
-        }
-    }
-
-    private func cancel() {
-        self.continuation?.resume(throwing: CancellationError())
-        self.continuation = nil
-    }
-}
-
 @MainActor
 private final class DashboardAppLinkRecorder: NSObject, WKScriptMessageHandler {
     var urls: [String] = []
-    let received = DashboardEventSignal()
+    let received = AsyncTestGate()
 
     func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
         #expect(message.world === DashboardAppLinkMessageHandler.world)
         #expect(message.frameInfo.isMainFrame)
         if let url = message.body as? String { self.urls.append(url) }
-        self.received.fire()
+        self.received.open()
     }
 }
 
@@ -51,7 +23,7 @@ private final class DashboardAppLinkRecorder: NSObject, WKScriptMessageHandler {
 /// shared main-actor load in the native suite cannot fail this wait.
 @MainActor
 private final class DashboardLoadCompletion {
-    private let finished = DashboardEventSignal()
+    private let finished = AsyncTestGate()
     private var sawLoading = false
 
     func wait(for webView: WKWebView, _ start: () -> Void) async throws {
@@ -60,14 +32,15 @@ private final class DashboardLoadCompletion {
         }
         defer { observation.invalidate() }
         start()
-        try await self.finished.wait()
+        await self.finished.wait()
+        try Task.checkCancellation()
     }
 
     private func update(isLoading: Bool) {
         if isLoading {
             self.sawLoading = true
         } else if self.sawLoading {
-            self.finished.fire()
+            self.finished.open()
         }
     }
 }
@@ -127,7 +100,8 @@ struct DashboardAppLinkBridgeTests {
             isARepeat: false,
             keyCode: 36))
         controller.webView.keyDown(with: enter)
-        try await recorder.received.wait()
+        await recorder.received.wait()
+        try Task.checkCancellation()
         #expect(recorder.urls == ["openclaw://dashboard"])
     }
 }

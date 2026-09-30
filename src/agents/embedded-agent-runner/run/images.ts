@@ -614,19 +614,12 @@ async function materializePromptMediaMessages(
       : [{ type: "text" as const, text: message.content }];
     const existingImages = content.filter((block): block is ImageContent => block.type === "image");
     const result = await detectAndLoadPromptImages({
+      ...options,
       prompt: "",
       media: resolvedMedia,
-      workspaceDir: options.workspaceDir,
-      agentWorkspaceDir: options.agentWorkspaceDir,
-      model: options.model,
       existingImages,
       existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
       mediaImageLayout,
-      maxBytes: options.maxBytes,
-      maxDimensionPx: options.maxDimensionPx,
-      workspaceOnly: options.workspaceOnly,
-      localRoots: options.localRoots,
-      sandbox: options.sandbox,
     });
     const projectedContent = await projectOrderedPromptMedia({
       content,
@@ -698,15 +691,9 @@ export async function materializeProviderContext(
   },
 ): Promise<ProviderContext> {
   const messages = await materializePromptMediaMessages(params.context.messages as AgentMessage[], {
-    workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
+    ...params,
     model: { input: ["text", "image"] },
-    workspaceOnly: params.workspaceOnly,
-    localRoots: params.localRoots,
-    sandbox: params.sandbox,
     provider: true,
-    signal: params.signal,
-    onCurrentTurnImageFailure: params.onCurrentTurnImageFailure,
   });
   params.signal?.throwIfAborted();
   return messages === params.context.messages
