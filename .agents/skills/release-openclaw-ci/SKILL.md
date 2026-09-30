@@ -848,7 +848,15 @@ run-ID-cached bytes first.
      `ClawHub dispatch blocked by waiting run`: see [Publish children](#publish-children)
      Only the first class changes the Code SHA. After one diagnosis/fix/narrow
      retry, reassess instead of starting another all-group cycle.
-7. If a required PR CI run is capacity-stalled with queued jobs and no active
+7. Runner routing: FRV-dispatched CI and Plugin Prerelease children always run
+   hosted `ubuntu-24.04` (or the release runner group). Other release lanes
+   follow `OPENCLAW_CI_RUNNER_BACKEND`, so a flip to `github` during a Blacksmith
+   outage moves them to hosted runners, except the QA Lab runtime-pair lane: it
+   fails on hosted runners and stays pinned to Blacksmith, queuing through an
+   outage. Release Checks prints a `Release runner routing` notice while the
+   flip is active. Codex extension tests run as file-bounded Plugin Prerelease
+   jobs because one hosted Codex batch took 36-60 minutes.
+8. If a required PR CI run is capacity-stalled with queued jobs and no active
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
    First verify the PR head carries the current fallback schema:
    `gh api 'repos/openclaw/openclaw/contents/.github/workflows/ci.yml?ref=<pr-head-branch>'
