@@ -324,8 +324,8 @@ timeline for current status.
     The official `@openclaw/codex` and `@openclaw/feishu` plugins released with
     `v2026.7.1-beta.5` imported the retired bridge. SDK-owner approval on
     September 30, 2026 closed its compatibility window early, replacing the
-    former October 12 deadline. The supported-plugin
-    cutoff excludes that release and any other package still importing the
+    former October 12 deadline. The supported-plugin cutoff excludes that
+    release and any other package still importing the
     bridge. Upgrade affected plugins to versions using the replacements before
     upgrading OpenClaw. A newer version number alone is not evidence of migration.
 

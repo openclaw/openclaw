@@ -557,7 +557,15 @@ it.each([false, true])(
         },
         "session.transcript.batch",
       );
-      closeForIntegrityAdmission(f);
+      const cached = getOpenClawAgentDatabaseIfOpen(f.options);
+      if (!cached) {
+        throw new Error("Fixture lost its cached handle before native deletion preparation");
+      }
+      // Evict the handle without revoking the lifecycle operation's captured execution owner.
+      closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+      expect(cached.db.isOpen).toBe(false);
+      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
     });
     const harness: AgentHarness = {
       id: "prepared-native",

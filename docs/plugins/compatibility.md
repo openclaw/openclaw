@@ -133,6 +133,11 @@ release that imports the retired whole-store or transcript-path bridge.
 Upgrade those plugins to versions using scoped row operations and
 identity-backed transcript APIs before upgrading the host.
 
+The published `@openclaw/codex@2026.9.7` and `@openclaw/feishu@2026.9.7`
+packages have migrated off the retired imports. Their `2026.7.1-beta.5`
+packages still use the bridge; a newer version number alone does not prove
+migration for other releases or plugins.
+
 `openclaw/plugin-sdk/session-store-runtime` and `resolveStorePath(...)` remain
 supported. The removed exports, option types, and package-root aliases are
 listed in the [session API migration guide](/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis).
