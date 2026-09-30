@@ -4056,8 +4056,8 @@ INSERT INTO device_identities VALUES (
     expect(database?.walMaintenance.close()).toBe(true);
 
     expect(fs.existsSync(privateDirectory)).toBe(false);
-    expect(fs.readFileSync(writer.path)).toEqual(beforeMain);
-    expect(fs.readFileSync(`${writer.path}-wal`)).toEqual(beforeWal);
+    deepStrictEqual(fs.readFileSync(writer.path), beforeMain);
+    deepStrictEqual(fs.readFileSync(`${writer.path}-wal`), beforeWal);
     expect(fs.statSync(`${writer.path}-shm`).size).toBe(beforeShmSize);
     expect(fs.readdirSync(stateDir).toSorted()).toEqual(beforeEntries);
   });

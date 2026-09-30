@@ -1,4 +1,3 @@
-// Builds documentation baselines from config schema metadata.
 import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

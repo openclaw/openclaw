@@ -639,9 +639,6 @@ export function extractCurrentImageRequest(
 }
 
 export function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
-  if (!toolOutput.trim()) {
-    return null;
-  }
   try {
     return JSON.parse(toolOutput) as Record<string, unknown>;
   } catch {

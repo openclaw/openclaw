@@ -26,9 +26,7 @@ function findPreferredRangeEnd(text: string, start: number, end: number): number
   const slice = text.slice(start, end);
   let paragraphEnd: number | undefined;
   for (const match of slice.matchAll(/\n[\t ]*\n+/g)) {
-    if (match.index !== undefined) {
-      paragraphEnd = start + match.index + match[0].length;
-    }
+    paragraphEnd = start + match.index + match[0].length;
   }
   if (paragraphEnd !== undefined) {
     return paragraphEnd;

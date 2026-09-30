@@ -213,7 +213,24 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
 
   const ciGraphsIndex = process.argv.indexOf("--ci-graphs-json");
   const changedPathsIndex = process.argv.indexOf("--changed-paths-json");
-  if (ciGraphsIndex >= 0) {
+  const rootStripeIndex = process.argv.indexOf("--root-stripe");
+  if (rootStripeIndex >= 0) {
+    const spec = process.argv[rootStripeIndex + 1] ?? "";
+    const match = /^([1-9]\d*)\/([1-9]\d*)$/u.exec(spec);
+    const index = Number(match?.[1]);
+    const count = Number(match?.[2]);
+    if (
+      !Number.isSafeInteger(index) ||
+      !Number.isSafeInteger(count) ||
+      index > count ||
+      count > TSGO_ROOT_TEST_SHARDS.length
+    ) {
+      throw new Error(`Invalid root test stripe: ${spec}`);
+    }
+    process.exitCode = await runTsgoCoreTestShards(
+      TSGO_ROOT_TEST_SHARDS.filter((_, offset) => offset % count === index - 1),
+    );
+  } else if (ciGraphsIndex >= 0) {
     const names: unknown = JSON.parse(process.argv[ciGraphsIndex + 1] ?? "null");
     if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) {
       throw new Error("--ci-graphs-json requires a JSON string array");

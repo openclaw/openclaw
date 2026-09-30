@@ -50,7 +50,10 @@ export function readModelBehaviorConfig(
   return {
     thinkingLevel: typeof thinkingValue === "string" ? thinkingValue : undefined,
     thinkingOverridden: agentsDefaults !== null && Object.hasOwn(agentsDefaults, "thinkingDefault"),
-    fastMode: fastValue === "auto" || typeof fastValue === "boolean" ? fastValue : undefined,
+    fastMode:
+      fastValue === "auto" || fastValue === "ultrafast" || typeof fastValue === "boolean"
+        ? fastValue
+        : undefined,
     fastModeOverridden: agentsDefaults !== null && Object.hasOwn(agentsDefaults, "fastModeDefault"),
   };
 }

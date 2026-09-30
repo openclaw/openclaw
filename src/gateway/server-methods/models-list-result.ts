@@ -18,6 +18,7 @@ import {
   resolveCatalogDecisionRuntime,
   type ModelCatalogDecisionParams,
 } from "../../agents/model-catalog-decisions.js";
+import { resolveModelCatalogServiceTiers } from "../../agents/model-catalog-service-tiers.js";
 import {
   createModelCatalogView,
   selectModelCatalogRuntimeEntry,
@@ -131,6 +132,8 @@ function createPublicModelsListProjector(params: {
   pluginRegistry?: ModelCatalogDecisionParams["pluginRegistry"];
   thinkingCatalog: ModelCatalogEntry[];
   fastMode: ReturnType<typeof createModelFastModeResolver>;
+  snapshot: ModelCatalogSnapshot;
+  isCurrent: () => boolean;
   cfg: OpenClawConfig;
   agentId: string;
   configuredEntriesByKey: ReturnType<typeof resolveConfiguredModelEntries>["byKey"];
@@ -219,6 +222,13 @@ function createPublicModelsListProjector(params: {
       ? evaluation.availability
       : (evaluation.availability ?? false);
     const supportsFastMode = params.fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
+    const serviceTiers = resolveModelCatalogServiceTiers({
+      snapshot: params.snapshot,
+      entry,
+      evaluation,
+      runtimeId: preparedEntry.agentRuntime?.id,
+      isCurrent: params.isCurrent,
+    });
     return Object.assign(
       {},
       preparedEntry,
@@ -231,6 +241,7 @@ function createPublicModelsListProjector(params: {
           }
         : {},
       supportsFastMode === undefined ? {} : { supportsFastMode },
+      serviceTiers === undefined ? {} : { serviceTiers },
       projectedAvailability === undefined ? {} : { available: projectedAvailability },
       projectedAvailability === false && evaluation.unavailableReason
         ? {
@@ -261,6 +272,8 @@ type BuildModelsListResultParams = {
   agentId?: string;
   requesterProfileId?: string;
   readScope?: ChatMetadataReadParams;
+  /** Request authority does not imply a session/account-selection projection. */
+  publicationScope?: Pick<ChatMetadataReadParams, "isCurrent" | "assertCurrent">;
   params: ModelsListParams;
   includeManualSelection?: boolean;
   preloadedCatalog?: {
@@ -292,6 +305,7 @@ export async function prepareModelsListResult(
 ): Promise<PreparedModelsListResult> {
   const { source } = params;
   const scope = params.readScope;
+  const publicationScope = params.publicationScope ?? scope;
   const draft = scope?.draftAccountSelection;
   const sessionEntry: ChatMetadataSessionEntry | undefined = draft
     ? { authProfileOverride: draft.authProfileId, authProfileOverrideSource: "user" }
@@ -360,7 +374,7 @@ export async function prepareModelsListResult(
   const isCurrent = () =>
     currentConfig() === requestConfig &&
     preparedOwnerIsCurrent?.() === true &&
-    scope?.isCurrent?.() !== false;
+    publicationScope?.isCurrent?.() !== false;
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
@@ -403,6 +417,7 @@ export async function prepareModelsListResult(
       snapshot: { ...snapshot, entries: preparedCatalog.catalog },
       metadataSnapshot,
       preparedAuthStore,
+      accountCatalog: preparedProjectionOwner?.accountCatalog,
       preparedRuntimeAuthModes,
       preparedRuntimeAuthMaterializations,
       // A complete catalog and its synthetic-auth probes cross the worker boundary together.
@@ -420,6 +435,20 @@ export async function prepareModelsListResult(
       isCurrent,
       observationConfig: preparedProjectionOwner?.observationConfig,
     });
+  if (view !== "provider-config") {
+    await projector.prepareSelectedAccountCatalog(
+      () => {
+        draft?.assertCurrent();
+        publicationScope?.assertCurrent?.();
+        if (!isCurrent()) {
+          throw new PreparedModelRuntimePublicationSupersededError(
+            "Selected account catalog changed",
+          );
+        }
+      },
+      { allowDiscovery: !params.preloadedOnly && !params.params.preparedOnly, refresh },
+    );
+  }
   const catalog = dedupeModelCatalogEntries([
     ...preparedCatalog.catalog,
     ...projector.snapshot.entries,
@@ -519,6 +548,7 @@ export async function prepareModelsListResult(
       snapshot: inventorySnapshot,
       metadataSnapshot,
       preparedAuthStore,
+      accountCatalog: preparedProjectionOwner?.accountCatalog,
       preparedRuntimeAuthModes,
       preparedRuntimeAuthMaterializations,
       pluginRegistry: preparedPluginRegistry,
@@ -536,6 +566,8 @@ export async function prepareModelsListResult(
     const projectPublic = createPublicModelsListProjector({
       pluginRegistry: preparedPluginRegistry,
       thinkingCatalog: catalog,
+      snapshot: inventoryProjector.snapshot,
+      isCurrent,
       fastMode: createModelFastModeResolver({
         cfg,
         agentId,
@@ -569,6 +601,8 @@ export async function prepareModelsListResult(
   const projectPublic = createPublicModelsListProjector({
     pluginRegistry: preparedPluginRegistry,
     thinkingCatalog: catalog,
+    snapshot: projector.snapshot,
+    isCurrent: () => isCurrent() && projector.isCurrent(),
     fastMode: createModelFastModeResolver({
       cfg,
       agentId,

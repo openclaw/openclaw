@@ -8939,6 +8939,7 @@ public struct ModelChoice: Codable, Sendable {
     public let thinkinglevels: [[String: AnyCodable]]?
     public let thinkingdefault: String?
     public let effectivefastmode: AnyCodable?
+    public let servicetiers: [String]?
     public let supportsfastmode: Bool?
     public let supportstools: Bool?
     public let input: [AnyCodable]?
@@ -8965,6 +8966,7 @@ public struct ModelChoice: Codable, Sendable {
         thinkinglevels: [[String: AnyCodable]]? = nil,
         thinkingdefault: String? = nil,
         effectivefastmode: AnyCodable? = nil,
+        servicetiers: [String]? = nil,
         supportsfastmode: Bool? = nil,
         supportstools: Bool? = nil,
         input: [AnyCodable]? = nil,
@@ -8990,6 +8992,7 @@ public struct ModelChoice: Codable, Sendable {
         self.thinkinglevels = thinkinglevels
         self.thinkingdefault = thinkingdefault
         self.effectivefastmode = effectivefastmode
+        self.servicetiers = servicetiers
         self.supportsfastmode = supportsfastmode
         self.supportstools = supportstools
         self.input = input
@@ -9017,6 +9020,7 @@ public struct ModelChoice: Codable, Sendable {
         case thinkinglevels = "thinkingLevels"
         case thinkingdefault = "thinkingDefault"
         case effectivefastmode = "effectiveFastMode"
+        case servicetiers = "serviceTiers"
         case supportsfastmode = "supportsFastMode"
         case supportstools = "supportsTools"
         case input
@@ -9041,6 +9045,7 @@ public struct ModelRuntimeChoice: Codable, Sendable {
     public let thinkinglevels: [[String: AnyCodable]]?
     public let thinkingdefault: String?
     public let effectivefastmode: AnyCodable?
+    public let servicetiers: [String]?
     public let supportsfastmode: Bool?
     public let supportstools: Bool?
     public let input: [AnyCodable]?
@@ -9060,6 +9065,7 @@ public struct ModelRuntimeChoice: Codable, Sendable {
         thinkinglevels: [[String: AnyCodable]]? = nil,
         thinkingdefault: String? = nil,
         effectivefastmode: AnyCodable? = nil,
+        servicetiers: [String]? = nil,
         supportsfastmode: Bool? = nil,
         supportstools: Bool? = nil,
         input: [AnyCodable]? = nil)
@@ -9078,6 +9084,7 @@ public struct ModelRuntimeChoice: Codable, Sendable {
         self.thinkinglevels = thinkinglevels
         self.thinkingdefault = thinkingdefault
         self.effectivefastmode = effectivefastmode
+        self.servicetiers = servicetiers
         self.supportsfastmode = supportsfastmode
         self.supportstools = supportstools
         self.input = input
@@ -9098,6 +9105,7 @@ public struct ModelRuntimeChoice: Codable, Sendable {
         case thinkinglevels = "thinkingLevels"
         case thinkingdefault = "thinkingDefault"
         case effectivefastmode = "effectiveFastMode"
+        case servicetiers = "serviceTiers"
         case supportsfastmode = "supportsFastMode"
         case supportstools = "supportsTools"
         case input

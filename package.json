@@ -1968,6 +1968,7 @@
     "release:beta": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:beta-smoke": "node --import ./scripts/tsx.mjs scripts/release-beta-smoke.ts",
     "release:candidate": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
+    "release:clawhub-recovery": "node scripts/plugin-clawhub-recovery.mjs",
     "release:check": "pnpm build:package && pnpm release:generated:check && node --import ./scripts/tsx.mjs scripts/release-check.ts",
     "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     "release:generated:check": "node scripts/release-preflight.mjs --check",

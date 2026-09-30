@@ -133,7 +133,11 @@ function normalizePreference(value: unknown): NewSessionPreference | null {
   if (preference.model && agentRuntime) {
     preference.agentRuntime = agentRuntime;
   }
-  if (typeof value.fastMode === "boolean" || value.fastMode === "auto") {
+  if (
+    typeof value.fastMode === "boolean" ||
+    value.fastMode === "auto" ||
+    value.fastMode === "ultrafast"
+  ) {
     preference.fastMode = value.fastMode;
   }
   if (typeof value.worktree === "boolean") {

@@ -733,6 +733,7 @@ export function createHookRunner(
 
     for (const hook of selectedHooks) {
       policy.assertHandlerBoundaryActive?.();
+      readClaimingHookAdmission(ctx)?.assertCurrent?.();
       let shouldStop = false;
       try {
         const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
@@ -793,6 +794,7 @@ export function createHookRunner(
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
       policy.assertHandlerBoundaryActive?.();
+      readClaimingHookAdmission(ctx)?.assertCurrent?.();
       if (shouldStop) {
         break;
       }
@@ -835,13 +837,15 @@ export function createHookRunner(
     | { status: "declined" }
     | { status: "error"; error: string }
   > {
-    const assertCurrent = readClaimingHookAdmission(ctx);
+    const admission = readClaimingHookAdmission(ctx);
     let firstError: string | undefined;
     for (const hook of hooks) {
       // Host admission failures end dispatch; plugin fail-open policy cannot swallow them.
-      if (assertCurrent) {
-        await assertCurrent();
+      if (admission?.prepare) {
+        await admission.prepare();
       }
+      admission?.assertCurrent?.();
+      let handlerResult: TResult | void = undefined;
       try {
         const invokeHandler = async (): Promise<TResult | void> => {
           const promise = Promise.resolve(
@@ -849,13 +853,14 @@ export function createHookRunner(
           );
           return await awaitHook(hook, promise);
         };
-        const handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
-        if (handlerResult?.handled) {
-          return { status: "handled", result: handlerResult };
-        }
+        handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
       } catch (err) {
         firstError ??= sanitizeHookError(err);
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+      admission?.assertCurrent?.();
+      if (handlerResult?.handled) {
+        return { status: "handled", result: handlerResult };
       }
     }
     return firstError ? { status: "error", error: firstError } : { status: "declined" };

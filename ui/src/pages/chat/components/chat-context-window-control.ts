@@ -30,7 +30,7 @@ export function renderContextWindowControl(
   });
   let control: ReturnType<typeof html>;
   if (contextWindow.options.length === 2) {
-    const [smaller, larger] = [...contextWindow.options].toSorted(
+    const [smaller, larger] = contextWindow.options.toSorted(
       (left, right) => left.contextWindow - right.contextWindow,
     );
     if (!smaller || !larger) {

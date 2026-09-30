@@ -64,7 +64,7 @@ function listKnownEnvApiKeyMarkers(): Set<string> {
 }
 
 /** List non-secret auth markers known from core and bundled plugin manifests. */
-function listKnownNonSecretApiKeyMarkers(): string[] {
+function listKnownNonSecretApiKeyMarkers(): readonly string[] {
   knownNonSecretApiKeyMarkersCache ??= uniqueStrings([
     ...CORE_NON_SECRET_API_KEY_MARKERS,
     ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
@@ -73,7 +73,7 @@ function listKnownNonSecretApiKeyMarkers(): string[] {
         : [],
     ),
   ]);
-  return [...knownNonSecretApiKeyMarkersCache];
+  return knownNonSecretApiKeyMarkersCache;
 }
 
 /** Return true for AWS SDK env marker values that represent ambient auth. */

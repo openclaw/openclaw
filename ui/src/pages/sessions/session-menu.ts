@@ -74,6 +74,7 @@ export function renderSessionManagementMenu(params: {
       .deleteAllowed=${deleteAllowed}
       .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
       .groups=${params.groups}
+      .currentOwner=${row.owner?.actor ?? null}
       .work=${params.work}
       .pluginActions=${pluginSessionMenuActions(context.plugins, row)}
       .onClose=${params.onClose}

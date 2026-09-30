@@ -98,28 +98,6 @@ function recordNextcloudTalkOutboundActivity(accountId: string): void {
   }
 }
 
-function createNextcloudTalkSendReceipt(params: {
-  messageId: string;
-  roomToken: string;
-  replyTo?: string;
-}) {
-  const messageId = params.messageId.trim();
-  return createMessageReceiptFromOutboundResults({
-    results:
-      messageId && messageId !== "unknown"
-        ? [
-            {
-              channel: "nextcloud-talk",
-              messageId,
-              conversationId: params.roomToken,
-            },
-          ]
-        : [],
-    kind: "text",
-    ...(params.replyTo ? { replyToId: params.replyTo } : {}),
-  });
-}
-
 export async function sendMessageNextcloudTalk(
   to: string,
   text: string,
@@ -230,13 +208,23 @@ export async function sendMessageNextcloudTalk(
 
     recordNextcloudTalkOutboundActivity(account.accountId);
 
+    const receiptMessageId = messageId.trim();
     return {
       messageId,
       roomToken,
-      receipt: createNextcloudTalkSendReceipt({
-        messageId,
-        roomToken,
-        ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
+      receipt: createMessageReceiptFromOutboundResults({
+        results:
+          receiptMessageId && receiptMessageId !== "unknown"
+            ? [
+                {
+                  channel: "nextcloud-talk",
+                  messageId: receiptMessageId,
+                  conversationId: roomToken,
+                },
+              ]
+            : [],
+        kind: "text",
+        ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
       }),
       timestamp,
     };

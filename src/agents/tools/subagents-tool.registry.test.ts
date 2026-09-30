@@ -178,6 +178,7 @@ it.each([
             sessionKeys: [],
           }),
           (selection) => selection.runIds,
+          { sessionKeys: [previous.childSessionKey], descendants: true },
         ).catch((error: unknown) => error);
         await recoveryStarted.promise;
         if (trigger === "run preparation") {

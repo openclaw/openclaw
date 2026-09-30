@@ -1013,6 +1013,7 @@ async function reconcileAttemptStarts(
   client,
   mutationResults,
   operationDeadline,
+  onStarted,
 ) {
   const reconcileDeadline = Math.min(
     operationDeadline,
@@ -1042,6 +1043,7 @@ async function reconcileAttemptStarts(
       const expectedAttempt = minimumAttempts.get(runId);
       const observedAttempt = controllerRunAttempt(run, sourceAttempt, expectedAttempt);
       if (observedAttempt === expectedAttempt) {
+        onStarted(run);
         pending.delete(runId);
       }
     }
@@ -1457,13 +1459,50 @@ async function verifyRerunAttemptJobs(child, runAttempt, client, operationDeadli
   }
 }
 
-export async function continueFailed(plan, rootRunId, client, options = {}) {
+export async function continueFailed(plan, rootRunId, reader, options = {}) {
   const operationDeadline =
     options.operationDeadline === undefined
       ? createOperationDeadline()
       : validateOperationDeadline(options.operationDeadline);
   const ownedAttempts = new Map();
   const target = resolveRerunTarget(plan, options);
+  const runKeys = new Map(selectedChildren(plan).map((child) => [child.runId, child.key]));
+  runKeys.set(String(rootRunId), "parent");
+  const reported = new Map();
+  const log = options.log ?? console.error;
+  const report = (run, started = false) => {
+    const key = runKeys.get(String(run.id));
+    if (!key) {
+      return;
+    }
+    const message = formatRunProgress(key, run, started ? "started" : undefined);
+    const previous = reported.get(String(run.id));
+    const now = Date.now();
+    if (
+      started ||
+      previous?.message !== message ||
+      (run.status !== "completed" && now - previous.at >= 5 * 60_000)
+    ) {
+      log(
+        formatProgressEvent("continue", {
+          message: !started && run.status !== "completed" ? `waiting for ${message}` : message,
+          url: `https://github.com/${client.repository ?? DEFAULT_REPOSITORY}/actions/runs/${run.id}/attempts/${run.run_attempt}`,
+        }),
+      );
+      if (!started) {
+        reported.set(String(run.id), { message, at: now });
+      }
+    }
+  };
+  const getRun = reader.getRun.bind(reader);
+  const client = {
+    ...reader,
+    getRun: async (...args) => {
+      const run = await getRun(...args);
+      report(run);
+      return run;
+    },
+  };
   const initial = await preflightContinuation(
     plan,
     rootRunId,
@@ -1476,6 +1515,9 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
   const reruns = [];
   let status;
   while (true) {
+    for (const producer of artifactProducers) {
+      runKeys.set(producer.runId, `artifact:${producer.request.stage}`);
+    }
     status = await inspectRecovery(plan, artifactProducers, client, { operationDeadline });
     for (const child of status.children) {
       const expectedAttempt = ownedAttempts.get(child.runId);
@@ -1602,6 +1644,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
           client,
           mutationResults.filter((_result, index) => sentRunIds.has(requests[index].child.runId)),
           operationDeadline,
+          (run) => report(run, true),
         );
       }
       const admissionFailure = mutationResults.find(
@@ -1730,6 +1773,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
       client,
       mutationResults,
       operationDeadline,
+      (run) => report(run, true),
     );
     ownedAttempts.set(rootRunId, minimumAttempts.get(rootRunId));
     await waitForTerminal([rootRunId], client, operationDeadline, minimumAttempts);
@@ -2362,6 +2406,14 @@ function writeWatchState(path, state) {
   renameSync(temporary, path);
 }
 
+function formatRunProgress(owner, run, state) {
+  return `${owner}${owner === "parent" ? "" : " run"} ${run.id} attempt ${run.run_attempt} ${state ?? (run.status === "completed" ? `completed ${run.conclusion}` : run.status)}`;
+}
+
+function formatProgressEvent(command, event) {
+  return `[frv ${command}] ${new Date().toISOString().slice(11, 19)}Z ${event.message}${event.url ? ` ${event.url}` : ""}`;
+}
+
 function failedJobEvent(owner, job, attempt) {
   if (job.status !== "completed" || !FAILED_JOB_CONCLUSIONS.has(String(job.conclusion))) {
     return undefined;
@@ -2418,7 +2470,7 @@ async function pollRelease(state, client, pending, readOptions) {
   const parentDone = parent.status === "completed";
   report(
     `run:${parentRunId}:${parent.run_attempt}:${parentDone ? "completed" : "active"}`,
-    `parent ${parentRunId} attempt ${parent.run_attempt} ${parentDone ? `completed ${parent.conclusion}` : parent.status}`,
+    formatRunProgress("parent", parent),
     parent.html_url,
   );
   const dispatchKeys = new Map([
@@ -2476,7 +2528,7 @@ async function pollRelease(state, client, pending, readOptions) {
       const done = run.status === "completed";
       report(
         `run:${runId}:${current}:${done ? "completed" : "active"}`,
-        `${child.key} run ${runId} attempt ${current} ${done ? `completed ${run.conclusion}` : run.status}`,
+        formatRunProgress(child.key, run),
         run.html_url,
       );
       // Earlier attempts are final; scan each once so a late start still reports them.
@@ -2628,7 +2680,7 @@ async function main() {
         console.log(
           options.json
             ? JSON.stringify({ at: new Date().toISOString(), ...event })
-            : `[frv watch] ${new Date().toISOString().slice(11, 19)}Z ${event.message}${event.url ? ` ${event.url}` : ""}`,
+            : formatProgressEvent("watch", event),
         ),
       intervalMs: options.intervalMs,
       once: options.once,

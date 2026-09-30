@@ -83,7 +83,10 @@ import {
   readManagedImageRecord,
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
-import { resolveManagedImageThumbnail } from "./managed-image-thumbnail-cache.js";
+import {
+  encodeImageThumbnail,
+  resolveManagedImageThumbnail,
+} from "./managed-image-thumbnail-cache.js";
 import {
   MANAGED_OUTGOING_ATTACHMENT_ID_RE,
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
@@ -107,8 +110,6 @@ const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
 const MANAGED_OUTGOING_IMAGE_TICKET_SCOPE = "managed-outgoing-image";
 const MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS = 5 * 60 * 1000;
-// Chat previews occupy up to 400 CSS pixels on displays with up to 3× density.
-const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 1200;
 const managedOutgoingImageTicketSecret = randomBytes(32);
 
 export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
@@ -1069,13 +1070,7 @@ async function readManagedImageThumbnailFromFile(
     if (maxBytes !== undefined && source.byteLength > maxBytes) {
       throw new Error("Managed image exceeds the preview byte limit");
     }
-    return (
-      await createImageProcessor().encode(source, {
-        format: "png",
-        resize: { maxSide: MANAGED_IMAGE_THUMBNAIL_MAX_SIDE, enlarge: false },
-        compressionLevel: 8,
-      })
-    ).data;
+    return await encodeImageThumbnail(source);
   });
 }
 

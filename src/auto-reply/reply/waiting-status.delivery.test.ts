@@ -71,7 +71,11 @@ function createContext(): FinalizeReplyAgentRunInput {
         payloads: [],
         meta: { durationMs: 0, yielded: true },
         acceptedSessionSpawns: [
-          { runId: "index-worker-run", childSessionKey: "agent:main:subagent:index-worker" },
+          {
+            runId: "index-worker-run",
+            childSessionKey: "agent:main:subagent:index-worker",
+            expectsCompletionMessage: true,
+          },
         ],
       },
       resolved: { provider: followupRun.run.provider, model: followupRun.run.model },

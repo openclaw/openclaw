@@ -122,17 +122,12 @@ export function formatTelemetryExporterSummary(snapshot: unknown): TelemetryExpo
       latest.set(key, record);
     }
   }
-  const records = [...latest.values()].toSorted((left, right) => {
-    const sourceOrder = left.source.localeCompare(right.source);
-    if (sourceOrder !== 0) {
-      return sourceOrder;
-    }
-    const signalOrder = SIGNALS.indexOf(left.signal) - SIGNALS.indexOf(right.signal);
-    if (signalOrder !== 0) {
-      return signalOrder;
-    }
-    return (left.transport ?? "").localeCompare(right.transport ?? "");
-  });
+  const records = [...latest.values()].toSorted(
+    (left, right) =>
+      left.source.localeCompare(right.source) ||
+      SIGNALS.indexOf(left.signal) - SIGNALS.indexOf(right.signal) ||
+      (left.transport ?? "").localeCompare(right.transport ?? ""),
+  );
   if (records.length === 0) {
     return null;
   }

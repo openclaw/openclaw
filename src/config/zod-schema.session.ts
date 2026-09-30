@@ -1,4 +1,3 @@
-// Defines session-related Zod schema fragments for config parsing.
 import { z } from "zod";
 import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
 import { NativeCommandsSettingSchema } from "./zod-schema.messages.js";
