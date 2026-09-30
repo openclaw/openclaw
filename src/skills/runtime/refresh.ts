@@ -257,12 +257,9 @@ function createSkillsPathWatcher(
     if (state.initialScan === "pending") {
       state.initialScan = "error";
     }
-    if (!state.unavailable) {
-      state.unavailable = true;
-      publishSkillsWatchChanges([{ ...targetChange, change: "unavailable" }]);
-    } else {
-      publishSkillsWatchChanges([{ ...targetChange, change: "skills" }]);
-    }
+    const change = state.unavailable ? "skills" : "unavailable";
+    state.unavailable = true;
+    publishSkillsWatchChanges([{ ...targetChange, change }]);
     // A fresh subscription gets one automatic recovery attempt. Each replacement
     // re-admits its source after joined retirement; close failure never rearms.
     const subscriber = state.subscribers.values().next().value;
