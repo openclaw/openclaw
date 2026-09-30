@@ -229,7 +229,6 @@ describe("cron service timer seam coverage", () => {
       evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
       await result;
     }
-
   });
 
   it.each([

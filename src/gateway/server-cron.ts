@@ -219,8 +219,6 @@ export async function fireStreamJob(
   return disposition ?? (result.ok && result.ran === true ? "fired" : "not-run");
 }
 
-
-
 function sanitizeCronHeartbeatOverride(
   heartbeat: AgentDefaultsConfig["heartbeat"] | undefined,
 ): AgentDefaultsConfig["heartbeat"] | undefined {

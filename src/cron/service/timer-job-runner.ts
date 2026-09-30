@@ -128,7 +128,7 @@ async function deliverPrimaryWebhook(
     deliveryAttemptFence?.assertCurrent();
     webhookAdapterEntered = true;
     const outcome = await state.deps.sendCronWebhook({
-      assertCurrent: deliveryAttemptFence?.assertCurrent ?? assertRunCurrent,
+      assertCurrent: deliveryAttemptFence?.assertCurrent,
       job,
       abortSignal,
       onDeliveryState: (delivery) => {
