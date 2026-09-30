@@ -93,6 +93,7 @@ export type PreparedModelWorkerResult =
         status: "ok";
         generationFingerprint: string;
         credentials: Readonly<AuthStorageData>;
+        heapUsedBytes?: number;
       } & (
           | {
               kind: "catalog";
@@ -110,8 +111,9 @@ export type PreparedModelWorkerResult =
       status: "generation-mismatch";
       generationFingerprint: string;
       reconstructedFingerprint: string;
+      heapUsedBytes?: number;
     }>
-  | Readonly<{ status: "failed"; error: string }>;
+  | Readonly<{ status: "failed"; error: string; heapUsedBytes?: number }>;
 
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
@@ -625,6 +627,18 @@ export function createPreparedModelCatalogWorker(
       tasks.set(pending, task);
       message = await pending;
       assertCurrent();
+      const heapLimitBytes = CATALOG_WORKER_HEAP_LIMIT_MB * 1024 * 1024;
+      if (
+        message.status === "ok" &&
+        message.heapUsedBytes !== undefined &&
+        message.heapUsedBytes >= heapLimitBytes &&
+        requestPool &&
+        !requestPool.isClosed
+      ) {
+        void requestPool.rotate().catch((rotateError) => {
+          process.emitWarning(`Catalog worker recycling failed: ${String(rotateError)}`);
+        });
+      }
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
       if (failure instanceof WorkerTaskError && failure.code === "overloaded") {
