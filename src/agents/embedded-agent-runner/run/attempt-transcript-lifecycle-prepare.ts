@@ -14,6 +14,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
+  runAbortController?: AbortController;
   attempt: Pick<
     EmbeddedRunAttemptParams,
     | "abortSignal"
@@ -61,11 +62,14 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
   };
   // The stable cron root can rotate while its exact run remains stored. Retain
   // its admitted generation only for this attempt, before compaction adoption.
-  const generation = await prepareCronRootSessionGeneration({
-    ...sessionTarget,
-    sessionKey: attempt.sessionKey ?? sessionTarget.sessionKey,
-    lifecycleRevision: fencedSessionTarget.expectedLifecycleRevision,
-  });
+  const generation = await prepareCronRootSessionGeneration(
+    {
+      ...sessionTarget,
+      sessionKey: attempt.sessionKey ?? sessionTarget.sessionKey,
+      lifecycleRevision: fencedSessionTarget.expectedLifecycleRevision,
+    },
+    input.runAbortController ? (reason) => input.runAbortController?.abort(reason) : undefined,
+  );
   const lifecycle = createEmbeddedAttemptTranscriptLifecycle({
     runId: attempt.runId,
     sessionId: attempt.sessionId,

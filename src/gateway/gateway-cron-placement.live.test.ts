@@ -152,6 +152,12 @@ describeLive("cron placement identity through production Gateway routing", () =>
             timeoutMs: 60_000,
             timeoutMessage: "Cron placement client did not connect",
             signal,
+          }).catch((error: unknown) => {
+            const logs = instance
+              .logs()
+              .replaceAll(instance.gatewayToken, "<test-token>")
+              .replaceAll(process.env.OPENAI_API_KEY ?? "<missing-key>", "<provider-key>");
+            throw new Error(`Cron placement connection failed: ${logs}`, { cause: error });
           });
           client = connected;
           await connected.request("sessions.create", { key: SOURCE_KEY, agentId: "probe" });

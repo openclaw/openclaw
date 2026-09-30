@@ -72,7 +72,10 @@ function isSessionGenerationFacts(value: unknown): value is SessionGenerationFac
 }
 
 /** Prepare once per delivery attempt; committed entry publications keep final I/O checks live. */
-async function prepareSessionGenerationLease(input: SessionGenerationFacts): Promise<{
+async function prepareSessionGenerationLease(
+  input: SessionGenerationFacts,
+  onRevoked?: (reason: unknown) => void,
+): Promise<{
   assertCurrent: () => void;
   assertDeliveryCurrent: () => void;
   release: () => void;
@@ -97,6 +100,10 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
     for (const stop of releases.splice(0).toReversed()) {
       stop();
     }
+  };
+  const revoke = () => {
+    release();
+    onRevoked?.(new SessionDeliveryGenerationUnavailableError());
   };
   const assertActive = () => {
     if (revoked) {
@@ -195,8 +202,8 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
         registerOpenClawAgentDatabaseAsyncResource({
           agentId: generation.agentId,
           path: generation.storePath,
-          revoke: release,
-          close: async () => release(),
+          revoke,
+          close: async () => revoke(),
         }),
       );
       readCurrent = () => {
@@ -241,8 +248,8 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
             registerOpenClawAgentDatabaseReadCandidateResource({
               ...candidate,
               path: pathname,
-              revoke: release,
-              close: async () => release(),
+              revoke,
+              close: async () => revoke(),
             }),
           );
         }
@@ -323,16 +330,33 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
         }
         readCurrent();
       } catch (error) {
-        if (
+        const failure =
           isSessionDeliveryGenerationRevokedError(error) ||
           isSessionDeliveryGenerationUnavailableError(error)
-        ) {
-          throw error;
-        }
-        throw new SessionDeliveryGenerationUnavailableError({ cause: error });
+            ? error
+            : new SessionDeliveryGenerationUnavailableError({ cause: error });
+        onRevoked?.(failure);
+        throw failure;
       }
     };
     assertCurrent();
+    if (onRevoked) {
+      let checkedPublications = publications;
+      // Public notifications run after every committed generation fact is installed.
+      releases.push(
+        sessionChanges.subscribe(() => {
+          if (checkedPublications === publications && !invalidated && !revoked) {
+            return;
+          }
+          checkedPublications = publications;
+          try {
+            assertCurrent();
+          } catch {
+            // assertCurrent has already revoked the execution owner.
+          }
+        }),
+      );
+    }
     return { assertCurrent, assertDeliveryCurrent: () => assertCurrent(true), release };
   } catch (error) {
     release();
@@ -355,14 +379,19 @@ export async function prepareSessionGenerationFacts(input: SessionGenerationFact
 /** Stable cron roots retain their admitted run; exact-run keys already name one generation. */
 export async function prepareCronRootSessionGeneration(
   input: Omit<SessionDeliveryGeneration, "lifecycleRevision"> & { lifecycleRevision?: string },
+  onRevoked?: (reason: unknown) => void,
 ) {
   if (!isCronSessionKey(input.sessionKey) || isCronRunSessionKey(input.sessionKey)) {
     return undefined;
   }
-  return await prepareSessionGenerationFacts({
-    ...input,
-    lifecycleRevision: input.lifecycleRevision ?? null,
-  });
+  const { assertCurrent, release } = await prepareSessionGenerationLease(
+    {
+      ...input,
+      lifecycleRevision: input.lifecycleRevision ?? null,
+    },
+    onRevoked,
+  );
+  return { assertCurrent, release };
 }
 
 /** Delivery remains unavailable while any lifecycle mutation owns the session. */
