@@ -538,19 +538,67 @@ describe("ClawHub prepared publication", () => {
     },
   );
 
-  it("keeps an unpublished version in the frozen roster for publication", async () => {
+  it.each([
+    { state: "published" },
+    { state: "absent" },
+    { state: "pending", stage: "staging" },
+    { state: "pending", stage: "checks", attemptId: "attempt_checks" },
+    { state: "pending", stage: "finalization", attemptId: "attempt_final" },
+    { state: "failed", attemptId: "attempt_recover", recoverable: true },
+    { state: "failed", recoverable: false },
+  ])("retains publication detail in the prepared roster: %j", async (publication) => {
     const f = preparedFixture();
-    const fetchImpl: typeof fetch = async (input, init) =>
-      requestUrl(input).endsWith(`/versions/${f.entry.version}`)
-        ? new Response(null, { status: 404 })
-        : f.options.fetchImpl(input, init);
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/publication")) {
+        return Response.json({ name: f.entry.name, version: f.entry.version, ...publication });
+      }
+      if (url.endsWith(`/versions/${f.entry.version}`)) {
+        throw new Error("Recognized publication state must not fall back to the version probe.");
+      }
+      if (url.endsWith("/trusted-publisher") && ["pending", "failed"].includes(publication.state)) {
+        return new Response(null, { status: 404 });
+      }
+      return f.options.fetchImpl(input, init);
+    };
     const [entry] = await resolvePreparedClawHubMatrix({ ...f.resolveOptions, fetchImpl });
     expect(entry).toMatchObject({
       packageName: f.entry.name,
-      alreadyPublished: false,
+      publication,
+      alreadyPublished: publication.state === "published",
       prepared: { tarballSha256: f.entry.artifactSha256 },
     });
   });
+
+  it.each([
+    [404, 404, "absent"],
+    [404, 200, "published"],
+    [200, 404, "absent"],
+    [200, 200, "published"],
+  ])(
+    "falls back on legacy publication HTTP %i to version HTTP %i",
+    async (status, legacy, state) => {
+      const f = preparedFixture();
+      const requests: string[] = [];
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const url = requestUrl(input);
+        if (url.includes("/versions/")) {
+          requests.push(url);
+          return url.endsWith("/publication")
+            ? Response.json({ version: f.entry.version }, { status })
+            : new Response(null, { status: legacy });
+        }
+        return f.options.fetchImpl(input, init);
+      };
+      const [entry] = await resolvePreparedClawHubMatrix({ ...f.resolveOptions, fetchImpl });
+      expect(entry.publication).toEqual({ state });
+      expect(entry.alreadyPublished).toBe(state === "published");
+      expect(requests.map((url) => url.slice(url.indexOf("/versions/")))).toEqual([
+        `/versions/${f.entry.version}/publication`,
+        `/versions/${f.entry.version}`,
+      ]);
+    },
+  );
 
   it.each([
     { label: "missing package", status: 404, patch: {} },
@@ -587,6 +635,8 @@ describe("ClawHub prepared publication", () => {
         resolvePreparedClawHubMatrix({ ...f.resolveOptions, fetchImpl }),
       ).rejects.toThrow(/Plugin ClawHub New owner before preparing again/u);
       expect(registryRequests).toEqual([
+        `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/versions/${f.entry.version}/publication`,
+        `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/versions/${f.entry.version}`,
         `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/trusted-publisher`,
       ]);
     },

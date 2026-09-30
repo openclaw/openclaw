@@ -89,6 +89,7 @@ const PUBLICATION_CONTRACT_FILES = [
   "scripts/lib/actions-artifact-archive.mjs",
   "scripts/lib/arg-utils.runtime.mjs",
   "scripts/lib/bounded-response.mjs",
+  "scripts/lib/clawhub-publication-state.mjs",
   "scripts/lib/canonical-json.mjs",
   "scripts/lib/npm-core-release-packages.json",
   "scripts/lib/npm-publish-plan.mjs",
@@ -5437,6 +5438,123 @@ require_clawhub_dispatch_available "$WORKFLOW_REF" plugin-clawhub-release.yml &&
     );
   });
 
+  it.each(["source", "prepared", "dry-run"])(
+    "keeps staged ClawHub publications out of the %s publish roster",
+    (mode) => {
+      const root = tempDirs.make("clawhub-publication-plan-");
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      mkdirSync(join(root, ".release-tooling"));
+      symlinkSync(resolve("scripts"), join(root, ".release-tooling/scripts"), "dir");
+      writeFileSync(
+        join(bin, "node"),
+        `#!/bin/sh
+case "$1" in
+  --input-type=module) exec "$REAL_NODE" "$@" ;;
+  *.mjs) cp "$MOCK_MATRIX" .local/clawhub-matrix.json ;;
+  *) cat "$MOCK_PLUGIN_PLAN" ;;
+esac
+`,
+        { mode: 0o755 },
+      );
+      const all = [
+        { state: "absent" },
+        { state: "published" },
+        { state: "pending", stage: "checks", attemptId: "attempt_pending" },
+        { state: "failed", recoverable: true, attemptId: "attempt_recover" },
+        { state: "failed", recoverable: false, attemptId: "attempt_blocked" },
+        { state: "failed", recoverable: true },
+      ].map((publication, index) => ({
+        packageName: `@openclaw/example-${index}`,
+        packageDir: `extensions/example-${index}`,
+        version: "2026.9.1",
+        publishTag: "latest",
+        artifactName: `artifact-${index}`,
+        publication,
+        alreadyPublished: publication.state === "published",
+        prepared: { artifactId: index + 1 },
+      }));
+      const plan = {
+        all,
+        candidates: [all[0]],
+        skippedPublished: [all[1]],
+        pendingPublication: [all[2]],
+        failedPublication: all.slice(3),
+        bootstrapCandidates: [],
+        missingTrustedPublisher: [],
+        warnings: [],
+      };
+      const planPath = join(root, "plan.json");
+      const matrixPath = join(root, "matrix.json");
+      const summaryPath = join(root, "summary.md");
+      writeFileSync(planPath, JSON.stringify(plan));
+      writeFileSync(matrixPath, JSON.stringify(all));
+      const script = workflowStep(
+        workflowJob(PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub"),
+        "Resolve plugin release plan",
+      ).run!;
+      const result = spawnSync("bash", ["-c", script], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: `${bin}:${process.env.PATH}`,
+          REAL_NODE: process.execPath,
+          MOCK_PLUGIN_PLAN: planPath,
+          MOCK_MATRIX: matrixPath,
+          GITHUB_OUTPUT: join(root, "output"),
+          GITHUB_STEP_SUMMARY: summaryPath,
+          GITHUB_RUN_ID: "1",
+          GITHUB_RUN_ATTEMPT: "1",
+          PUBLISH_SCOPE: "all-publishable",
+          RELEASE_PLUGINS: "",
+          DRY_RUN: mode === "dry-run" ? "true" : "false",
+          PREPARED_ARTIFACT: mode === "prepared" ? "{}" : "",
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const outputs = Object.fromEntries(
+        readFileSync(join(root, "output"), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const equals = line.indexOf("=");
+            return [line.slice(0, equals), line.slice(equals + 1)];
+          }),
+      );
+      if (!outputs.matrix || !outputs.publish_matrix) {
+        throw new Error("Release plan did not emit both matrices.");
+      }
+      const matrix = JSON.parse(outputs.matrix) as typeof all;
+      const publish = JSON.parse(outputs.publish_matrix) as typeof all;
+      expect(matrix.map((entry) => entry.publication.state)).toEqual(
+        mode === "dry-run"
+          ? all.map((entry) => entry.publication.state)
+          : mode === "prepared"
+            ? ["absent", "published"]
+            : ["absent"],
+      );
+      expect(publish.map((entry) => entry.publication.state)).toEqual(
+        mode === "dry-run" ? all.map((entry) => entry.publication.state) : ["absent"],
+      );
+      expect(publish.every((entry) => !("prepared" in entry))).toBe(true);
+      const resolvedPlan = JSON.parse(
+        readFileSync(join(root, ".local/plugin-clawhub-release-plan.json"), "utf8"),
+      );
+      expect(resolvedPlan.pendingPublication).toEqual(plan.pendingPublication);
+      expect(resolvedPlan.failedPublication).toEqual(plan.failedPublication);
+      const summary = readFileSync(summaryPath, "utf8");
+      expect(summary).toContain("### Pending publications");
+      expect(summary).toContain("### Failed publications");
+      expect(summary).toContain(
+        "bun '<PINNED_CLAWHUB_CHECKOUT>/packages/clawhub/src/cli.ts' --no-input package recover 'attempt_recover' --manual-override-reason '<EDIT_RECOVERY_REASON>' --wait --wait-timeout 1800 --json",
+      );
+      expect(summary).not.toContain("package recover 'attempt_blocked'");
+      expect(summary).toContain("new version or ask the ClawHub operator to discard");
+      expect(summary).toContain("Locate the bound attempt");
+      expect(result.stdout.match(/::warning::/gu)).toHaveLength(4);
+    },
+  );
+
   it.each([
     [PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm", "Resolve plugin release plan"],
     [PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub", "Resolve plugin release plan"],
@@ -5544,6 +5662,22 @@ require_clawhub_dispatch_available "$WORKFLOW_REF" plugin-clawhub-release.yml &&
         const rejected = run();
         expect(rejected.status, rejected.stderr).toBe(1);
         expect(rejected.stderr).toContain("Alpha releases are retired;");
+      }
+      if (workflow === ".github/workflows/plugin-clawhub-new.yml") {
+        for (const publication of [
+          { state: "pending", stage: "checks", attemptId: "attempt_pending" },
+          { state: "failed", recoverable: true, attemptId: "attempt_failed" },
+        ]) {
+          const plan = JSON.parse(originalPlan);
+          plan.bootstrapCandidates = [];
+          plan.missingTrustedPublisher = [{ ...plugin, publication, alreadyPublished: false }];
+          writeFileSync(planPath, JSON.stringify(plan));
+          const rejected = run();
+          expect(rejected.status, rejected.stderr).toBe(1);
+          expect(rejected.stdout).toContain(
+            "Pending or failed ClawHub publications cannot be bootstrapped again",
+          );
+        }
       }
     }
   });
