@@ -105,6 +105,7 @@ describe("Control UI release-only inventories", () => {
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
+    "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
     "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
     automationManagement,
