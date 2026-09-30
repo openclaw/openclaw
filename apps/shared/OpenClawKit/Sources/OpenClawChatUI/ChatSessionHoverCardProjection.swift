@@ -73,14 +73,14 @@ enum ChatSessionHoverCardProjection {
 
     struct Attribution { let primary: Person
         let others: [Person]
-        let count: Int
+        let participantCount: Int
         let primaryIsCreator: Bool
         var visibleOthers: [Person] {
             Array(self.others.prefix(4))
         }
 
         var hiddenAvatarCount: Int {
-            max(0, self.count - self.visibleOthers.count)
+            max(0, self.participantCount - self.visibleOthers.count)
         }
     }
 
@@ -162,20 +162,21 @@ enum ChatSessionHoverCardProjection {
             return true
         }.map { Person(
             label: self.text($0.label) ?? self.string(($0.identity.value as? [String: AnyCodable])?["id"]) ?? "",
-            identity: $0.identity, avatarURL: $0.avatarUrl) }
+            identity: $0.identity,
+            avatarURL: $0.avatarUrl) }
         let count = max(participants.count, (row.participantCount ?? 0) - excluded)
         if let creator = row.createdActor, let label = self.text(creator.label) ?? self.text(creator.id) {
             return Attribution(
                 primary: Person(label: label, identity: creator.identity, avatarURL: creator.avatarUrl),
                 others: participants,
-                count: count,
+                participantCount: count,
                 primaryIsCreator: true)
         }
         guard let primary = participants.first else { return nil }
         return Attribution(
             primary: primary,
             others: Array(participants.dropFirst()),
-            count: max(0, count - 1),
+            participantCount: max(0, count - 1),
             primaryIsCreator: false)
     }
 

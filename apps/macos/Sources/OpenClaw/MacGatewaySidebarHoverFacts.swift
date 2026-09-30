@@ -6,27 +6,57 @@ extension MacGatewayChatTransport: OpenClawChatSidebarHoverTransport {
         MacGatewaySidebarHoverFacts.facts(for: self)
     }
 
-    @MainActor func sidebarHoverChannelAvatar(session: OpenClawChatSessionEntry) async -> Data? {
+    @MainActor func sidebarHoverChannelAvatar(
+        session: OpenClawChatSessionEntry, sessionAgentID: String?) async -> Data?
+    {
+        await self.sidebarAvatar(
+            session: session, sessionAgentID: sessionAgentID, resource: .channel, advertised: session.channelAvatarUrl)
+    }
+
+    @MainActor func sidebarHoverAgentAvatar(
+        session: OpenClawChatSessionEntry, sessionAgentID: String?, agentID: String, advertised: String) async -> Data?
+    {
+        await self.sidebarAvatar(
+            session: session, sessionAgentID: sessionAgentID, resource: .agent(agentID), advertised: advertised)
+    }
+
+    @MainActor private func sidebarAvatar(
+        session: OpenClawChatSessionEntry,
+        sessionAgentID: String?,
+        resource: OpenClawChatSidebarHoverFacts.AvatarResource,
+        advertised: String?) async -> Data?
+    {
+        let path: String
+        let id: String
+        switch resource {
+        case .channel: (path, id) = ("__openclaw__/channel-avatar", session.key)
+        case let .agent(agentID): (path, id) = ("avatar", agentID)
+        }
         guard await (try? self.requireCurrentOutboxGateway()) != nil,
               let lease = await self.connection.captureServerLease(),
               let base = try? GatewayEndpointStore.dashboardURL(
                   for: (url: lease.route.url, token: nil, password: nil), mode: .remote),
               var url = URLComponents(
-                  url: base.appending(path: "__openclaw__/channel-avatar")
-                      .appending(component: session.key),
+                  url: base.appending(path: path).appending(component: id),
                   resolvingAgainstBaseURL: false) else { return nil }
+        if case .agent = resource {
+            guard let advertised, let route = URL(string: advertised, relativeTo: base)?.absoluteURL,
+                  route.scheme == base.scheme, route.host == base.host, route.port == base.port,
+                  route.path == url.path else { return nil }
+        }
         // control-ui-resource-routes.ts:92: construct the authenticated route; never send credentials to an advertised host.
-        url.queryItems = session.channelAvatarUrl.flatMap(URLComponents.init(string:))?.queryItems?
+        url.queryItems = advertised.flatMap(URLComponents.init(string:))?.queryItems?
             .filter { $0.name == "v" }
-        guard let resource = url.url else { return nil }
+        guard let targetURL = url.url else { return nil }
         let revision = await self.connection.sourceResourceRevision
-        let data = await self.sidebarHoverFacts.channelAvatar(
+        let data = await self.sidebarHoverFacts.avatar(
             sessionKey: session.key,
-            agentID: self.sessionTarget(for: session.key).agentID,
-            version: "\(resource.absoluteString)#\(revision)")
+            agentID: sessionAgentID,
+            version: "\(targetURL.absoluteString)#\(revision)",
+            resource: resource)
         {
             guard let (data, response) = try? await self.connection.requestSourceResource(
-                url: resource, maximumBytes: 2 * 1024 * 1024, lease: lease, revision: revision)
+                url: targetURL, maximumBytes: 2 * 1024 * 1024, lease: lease, revision: revision)
             else { return .unavailable }
             if (response as? HTTPURLResponse)?.statusCode == 404 { return .notFound }
             guard (response as? HTTPURLResponse)?.statusCode == 200,

@@ -72,20 +72,24 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
 
 @MainActor public protocol OpenClawChatSidebarHoverTransport {
     var sidebarHoverFacts: OpenClawChatSidebarHoverFacts { get }
-    func sidebarHoverChannelAvatar(session: OpenClawChatSessionEntry) async -> Data?
+    func sidebarHoverChannelAvatar(session: OpenClawChatSessionEntry, sessionAgentID: String?) async -> Data?
+    func sidebarHoverAgentAvatar(
+        session: OpenClawChatSessionEntry, sessionAgentID: String?, agentID: String, advertised: String) async -> Data?
 }
 
 @MainActor @Observable public final class OpenClawChatSidebarHoverFacts {
     private typealias Target = OpenClawChatSessionTarget
     public typealias Request = @Sendable (OpenClawChatGatewayRequest) async throws -> Data
-    public enum ChannelAvatarResult: Sendable { case image(Data), notFound, unavailable }
+    public enum AvatarResult: Sendable { case image(Data), notFound, unavailable }
+    public enum AvatarResource: Hashable, Sendable { case channel, agent(String) }
     private struct Avatar {
         let version: String
         let id = UUID()
-        let task: Task<ChannelAvatarResult, Never>
+        let task: Task<AvatarResult, Never>
+        var retryAt: Date?
     }
 
-    private var avatars: [Target: Avatar] = [:]
+    private var avatars: [Target: [AvatarResource: Avatar]] = [:]
     private var pulls: [String: OpenClawSessionPullRequestSnapshot] = [:]
     private var cards: [Target: ProgressCard] = [:]
     private var progressNeedsReload: Set<Target> = []
@@ -95,6 +99,10 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
     private enum Revision { case unknown, atLeast(Int) }
     private var pending: [Target: Revision] = [:]
     private var generation = UUID()
+    var avatarGeneration: UUID {
+        self.generation
+    }
+
     private var request: Request?
     private var pullRequestsAvailable = false
     private var subscribedKeys: [String]?
@@ -111,7 +119,7 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
     }
 
     isolated deinit {
-        self.avatars.values.forEach { $0.task.cancel() }
+        self.avatars.values.flatMap(\.values).forEach { $0.task.cancel() }
         self.subscription?.cancel()
         self.reads.values.forEach { $0.cancel() }
         self.refreshTasks.values.forEach { $0.cancel() }
@@ -149,27 +157,34 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         self.cards[Self.target(sessionKey: sessionKey, agentID: agentID)]
     }
 
-    public func channelAvatar(
-        sessionKey: String, agentID: String?, version: String,
-        load: @escaping @MainActor @Sendable () async -> ChannelAvatarResult) async -> Data?
+    public func avatar(
+        sessionKey: String,
+        agentID: String?,
+        version: String,
+        resource: AvatarResource = .channel,
+        load: @escaping @MainActor @Sendable () async -> AvatarResult) async -> Data?
     {
         let target = Self.target(sessionKey: sessionKey, agentID: agentID)
         guard let lifetime = self.lifetimes[target] else { return nil }
-        if self.avatars[target]?.version != version {
-            self.avatars[target]?.task.cancel()
-            self.avatars[target] = Avatar(version: version, task: Task { await load() })
+        let cached = self.avatars[target]?[resource]
+        if cached?.version != version || cached?.retryAt.map({ $0 <= .now }) == true {
+            cached?.task.cancel()
+            self.avatars[target, default: [:]][resource] = Avatar(version: version, task: Task { await load() })
         }
-        guard let avatar = self.avatars[target] else { return nil }
+        guard let avatar = self.avatars[target]?[resource] else { return nil }
         let generation = self.generation
         let result = await avatar.task.value
         guard generation == self.generation, self.lifetimes[target] == lifetime,
-              self.avatars[target]?.id == avatar.id, !Task.isCancelled else { return nil }
+              self.avatars[target]?[resource]?.id == avatar.id, !Task.isCancelled else { return nil }
         // ui/src/lib/authenticated-avatar-route.ts:128: share images/404s while watched; other misses remain retryable.
         switch result {
         case let .image(data): return data
-        case .notFound: return nil
-        case .unavailable:
-            self.avatars[target] = nil
+        case .notFound where resource == .channel: return nil
+        default:
+            // ui/src/lib/identity-avatar-loader.ts:95 lets unversioned agent uploads recover after a cached miss.
+            if case .agent = resource, self.avatars[target]?[resource]?.retryAt == nil {
+                self.avatars[target]?[resource]?.retryAt = .now.addingTimeInterval(60)
+            } else if resource == .channel { self.avatars[target]?[resource] = nil }
             return nil
         }
     }
@@ -194,7 +209,7 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
     public func unwatch(_ owner: UUID) {
         guard let key = self.owners.removeValue(forKey: owner) else { return }
         if !self.owners.values.contains(key) {
-            self.avatars.removeValue(forKey: key)?.task.cancel()
+            self.avatars.removeValue(forKey: key)?.values.forEach { $0.task.cancel() }
             self.lifetimes[key] = nil
             self.cards[key] = nil
             self.progressNeedsReload.remove(key)
@@ -222,7 +237,7 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
 
     public func disconnect() {
         self.generation = UUID()
-        self.avatars.values.forEach { $0.task.cancel() }
+        self.avatars.values.flatMap(\.values).forEach { $0.task.cancel() }
         self.avatars.removeAll()
         self.request = nil
         self.subscribedKeys = nil

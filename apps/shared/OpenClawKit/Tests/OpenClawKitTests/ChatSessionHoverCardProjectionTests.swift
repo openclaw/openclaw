@@ -23,7 +23,7 @@ import Testing
         #expect(attribution.primary.label == "Ada")
         #expect(attribution.primaryIsCreator)
         #expect(attribution.others.map(\.label) == ["Bob"])
-        #expect(attribution.count == 3)
+        #expect(attribution.participantCount == 3)
         #expect(attribution.visibleOthers.map(\.label) == ["Bob"])
         #expect(attribution.hiddenAvatarCount == 2)
         var withoutCreator = row
@@ -34,7 +34,7 @@ import Testing
         #expect(fallback.primary.label == "Ada")
         #expect(!fallback.primaryIsCreator)
         #expect(fallback.others.map(\.label) == ["Bob"])
-        #expect(fallback.count == 3)
+        #expect(fallback.participantCount == 3)
     }
 
     @Test(arguments: [
@@ -76,9 +76,9 @@ import Testing
         {"key":"agent:main:matrix:direct:@alex:example.test","label":"Alex","channel":"matrix","chatType":"direct"}
         """#)
         #expect(ChatSessionHoverCardProjection.channel(matrix)?.details == ["Direct chat", "@alex:example.test"])
-        let local = try self
-            .row(
-                #"{"key":"agent:main:main","channel":"telegram","origin":{"provider":"telegram","label":"Delivery only"}}"#)
+        let local = try self.row(#"""
+        {"key":"agent:main:main","channel":"telegram","origin":{"provider":"telegram","label":"Delivery only"}}
+        """#)
         #expect(ChatSessionHoverCardProjection.channel(local) == nil)
     }
 
@@ -111,7 +111,8 @@ import Testing
             .row(#"{"key":"agent:main:release-plan","status":"running","hasActiveRun":true,"startedAt":1000}"#)
         let card = try JSONDecoder().decode(ProgressCard.self, from: Data(#"""
         {"sessionKey":"agent:main:release-plan","revision":3,"updatedAt":2000,"markdown":"Ready",
-         "steps":[{"step":"Earlier","status":"completed"},{"step":"Next","status":"pending"},{"step":"Current","status":"in_progress"}]}
+         "steps":[{"step":"Earlier","status":"completed"},{"step":"Next","status":"pending"},
+                  {"step":"Current","status":"in_progress"}]}
         """#.utf8))
         let active = try #require(ChatSessionHoverCardProjection.headsUp(card, session: row))
         #expect(active.step == "Current")

@@ -18,8 +18,9 @@ private actor HoverFactsWire {
     func send(_ request: OpenClawChatGatewayRequest) async throws -> Data {
         try await withCheckedThrowingContinuation { reply in
             let call = Pending(request: request, reply: reply)
-            if let waiter = self.waiters.removeValue(forKey: request.method) { waiter.resume(returning: call) }
-            else { self.calls[request.method, default: []].append(call) }
+            if let waiter = self.waiters.removeValue(forKey: request.method) {
+                waiter.resume(returning: call)
+            } else { self.calls[request.method, default: []].append(call) }
         }
     }
 
@@ -68,8 +69,8 @@ struct ChatSessionHoverCardTests {
         let first = facts.watch(sessionKey: "agent:main:work", agentID: nil)
         let second = facts.watch(sessionKey: "agent:main:work", agentID: nil)
         var loads = 0
-        func avatar(_ version: String, result: OpenClawChatSidebarHoverFacts.ChannelAvatarResult) async -> Data? {
-            await facts.channelAvatar(sessionKey: "agent:main:work", agentID: nil, version: version) {
+        func avatar(_ version: String, result: OpenClawChatSidebarHoverFacts.AvatarResult) async -> Data? {
+            await facts.avatar(sessionKey: "agent:main:work", agentID: nil, version: version) {
                 loads += 1
                 return result
             }
@@ -97,14 +98,19 @@ struct ChatSessionHoverCardTests {
         let wire = HoverFactsWire()
         let owner = facts.watch(sessionKey: "agent:main:work", agentID: nil)
         let fetch = Task {
-            await facts.channelAvatar(sessionKey: "agent:main:work", agentID: nil, version: "v1") {
-                await .image(try! wire.send(.init(method: "avatar", params: [:], timeoutMs: 15000)))
+            await facts.avatar(sessionKey: "agent:main:work", agentID: nil, version: "v1") {
+                do {
+                    return try await .image(wire.send(.init(method: "avatar", params: [:], timeoutMs: 15000)))
+                } catch {
+                    Issue.record(error)
+                    return .unavailable
+                }
             }
         }
         let pending = await wire.next("avatar")
         var duplicateFetch = false
         let duplicate = Task {
-            await facts.channelAvatar(sessionKey: "agent:main:work", agentID: nil, version: "v1") {
+            await facts.avatar(sessionKey: "agent:main:work", agentID: nil, version: "v1") {
                 duplicateFetch = true
                 return .notFound
             }
@@ -114,18 +120,53 @@ struct ChatSessionHoverCardTests {
         #expect(await duplicate.value == Data([1]))
         #expect(!duplicateFetch)
         let retired = Task {
-            await facts.channelAvatar(sessionKey: "agent:main:work", agentID: nil, version: "v2") {
-                await .image(try! wire.send(.init(method: "avatar", params: [:], timeoutMs: 15000)))
+            await facts.avatar(sessionKey: "agent:main:work", agentID: nil, version: "v2") {
+                do {
+                    return try await .image(wire.send(.init(method: "avatar", params: [:], timeoutMs: 15000)))
+                } catch {
+                    Issue.record(error)
+                    return .unavailable
+                }
             }
         }
         let old = await wire.next("avatar")
         facts.connect { [empty = self.empty] _ in empty }
         old.reply.resume(returning: Data([2]))
         #expect(await retired.value == nil)
-        #expect(await facts.channelAvatar(sessionKey: "agent:main:work", agentID: nil, version: "v2") {
+        #expect(await facts.avatar(sessionKey: "agent:main:work", agentID: nil, version: "v2") {
             .image(Data([3]))
         } == Data([3]))
         facts.disconnect()
+        facts.unwatch(owner)
+    }
+
+    @Test func `channel and agent images coexist while agent misses remain revision scoped`() async {
+        let facts = OpenClawChatSidebarHoverFacts()
+        let owner = facts.watch(sessionKey: "agent:main:work", agentID: nil)
+        let resources: [OpenClawChatSidebarHoverFacts.AvatarResource] = [.channel, .agent("research"), .agent("ops")]
+        for (index, resource) in resources.enumerated() {
+            #expect(await facts.avatar(sessionKey: "agent:main:work", agentID: nil, version: "v1", resource: resource) {
+                .image(Data([UInt8(index)]))
+            } == Data([UInt8(index)]))
+        }
+        for (index, resource) in resources.enumerated() {
+            #expect(await facts.avatar(sessionKey: "agent:main:work", agentID: nil, version: "v1", resource: resource) {
+                .unavailable
+            } == Data([UInt8(index)]))
+        }
+        #expect(await facts
+            .avatar(sessionKey: "agent:main:work", agentID: nil, version: "v2", resource: .agent("ops")) {
+                .notFound
+            } == nil)
+        #expect(await facts
+            .avatar(sessionKey: "agent:main:work", agentID: nil, version: "v2", resource: .agent("ops")) {
+                Issue.record("Repeated consumers should share an unexpired agent image miss")
+                return .image(Data([3]))
+            } == nil)
+        #expect(await facts
+            .avatar(sessionKey: "agent:main:work", agentID: nil, version: "v3", resource: .agent("ops")) {
+                .image(Data([4]))
+            } == Data([4]))
         facts.unwatch(owner)
     }
 
@@ -353,7 +394,9 @@ struct ChatSessionHoverCardTests {
             event: "progressCard.changed",
             payload: Data(#"{"sessionKey":"agent:main:work","revision":4}"#.utf8))
         denied.reply.resume(throwing: GatewayResponseError(
-            method: "progressCard.get", code: "INVALID_REQUEST", message: "Participation required",
+            method: "progressCard.get",
+            code: "INVALID_REQUEST",
+            message: "Participation required",
             details: ["code": .init("SESSION_PARTICIPATION_REQUIRED")]))
         let afterDenial = await wire.next("progressCard.get")
         #expect(facts.progress(sessionKey: "agent:main:work", agentID: nil) == nil)
@@ -400,7 +443,9 @@ struct ChatSessionHoverCardTests {
 struct ChatSessionHoverCardDecodingTests {
     @Test func `retains channel origin from roster wire`() throws {
         let data = Data(
-            #"{"key":"agent:main:telegram:group:-42:topic:7","origin":{"provider":"telegram","label":"Release id:-42 topic:7","threadId":7},"chatType":"group","groupChannel":"Release","deliveryContext":{"channel":"telegram","accountId":"work","threadId":7}}"#
+            (#"{"key":"agent:main:telegram:group:-42:topic:7","origin":{"provider":"telegram","# +
+                #""label":"Release id:-42 topic:7","threadId":7},"chatType":"group","groupChannel":"Release","# +
+                #""deliveryContext":{"channel":"telegram","accountId":"work","threadId":7}}"#)
                 .utf8)
         let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: data)
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)) as? [String: Any]
