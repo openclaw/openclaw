@@ -168,6 +168,7 @@ export type ChatProps = Omit<
     ) => void;
     pullRequests?: ControlUiSessionPullRequest[];
     pullRequestsGateway?: ApplicationGateway;
+    pullRequestsSessionId?: string;
     pullRequestsBranch?: ControlUiSessionBranch;
     pullRequestsStatus?: ControlUiSessionPullRequestSnapshot["status"];
     onOpenSessionDiff?: () => void;
@@ -414,6 +415,8 @@ export function renderChat(props: ChatProps) {
     ${renderChatPullRequests({
       pullRequests: props.pullRequests ?? [],
       gateway: props.pullRequestsGateway,
+      sessionId: props.pullRequestsSessionId,
+      basePath: props.basePath,
       sessionKey: scopedSessionArtifactKey(props.sessionKey, props.currentAgentId ?? undefined),
       presented: props.presented ?? true,
       branch: props.pullRequestsBranch,

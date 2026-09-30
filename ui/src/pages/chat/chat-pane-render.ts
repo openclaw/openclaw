@@ -558,16 +558,13 @@ export class ChatPane extends ChatPaneLayoutRender {
       composerControls: composerControls?.composerControls ?? nothing,
       permissionPicker: composerControls?.permissionPicker,
       ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
-      pullRequests: this.visibleSessionPullRequests,
+      ...this.sessionPullRequestChatProps(selectedSession?.sessionId),
       // Until catalog success, a lowercase name may be a hidden/ambiguous alias.
       // Do not mint a checkout link that can prefetch the wrong repository.
       githubRepo: projectCatalog.result ? this.githubRepo : null,
       githubRepositories: projectCatalog.repositories,
-      pullRequestsGateway: this.context.gateway,
-      pullRequestsBranch: this.sessionPullRequestsBranch,
-      pullRequestsStatus: this.sessionPullRequestsStatus,
+
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
-      onDismissPullRequest: this.dismissSessionPullRequest,
       githubPublication: this.githubPublication?.view(),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
