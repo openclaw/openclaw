@@ -68,7 +68,7 @@ relay. Native base and catalog instructions remain unchanged; this new context
 is not written to native conversation history or automatically inherited by
 native subagents. Connections without that relay carry eligible skills, persona, and memory
 in thread developer instructions instead, preserving delivery when the model
-owns collaboration-mode instructions. Native children can inherit that fallback context. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
+owns collaboration-mode instructions. Native children can inherit that fallback context; selected personal `users/<profile-id>/USER.md` overlays are excluded and require the managed parent-only relay. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
 for fallback refresh and inheritance semantics. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
 bounded `MEMORY.md` content travel as plain turn input references. They are
 introduced on a new native thread, after a cold resume or native compaction,

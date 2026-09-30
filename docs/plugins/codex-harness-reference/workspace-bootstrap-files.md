@@ -101,11 +101,19 @@ not removed from existing histories or full-history forks.
 
 ### Skills, persona, and memory without a managed relay
 
-On connections without a managed inference relay, eligible skills, persona
-(`SOUL.md`, `IDENTITY.md`, `USER.md`), and memory guidance share a refreshable
+On connections without a managed inference relay, eligible skills, shared persona
+(`SOUL.md`, `IDENTITY.md`, workspace-root `USER.md`), and memory guidance share a refreshable
 thread developer section. Model-owned collaboration instructions cannot replace
 this section. Native children can inherit this fallback context. Managed connections
 keep their existing parent-only request-local delivery.
+
+Selected personal `users/<profile-id>/USER.md` overlays are excluded from the
+fallback section. Thread configuration and history can both be inherited by native
+children, so neither is a parent-only carrier. These connections currently use
+shared user preferences only, log a warning when a personal overlay is omitted,
+and report zero injected characters for it. Personal-profile delivery on external
+connections is deferred until a parent-only carrier is available. Managed relay
+connections continue delivering the selected personal overlay to the parent.
 
 A changed or removed section cold-resumes the same ordinary persistent thread
 with the complete current developer instructions. That current configuration also

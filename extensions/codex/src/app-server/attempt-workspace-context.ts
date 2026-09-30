@@ -43,6 +43,7 @@ export type CodexWorkspaceBootstrapContext = {
   promptContext?: string;
   threadDeveloperInstructions?: string;
   personaInstructions?: string;
+  sharedPersonaInstructions?: string;
   memoryInstructions?: string;
 };
 
@@ -165,6 +166,9 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         ? (params.agentWorkspaceDeveloperInstructions ?? prepared.instructionSnapshot.instructions)
         : undefined,
       personaInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
+      sharedPersonaInstructions: injectOpenClawContext
+        ? prepared.sharedPersonaInstructions
+        : undefined,
       memoryInstructions: injectOpenClawContext
         ? renderCodexWorkspaceMemoryInstructions({
             files: memoryReferenceFiles,

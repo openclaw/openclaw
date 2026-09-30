@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
@@ -279,6 +280,29 @@ describe("native Codex skill delivery", () => {
       const soulPath = path.join(native.cwd, "SOUL.md");
       const firstSoul = "SYNTHETIC_REMOTE_PERSONA_FIRST";
       const editedSoul = "SYNTHETIC_REMOTE_PERSONA_EDITED";
+      const sharedUser = "SYNTHETIC_SHARED_USER";
+      const personalUser = "SYNTHETIC_PERSONAL_USER";
+      const personalPath = path.join(native.cwd, "users", "alice", "USER.md");
+      await fs.writeFile(path.join(native.cwd, "USER.md"), sharedUser);
+      registerInternalHook("agent:bootstrap", (event) => {
+        // Supply the same authenticated-selection metadata as the personal loader.
+        const context = event.context as {
+          bootstrapFiles: Array<{
+            name: string;
+            path: string;
+            content?: string;
+            missing: boolean;
+            personalUser?: true;
+          }>;
+        };
+        context.bootstrapFiles.push({
+          name: "USER.md",
+          path: personalPath,
+          content: personalUser,
+          missing: false,
+          personalUser: true,
+        });
+      });
       const threadIds = new Set<string>();
       for (const [index, soul] of [firstSoul, editedSoul, undefined].entries()) {
         if (soul) {
@@ -320,7 +344,14 @@ describe("native Codex skill delivery", () => {
           },
         });
         expect(result.terminal).toEqual({ kind: "ok" });
+        // No personal overlay may enter native history or configuration, both of
+        // which can be inherited by native children (including full-history forks).
+        expect(JSON.stringify(fixture.requests)).not.toContain(personalUser);
+        expect(result.systemPromptReport?.injectedWorkspaceFiles).toContainEqual(
+          expect.objectContaining({ path: personalPath, injectedChars: 0, truncated: false }),
+        );
         const text = developerMessageText(fixture.requests.at(-1));
+        expect(text).toContain(sharedUser);
         expect(text).toContain("Synthetic model-owned Default policy.");
         if (soul) {
           expect(text).toContain(soul);

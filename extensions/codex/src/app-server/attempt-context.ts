@@ -131,6 +131,7 @@ export function buildCodexSystemPromptReport(params: {
   developerInstructions: string;
   workspaceBootstrapContext: CodexWorkspaceBootstrapContext;
   omitWorkspaceReferences?: boolean;
+  parentLocalEgress?: boolean;
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
 }): CodexSystemPromptReport {
@@ -163,6 +164,7 @@ export function buildCodexSystemPromptReport(params: {
       bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
       injectedFiles: params.workspaceBootstrapContext.promptContextFiles ?? [],
       omitReferenceFiles: params.omitWorkspaceReferences,
+      omitPersonalProfiles: !params.parentLocalEgress,
       developerInstructionFiles: [
         ...(params.workspaceBootstrapContext.threadDeveloperInstructionFiles ?? []),
         ...(params.workspaceBootstrapContext.personaFiles ?? []),
@@ -239,6 +241,7 @@ function buildCodexBootstrapInjectionStats(params: {
   bootstrapFiles: CodexBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
   omitReferenceFiles?: boolean;
+  omitPersonalProfiles?: boolean;
   developerInstructionFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolRouted?: boolean;
@@ -283,6 +286,7 @@ function buildCodexBootstrapInjectionStats(params: {
       };
     }
     const omitted =
+      (params.omitPersonalProfiles && file.personalUser === true) ||
       memoryToolRoutedFile ||
       (params.omitReferenceFiles &&
         readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) !== undefined);
