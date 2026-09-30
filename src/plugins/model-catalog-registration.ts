@@ -21,11 +21,7 @@ function mergeModelCatalogHooks(
   return async (ctx) => {
     const [leftRows, rightRows] = await Promise.all([left(ctx), right(ctx)]);
     const rows = [...(leftRows ?? []), ...(rightRows ?? [])];
-    const mergedRows: typeof rows = [];
-    for (const row of rows) {
-      mergedRows.push({ ...row, source });
-    }
-    return mergedRows.length ? mergedRows : null;
+    return rows.length ? rows.map((row) => ({ ...row, source })) : null;
   };
 }
 
