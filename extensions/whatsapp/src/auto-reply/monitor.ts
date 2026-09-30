@@ -379,7 +379,7 @@ export async function monitorWebChannel(
               );
             } else {
               runtime.error(
-                `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}) after ${setupDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` if the issue persists.`,
+                `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}) after ${setupDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Stopping this reconnect cycle; the Gateway supervisor can retry.`,
               );
             }
             await controller.shutdown();
@@ -424,7 +424,7 @@ export async function monitorWebChannel(
             "web reconnect: auth state stayed unstable; max attempts reached",
           );
           runtime.error(
-            `WhatsApp auth state is still stabilizing after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Stopping web monitoring.`,
+            `WhatsApp auth state is still stabilizing after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Stopping this reconnect cycle; the Gateway supervisor can retry.`,
           );
           await controller.shutdown();
           break;
@@ -600,10 +600,10 @@ export async function monitorWebChannel(
               reconnectAttempts: decision.reconnectAttempts,
               maxAttempts: reconnectPolicy.maxAttempts,
             },
-            "web reconnect: max attempts reached; continuing in degraded mode",
+            "web reconnect: max attempts reached; handing recovery to the Gateway supervisor",
           );
           runtime.error(
-            `WhatsApp Web reconnect: max attempts reached (${decision.reconnectAttempts}/${reconnectPolicy.maxAttempts}). Stopping web monitoring.`,
+            `WhatsApp Web reconnect: max attempts reached (${decision.reconnectAttempts}/${reconnectPolicy.maxAttempts}). Stopping this reconnect cycle; the Gateway supervisor can retry.`,
           );
         }
 

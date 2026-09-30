@@ -151,11 +151,13 @@ describe("web auto-reply connection", () => {
     ]) {
       const sleep = vi.fn(async () => {});
       const scripted = createScriptedWebListenerFactory();
+      const statuses: WebChannelStatus[] = [];
       const { runtime, controller, run } = startWebAutoReplyMonitor({
         monitorWebChannelFn: monitorWebChannel as never,
         listenerFactory: scripted.listenerFactory,
         sleep,
         reconnect: scenario.reconnect,
+        statusSink: (next) => statuses.push({ ...next }),
       });
 
       await vi.waitFor(
@@ -165,7 +167,8 @@ describe("web auto-reply connection", () => {
         { timeout: 250, interval: 2 },
       );
 
-      scripted.resolveClose(0);
+      const timeout = { status: 408, isLoggedOut: false, error: new Error("network timeout") };
+      scripted.resolveClose(0, timeout);
       await vi.waitFor(
         () => {
           expect(scripted.getListenerCount()).toBe(scenario.expectedCallsAfterFirstClose);
@@ -174,8 +177,17 @@ describe("web auto-reply connection", () => {
       );
 
       if (scenario.closeTwiceAndFinish) {
-        scripted.resolveClose(1);
+        scripted.resolveClose(1, timeout);
         await run;
+        expect(statuses.at(-1)).toMatchObject({
+          running: false,
+          connected: false,
+          healthState: "stopped",
+          lifecycle: "stopped",
+          terminalDisconnect: false,
+          reconnectAttempts: scenario.reconnect.maxAttempts,
+          lastDisconnect: { status: 408, loggedOut: false, error: "status=408 network timeout" },
+        });
       } else {
         controller.abort();
         scripted.resolveClose(1);
@@ -242,33 +254,47 @@ describe("web auto-reply connection", () => {
     await run;
   });
 
-  it("retries opening-phase Boom 428 through the reconnect policy", async () => {
-    const boom428 = {
-      output: {
-        statusCode: 428,
-        payload: { error: "Precondition Required", message: "Connection Terminated" },
-      },
-    };
-    const listenerFactory = vi.fn(async () => {
-      throw toErrorObject(boom428, "Non-Error thrown");
-    });
+  it.each([408, 428])(
+    "keeps exhausted opening-phase %s recovery restartable",
+    async (statusCode) => {
+      const connectionError = {
+        output: {
+          statusCode,
+          payload: { error: "Connection failed", message: "Connection Terminated" },
+        },
+      };
+      const listenerFactory = vi.fn(async () => {
+        throw toErrorObject(connectionError, "Non-Error thrown");
+      });
 
-    const sleep = vi.fn(async () => {});
-    const { runtime, run } = startWebAutoReplyMonitor({
-      monitorWebChannelFn: monitorWebChannel as never,
-      listenerFactory,
-      sleep,
-      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 2, factor: 1.1 },
-    });
+      const sleep = vi.fn(async () => {});
+      const statuses: WebChannelStatus[] = [];
+      const { runtime, run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory,
+        sleep,
+        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 2, factor: 1.1 },
+        statusSink: (next) => statuses.push({ ...next }),
+      });
 
-    await run;
+      await run;
 
-    expect(listenerFactory).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalled();
-    expectErrorContaining(runtime.error, "status 428");
-    expectErrorContaining(runtime.error, "Retry 1/2");
-    expectErrorContaining(runtime.error, "2/2 attempts");
-  });
+      expect(listenerFactory).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenCalled();
+      expectErrorContaining(runtime.error, `status ${statusCode}`);
+      expectErrorContaining(runtime.error, "Retry 1/2");
+      expectErrorContaining(runtime.error, "2/2 attempts");
+      expect(statuses.at(-1)).toMatchObject({
+        running: false,
+        connected: false,
+        healthState: "stopped",
+        lifecycle: "stopped",
+        terminalDisconnect: false,
+        reconnectAttempts: 2,
+        lastDisconnect: { status: statusCode, loggedOut: false },
+      });
+    },
+  );
 
   it("retries opening-phase connection wait timeouts through the reconnect policy", async () => {
     vi.mocked(waitForWaConnection).mockRejectedValueOnce({ output: { statusCode: 408 } });
@@ -606,7 +632,7 @@ describe("web auto-reply connection", () => {
     } else {
       expect(sleep).toHaveBeenCalledTimes(1);
       expectErrorContaining(runtime.error, "Retry 1/2");
-      expectErrorContaining(runtime.error, "Stopping web monitoring");
+      expectErrorContaining(runtime.error, "Stopping this reconnect cycle");
     }
   });
 

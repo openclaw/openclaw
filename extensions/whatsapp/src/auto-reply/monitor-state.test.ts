@@ -164,10 +164,10 @@ describe("createWebChannelStatusController", () => {
       statusCode: 408,
       error: "WhatsApp reconnect attempts exhausted after a timeout",
       reconnectAttempts: 12,
-      lifecycle: "blocked",
+      lifecycle: "stopped",
       finalHealthState: "stopped",
-      finalLifecycle: "blocked",
-      terminalDisconnect: true,
+      finalLifecycle: "stopped",
+      terminalDisconnect: false,
     },
     {
       healthState: "reconnecting",
