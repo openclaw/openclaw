@@ -72,10 +72,8 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
           agentId: resolved.target.agentId,
           sessionKey: resolved.target.canonicalKey,
           sessionId,
-          assertCurrent: () => {
-            resolved.assertCurrent(getRuntimeConfig());
-            authorize?.();
-          },
+          // The move committed; settling its source queues must survive authority changes.
+          assertCurrent: () => {},
         });
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
         if (sourceDisposition === "abandon") {

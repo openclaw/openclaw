@@ -628,7 +628,8 @@ async function mutateSessionAtMessage(
           agentId: current.target.agentId,
           sessionKey: current.canonicalKey,
           sessionId: initialSessionId,
-          assertCurrent: commitGuard,
+          // History is committed; settling its original queues must finish after revocation.
+          assertCurrent: () => {},
         });
       } else {
         recordSessionCreated(cfg, {

@@ -91,13 +91,23 @@ function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string, ag
 }
 
 describe("worker placement move destination", () => {
-  it.each(["dispatch", "reconcile", "abandon"] as const)(
-    "%s preserves another agent's lane commands under the global key",
-    async (action) => {
+  it.each(
+    (["dispatch", "reconcile", "abandon"] as const).flatMap((action) =>
+      (["current", "revoked after commit"] as const).map((authority) => ({ action, authority })),
+    ),
+  )(
+    "$action preserves another agent's lane commands under the global key ($authority authority)",
+    async ({ action, authority }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const sessionKey = "global";
         const sessionId = "research-global";
         const agentId = "research";
+        let committed = false;
+        const assertAuthority = () => {
+          if (committed && authority === "revoked after commit") {
+            throw new Error("placement authority revoked after commit");
+          }
+        };
         const target = {
           agentId,
           canonicalKey: sessionKey,
@@ -107,8 +117,8 @@ describe("worker placement move destination", () => {
         };
         moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValueOnce(target);
         moveDestinationMocks.resolveSessionTarget.mockResolvedValueOnce({
-          assertCurrent: () => {},
-          assertBindingCurrent: () => {},
+          assertCurrent: assertAuthority,
+          assertBindingCurrent: assertAuthority,
           config: {},
           entry: { sessionId },
           target,
@@ -133,10 +143,33 @@ describe("worker placement move destination", () => {
           }),
         ];
         const results = Promise.allSettled(queued);
+        const effects: string[] = [];
+        let releaseAdmission = () => {};
+        const admission = await beginSessionWorkAdmission({
+          scope: target.storePath,
+          identities: [sessionKey, sessionId],
+          assertAllowed: () => {},
+          onInterrupt: () => {
+            effects.push("interrupt");
+            releaseAdmission();
+          },
+        });
+        releaseAdmission = admission.release;
+        const commit = () => {
+          committed = true;
+          effects.push("commit");
+          return createMoveBarrierBeginFixture(sessionId, sessionKey, agentId);
+        };
         const options = {
-          placements: { waitForTurnClaimRelease: async () => {} },
+          placements: {
+            waitForTurnClaimRelease: async () => {
+              effects.push("claims released");
+            },
+          },
           awaitTurnClaimRelease: async (_sessionId: string, wait: () => Promise<void>) => wait(),
-          revokeSessionAuthority: () => {},
+          revokeSessionAuthority: () => {
+            effects.push("revoke");
+          },
         };
         try {
           if (action === "dispatch") {
@@ -145,8 +178,8 @@ describe("worker placement move destination", () => {
               sessionKey,
               agentId,
               executionMode: "remote-exec",
-              startDispatch: async () =>
-                createMoveBarrierBeginFixture(sessionId, sessionKey, agentId).placement,
+              authorize: assertAuthority,
+              startDispatch: async () => commit().placement,
             });
           } else {
             await createGatewayWorkerPlacementMoveBarrier({
@@ -161,9 +194,16 @@ describe("worker placement move destination", () => {
               sessionKey,
               agentId,
               sourceDisposition: action,
-              begin: async () => createMoveBarrierBeginFixture(sessionId, sessionKey, agentId),
+              authorize: assertAuthority,
+              begin: async () => commit(),
             });
           }
+          expect(effects).toEqual([
+            "commit",
+            "revoke",
+            "interrupt",
+            ...(action === "abandon" ? [] : ["claims released"]),
+          ]);
           release.resolve();
           await blocker;
           expect(await results).toEqual([
@@ -175,6 +215,7 @@ describe("worker placement move destination", () => {
             },
           ]);
         } finally {
+          admission.release();
           release.resolve();
           clearCommandLane(lane);
           await Promise.allSettled([blocker, results]);
@@ -332,9 +373,6 @@ describe("worker placement move destination", () => {
         },
         begin,
       });
-      const observedTransitions = () =>
-        observed.filter((step, index) => step !== "authorize" || observed[index - 1] !== step);
-
       try {
         if (scenario.outcome === "persist-error") {
           await expect(operation).rejects.toThrow("transcript append failed");
@@ -378,22 +416,15 @@ describe("worker placement move destination", () => {
             joined: true,
             placement: { state: "draining" },
           });
-          expect(observedTransitions()).toEqual([
-            "authorize",
-            "inspect-intent",
-            "authorize",
-            "revoke",
-            "interrupt",
-          ]);
+          expect(observed).toEqual(["authorize", "inspect-intent", "revoke", "interrupt"]);
         } else {
           await expect(operation).resolves.toMatchObject({ placement: { state: "draining" } });
-          expect(observedTransitions()).toEqual([
+          expect(observed).toEqual([
             "authorize",
             "inspect-intent",
             "validate-source",
             ...(scenario.claimRunId ? ["persist", "authorize", "validate-claim"] : []),
             "begin",
-            "authorize",
             "revoke",
             "interrupt",
           ]);

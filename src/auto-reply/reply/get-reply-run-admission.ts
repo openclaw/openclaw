@@ -15,7 +15,7 @@ import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
+import { getQueueSize } from "../../process/command-queue.js";
 import {
   getSessionWorkAdmissionOwnerRelease,
   interruptSessionWorkAdmissions,
@@ -360,8 +360,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const resolveActiveEmbeddedSessionId = (sessionFile = preparedSessionState.sessionFile) =>
     embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ??
     embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionIdBySessionFile?.(sessionFile);
+  const queueKey = sessionKey ?? sessionIdFinal;
   const sessionLaneKey = embeddedAgentRuntime
-    ? embeddedAgentRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
+    ? embeddedAgentRuntime.resolveEmbeddedSessionLane(queueKey)
     : undefined;
   const laneSize = sessionLaneKey ? getQueueSize(sessionLaneKey) : 0;
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
@@ -394,7 +395,13 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionLaneKey &&
     (laneSize > 0 || activeSessionIdForInterrupt)
   ) {
-    const cleared = clearCommandLane(sessionLaneKey);
+    const { clearSessionLifecycleLanes } = await import("./queue/cleanup.js");
+    const cleared = clearSessionLifecycleLanes({
+      keys: [queueKey],
+      agentId,
+      sessionKey: queueKey,
+      assertCurrent: () => {},
+    });
     logVerbose(`Cleared ${cleared} queued command(s) before interrupting ${sessionLaneKey}`);
   }
   const agentHarnessPolicy = useFastReplyRuntime
@@ -460,7 +467,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
     loadAgentRunnerRuntime(),
   );
-  const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
   const currentRouteThreadId = resolveRoutedDeliveryThreadId({ ctx, sessionKey });
   const applySlackRouteThreadSteeringGuard = isSlackDirectRoutedThreadTurn(ctx);

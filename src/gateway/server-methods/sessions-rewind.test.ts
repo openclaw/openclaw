@@ -530,19 +530,49 @@ describe("session message-cut methods", () => {
     await expectSessionWorkCleared(work);
   });
 
-  it("clears queued session work after a successful rewind", async () => {
-    const work = enqueueSessionWork("rewind");
-    expectSessionWorkQueued(work);
+  it.each([false, true])(
+    "settles a successful rewind after authority revocation=%s",
+    async (revoke) => {
+      const work = enqueueSessionWork("rewind");
+      expectSessionWorkQueued(work);
+      let current = true;
+      const readMedia = expectDefined(
+        mocks.readMediaBuffer.getMockImplementation(),
+        "media reader",
+      );
+      mocks.readMediaBuffer.mockImplementation(async (id: string) => {
+        const result = await readMedia(id);
+        expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).not.toBe(
+          sourceSessionId,
+        );
+        if (revoke) {
+          current = false;
+        }
+        return result;
+      });
+      const respond = vi.fn();
+      await sessionRewindHandlers["sessions.rewind"]!({
+        req: { id: "committed-rewind" } as never,
+        params: { sessionKey, entryId: "user-entry" },
+        respond,
+        context: context(),
+        client: null,
+        isWebchatConnect: () => false,
+        sessionMutationCommitGuard: () => {
+          if (!current) {
+            throw new Error("rewind authority revoked after commit");
+          }
+        },
+      });
 
-    const respond = await invoke("sessions.rewind", "user-entry");
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ editorText: "edit me" }),
-      undefined,
-    );
-    await expectSessionWorkCleared(work);
-  });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ editorText: "edit me" }),
+        undefined,
+      );
+      await expectSessionWorkCleared(work);
+    },
+  );
 
   it("rewinds research's global session without clearing main's shared lane", async () => {
     const key = "global";

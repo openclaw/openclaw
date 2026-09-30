@@ -99,10 +99,8 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
           agentId: currentTarget.agentId,
           sessionKey: currentTarget.canonicalKey,
           sessionId,
-          assertCurrent: () => {
-            assertCurrent(getRuntimeConfig());
-            authorize?.();
-          },
+          // Dispatch committed; settling its old local queues must survive authority changes.
+          assertCurrent: () => {},
         });
         params.revokeSessionAuthority({
           sessionId,
