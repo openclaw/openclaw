@@ -579,19 +579,29 @@ describe("agent harness host capability", () => {
     await expect(pending).rejects.toThrow("no longer active");
   });
 
-  it("preserves the gateway decision and terminal reason at the host boundary", async () => {
-    const { attempt } = await admittedAttempt("run-approval-timeout-result");
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "approval-1",
-      decision: "deny",
-      terminalReason: "timeout",
-    });
+  it.each([
+    {
+      label: "matching timeout",
+      response: { id: "approval-1", decision: "deny", terminalReason: "timeout" },
+      expected: { decision: "deny", terminalReason: "timeout" },
+    },
+    {
+      label: "misrouted allowance",
+      response: { id: "approval-other", decision: "allow-once" },
+      expected: undefined,
+    },
+  ] as const)(
+    "binds the gateway $label to the requested approval",
+    async ({ response, expected }) => {
+      const { attempt } = await admittedAttempt("run-approval-result-binding");
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      mockCallGatewayTool.mockResolvedValueOnce(response);
 
-    await expect(
-      host.capabilities.waitForApproval({ approvalId: "approval-1", timeoutMs: 1_000 }),
-    ).resolves.toEqual({ decision: "deny", terminalReason: "timeout" });
-  });
+      await expect(
+        host.capabilities.waitForApproval({ approvalId: "approval-1", timeoutMs: 1_000 }),
+      ).resolves.toEqual(expected);
+    },
+  );
 
   it("carries native-turn closure through policy, approval registration, and decision waits", async () => {
     const { attempt } = await admittedAttempt("run-native-approval-scope");

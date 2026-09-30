@@ -540,48 +540,62 @@ describe("host-owned current admission annotation", () => {
     });
   });
 
-  it.each(["host-close", "abort", "writer", "lifecycle", "session", "blocked"] as const)(
-    "refuses a queued write after %s revocation",
-    async (reason) => {
-      await withAdmission(async (f) => {
-        const before = await loadTranscriptEvents(f.target);
-        const release = await holdTranscriptWriter(f.target);
-        const updates = vi.fn();
-        const unsubscribe = onInternalSessionTranscriptUpdate(updates);
-        const pending = f.annotate();
-        const refused = expect(pending).rejects.toThrow();
-        try {
-          if (reason === "host-close") {
-            f.closeHost();
-          }
-          if (reason === "abort") {
-            f.controller.abort();
-          }
-          if (reason === "writer") {
-            f.patchSession({ activeWriterRunId: "successor" });
-          }
-          if (reason === "lifecycle") {
-            f.patchSession({ lifecycleRevision: "successor" });
-          }
-          if (reason === "session") {
-            f.patchSession({ sessionId: "successor" });
-          }
-          if (reason === "blocked") {
-            f.recorder.markBlocked();
-          }
-        } finally {
-          await release();
+  it.each([
+    "host-close",
+    "admission-close",
+    "abort",
+    "writer",
+    "lifecycle",
+    "session",
+    "replacement",
+    "blocked",
+  ] as const)("refuses a queued write after %s revocation", async (reason) => {
+    await withAdmission(async (f) => {
+      const before = await loadTranscriptEvents(f.target);
+      const release = await holdTranscriptWriter(f.target);
+      const updates = vi.fn();
+      const unsubscribe = onInternalSessionTranscriptUpdate(updates);
+      const pending = f.annotate();
+      const refused = expect(pending).rejects.toThrow();
+      try {
+        if (reason === "host-close") {
+          f.closeHost();
         }
-        try {
-          await refused;
-          expect(await loadTranscriptEvents(f.target)).toEqual(before);
-          expect(updates).not.toHaveBeenCalled();
-        } finally {
-          unsubscribe();
+        if (reason === "admission-close") {
+          f.closeAdmission();
         }
-      });
-    },
-  );
+        if (reason === "abort") {
+          f.controller.abort();
+        }
+        if (reason === "writer") {
+          f.patchSession({ activeWriterRunId: "successor" });
+        }
+        if (reason === "lifecycle") {
+          f.patchSession({ lifecycleRevision: "successor" });
+        }
+        if (reason === "session") {
+          f.patchSession({ sessionId: "successor" });
+        }
+        if (reason === "blocked") {
+          f.recorder.markBlocked();
+        }
+        if (reason === "replacement") {
+          const replacement = await createAdmittedHostCapabilityTestFixture(f.attempt);
+          replacement.closeHost();
+          replacement.closeAdmission();
+        }
+      } finally {
+        await release();
+      }
+      try {
+        await refused;
+        expect(await loadTranscriptEvents(f.target)).toEqual(before);
+        expect(updates).not.toHaveBeenCalled();
+      } finally {
+        unsubscribe();
+      }
+    });
+  });
 
   it("revalidates the captured host-owned worker claim inside the write transaction", async () => {
     await withAdmission(async (f) => {
@@ -732,6 +746,15 @@ describe("host-owned current admission annotation", () => {
         host.close();
       }
     });
+  });
+
+  it("does not issue current-row authority for an excluded recorder", async () => {
+    await withAdmission(
+      async (f) => {
+        expect(f.hostCapabilities.annotateCurrentUserTurn).toBeUndefined();
+      },
+      { input: { display: false, excludeFromContext: true, text: "prompt" } },
+    );
   });
 
   it("revokes annotation when steering is confirmed without waiting on its own runtime promise", async () => {

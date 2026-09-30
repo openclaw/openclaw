@@ -181,26 +181,34 @@ describe("Codex native command approval scopes", () => {
 });
 
 describe("Codex approval request lifetime", () => {
-  it.each(["before dispatch", "decision"] as const)(
+  it.each(["before dispatch", "policy", "registration", "decision"] as const)(
     "does not report native failure when another client resolves approval during %s",
     async (phase) => {
       const controller = new AbortController();
       const resolved = new CodexServerRequestResolvedError();
       const onNativeToolFailureDisposition = vi.fn();
+      const resolveDuring = (stage: typeof phase) => {
+        if (phase === stage) {
+          controller.abort(resolved);
+        }
+      };
       const waitForApproval = vi.fn<HostCapabilities["waitForApproval"]>(async () => {
-        controller.abort(resolved);
+        resolveDuring("decision");
         return undefined;
       });
       const params = createParams({
+        runBeforeToolCall: async ({ params: toolParams }) => {
+          resolveDuring("policy");
+          return { blocked: false, params: toolParams };
+        },
         requestApproval: async ({ signal }) => {
           expect(signal).toBe(controller.signal);
+          resolveDuring("registration");
           return { id: "plugin:approval-resolved" };
         },
         waitForApproval,
       });
-      if (phase === "before dispatch") {
-        controller.abort(resolved);
-      }
+      resolveDuring("before dispatch");
       const result = await handleCodexAppServerApprovalRequest({
         method: "item/fileChange/requestApproval",
         requestParams: { ...codexTestTurnIds(), itemId: "patch-resolved" },

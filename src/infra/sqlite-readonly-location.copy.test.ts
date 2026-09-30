@@ -195,6 +195,59 @@ describe("stable read-only snapshot copies", () => {
     }
   });
 
+  it("continues after unequal positive short source and private-copy reads", () => {
+    const bytes = patternedBytes(MIB + 37);
+    const fixture = createFixture(bytes);
+    const open = fs.openSync.bind(fs);
+    const close = fs.closeSync.bind(fs);
+    const read = fs.readSync.bind(fs);
+    const files = {
+      source: { maxBytes: 8191, shortReads: 0 },
+      copy: { maxBytes: 4093, shortReads: 0 },
+    };
+    const descriptors = new Map<number, (typeof files)[keyof typeof files]>();
+    vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+      const descriptor = open(pathname, flags, mode);
+      const resolved = path.resolve(String(pathname));
+      if (resolved === fixture.sourcePath) {
+        descriptors.set(descriptor, files.source);
+      } else if (flags === "r" && resolved.startsWith(`${fixture.stagingRoot}${path.sep}`)) {
+        descriptors.set(descriptor, files.copy);
+      }
+      return descriptor;
+    });
+    vi.spyOn(fs, "closeSync").mockImplementation((descriptor) => {
+      close(descriptor);
+      descriptors.delete(descriptor);
+    });
+    vi.spyOn(fs, "readSync").mockImplementation(
+      (
+        descriptor: number,
+        buffer: NodeJS.ArrayBufferView,
+        offsetOrOptions: number | fs.ReadOptions = {},
+        length?: number,
+        position?: fs.ReadPosition | null,
+      ) => {
+        const options =
+          typeof offsetOrOptions === "number"
+            ? { offset: offsetOrOptions, length, position }
+            : offsetOrOptions;
+        const file = descriptors.get(descriptor);
+        const requested = options.length ?? buffer.byteLength - (options.offset ?? 0);
+        if (file && requested > file.maxBytes) {
+          file.shortReads += 1;
+          return read(descriptor, buffer, { ...options, length: file.maxBytes });
+        }
+        return read(descriptor, buffer, options);
+      },
+    );
+
+    expectSnapshot(fixture, bytes);
+    expect(files.source.shortReads).toBeGreaterThan(0);
+    expect(files.copy.shortReads).toBeGreaterThan(0);
+    expect(descriptors.size).toBe(0);
+  });
+
   it("captures a bounded committed WAL prefix while later commits keep appending", () => {
     const fixture = createFixture(Buffer.alloc(0));
     const sqlite = requireNodeSqlite();
@@ -213,21 +266,73 @@ describe("stable read-only snapshot copies", () => {
       const walPath = `${fixture.sourcePath}-wal`;
       const capturedWalBytes = fs.statSync(walPath).size;
       const insert = writer.prepare("INSERT INTO entries VALUES (?)");
+      const open = fs.openSync.bind(fs);
+      const close = fs.closeSync.bind(fs);
       const read = fs.readSync.bind(fs);
+      const fsync = fs.fsyncSync.bind(fs);
+      const sourceWal = fs.statSync(walPath, { bigint: true });
+      const copiedWalReaders = new Set<number>();
+      const copiedWalWriters = new Set<number>();
+      const shortReads = { source: 0, copy: 0 };
       let appendedDuringCopy = false;
       let appendedAfterCopy = 0;
       let sourceAfterWrites = snapshotSqliteFamily(fixture.sourcePath);
-      interceptSourceReads(walPath, (descriptor, buffer, options) => {
-        const count = read(descriptor, buffer, options);
-        if (!appendedDuringCopy && (options.length ?? buffer.byteLength) > 32 && count > 0) {
-          appendedDuringCopy = true;
-          insert.run("during-copy");
-          sourceAfterWrites = snapshotSqliteFamily(fixture.sourcePath);
+      vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+        const descriptor = open(pathname, flags, mode);
+        const resolved = path.resolve(String(pathname));
+        if (resolved.startsWith(`${fixture.stagingRoot}${path.sep}`) && resolved.endsWith("-wal")) {
+          if (flags === "r") {
+            copiedWalReaders.add(descriptor);
+          } else if (flags === "wx") {
+            copiedWalWriters.add(descriptor);
+          }
         }
-        return count;
+        return descriptor;
       });
-      afterPrivateCopy(fixture.stagingRoot, (target) => {
-        if (target.endsWith("-wal")) {
+      vi.spyOn(fs, "closeSync").mockImplementation((descriptor) => {
+        close(descriptor);
+        copiedWalReaders.delete(descriptor);
+        copiedWalWriters.delete(descriptor);
+      });
+      vi.spyOn(fs, "readSync").mockImplementation(
+        (
+          descriptor: number,
+          buffer: NodeJS.ArrayBufferView,
+          offsetOrOptions: number | fs.ReadOptions = {},
+          length?: number,
+          position?: fs.ReadPosition | null,
+        ) => {
+          const options =
+            typeof offsetOrOptions === "number"
+              ? { offset: offsetOrOptions, length, position }
+              : offsetOrOptions;
+          const opened = fs.fstatSync(descriptor, { bigint: true });
+          const source = opened.dev === sourceWal.dev && opened.ino === sourceWal.ino;
+          const compared = copiedWalReaders.has(descriptor)
+            ? "copy"
+            : source && copiedWalReaders.size > 0
+              ? "source"
+              : undefined;
+          const requested = options.length ?? buffer.byteLength - (options.offset ?? 0);
+          const maxBytes = compared === "source" ? 8191 : 4093;
+          if (compared && requested > maxBytes) {
+            shortReads[compared] += 1;
+          }
+          const bytesRead = read(descriptor, buffer, {
+            ...options,
+            length: compared ? Math.min(requested, maxBytes) : requested,
+          });
+          if (source && !appendedDuringCopy && requested > 32 && bytesRead > 0) {
+            appendedDuringCopy = true;
+            insert.run("during-copy");
+            sourceAfterWrites = snapshotSqliteFamily(fixture.sourcePath);
+          }
+          return bytesRead;
+        },
+      );
+      vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+        fsync(descriptor);
+        if (copiedWalWriters.has(descriptor)) {
           insert.run(`after-copy-${++appendedAfterCopy}`);
           sourceAfterWrites = snapshotSqliteFamily(fixture.sourcePath);
         }
@@ -239,6 +344,10 @@ describe("stable read-only snapshot copies", () => {
       );
       expect(appendedDuringCopy).toBe(true);
       expect(appendedAfterCopy).toBeGreaterThan(0);
+      expect(shortReads.source).toBeGreaterThan(0);
+      expect(shortReads.copy).toBeGreaterThan(0);
+      expect(copiedWalReaders.size).toBe(0);
+      expect(copiedWalWriters.size).toBe(0);
       expect(fs.statSync(`${prepared.location}-wal`).size).toBe(capturedWalBytes);
       expect(fs.statSync(walPath).size).toBeGreaterThan(capturedWalBytes);
       const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });

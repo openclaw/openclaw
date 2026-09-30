@@ -232,6 +232,54 @@ describe("SQLite read-only worker cancellation", () => {
     expect(fs.readdirSync(cacheRoot)).toEqual([]);
   });
 
+  it("joins a killed child before rejecting and removes its unpublished partial snapshot", async () => {
+    const fixture = tempDirs.make("openclaw-readonly-held-worker-");
+    const worker = path.join(fixture, "worker.mjs");
+    fs.writeFileSync(
+      worker,
+      `import fs from 'node:fs'; import path from 'node:path';
+         ${reclaimFixture}
+         fs.writeFileSync(path.join(process.argv[5], 'partial.sqlite'), 'private partial snapshot');
+         process.on('SIGTERM', () => {});
+         setTimeout(() => process.exit(2), 5000);`,
+    );
+    vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
+    const controller = new AbortController();
+    const reason = new Error("startup stopped");
+    const operation = prepareSqliteReadOnlyLocation(path.join(fixture, "unused.sqlite"), {
+      signal: controller.signal,
+    });
+    let childClosed: Promise<void> | undefined;
+    try {
+      const workerIndex = () =>
+        processMocks.execFile.mock.calls.findIndex(([, args]) => isWorkerMode(args, "async"));
+      await vi.waitFor(() => expect(workerIndex()).toBeGreaterThanOrEqual(0));
+      const callIndex = workerIndex();
+      const child = processMocks.execFile.mock.results[callIndex]?.value;
+      expect(child).toBeDefined();
+      childClosed = new Promise<void>((resolve) => {
+        child.once("close", () => resolve());
+      });
+      const argv = processMocks.execFile.mock.calls[callIndex]?.[1];
+      if (!Array.isArray(argv)) {
+        throw new Error("worker arguments missing");
+      }
+      const stagingRoot = argv.at(-1)!;
+      await vi.waitFor(() =>
+        expect(fs.existsSync(path.join(stagingRoot, "partial.sqlite"))).toBe(true),
+      );
+      controller.abort(reason);
+      await expect(operation).rejects.toBe(reason);
+      expect(child.signalCode).toBe("SIGKILL");
+      await childClosed;
+      expect(fs.existsSync(stagingRoot)).toBe(false);
+      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+    } finally {
+      controller.abort(reason);
+      await Promise.allSettled([operation, childClosed]);
+    }
+  });
+
   it("reports failed owned cleanup and keeps it retryable", async () => {
     const source = createDatabase();
     const before = fs.readFileSync(source);

@@ -304,6 +304,39 @@ describe("slackPlugin actions", () => {
     expect(actionContext.currentChannelId).toBe("C123");
   });
 
+  it("forwards the host media reader through bundled Slack uploads", async () => {
+    handleSlackActionMock.mockResolvedValueOnce({ ok: true });
+    const mediaLocalRoots = ["/tmp/workspace-agent"];
+    const mediaReadFile = vi.fn(async () => Buffer.from("file"));
+
+    await slackPlugin.actions!.handleAction!({
+      action: "upload-file",
+      channel: "slack",
+      accountId: "default",
+      cfg: {},
+      params: {
+        to: "channel:C123",
+        filePath: "/tmp/workspace-agent/renders/file.wav",
+        initialComment: "render",
+      },
+      mediaLocalRoots,
+      mediaReadFile,
+      toolContext: { currentChannelId: "C123", replyToMode: "all" },
+    });
+
+    expect(requireMockCallArg(handleSlackActionMock, 0, 0)).toMatchObject({
+      action: "uploadFile",
+      filePath: "/tmp/workspace-agent/renders/file.wav",
+      initialComment: "render",
+    });
+    expect(requireMockCallArg(handleSlackActionMock, 0, 2)).toMatchObject({
+      currentChannelId: "C123",
+      replyToMode: "all",
+      mediaLocalRoots,
+      mediaReadFile,
+    });
+  });
+
   it("does not inherit forged media capabilities from generic Slack tool context", async () => {
     handleSlackActionMock.mockResolvedValueOnce({ ok: true });
     const handleAction = slackPlugin.actions!.handleAction!;
