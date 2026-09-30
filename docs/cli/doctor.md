@@ -263,9 +263,9 @@ the container normally.
 
 Completed agent deletions that intentionally retained their database are held back from
 legacy state migrations. Doctor reports a nonblocking note naming the retained path and
-restoration command, while a configured or registered surviving owner of the same physical
-database still migrates normally. If deletion history is missing or unreadable, migration
-fails closed instead of guessing that an unowned database is active.
+manual restore-or-move guidance, while a configured or registered surviving owner of the
+same physical database still migrates normally. If deletion history is missing or unreadable,
+migration fails closed instead of guessing that an unowned database is active.
 
 Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
 

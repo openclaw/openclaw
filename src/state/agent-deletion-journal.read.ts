@@ -46,7 +46,7 @@ function parseDatabasePaths(value: string): string[] {
   throw new Error("Invalid agent deletion database path journal.");
 }
 
-/** Read completed retained deletions without initializing or repairing journal history. */
+/** Read deletions that currently revoke database writes without mutating journal history. */
 export function readRetainedAgentDeletions(
   env: NodeJS.ProcessEnv,
 ): RetainedAgentDeletionDisposition {
@@ -65,8 +65,12 @@ export function readRetainedAgentDeletions(
               database
                 .selectFrom("agent_deletion_journal")
                 .select(["agent_id", "agent_dir", "database_paths_json"])
-                .where("cleanup_completed", "=", 1)
-                .where("delete_files", "=", 0)
+                .where((expression) =>
+                  expression.or([
+                    expression("cleanup_completed", "=", 0),
+                    expression("delete_files", "=", 0),
+                  ]),
+                )
                 .orderBy("agent_id", "asc"),
             ).rows.map((row) => ({
               agentId: row.agent_id,
