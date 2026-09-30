@@ -32,6 +32,7 @@ export function createAgentsApiSession(options: {
   onUsageError?: (error: unknown) => void;
   onTranscriptOrderingGap?: () => void;
   executeFunction?: (call: AgentsApiFunctionCall) => Promise<AgentsApiToolExecutionResult>;
+  connectEnvironment?: (environmentId: string) => Promise<void>;
   onFunctionResult?: (
     call: AgentsApiFunctionCall,
     result: AgentsApiToolExecutionResult,
@@ -279,7 +280,11 @@ export function createAgentsApiSession(options: {
         await submissionFence;
         assertCurrent();
         const inputCount = admittedMessageCount;
-        const calls = await client.pendingFunctionCalls(sessionId, signal);
+        const calls = await client.pendingFunctionCalls(
+          sessionId,
+          signal,
+          options.connectEnvironment,
+        );
         if (!calls.length) {
           return;
         }

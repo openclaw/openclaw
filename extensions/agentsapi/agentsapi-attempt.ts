@@ -29,8 +29,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { resolveAgentsApiSessionAccessError } from "./agentsapi-errors.js";
+import {
+  ensureAgentsApiEnvironment,
+  resolveAgentsApiWorkspace,
+  type AgentsApiExecutorController,
+} from "./agentsapi-environment.js";
 import * as files from "./agentsapi-files.js";
 import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
@@ -48,13 +54,15 @@ import { agentsApiConfigSchema, resolveAgentsApiEnvironment } from "./config.js"
 
 export async function runAgentsApiAttempt(
   params: AgentHarnessAttemptParamsV2,
-  binding: import("./agentsapi-bindings.js").AgentsApiBinding | undefined,
-  bind: (binding: import("./agentsapi-bindings.js").AgentsApiBinding) => Promise<void>,
+  binding: AgentsApiBinding | undefined,
+  bind: (binding: AgentsApiBinding) => Promise<void>,
   assertOwnerCurrent: () => void,
   assertHarnessCurrent: () => void,
   target: ReturnType<typeof requireAgentsApiSessionTarget>,
   readPluginConfig: () => unknown,
   promptHistories: AgentsApiPromptHistories,
+  executorController?: AgentsApiExecutorController,
+  prepareNativeCleanup?: (binding: AgentsApiBinding, apiKey: string) => void,
 ): Promise<EmbeddedRunAttemptResult> {
   const startedAtMs = Date.now();
   const cancellationState = {
@@ -154,6 +162,11 @@ export async function runAgentsApiAttempt(
   };
   let native: ReturnType<typeof createAgentsApiSession> | undefined;
   let remoteSessionId = binding?.sessionId;
+  let activeBinding = binding;
+  const saveBinding = async (next: AgentsApiBinding) => {
+    await bind(next);
+    activeBinding = next;
+  };
   let terminal: ReturnType<typeof agentHarnessAttemptTerminal.normalize> = { kind: "ok" };
   let reply: AgentsApiMessageProjection["reply"] | undefined;
   let projection: AgentsApiMessageProjection | undefined;
@@ -222,8 +235,27 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
+    if (binding?.executor && executorController) {
+      // Even rejected configuration changes must leave authenticated cleanup available.
+      prepareNativeCleanup?.(binding, params.resolvedApiKey!);
+    }
     const pluginConfig = agentsApiConfigSchema.parse(readPluginConfig() ?? {});
     const environment = resolveAgentsApiEnvironment(pluginConfig, params.workspaceDir);
+    if (binding?.executor && !executorController) {
+      throw new Error(
+        "Agents API self-hosted executor controller is unavailable; restore it before continuing",
+      );
+    }
+    if (environment.type === "self_hosted" && executorController) {
+      // Executor paths are independent of the Gateway's tool workspace.
+      environment.workspace_directory = await resolveAgentsApiWorkspace(
+        executorController,
+        target.sessionKey,
+        target.agentId,
+        controller.signal,
+        assertCurrent,
+      );
+    }
     const surface = await buildAgentsApiToolSurface(
       runParams,
       controller.signal,
@@ -337,11 +369,40 @@ export async function runAgentsApiAttempt(
         },
       );
       assertCurrent();
-      await bind({ sessionId: remoteSessionId, configFingerprint: fingerprint });
+      await saveBinding({ sessionId: remoteSessionId, configFingerprint: fingerprint });
     } else {
       await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
     }
     assertCurrent();
+    let connectEnvironment: ((environmentId?: string) => Promise<void>) | undefined;
+    if (environment.type === "self_hosted" && executorController) {
+      const workspaceDirectory = environment.workspace_directory;
+      const selfHostedBinding = activeBinding;
+      if (!selfHostedBinding) {
+        throw new Error("Agents API self-hosted session is missing its canonical binding");
+      }
+      prepareNativeCleanup?.(selfHostedBinding, params.resolvedApiKey!);
+      connectEnvironment = async (environmentId) => {
+        const currentBinding = activeBinding;
+        if (!currentBinding) {
+          throw new Error("Agents API self-hosted session is missing its canonical binding");
+        }
+        await ensureAgentsApiEnvironment({
+          controller: executorController,
+          client,
+          binding: currentBinding,
+          bind: saveBinding,
+          sessionKey: target.sessionKey,
+          agentId: target.agentId,
+          workspaceDirectory,
+          environmentId,
+          signal: controller.signal,
+          assertCurrent,
+        });
+      };
+      await connectEnvironment();
+      assertCurrent();
+    }
     if (recorder && preparedHistory) {
       // A retry keeps this run's already-validated, detached hook context. The
       // hook runner isolates each dispatch; live authority is checked separately.
@@ -380,7 +441,7 @@ export async function runAgentsApiAttempt(
     reply = projection.reply;
     native = createAgentsApiSession({
       client,
-      // Admitted hosted work must still be retired when host run authority closes.
+      // Admitted native work must still be retired when host run authority closes.
       cleanupClient: new AgentsApiClient(params.resolvedApiKey!, assertHarnessCurrent),
       sessionId: remoteSessionId,
       signal: controller.signal,
@@ -408,6 +469,7 @@ export async function runAgentsApiAttempt(
           }
         }
       },
+      connectEnvironment,
       executeFunction: async (call) => {
         startedToolCount++;
         await emitEvent({

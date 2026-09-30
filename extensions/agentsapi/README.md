@@ -217,6 +217,38 @@ an executor. Input submission has a 60-second HTTP deadline, including any wait
 for the executor to connect. Configure the controller to connect promptly;
 the API's longer connection window does not extend this deadline. Session
 connection events remain visible while it connects.
+A deployment that registers the harness itself can instead import
+`createAgentsApiHarness` and `AgentsApiExecutorController` from
+`@openclaw/agentsapi/api.js` and pass `{ executorController }` as the second
+factory argument. Register this harness in place of the default `agentsapi`
+entry, not alongside another harness with the same ID. No controller is installed
+by default, so the webhook-managed path above remains unchanged.
+
+The optional controller implements three callbacks:
+
+- `workspace(context)` returns an existing absolute path on the executor host.
+  It receives the OpenClaw session key and agent ID; Gateway tool paths stay unchanged.
+- `ensure(binding, context)` idempotently starts or reconnects the executor using
+  the exact environment ID, remote URL and workspace in the canonical binding.
+  The harness persists that binding before invoking the controller and waits for
+  the API to report the environment connected before submitting input.
+- `retire(binding, context)` idempotently releases only that binding's executor
+  after native work settles, before reset or session deletion discards the binding.
+  A failed retirement retains the binding for retry; a rolled-back deletion can
+  reconnect that executor on the next input.
+
+Each callback receives `signal` and `assertCurrent`. Honor cancellation, recheck
+`assertCurrent()` immediately before side effects and after asynchronous work,
+and do not retain these operation-scoped handles. The deployment owns process
+launch, authentication and filesystem provisioning. The harness owns native
+session identity, readiness, reconnection and cleanup ordering.
+
+Gateway disposal retains the executor and its persisted binding. The next input
+reconciles the same native session. After a Gateway restart, resume a controlled
+session once before resetting or deleting it so the harness can prepare its
+credential handle for cleanup. If its controller is unavailable, the harness
+refuses continued input or cleanup and retains the binding for recovery.
+
 Hosted environments support input attachments and output file transfers. Each
 turn transfers its admitted original files, including images, to unique hosted
 paths, so later uploads with the same filename keep their own bytes and mapping.

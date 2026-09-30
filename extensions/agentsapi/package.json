@@ -7,6 +7,10 @@
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./api.js": "./api.ts"
+  },
   "dependencies": {
     "openai": "7.23.0",
     "zod": "4.6.5"
