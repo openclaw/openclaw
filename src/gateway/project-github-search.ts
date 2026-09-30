@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import type {
   RemoteProject,
   ProjectsSearchRemoteResult,
@@ -24,7 +27,7 @@ type SearchCacheEntry = {
 const searchCache = new Map<string, SearchCacheEntry>();
 
 function boundedString(value: unknown, maxLength: number): string | undefined {
-  return readNonBlankString(value)?.slice(0, maxLength);
+  return normalizeOptionalString(value)?.slice(0, maxLength);
 }
 
 function parseRepository(value: unknown): RemoteProject | null {
