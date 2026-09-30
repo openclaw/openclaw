@@ -1,4 +1,3 @@
-// Runtime logging helpers route plugin runtime logs through OpenClaw verbosity controls.
 import { shouldLogVerbose } from "../../globals.js";
 import { getChildLogger, isFileLogLevelEnabled } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";

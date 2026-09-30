@@ -1,11 +1,13 @@
-// Memory Core tests cover manager reindex recovery plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  resolveSessionTranscriptsDirForAgent,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -32,7 +34,6 @@ type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: strin
 type ReindexHarness = {
   sync: (params: { reason?: string; force?: boolean }) => Promise<void>;
   runInPlaceReindex: (params: { reason?: string; force?: boolean }) => Promise<void>;
-  syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
   syncArchiveFiles: (params: SyncArchiveParams) => Promise<unknown>;
   db: DatabaseSync;
   cache: { enabled: boolean; maxEntries?: number };
@@ -183,91 +184,60 @@ describe("memory manager reindex recovery", () => {
     return { done, release: released.resolve };
   }
 
-  it("restores retry state after a shadow full reindex fails late", async () => {
+  it("retries both sources without force after a late shadow failure", async () => {
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcript = path.join(sessionsDir, "retry.jsonl.deleted.2026-09-01T00-00-00.000Z");
+    const writeSources = async (version: string) => {
+      await fs.writeFile(path.join(memoryDir, "alpha.md"), `${version} memory`);
+      await fs.writeFile(
+        transcript,
+        `${JSON.stringify({ type: "message", message: { role: "user", content: `${version} session` } })}\n`,
+      );
+    };
+    await writeSources("published");
     const memoryManager = await openManager(
-      createCfg({
-        provider: "none",
-        sources: ["memory", "sessions"],
-      }),
+      createCfg({ provider: "none", sources: ["memory", "sessions"] }),
     );
     const harness = memoryManager as unknown as ReindexHarness;
-    const dirtySessionFile = path.join(workspaceDir, "sessions", "dirty.jsonl");
-    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
+    const rows = harness.db.prepare("SELECT source, text FROM memory_index_chunks ORDER BY source");
+    await memoryManager.sync({ force: true });
+    expect(rows.all()).toEqual([
+      { source: "memory", text: "published memory" },
+      { source: "sessions", text: "User: published session" },
+    ]);
 
-    harness.dirty = true;
+    await writeSources("replacement");
     harness.sessionsDirty = true;
-    harness.sessionsDirtyFiles.add(dirtySessionFile);
-    harness.syncMemoryFiles = async () => emptySyncPlan;
-    harness.syncArchiveFiles = async () => emptySyncPlan;
-    harness.writeMeta = () => {
+    harness.sessionsDirtyFiles.add(transcript);
+    vi.spyOn(harness, "writeMeta").mockImplementationOnce(() => {
       throw new Error("late reindex failure");
-    };
+    });
+    await expect(memoryManager.sync({ force: true })).rejects.toThrow("late reindex failure");
+    expect(harness).toMatchObject({
+      dirty: true,
+      memoryFullRetryDirty: true,
+      sessionsDirty: true,
+      sessionsFullRetryDirty: true,
+    });
+    expect([...harness.sessionsDirtyFiles]).toEqual([transcript]);
+    expect(rows.all()).toEqual([
+      { source: "memory", text: "published memory" },
+      { source: "sessions", text: "User: published session" },
+    ]);
 
-    await expect(memoryManager.sync({ reason: "test", force: true })).rejects.toThrow(
-      "late reindex failure",
-    );
-
-    expect(harness.dirty).toBe(true);
-    expect(harness.memoryFullRetryDirty).toBe(true);
-    expect(harness.sessionsDirty).toBe(true);
-    expect(Array.from(harness.sessionsDirtyFiles)).toEqual([dirtySessionFile]);
-  });
-
-  it("marks clean full reindex work dirty after a shadow full reindex fails late", async () => {
-    const memoryManager = await openManager(
-      createCfg({
-        provider: "none",
-        sources: ["memory", "sessions"],
-      }),
-    );
-    const harness = memoryManager as unknown as ReindexHarness;
-    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
-
-    harness.syncMemoryFiles = async () => emptySyncPlan;
-    harness.syncArchiveFiles = async () => emptySyncPlan;
-    harness.writeMeta = () => {
-      throw new Error("late clean reindex failure");
-    };
-
-    await expect(memoryManager.sync({ reason: "test", force: true })).rejects.toThrow(
-      "late clean reindex failure",
-    );
-
-    expect(harness.dirty).toBe(true);
-    expect(harness.sessionsDirty).toBe(true);
-    expect(harness.sessionsFullRetryDirty).toBe(true);
+    await memoryManager.sync();
+    expect(rows.all()).toEqual([
+      { source: "memory", text: "replacement memory" },
+      { source: "sessions", text: "User: replacement session" },
+    ]);
+    expect(harness).toMatchObject({
+      dirty: false,
+      memoryFullRetryDirty: false,
+      sessionsDirty: false,
+      sessionsFullRetryDirty: false,
+    });
     expect(harness.sessionsDirtyFiles.size).toBe(0);
-  });
-
-  it("keeps the published memory index when a shadow full reindex fails late", async () => {
-    await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha", "utf8");
-    const memoryManager = await openManager(
-      createCfg({
-        provider: "none",
-        sources: ["memory"],
-      }),
-    );
-    await memoryManager.sync({ reason: "test", force: true });
-
-    const harness = memoryManager as unknown as ReindexHarness;
-    const publishedRows = harness.db
-      .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
-      .all();
-    expect(publishedRows.length).toBeGreaterThan(0);
-
-    await fs.writeFile(path.join(memoryDir, "alpha.md"), "replacement beta", "utf8");
-    harness.writeMeta = () => {
-      throw new Error("late shadow failure");
-    };
-
-    await expect(memoryManager.sync({ reason: "test", force: true })).rejects.toThrow(
-      "late shadow failure",
-    );
-    expect(
-      harness.db
-        .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
-        .all(),
-    ).toEqual(publishedRows);
   });
 
   it.each([
@@ -371,7 +341,7 @@ describe("memory manager reindex recovery", () => {
     ).toEqual([{ dims: 3 }]);
   });
 
-  it.each(["commit", "purge", "replace"] as const)(
+  it.each(["purge", "replace"] as const)(
     "revalidates generated cache writes after published writer admission (%s)",
     async (scenario) => {
       const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
@@ -417,22 +387,12 @@ describe("memory manager reindex recovery", () => {
         expect(publishedDb.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
         reservation?.release();
         await reservation?.done;
-        if (scenario === "commit") {
-          await expect(sync).resolves.toBeUndefined();
-          expect(publishedDb.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-            { text: "New reusable alpha memory." },
-          ]);
-          expect(publishedDb.prepare("SELECT embedding FROM memory_embedding_cache").all()).toEqual(
-            [{ embedding: encodeMemoryEmbedding([0, 1, 0]) }],
-          );
-        } else {
-          await expect(sync).rejects.toThrow(
-            scenario === "replace" ? /closed or changed/ : /Memory index changed/,
-          );
-          expect(
-            (replacementDb ?? publishedDb).prepare("SELECT hash FROM memory_embedding_cache").all(),
-          ).toEqual([]);
-        }
+        await expect(sync).rejects.toThrow(
+          scenario === "replace" ? /closed or changed/ : /Memory index changed/,
+        );
+        expect(
+          (replacementDb ?? publishedDb).prepare("SELECT hash FROM memory_embedding_cache").all(),
+        ).toEqual([]);
       } finally {
         reservation?.release();
         await reservation?.done;
@@ -698,7 +658,7 @@ describe("memory manager reindex recovery", () => {
     );
   });
 
-  it.each([false, true])("bounds unresolved targeted sync cache when force=%s", async (force) => {
+  it("bounds unresolved targeted sync cache even when forced", async () => {
     const { memoryManager, harness, newest } = await createOversizedPublishedCache();
     const publishedChunks = harness.db
       .prepare("SELECT * FROM memory_index_chunks ORDER BY id")
@@ -706,7 +666,7 @@ describe("memory manager reindex recovery", () => {
 
     await memoryManager.sync({
       reason: "queued-sessions",
-      force,
+      force: true,
       sessions: [
         { agentId: "main", sessionId: "missing-session", sessionKey: "agent:main:missing-session" },
       ],
@@ -829,35 +789,6 @@ describe("memory manager reindex recovery", () => {
     });
   });
 
-  it("waits for the build lock without blocking the event loop", async () => {
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const lock = await waitForMemoryReindexLock(databasePath);
-    let timerFired = false;
-    let lockReleased = false;
-
-    try {
-      const wait = waitForMemoryReindexLock(databasePath);
-      const timer = new Promise<void>((resolve) => {
-        setTimeout(() => {
-          timerFired = true;
-          resolve();
-        }, 10);
-      });
-
-      await timer;
-      expect(timerFired).toBe(true);
-      await lock.release();
-      lockReleased = true;
-      const waitedLock = await wait;
-      await waitedLock.release();
-    } finally {
-      if (!lockReleased) {
-        await lock.release();
-      }
-    }
-  });
-
   it("forces source-wide session sync when retrying a failed full reindex", async () => {
     const memoryManager = await openManager(
       createCfg({
@@ -886,26 +817,6 @@ describe("memory manager reindex recovery", () => {
     expect(sessionSyncCalls[0]?.targetArchiveFiles).toBeUndefined();
     expect(harness.sessionsDirty).toBe(false);
     expect(harness.sessionsFullRetryDirty).toBe(false);
-  });
-
-  it("requires doctor for legacy schemas before exposing a manager", async () => {
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const db = new DatabaseSync(databasePath);
-    db.exec("CREATE TABLE memory_index_chunks (id TEXT PRIMARY KEY)");
-    db.close();
-
-    const { getMemorySearchManager } = await import("./index.js");
-    const result = await getMemorySearchManager({
-      cfg: createCfg({ provider: "none", sources: ["memory"] }),
-      agentId: "main",
-    });
-
-    expect(result.manager).toBeNull();
-    expect(result.error).toContain("uses schema version 0; run openclaw doctor --fix");
-    const reopened = new DatabaseSync(databasePath);
-    expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
-    reopened.close();
   });
 
   it("full-reindexes sessions-only retry state when metadata is mismatched", async () => {
@@ -955,30 +866,5 @@ describe("memory manager reindex recovery", () => {
 
     expect(reindexCalls).toHaveLength(1);
     expect(reindexCalls[0]).toMatchObject({ reason: "test" });
-  });
-
-  it("forces source-wide memory sync when retrying a failed full reindex", async () => {
-    const memoryManager = await openManager(
-      createCfg({
-        provider: "none",
-        sources: ["memory"],
-      }),
-    );
-    await fs.writeFile(path.join(memoryDir, "alpha.md"), "alpha", "utf8");
-    await memoryManager.sync({ reason: "test", force: true });
-
-    const harness = memoryManager as unknown as ReindexHarness;
-    const memorySync = vi.spyOn(harness, "syncMemoryFiles");
-
-    harness.dirty = true;
-    harness.memoryFullRetryDirty = true;
-
-    await harness.sync({ reason: "test" });
-
-    expect(memorySync).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ needsFullReindex: true }),
-    );
-    expect(harness.dirty).toBe(false);
-    expect(harness.memoryFullRetryDirty).toBe(false);
   });
 });

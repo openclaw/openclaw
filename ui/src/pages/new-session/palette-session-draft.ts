@@ -71,18 +71,9 @@ export class PaletteSessionDraft implements ReactiveController {
       () => host.requestUpdate(),
     );
     this.subscriptions = new SubscriptionsController(host)
-      .watch(
-        () => this.draft && this.read().context?.agents,
-        (agents, notify) => agents.subscribe(notify),
-      )
-      .watch(
-        () => this.draft && this.read().context?.agentIdentity,
-        (identity, notify) => identity.subscribe(notify),
-      )
-      .watch(
-        () => this.draft && this.read().context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
-      )
+      .watchStore(() => this.draft && this.read().context?.agents)
+      .watchStore(() => this.draft && this.read().context?.agentIdentity)
+      .watchStore(() => this.draft && this.read().context?.sessions)
       .watch(
         () => this.draft && this.read().context?.config,
         (config, notify) => config.subscribe(() => notify()),

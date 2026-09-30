@@ -1,4 +1,3 @@
-// Defines agent default configuration types shared by runtime schemas.
 import type { z } from "zod";
 import type {
   AgentRuntimePolicyConfig,

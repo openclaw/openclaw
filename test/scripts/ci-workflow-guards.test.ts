@@ -44,7 +44,10 @@ import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/t
 import { createPrebuiltUiE2eVitestConfig } from "../vitest/vitest.ui-e2e-prebuilt.config.ts";
 import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
-import { runDependencyFreePreflight } from "./ci-preflight-dependencies.test-support.js";
+import {
+  exportPreflightHarness,
+  runDependencyFreePreflight,
+} from "./ci-preflight-dependencies.test-support.js";
 import { assertControlUiE2eOwnership } from "./ci-ui-e2e-ownership.test-support.js";
 import {
   CACHE_SAVE_V5,
@@ -4497,38 +4500,60 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(run.status, run.stderr).toBe(0);
   });
 
-  it("keeps the preflight manifest import closure dependency-free", () => {
-    const { result, manifest } = runDependencyFreePreflight(
-      new URL("../../scripts/ci-build-manifest.mjs", import.meta.url),
-      tempDirs.make("ci-preflight-dependencies-"),
-      testNodeExecPath,
-    );
-    expect(
-      result.status,
-      `${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`,
-    ).toBe(0);
-    expect(manifest).toContain("run_node=false\n");
-    expect(manifest).toContain("run_windows=true\n");
-    const outputs = Object.fromEntries(
-      manifest
-        .trim()
-        .split("\n")
-        .map((line) => {
-          const separator = line.indexOf("=");
-          return [line.slice(0, separator), line.slice(separator + 1)];
-        }),
-    );
-    expect(
-      JSON.parse(expectDefined(outputs.checks_node_core_nondist_matrix, "Node test matrix")),
-    ).toEqual({
-      include: [],
-    });
-    expect(
-      JSON.parse(expectDefined(outputs.checks_windows_matrix, "Windows test matrix")).include
-        .length,
-    ).toBeGreaterThan(0);
-    expect(outputs.ui_test_groups_gzip_base64).toBeTruthy();
-  });
+  it.skipIf(process.platform === "win32")(
+    "runs the dependency-free preflight manifest from the owner-exported harness",
+    () => {
+      const directory = tempDirs.make("ci-preflight-dependencies-");
+      const harness = exportPreflightHarness(directory);
+      const harnessPaths = new Set<string>();
+      const steps: WorkflowStep[] = readCiWorkflow().jobs.preflight.steps;
+      for (const step of steps) {
+        for (const source of [step.run, step.uses]) {
+          for (const match of (source ?? "").matchAll(/(?:\.\/)?\.ci-harness\/([\w./-]+)/gu)) {
+            harnessPaths.add(expectDefined(match[1], "preflight harness path"));
+          }
+        }
+      }
+      expect(harnessPaths.size).toBeGreaterThan(0);
+      expect(harnessPaths).toContain("scripts/ci-build-manifest.mjs");
+      const missingPaths = [...harnessPaths].filter(
+        (entry) => !existsSync(path.join(harness, entry)),
+      );
+      expect(missingPaths, `Missing preflight harness paths: ${missingPaths.join(", ")}`).toEqual(
+        [],
+      );
+      const { result, manifest } = runDependencyFreePreflight(
+        pathToFileURL(path.join(harness, "scripts/ci-build-manifest.mjs")),
+        directory,
+        testNodeExecPath,
+      );
+      expect(
+        result.status,
+        `${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`,
+      ).toBe(0);
+      expect(manifest).toContain("run_node=false\n");
+      expect(manifest).toContain("run_windows=true\n");
+      const outputs = Object.fromEntries(
+        manifest
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      expect(
+        JSON.parse(expectDefined(outputs.checks_node_core_nondist_matrix, "Node test matrix")),
+      ).toEqual({
+        include: [],
+      });
+      expect(
+        JSON.parse(expectDefined(outputs.checks_windows_matrix, "Windows test matrix")).include
+          .length,
+      ).toBeGreaterThan(0);
+      expect(outputs.ui_test_groups_gzip_base64).toBeTruthy();
+    },
+  );
 
   it("keeps type-aware oxlint within hosted fork-runner resources", () => {
     const workflow = readCiWorkflow();
@@ -5346,7 +5371,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           .toSorted(),
       );
       if (releaseTier === false) {
-        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 11);
+        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 12);
         expect(selectedFiles).not.toContain(
           "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
         );

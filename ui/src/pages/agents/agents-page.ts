@@ -190,10 +190,7 @@ class AgentsPage
     ensureInitialData: () => this.ensureInitialData(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    )
+    .watchStore(() => this.context?.config)
     .watch(() => this.client, subscribeModelCatalogCache)
     .effect(
       () => this.context?.settingsAgentSelection,
@@ -277,18 +274,9 @@ class AgentsPage
         };
       },
     )
-    .watch(
-      () => this.context?.channels,
-      (channels, notify) => channels.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.navigation,
-      (navigation, notify) => navigation.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-    )
+    .watchStore(() => this.context?.channels)
+    .watchStore(() => this.context?.navigation)
+    .watchStore(() => this.context?.runtimeConfig)
     .effect(
       () => this.context?.sessions,
       (sessions) => {

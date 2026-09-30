@@ -1,28 +1,12 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
-import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
-import {
-  normalizeRoleForGrouping,
-  resolveMessageRole,
-  resolveMessageSender,
-} from "../../../lib/chat/message-normalizer.ts";
-import {
-  localParticipantIdentityKey,
-  sessionParticipantIdentityKey,
-} from "../../../lib/chat/sender-label.ts";
+import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
-import {
-  isUiGlobalScopeConfigured,
-  isSubagentSessionKey,
-  parseAgentSessionKey,
-  resolveUiGlobalAliasAgentId,
-} from "../../../lib/sessions/session-key.ts";
 import { agentRunFrameGroups } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
@@ -39,9 +23,7 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
-import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import {
@@ -62,6 +44,11 @@ import {
 } from "./chat-thread-interactions.ts";
 import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
+import {
+  isTranscriptGlobalAlias,
+  resolveTranscriptAvatarPlacement,
+  resolveTranscriptParticipants,
+} from "./chat-transcript-identity.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   expandReplyTargetWork,
@@ -91,48 +78,10 @@ export function projectChatTranscript(
   const state = getTranscriptState(props.paneId);
   const asyncQuestions = props.asyncQuestions;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const sessionHost = props.sessionHost ?? null;
   const activeSession = props.selectedSession;
-  // Use unfiltered history and retained participants so searching or paging away
-  // another person's messages cannot turn a shared conversation into a solo one.
-  const showOwnSenderName =
-    (activeSession?.expandedParticipants ?? activeSession?.participants ?? []).some(
-      ({ identity }) =>
-        identity.type !== "agent" && !(identity.type === "profile" && identity.id === props.userId),
-    ) ||
-    [...props.messages, ...(props.pendingInputs ?? []).map((input) => input.message)].some(
-      (message) => {
-        if (normalizeRoleForGrouping(resolveMessageRole(message)) !== "user") {
-          return false;
-        }
-        const sender = resolveMessageSender(
-          asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]),
-        );
-        return Boolean(
-          sender && !(sender.identity?.type === "profile" && sender.identity.id === props.userId),
-        );
-      },
-    );
-  // The session row counts every person who spoke, including rows not loaded yet.
-  // Grouping adds the loaded senders with the same keys, so one person counts once.
-  const sessionPeople = new Set(
-    [
-      activeSession?.owner?.actor.identity,
-      ...(activeSession?.expandedParticipants ?? activeSession?.participants ?? []).map(
-        ({ identity }) => identity,
-      ),
-    ].flatMap((identity) =>
-      identity && identity.type !== "agent" ? [sessionParticipantIdentityKey(identity)] : [],
-    ),
-  );
+  const { showOwnSenderName, sessionPeople } = resolveTranscriptParticipants(props);
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
-  // Global-alias routing ignores the capped session list, which may omit the
-  // canonical row. The scope gate keeps per-sender main threads direct.
-  const isGlobalAliasKey =
-    parseAgentSessionKey(props.sessionKey)?.rest === "global" ||
-    (sessionHost !== null &&
-      isUiGlobalScopeConfigured(sessionHost) &&
-      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
+  const isGlobalAliasKey = isTranscriptGlobalAlias(props);
   const showReasoning = props.showThinking && activeSession?.reasoningLevel === "on";
   const assistantAgentId = props.currentAgentId ?? props.fullMessageAgentId;
   const assistantAvatar = resolveAssistantDisplayAvatar({
@@ -304,35 +253,11 @@ export function projectChatTranscript(
   const isEmpty =
     chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
   transcript.setContentReady(!props.loading);
-  // 1:1 exchanges do not need an avatar gutter; group threads keep it to identify
-  // multiple voices. The capped sessions list may omit the selected row, so absent
-  // or unknown rows classify by key, with global aliases taking precedence.
-  // senderLabels are not a signal: gateway sanitization also labels 1:1 channel DMs.
-  const rowKind = activeSession?.kind;
-  const sessionKind =
-    rowKind && rowKind !== "unknown"
-      ? rowKind
-      : isGlobalAliasKey
-        ? "global"
-        : classifySessionKind(props.sessionKey);
-  // Only agent-solo kinds qualify. Global sessions aggregate inbound contexts,
-  // including groups/channels; identity-resolving gateways also share sessions
-  // between people, so both keep avatars. A forwarded cross-session message adds
-  // another voice to a direct exchange and restores identity chrome.
-  const hasForwardedGroups = chatItems.some(
-    (item) => item.kind === "group" && hasForwardedSource(item),
+  const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(
+    props,
+    chatItems,
+    isGlobalAliasKey,
   );
-  const defaultAvatarPlacement = resolveChatDefaultAvatarPlacement(
-    (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
-      !hasForwardedGroups,
-    props.userId,
-  );
-  const isDirectThread = defaultAvatarPlacement === "footer";
-  // Subagent sessions omit avatars; direct chats use the footer, others the gutter.
-  const avatarPlacement =
-    activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
-      ? "none"
-      : defaultAvatarPlacement;
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;

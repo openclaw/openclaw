@@ -1,4 +1,3 @@
-// Defines proxy-related Zod schema fragments for config parsing.
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { z } from "zod";
 import { sensitive } from "./zod-schema.sensitive.js";

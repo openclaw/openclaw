@@ -53,18 +53,15 @@ export async function waitForEventLoopReady(
   return await new Promise<EventLoopReadyResult>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const clearTimer = () => {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-    };
     const finish = (ready: boolean, aborted = false) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimer();
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
       signal?.removeEventListener("abort", onAbort);
       resolve({
         ready,

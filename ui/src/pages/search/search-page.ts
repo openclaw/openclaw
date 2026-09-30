@@ -84,9 +84,8 @@ class SearchPage extends OpenClawLightDomElement {
   });
 
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.runtimeConfig,
-      (runtime, notify) => runtime.subscribe(notify),
       (runtime) => {
         if (!isSearchConfigSettled(runtime.state)) {
           this.invalidateTest();
@@ -98,15 +97,11 @@ class SearchPage extends OpenClawLightDomElement {
         }
       },
     )
-    .watch(
+    .watchStore(
       () => this.context?.settingsAgentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => this.syncAgent(),
     )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    );
+    .watchStore(() => this.context?.agents);
 
   override disconnectedCallback() {
     this.invalidate();

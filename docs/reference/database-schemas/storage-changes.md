@@ -333,6 +333,13 @@ account without repeating network verification. Empty repository results retain
 the non-repository workspace owner's fallback. Database-open behavior, publication
 writes, schemas, and retention are unchanged.
 
+Shared GitHub publication options and status read committed receipts through the
+independent read worker when the admitted native database still matches its
+physical path. They retain the source owner and recheck session and workspace
+authority after waiting, without copying the live database for each observation.
+Cold sources and unavailable or replaced native paths retain artifact-preserving
+snapshot preparation. Schema, permissions, and update behavior are unchanged.
+
 Default project recents reuse the Gateway's resident session-row projection after
 readiness, including archived metadata. The combined-store loader retains physical
 store selection, sentinel precedence, and process-local incognito reads. Observed

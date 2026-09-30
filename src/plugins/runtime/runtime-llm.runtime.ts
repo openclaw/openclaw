@@ -1,4 +1,4 @@
-import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
+import { asFiniteNumber, asNonNegativeFiniteNumber } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -190,22 +190,18 @@ function buildMessages(params: {
     );
 }
 
-function readFiniteNonNegativeNumber(value: unknown): number | undefined {
-  return asFiniteNumberInRange(value, { min: 0 });
-}
-
 function readExplicitCostUsd(raw: unknown): number | undefined {
   const cost = asOptionalRecord(raw)?.cost;
   if (typeof cost === "number") {
-    return readFiniteNonNegativeNumber(cost);
+    return asNonNegativeFiniteNumber(cost);
   }
   const record = asOptionalRecord(cost);
   if (!record) {
     return undefined;
   }
   return (
-    readFiniteNonNegativeNumber(record.totalUsd) ??
-    (hasRecordedUsageCost(record) ? readFiniteNonNegativeNumber(record.total) : undefined)
+    asNonNegativeFiniteNumber(record.totalUsd) ??
+    (hasRecordedUsageCost(record) ? asNonNegativeFiniteNumber(record.total) : undefined)
   );
 }
 

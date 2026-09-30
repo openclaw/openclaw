@@ -26,6 +26,7 @@ import { readBrowserTabTarget } from "../../components/browser/browser-target.ts
 import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
+import { readLiveDiffStat } from "./tool-call-diff.ts";
 import { readPreparedActivity } from "./tool-call-grouping.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
@@ -348,16 +349,7 @@ function extractToolCards(message: unknown): ToolCard[] {
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const isLiveToolStream = m["__openclawToolStreamLive"] === true;
-  const liveDiff = readRecord(m["__openclawToolStreamDiffStat"]);
-  const liveDiffStat =
-    typeof liveDiff?.added === "number" &&
-    Number.isInteger(liveDiff.added) &&
-    liveDiff.added >= 0 &&
-    typeof liveDiff.removed === "number" &&
-    Number.isInteger(liveDiff.removed) &&
-    liveDiff.removed >= 0
-      ? { added: liveDiff.added, removed: liveDiff.removed }
-      : undefined;
+  const liveDiffStat = readLiveDiffStat(m["__openclawToolStreamDiffStat"]);
   const cards: ToolCard[] = [];
   const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);

@@ -300,6 +300,7 @@ export async function withSubagentKillScope<T>(
           }),
           (_selection, runs) =>
             listRunsForControllerFromRuns(new Map(runs), controller.controllerSessionKey),
+          { sessionKeys: [controller.controllerSessionKey], descendants: false },
         );
         assertCurrent();
         await select(candidates, tree.children, controller, () => tree.canTraverse());

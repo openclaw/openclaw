@@ -10,12 +10,12 @@ import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { isAuthModeAllowedForModel } from "../agents/model-auth-policy.js";
 import {
   profileTypeToAuthMode,
-  resolveProviderConfig,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import { resolveDirectProviderCredentialMode } from "../agents/model-auth-runtime-shared.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type ProviderAuthProfileLookup = {
@@ -75,7 +75,7 @@ export function createProviderAuthAvailability(
         return false;
       }
 
-      const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+      const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
       const authoredApiKey = providerConfig?.apiKey;
       const store = agentDir
         ? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false })
@@ -127,7 +127,7 @@ export function createProviderAuthAvailability(
             mode,
             authFlow,
           }));
-      const authoredApiKey = resolveProviderConfig(params.cfg, params.provider)?.apiKey;
+      const authoredApiKey = resolveMergedModelProviderConfig(params.cfg, params.provider)?.apiKey;
       const profileId = typeof authoredApiKey === "string" ? authoredApiKey.trim() : undefined;
       if (agentDir && profileId) {
         const credential = findPersistedAuthProfileCredential({ agentDir, profileId });

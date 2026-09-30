@@ -50,6 +50,7 @@ import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
 } from "openclaw/plugin-sdk/text-chunking";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 import {
   describeMattermostAccount,
@@ -447,17 +448,12 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error(result.error);
     }
 
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: remove
-            ? `Removed reaction :${emojiName}: from ${postId}`
-            : `Reacted with :${emojiName}: on ${postId}`,
-        },
-      ],
-      details: {},
-    };
+    return textResult(
+      remove
+        ? `Removed reaction :${emojiName}: from ${postId}`
+        : `Reacted with :${emojiName}: on ${postId}`,
+      {},
+    );
   },
 };
 

@@ -1,4 +1,3 @@
-// Defines channel-related Zod schema fragments for config parsing.
 import { z } from "zod";
 
 /** Optional heartbeat visibility controls shared by channel schemas. */

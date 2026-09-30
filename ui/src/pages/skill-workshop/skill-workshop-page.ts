@@ -69,10 +69,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     this.requestPageUpdate,
   );
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
+    .watchStore(() => this.context?.agents)
     .effect(
       () => this.context,
       (context) => {
@@ -122,10 +119,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         return cleanup;
       },
     )
-    .watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    )
+    .watchStore(() => this.context?.config)
     .effect(
       () => this.context?.agentSelection,
       (agentSelection) => {
@@ -166,17 +160,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         }
       },
     )
-    .watch(
-      () => this.context?.agentIdentity,
-      (agentIdentity, notify) => agentIdentity.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-    )
-    .watch(
-      () => (this.context ? skillWorkshopRevisionAdmissionsFor(this.context) : undefined),
-      (admissions, notify) => admissions.subscribe(notify),
+    .watchStore(() => this.context?.agentIdentity)
+    .watchStore(() => this.context?.runtimeConfig)
+    .watchStore(() =>
+      this.context ? skillWorkshopRevisionAdmissionsFor(this.context) : undefined,
     );
 
   private readonly handleRevisionRequest: SkillWorkshopRevisionRequest = async (

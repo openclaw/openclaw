@@ -20,9 +20,9 @@ import {
 } from "./runtime/generation-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
-function createOwnedInstance() {
+function createOwnedInstance(id = "paired-scope") {
   const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "paired-scope" });
+  const record = createPluginRecord({ id });
   registry.plugins.push(record);
   return new PluginInstance(record.id, { record, registry });
 }
@@ -136,6 +136,7 @@ describe("independent plugin execution scope views", () => {
 
   it("isolates mutable sibling Gateway views when the admitted instance token is unchanged", async () => {
     const instance = createOwnedInstance();
+    const other = createOwnedInstance("other-scope");
     try {
       await instance.run(async () => {
         const call = pluginInstanceInvocation.getStore();
@@ -152,6 +153,16 @@ describe("independent plugin execution scope views", () => {
               expect(getPluginRuntimeGatewayRequestScope()).toBe(child);
               expect(child.pluginSource).toBe(source);
               expect(parent.pluginSource).toBe(originalSource);
+              await other.run(async () => {
+                await Promise.resolve();
+                expect(pluginInstanceInvocation.getStore()?.instance).toBe(other);
+                expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(other.pluginId);
+                expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).not.toBe(
+                  child.pluginRegistry,
+                );
+              });
+              expect(pluginInstanceInvocation.getStore()).toBe(call);
+              expect(getPluginRuntimeGatewayRequestScope()).toBe(child);
               return child;
             }),
           ),
@@ -161,7 +172,7 @@ describe("independent plugin execution scope views", () => {
         expect(getPluginRuntimeGatewayRequestScope()).toBe(parent);
       });
     } finally {
-      await instance.dispose();
+      await Promise.all([instance.dispose(), other.dispose()]);
     }
   });
 

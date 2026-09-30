@@ -509,8 +509,6 @@ def checkout_harness(sha):
         sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
         if kind in ("platform", "linux-node"):
             sparse_paths += [f"/{path}" for path in evidence_scripts]
-        elif kind == "preflight":
-            sparse_paths += [f"/{path}" for path in preflight_scripts]
         if kind == "platform":
             sparse_paths += [f"/{path}" for path in platform_scripts]
         if kind == "linux-node":

@@ -144,20 +144,15 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     refresh: () => this.detect(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.synchronizeGateway(gateway.snapshot),
     )
-    .watch(
+    .watchStore(
       () => this.context && this.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => this.synchronizeGateway(this.context.gateway.snapshot),
     )
-    .watch(
-      () => this.firstRun,
-      (firstRun, notify) => firstRun.subscribe(notify),
-    );
+    .watchStore(() => this.firstRun);
   private readonly wizard = new ModelSetupWizardRunner({
     getClient: () => this.context?.gateway.snapshot.client ?? null,
     getAgentId: () => this.agentSelection.state.selectedId ?? null,

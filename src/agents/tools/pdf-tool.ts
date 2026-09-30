@@ -38,7 +38,7 @@ import { optionalFiniteNumberSchema } from "../schema/typebox.js";
 import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-execution.js";
 import { prepareSimpleCompletionModel } from "../simple-completion-runtime.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
-import { readFiniteNumberParam, ToolInputError, type AnyAgentTool } from "./common.js";
+import { readFiniteNumberParam, textResult, ToolInputError, type AnyAgentTool } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   buildMediaReferenceDetails,
@@ -414,19 +414,10 @@ export function createPdfTool(options?: {
     const pdfInputs = resolvePdfInputs(record);
 
     if (pdfInputs.length > DEFAULT_MAX_PDFS) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Too many PDFs: ${pdfInputs.length} provided, maximum is ${DEFAULT_MAX_PDFS}. Please reduce the number.`,
-          },
-        ],
-        details: {
-          error: "too_many_pdfs",
-          count: pdfInputs.length,
-          max: DEFAULT_MAX_PDFS,
-        },
-      };
+      return textResult(
+        `Too many PDFs: ${pdfInputs.length} provided, maximum is ${DEFAULT_MAX_PDFS}. Please reduce the number.`,
+        { error: "too_many_pdfs", count: pdfInputs.length, max: DEFAULT_MAX_PDFS },
+      );
     }
 
     const { prompt: promptRaw, modelOverride } = resolvePromptAndModelOverride(
@@ -486,15 +477,10 @@ export function createPdfTool(options?: {
       const { isHttpUrl } = refInfo;
 
       if (refInfo.hasUnsupportedScheme) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Unsupported PDF reference: ${pdfRaw}. Use a file path, file:// URL, or http(s) URL.`,
-            },
-          ],
-          details: { error: "unsupported_pdf_reference", pdf: pdfRaw },
-        };
+        return textResult(
+          `Unsupported PDF reference: ${pdfRaw}. Use a file path, file:// URL, or http(s) URL.`,
+          { error: "unsupported_pdf_reference", pdf: pdfRaw },
+        );
       }
 
       if (sandboxConfig && isHttpUrl) {

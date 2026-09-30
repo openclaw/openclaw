@@ -23,10 +23,7 @@ import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  type GatewayDrainReason,
-  runOutsideGatewayRootWorkAdmission,
-} from "../../process/gateway-work-admission.js";
+import { runOutsideGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -93,6 +90,8 @@ export async function runGatewayLoop(params: {
   // dist chunks; a late import can fail and leave the restart token unconsumed,
   // coalescing every subsequent restart.
   const eagerLifecycleRuntime = await gatewayLifecycleRuntimeLoader.load();
+  // Keep admission transitions synchronous through this primed runtime so an
+  // accepted signal cannot yield between token handling and closing root admission.
   const supervisor = eagerLifecycleRuntime.detectGatewayRespawnSupervisorIdentity(
     process.env,
     process.platform,
@@ -624,13 +623,6 @@ export async function runGatewayLoop(params: {
         );
     }
   };
-  const markRestartDraining = (reason: GatewayDrainReason) => {
-    // The lifecycle module is primed before listeners are installed. Keep this
-    // transition synchronous so an accepted signal cannot yield between token
-    // handling and closing process-wide root admission.
-    eagerLifecycleRuntime.markGatewayDraining(reason);
-  };
-
   const handleHostedStopAfterServerClose = async (
     owner: ReturnType<typeof createGatewayHostLifecycle>,
     shutdownFailure: ShutdownFailure | undefined,
@@ -799,7 +791,6 @@ export async function runGatewayLoop(params: {
           runtime: eagerLifecycleRuntime,
           drainTimeoutMs: drainBudget.drainTimeoutMs,
           restartDrainDeadlineAt: drainBudget.restartDrainDeadlineAt,
-          markDraining: markRestartDraining,
           recordCounts: (counts) => {
             lastDrainCounts = counts;
           },
@@ -971,7 +962,8 @@ export async function runGatewayLoop(params: {
         foregroundUpdateClosed || (pendingStartupRequest ?? activeRestartRequest)?.foregroundUpdate,
         {
           beforeWait: () => {
-            markRestartDraining(`stop (${signal})`);
+            const drainReason = `stop (${signal})` as const;
+            eagerLifecycleRuntime.markGatewayDraining(drainReason);
             clearPendingStartupForceExitTimer();
             forceActiveRestartExit?.();
           },
@@ -1018,7 +1010,8 @@ export async function runGatewayLoop(params: {
         pendingStartupRequest = null;
         clearPendingStartupForceExitTimer();
         startupFailedWithoutServerHandle = false;
-        markRestartDraining(formatShutdownReason(acceptedRequest));
+        const drainReason = formatShutdownReason(acceptedRequest);
+        eagerLifecycleRuntime.markGatewayDraining(drainReason);
         runAcceptedRequest(acceptedRequest);
         return;
       }
@@ -1042,7 +1035,8 @@ export async function runGatewayLoop(params: {
     }
     // Fence new roots synchronously for stops as well as restarts so admitted
     // detached finalizers can drain before the signal tears down the gateway.
-    markRestartDraining(formatShutdownReason(acceptedRequest));
+    const drainReason = formatShutdownReason(acceptedRequest);
+    eagerLifecycleRuntime.markGatewayDraining(drainReason);
     shuttingDown = true;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
     if (isRestart) {
@@ -1138,13 +1132,12 @@ export async function runGatewayLoop(params: {
         if (processLocalIntent?.successorOwner) {
           Object.assign(restartIntent, processLocalIntent);
         }
-        markRestartDraining(
-          formatShutdownReason({
-            action: "restart",
-            signal: "SIGUSR2",
-            restartReason: restartIntent.reason ?? "gateway.restart",
-          }),
-        );
+        const drainReason = formatShutdownReason({
+          action: "restart",
+          signal: "SIGUSR2",
+          restartReason: restartIntent.reason ?? "gateway.restart",
+        });
+        eagerLifecycleRuntime.markGatewayDraining(drainReason);
         if (authorized) {
           markGatewayRestartHandled();
         }
@@ -1176,13 +1169,12 @@ export async function runGatewayLoop(params: {
       abortPendingChannelReloads();
       const signalRestartIntent = consumeGatewayRestartIntent();
       const restartReason = peekGatewayRestartReason();
-      markRestartDraining(
-        formatShutdownReason({
-          action: "restart",
-          signal: "SIGUSR2",
-          restartReason: signalRestartIntent?.reason ?? restartReason,
-        }),
-      );
+      const drainReason = formatShutdownReason({
+        action: "restart",
+        signal: "SIGUSR2",
+        restartReason: signalRestartIntent?.reason ?? restartReason,
+      });
+      eagerLifecycleRuntime.markGatewayDraining(drainReason);
       markGatewayRestartHandled();
       request(
         "restart",

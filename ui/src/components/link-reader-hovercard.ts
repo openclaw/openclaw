@@ -77,14 +77,12 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
   private readonly subscriptions = new SubscriptionsController(this);
   constructor() {
     super();
-    this.subscriptions.watch(
+    this.subscriptions.watchStore(
       () => this.pagePreviewContext?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       () => this.retirePage(),
     );
-    this.subscriptions.watch(
+    this.subscriptions.watchStore(
       () => this.pagePreviewContext?.config,
-      (config, notify) => config.subscribe(notify),
       () => {
         if (this.client && !this.pagePreviewContext?.config.current.automaticallyFetchFavicons) {
           clearLinkPreviews(this.client);

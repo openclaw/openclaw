@@ -1,4 +1,3 @@
-// Access group helpers resolve plugin allowlists that reference named config groups.
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   ACCESS_GROUP_ALLOW_FROM_PREFIX,

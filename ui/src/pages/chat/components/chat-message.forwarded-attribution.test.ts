@@ -7,7 +7,7 @@ import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
-import { renderMessageGroup } from "./chat-message.ts";
+import { renderMessageGroup } from "./chat-message-group.ts";
 
 let container: HTMLDivElement;
 

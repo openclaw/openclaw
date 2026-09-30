@@ -9,14 +9,16 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
   createReviewFixture,
   renderPanelFixture,
 } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
-import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { availableSidebarSlots, sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
@@ -374,7 +376,11 @@ describe("chat pane embedded panels", () => {
         onOpenSidebar: state.handleOpenSidebar,
         sessionKey: state.sessionKey,
         currentAgentId: resolveChatAgentId(state),
-        ...resolveChatMessageAccess(state).chatProps,
+        fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
+        loadFullAssistantMessage: createSidebarFullMessageLoader(
+          state,
+          Boolean(parseCatalogSessionKey(state.sessionKey)),
+        ),
         connectionEpoch: state.connectionEpoch,
       } as ChatProps;
       const renderAttachment = () => {

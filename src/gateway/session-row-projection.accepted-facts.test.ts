@@ -527,6 +527,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               sessionKeys: [],
             }),
             (selection) => selection.runIds,
+            { sessionKeys: [previous.childSessionKey], descendants: true },
           );
           await registryPending.promise;
           expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();

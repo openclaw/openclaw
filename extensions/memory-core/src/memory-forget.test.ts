@@ -170,7 +170,7 @@ describe("memory forget", () => {
     { label: "session key", selector: "agent:main:archived" },
   ])("purges an archived-only session selected by its $label", async ({ selector }) => {
     await seedMemoryForgetSession("archived");
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
         {
@@ -259,7 +259,7 @@ describe("memory forget", () => {
 
   it("leaves the original memory file intact when a rewrite fails mid-write", async () => {
     await seedMemoryForgetSession("archived");
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
         {
@@ -550,7 +550,7 @@ describe("memory forget", () => {
     async ({ failure, corpusExtension }) => {
       await seedMemoryForgetSession("survivor");
       await seedMemoryForgetSession("target", "gmail");
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId: "main",
         origins: [
           {

@@ -496,7 +496,7 @@ export async function applyShortTermPromotions(
       if (consolidationResult && consolidationPlan) {
         // Reserve lineage before publication; release new rows only when the
         // file owner rules out a replacement or reconciles an unchanged target.
-        const rollbackOrigins = reserveMemoryEntryOrigins({
+        const rollbackOrigins = await reserveMemoryEntryOrigins({
           agentIds: originAgentIds,
           previousMemory: existingMemory,
           operations: consolidationPlan.operations,
@@ -518,7 +518,7 @@ export async function applyShortTermPromotions(
           if (error instanceof MemoryAtomicPublicationError) {
             throw error;
           }
-          rollbackOrigins();
+          await rollbackOrigins();
           if (
             !(error instanceof MemoryWriteConflictError) &&
             !isAtomicReplacePermissionError(error)

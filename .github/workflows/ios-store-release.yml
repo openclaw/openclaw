@@ -109,8 +109,9 @@ jobs:
       ((github.event_name == 'schedule' && vars.IOS_TESTFLIGHT_ENABLED == 'true') ||
       (github.event_name == 'workflow_dispatch' && (inputs.operation == 'release' || inputs.operation == 'testflight')))
     permissions:
+      actions: read
       contents: read
-    # Qualification rebuilds tracked plugin manifests; keep its workspace separate
+    # Keep native qualification products and disposable Gateway state separate
     # from the clean checkout that admits the release.
     uses: ./.github/workflows/ios-release-e2e.yml
     with:
