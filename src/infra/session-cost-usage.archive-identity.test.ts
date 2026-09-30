@@ -19,9 +19,11 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { sessionTranscriptEventsOverlapRange } from "../config/sessions/session-accessor.sqlite-event-time.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { transcriptEventJsonMayOverlapRange } from "../config/sessions/transcript-event-time.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
@@ -43,6 +45,7 @@ import {
   resolveUsageCostTranscriptFile,
 } from "./session-cost-usage-collection.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
+import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
 import { decodeUsageCostRollupEnvelope } from "./session-cost-usage-rollup-codec.js";
 import {
   discoverAllSessions,
@@ -142,6 +145,40 @@ async function cachedTotal(agentId: string) {
   });
 }
 
+describe("usage event-time preflight", () => {
+  const recent = Date.parse("2026-09-26T12:00:00.000Z");
+  const older = Date.parse("2026-08-26T12:00:00.000Z");
+  const range = { startMs: recent - 1_000, endMs: recent + 1_000 };
+
+  it.each([
+    [{ role: "assistant", timestamp: "2026-08-26T12:00:00.000Z" }, true],
+    [{ role: "assistant", timestamp: 9e15 }, true],
+    [{ role: "assistant", timestamp: older }, false],
+    [{ role: "assistant", timestamp: recent }, true],
+  ] as const)("matches report timestamp fallback for message %j", (message, included) => {
+    const event = { message, timestamp: "2026-09-26T12:00:00.000Z" };
+    const parsed = parseUsageCostTranscriptRecord(event);
+    expect(parsed?.timestamp?.getTime() === recent).toBe(included);
+    expect(transcriptEventJsonMayOverlapRange(JSON.stringify(event), range)).toBe(included);
+  });
+
+  it("does not mistake session headers for usage even when their timestamp is recent", () => {
+    expect(
+      transcriptEventJsonMayOverlapRange(
+        JSON.stringify({ type: "session", timestamp: new Date(recent).toISOString() }),
+        range,
+      ),
+    ).toBe(false);
+  });
+
+  it("cannot exclude a malformed or untimestamped message on metadata alone", () => {
+    expect(transcriptEventJsonMayOverlapRange("{", range)).toBe(true);
+    expect(
+      transcriptEventJsonMayOverlapRange(JSON.stringify({ message: { role: "assistant" } }), range),
+    ).toBe(true);
+  });
+});
+
 describe("usage archive identity", () => {
   let state: OpenClawTestState;
 
@@ -173,6 +210,190 @@ describe("usage archive identity", () => {
       }),
     ]);
     expect(tableExists(db, "session_transcript_archives")).toBe(false);
+  });
+
+  it.each(encodings)(
+    "uses transcript event time rather than stale mtime for %s archives",
+    async (encoding) => {
+      const now = Date.now();
+      const manager = SessionManager.inMemory();
+      manager.appendMessage({ role: "user", content: "recent archived prompt", timestamp: now });
+      manager.appendMessage({ ...assistant(11), timestamp: now });
+      const sessionFile = await writeArchive({
+        state,
+        manager,
+        encoding,
+        mtime: 1,
+      });
+
+      expect(
+        await listUsageCountedTranscriptStats("main", {
+          eventTimeRange: { startMs: now - 1_000, endMs: now + 1_000 },
+        }),
+      ).toEqual([expect.objectContaining({ sourcePath: sessionFile, kind: "jsonl" })]);
+    },
+  );
+
+  it("uses event time when SQLite session window timestamps are stale or missing", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "recent-transcript-old-entry",
+      sessionKey: "agent:main:recent-transcript-old-entry",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const now = Date.now();
+    const startMs = now - 7 * 86_400_000;
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { ...assistant(17), timestamp: now } }],
+      touchSessionEntry: false,
+    });
+    runOpenClawAgentWriteTransaction(
+      ({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<DB>(db)
+            .updateTable("session_windows")
+            .set({ created_at: 43, updated_at: 50, transcript_updated_at: 50 })
+            .where("session_id", "=", scope.sessionId),
+        );
+      },
+      { agentId: "main", env: state.env },
+    );
+
+    const window = openOpenClawAgentDatabase({ agentId: "main", env: state.env })
+      .db.prepare(
+        "SELECT created_at, updated_at, transcript_updated_at FROM session_windows WHERE session_id = ?",
+      )
+      .get(scope.sessionId) as
+      | { created_at: number; updated_at: number; transcript_updated_at: number }
+      | undefined;
+    expect(window).toEqual({ created_at: 43, updated_at: 50, transcript_updated_at: 50 });
+    expect(
+      await listUsageCountedTranscriptStats("main", {
+        eventTimeRange: { startMs, endMs: now + 86_400_000 },
+      }),
+    ).toEqual([expect.objectContaining({ sessionId: scope.sessionId, kind: "sqlite" })]);
+    expect(
+      await loadCostUsageSummary({
+        agentId: "main",
+        config,
+        startMs,
+        endMs: now + 86_400_000,
+      }),
+    ).toMatchObject({ totals: { totalTokens: 17 } });
+    runOpenClawAgentWriteTransaction(
+      ({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<DB>(db)
+            .updateTable("session_windows")
+            .set({ created_at: 43, updated_at: 50, transcript_updated_at: null })
+            .where("session_id", "=", scope.sessionId),
+        );
+      },
+      { agentId: "main", env: state.env },
+    );
+    expect(
+      await listUsageCountedTranscriptStats("main", {
+        eventTimeRange: { startMs, endMs: now + 86_400_000 },
+      }),
+    ).toEqual([expect.objectContaining({ sessionId: scope.sessionId, kind: "sqlite" })]);
+  });
+
+  it("restores a cold archive whose event timestamp is recent despite old imported metadata", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "recent-event-cold-import",
+      sessionKey: "agent:main:recent-event-cold-import",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const now = Date.now();
+    const startMs = now - 7 * 86_400_000;
+    const coldConfig = {
+      ...config,
+      agents: { list: [{ id: scope.agentId }] },
+      session: {
+        store: scope.storePath,
+        maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+      },
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 50 });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { ...assistant(17), timestamp: now } }],
+      touchSessionEntry: false,
+    });
+    runOpenClawAgentWriteTransaction(
+      ({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<DB>(db)
+            .updateTable("session_windows")
+            .set({ created_at: 43, updated_at: 50, transcript_updated_at: 50 })
+            .where("session_id", "=", scope.sessionId),
+        );
+      },
+      { agentId: "main", env: state.env },
+    );
+    await replaceSessionEntry(scope, {
+      ...expectDefined(loadSessionEntry(scope), "cold imported fixture"),
+      updatedAt: 50,
+      lastActivityAt: 50,
+      lastInteractionAt: 50,
+      status: "done",
+    });
+    expect(await runSessionColdStorageMaintenance({ config: coldConfig })).toMatchObject({
+      archivedTranscripts: 1,
+      externalizedTranscripts: 0,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+    expect(
+      await listUsageCountedTranscriptStats("main", {
+        env: state.env,
+        eventTimeRange: { startMs, endMs: now + 86_400_000 },
+      }),
+    ).toEqual([expect.objectContaining({ sessionId: scope.sessionId, kind: "sqlite" })]);
+    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+    expect(
+      await loadCostUsageSummary({
+        agentId: "main",
+        config: coldConfig,
+        startMs,
+        endMs: now - 86_400_000,
+      }),
+    ).toMatchObject({ totals: { totalTokens: 0 } });
+    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+    expect(
+      await loadCostUsageSummary({
+        agentId: "main",
+        config: coldConfig,
+        startMs,
+        endMs: now + 86_400_000,
+      }),
+    ).toMatchObject({ totals: { totalTokens: 17 } });
+    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeUndefined();
+  });
+
+  it("retains older rollups during bounded refresh but prunes them for all history", async () => {
+    const sessionFile = await writeArchive({ state, manager: transcript(), encoding: "plain" });
+    await loadSessionCostSummary({ agentId: "main", sessionFile, config });
+    expect(readSessionCostUsageRollupRows("main")).toHaveLength(1);
+    await fs.unlink(sessionFile);
+
+    expect(
+      await refreshCostUsageCacheForAgent({
+        agentId: "main",
+        config,
+        startMs: Date.now() - 7 * 86_400_000,
+      }),
+    ).toBe("refreshed");
+    expect(readSessionCostUsageRollupRows("main")).toHaveLength(1);
+
+    expect(await refreshCostUsageCacheForAgent({ agentId: "main", config, startMs: 0 })).toBe(
+      "refreshed",
+    );
+    expect(readSessionCostUsageRollupRows("main")).toEqual([]);
   });
 
   it.each(["shared.sqlite", "my-store.json", "shared-link.sqlite"])(
@@ -298,7 +519,7 @@ describe("usage archive identity", () => {
     },
   );
 
-  it("keeps cold usage inventory cheap, restores for scanning, and reports a missing archive", async () => {
+  it("uses cold archive event time for bounded inventory and preserves all-history restore", async () => {
     const scope = {
       agentId: "main",
       sessionId: "cold-usage",
@@ -335,7 +556,7 @@ describe("usage archive identity", () => {
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
     await persistSessionTranscriptTurn(scope, {
-      messages: [{ message: assistant(17) }],
+      messages: [{ message: assistant(17), now: archiveTime }],
       touchSessionEntry: false,
     });
     const hotScope = { ...scope, sessionId: "hot-usage", sessionKey: "agent:main:hot-usage" };
@@ -364,7 +585,70 @@ describe("usage archive identity", () => {
       ),
     ).toEqual(before);
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+    const coldArchive = expectDefined(
+      readSessionColdTranscript(database.db, scope.sessionId),
+      "cold usage archive",
+    );
+    const archivePath = resolveSessionColdArchivePath(database.path, coldArchive.archive_name);
+    const archiveBytes = await fs.readFile(archivePath);
+    runOpenClawAgentWriteTransaction(
+      ({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<DB>(db)
+            .updateTable("session_transcript_cold_archives")
+            .set({ storage: "sqlite", archive_blob: archiveBytes })
+            .where("session_id", "=", scope.sessionId),
+        );
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<DB>(db)
+            .updateTable("session_windows")
+            .set({
+              created_at: 43,
+              updated_at: Date.now() + 86_400_000,
+              transcript_updated_at: Date.now() + 86_400_000,
+            })
+            .where("session_id", "=", scope.sessionId),
+        );
+      },
+      { agentId: "main", env: state.env },
+    );
+    await fs.unlink(archivePath);
+    expect(
+      await sessionTranscriptEventsOverlapRange(
+        scope,
+        { startMs: Date.now() - 7 * 86_400_000, endMs: Date.now() },
+        Date.now() + 86_400_000,
+        state.env,
+      ),
+    ).toBe(false);
+    await persistSessionTranscriptTurn(hotScope, { messages: [{ message: assistant(19) }] });
+    const bounded = new AsyncWorkScope();
+    try {
+      await bounded.track(() =>
+        loadCostUsageSummaryFromCache({
+          agentId: "main",
+          config: coldConfig,
+          startMs: Date.now() - 7 * 86_400_000,
+          endMs: Date.now(),
+          refreshMode: "background",
+        }),
+      );
+      await bounded.runWhenIdle(() => undefined);
+      expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+      expect(
+        await loadCostUsageSummaryFromCache({
+          agentId: "main",
+          config: coldConfig,
+          startMs: Date.now() - 7 * 86_400_000,
+          endMs: Date.now(),
+          requestRefresh: false,
+        }),
+      ).toMatchObject({ totals: { totalTokens: 0 } });
+    } finally {
+      await bounded.drain();
+    }
     const sessions = [
       before.filePath,
       formatSqliteSessionFileMarker(hotScope),
@@ -379,7 +663,7 @@ describe("usage archive identity", () => {
         requestRefresh: false,
       }),
     ).toMatchObject({
-      summaries: [null, { totalTokens: 19 }, { totalTokens: 19 }, null],
+      summaries: [null, { totalTokens: 38 }, { totalTokens: 38 }, null],
       cacheStatus: { cachedFiles: 2, pendingFiles: 2 },
     });
     expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
@@ -390,7 +674,7 @@ describe("usage archive identity", () => {
         startMs: 0,
         endMs: Date.now() + 86_400_000,
       }),
-    ).toMatchObject({ totals: { totalTokens: 36 } });
+    ).toMatchObject({ totals: { totalTokens: 55 } });
     expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeUndefined();
     const rollups = readSessionCostUsageRollupRows("main");
     const missingScope = {

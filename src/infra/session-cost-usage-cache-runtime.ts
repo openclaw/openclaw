@@ -31,6 +31,8 @@ type UsageCostRefreshState = {
   config?: OpenClawConfig;
   databasePath: string;
   fullRefreshRequested: boolean;
+  fullRefreshStartMs?: number;
+  fullRefreshEndMs?: number;
   pendingSessionFiles: Set<string>;
   pendingRebuildRows: Map<string, SessionCostUsageRollupRow>;
   storePath: string;
@@ -38,6 +40,8 @@ type UsageCostRefreshState = {
 
 type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" | "storePath"> & {
   sessionFiles?: string[];
+  startMs?: number;
+  endMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
 };
 
@@ -92,6 +96,8 @@ export async function loadCostUsageSummary(params: {
     agentDir: prepared.agentDir,
     databasePath,
     storePath,
+    startMs,
+    endMs,
   });
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
@@ -108,6 +114,8 @@ export async function loadCostUsageSummary(params: {
       config: params.config,
       agentId: params.agentId,
       storePath,
+      startMs,
+      endMs,
       rebuildRows: invalidRows,
     });
   }
@@ -152,6 +160,7 @@ export async function loadCostUsageSummaryFromCache(params: {
         agentDir: prepared.agentDir,
         storePath,
         startMs: params.startMs,
+        endMs: params.endMs,
         rebuildRows: snapshot.invalidRows,
       });
       snapshot = await readCostUsageSummaryFromWorker(prepared, request);
@@ -160,6 +169,8 @@ export async function loadCostUsageSummaryFromCache(params: {
           config: params.config,
           agentId: params.agentId,
           storePath,
+          startMs: params.startMs,
+          endMs: params.endMs,
           rebuildRows: snapshot.invalidRows,
         });
       }
@@ -168,6 +179,8 @@ export async function loadCostUsageSummaryFromCache(params: {
         config: params.config,
         agentId: params.agentId,
         storePath,
+        startMs: params.startMs,
+        endMs: params.endMs,
         rebuildRows: snapshot.invalidRows,
       });
     }
@@ -276,6 +289,16 @@ function mergeUsageCostRefreshRequest(
     state.pendingRebuildRows.set(row.key, row);
   }
   if (!params.sessionFiles) {
+    state.fullRefreshStartMs = state.fullRefreshRequested
+      ? state.fullRefreshStartMs === undefined || params.startMs === undefined
+        ? undefined
+        : Math.min(state.fullRefreshStartMs, params.startMs)
+      : params.startMs;
+    state.fullRefreshEndMs = state.fullRefreshRequested
+      ? state.fullRefreshEndMs === undefined || params.endMs === undefined
+        ? undefined
+        : Math.max(state.fullRefreshEndMs, params.endMs)
+      : params.endMs;
     state.fullRefreshRequested = true;
     return;
   }
@@ -318,6 +341,8 @@ async function runQueuedUsageCostRefresh(
       try {
         while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
           const fullRefreshRequested = state.fullRefreshRequested;
+          const fullRefreshStartMs = state.fullRefreshStartMs;
+          const fullRefreshEndMs = state.fullRefreshEndMs;
           const sessionFiles = fullRefreshRequested ? [] : [...state.pendingSessionFiles];
           const rebuildRows = [...state.pendingRebuildRows.values()];
           state.pendingRebuildRows.clear();
@@ -325,12 +350,16 @@ async function runQueuedUsageCostRefresh(
             state.pendingSessionFiles.clear();
           }
           state.fullRefreshRequested = false;
+          state.fullRefreshStartMs = undefined;
+          state.fullRefreshEndMs = undefined;
           const result = await refreshCostUsageCacheForAgent({
             config: state.config,
             agentId: state.agentId,
             databasePath: state.databasePath,
             storePath: state.storePath,
             sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
+            startMs: fullRefreshRequested ? fullRefreshStartMs : undefined,
+            endMs: fullRefreshRequested ? fullRefreshEndMs : undefined,
             rebuildRows,
           });
           if (signal?.aborted) {
@@ -343,7 +372,14 @@ async function runQueuedUsageCostRefresh(
               }
             }
             if (fullRefreshRequested) {
-              state.fullRefreshRequested = true;
+              mergeUsageCostRefreshRequest(state, {
+                agentId: state.agentId,
+                config: state.config,
+                storePath: state.storePath,
+                startMs: fullRefreshStartMs,
+                endMs: fullRefreshEndMs,
+                rebuildRows,
+              });
             } else {
               for (const sessionFile of sessionFiles) {
                 state.pendingSessionFiles.add(sessionFile);

@@ -302,6 +302,18 @@ it("retains the process-held incognito cache without creating its sentinel file"
       storePath: databasePath,
       sessionFiles: [sessionFile],
     });
+    expect(
+      await runUsageCostWorker(prepared, {
+        kind: "inventory",
+        eventTimeRange: {
+          startMs: Date.parse("2026-09-18T00:00:00Z"),
+          endMs: Date.parse("2026-09-19T00:00:00Z"),
+        },
+      }),
+    ).toMatchObject({
+      kind: "inventory",
+      files: [expect.objectContaining({ kind: "sqlite", sessionId })],
+    });
     const pricingFingerprint = await resolveUsageCostPricingFingerprint(
       undefined,
       prepared.agentDir,

@@ -2,6 +2,7 @@ import type { ModelCostConfig } from "@openclaw/llm-core";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type { MemoryTranscriptProjectionFrame } from "../config/sessions/session-transcript-reconcile-memory.js";
+import type { SessionTranscriptEventTimeRange } from "../config/sessions/transcript-event-time.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type {
   SessionCostUsageRollupByteRow,
@@ -17,6 +18,12 @@ import type {
 
 export type UsageCostWorkerDatabase = { agentId: string; path: string };
 
+export type CachedSummaryEventTimeLookup = (
+  marker: SqliteSessionFileMarker,
+  range: SessionTranscriptEventTimeRange,
+  file: UsageCostTranscriptFile,
+) => Promise<boolean | undefined>;
+
 export type UsageCostWorkerLocation = {
   agentId: string;
   databasePath: string;
@@ -31,7 +38,12 @@ type UsageCostWorkerRange = {
 };
 
 export type UsageCostWorkerOperation =
-  | { kind: "inventory"; minMtimeMs?: number; sessionFiles?: string[] }
+  | {
+      kind: "inventory";
+      eventTimeRange?: SessionTranscriptEventTimeRange;
+      minMtimeMs?: number;
+      sessionFiles?: string[];
+    }
   | ({ kind: "summary"; pricingFingerprint: string } & UsageCostWorkerRange)
   | {
       kind: "sessions";
@@ -49,6 +61,7 @@ export type UsageCostWorkerOperation =
       sessionsDir?: string;
       sessionFiles?: string[];
       startMs?: number;
+      endMs?: number;
       rebuildRows?: SessionCostUsageRollupRow[];
     };
 
@@ -119,8 +132,16 @@ export type UsageCostWorkerHostEffects = {
     output: Array<SessionTranscriptStats | undefined>;
   };
   "memory-instances": {
-    input: { agentId: string; storePath: string };
+    input: { agentId: string; storePath: string; includeAllWindows: boolean };
     output: Array<{ agentId: string; sessionId: string; updatedAtMs: number }>;
+  };
+  "memory-event-time": {
+    input: {
+      marker: SqliteSessionFileMarker;
+      range: SessionTranscriptEventTimeRange;
+      updatedAtMs: number | null | undefined;
+    };
+    output: boolean;
   };
   "memory-cache": {
     input: { filePaths?: readonly string[] };

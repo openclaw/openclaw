@@ -25,6 +25,7 @@ import {
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import {
+  MAX_SESSION_COLD_ARCHIVE_DECODED_BYTES,
   readVerifiedSessionColdArchive,
   resolveSessionColdArchivePath,
   sessionColdRecordSchema,
@@ -41,8 +42,6 @@ import {
   selectSessionTranscriptFtsRows,
 } from "./session-transcript-fts.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
-
-const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
 type SessionColdPlan = {
   databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
@@ -329,7 +328,7 @@ export async function prepareSessionColdBatchInWorker(
     oversizedSessionIds: [],
     envelopeBytes: 0,
   };
-  const maxBytes = Math.min(input.maxBytes, MAX_COLD_ARCHIVE_BYTES);
+  const maxBytes = Math.min(input.maxBytes, MAX_SESSION_COLD_ARCHIVE_DECODED_BYTES);
   const candidates = [
     ...input.externalizations.map((archive) => ({ kind: "externalize" as const, archive })),
     ...input.plans.map((plan) => ({ kind: "archive" as const, plan })),
@@ -355,7 +354,7 @@ export async function prepareSessionColdBatchInWorker(
       if (!(error instanceof ColdArchiveLimitError)) {
         throw error;
       }
-      if (remaining === MAX_COLD_ARCHIVE_BYTES) {
+      if (remaining === MAX_SESSION_COLD_ARCHIVE_DECODED_BYTES) {
         result.oversizedSessionIds.push(
           candidate.kind === "archive" ? candidate.plan.sessionId : candidate.archive.session_id,
         );
@@ -373,7 +372,7 @@ function decodeSessionColdRecords(
   archive: SessionColdArchive,
 ): SessionColdRecord[] {
   const records = zlib
-    .zstdDecompressSync(bytes, { maxOutputLength: MAX_COLD_ARCHIVE_BYTES })
+    .zstdDecompressSync(bytes, { maxOutputLength: MAX_SESSION_COLD_ARCHIVE_DECODED_BYTES })
     .toString("utf8")
     .trimEnd()
     .split("\n")

@@ -60,6 +60,10 @@ export async function discoverAllSessions(params: {
   const discovered = new Map<string, DiscoveredSession>();
 
   for (const file of result.files) {
+    // JSONL uses file mtime; SQLite was filtered by instance updatedAtMs in inventory.
+    if (file.kind !== "sqlite" && params.startMs !== undefined && file.mtimeMs < params.startMs) {
+      continue;
+    }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
     const { sourcePath: sessionFile, sessionId } = file;
     if (!sessionId) {

@@ -9,11 +9,16 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.js";
+import {
+  readSessionTranscriptEventTimeSourceFromDatabase,
+  sessionTranscriptEventTimeSourceOverlapsRange,
+} from "../config/sessions/session-accessor.sqlite-event-time.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -382,16 +387,21 @@ export async function runUsageCostWorker(
                 case "memory-instances": {
                   const binding = memoryBinding(request.input);
                   output = binding.database
-                    ? listSessionTranscriptInstances({
-                        ...request.input,
-                        storePath: binding.options.path,
-                        env: location.env,
-                        projection: "list",
-                      }).map(({ agentId, sessionId, updatedAtMs }) => ({
-                        agentId,
-                        sessionId,
-                        updatedAtMs,
-                      }))
+                    ? listSessionTranscriptInstances(
+                        {
+                          agentId: request.input.agentId,
+                          storePath: binding.options.path,
+                          env: location.env,
+                          projection: "list",
+                        },
+                        { includeAllWindows: request.input.includeAllWindows },
+                      )
+                        .filter((instance) => !isInternalSessionEffectsKey(instance.sessionKey))
+                        .map(({ agentId, sessionId, updatedAtMs }) => ({
+                          agentId,
+                          sessionId,
+                          updatedAtMs,
+                        }))
                     : [];
                   break;
                 }
@@ -405,6 +415,21 @@ export async function runUsageCostWorker(
                       : undefined;
                   });
                   break;
+                case "memory-event-time": {
+                  const { marker, range, updatedAtMs } = request.input;
+                  const binding = memoryBinding(marker);
+                  if (!binding.database) {
+                    throw new Error("Usage memory transcript database is unavailable");
+                  }
+                  const source = readSessionTranscriptEventTimeSourceFromDatabase(
+                    binding.database,
+                    marker,
+                    range,
+                    updatedAtMs,
+                  );
+                  output = await sessionTranscriptEventTimeSourceOverlapsRange(source, range);
+                  break;
+                }
                 case "memory-cache": {
                   const binding = memoryBinding({
                     agentId: location.agentId,

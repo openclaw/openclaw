@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionTranscriptEventTimeRange } from "../config/sessions/transcript-event-time.js";
 import { sha256Hex } from "./crypto-digest.js";
 import type { SessionUsageRollupData } from "./session-cost-usage-rollup.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
@@ -159,6 +160,48 @@ export function decodeUsageCostRollup(
   } catch {
     return undefined;
   }
+}
+
+export function boundedInventoryStartMs(startMs: number | undefined): number | undefined {
+  // An all-history request has no lower inventory bound and can safely prune missing sources.
+  return startMs !== undefined && startMs > 0 ? startMs : undefined;
+}
+
+export function boundedInventoryEventTimeRange(
+  startMs: number | undefined,
+  endMs: number | undefined,
+): SessionTranscriptEventTimeRange | undefined {
+  const start = boundedInventoryStartMs(startMs);
+  return start === undefined
+    ? undefined
+    : { startMs: start, ...(endMs !== undefined ? { endMs } : {}) };
+}
+
+export function cachedRollupMayOverlapEventTimeRange(
+  entry: UsageCostRollupEntry,
+  range: SessionTranscriptEventTimeRange,
+): boolean | undefined {
+  for (const [key, candidate] of Object.entries(entry.rollup.buckets)) {
+    if (!isRecord(candidate)) {
+      return undefined;
+    }
+    const bucketEventTimeMs = candidate.timestampMs;
+    if (
+      typeof bucketEventTimeMs !== "number" ||
+      !Number.isSafeInteger(bucketEventTimeMs) ||
+      String(bucketEventTimeMs) !== key ||
+      Number.isNaN(new Date(bucketEventTimeMs).valueOf())
+    ) {
+      return undefined;
+    }
+    if (
+      (range.startMs === undefined || bucketEventTimeMs >= range.startMs) &&
+      (range.endMs === undefined || bucketEventTimeMs <= range.endMs)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function isUsageCostRollupFresh(params: {

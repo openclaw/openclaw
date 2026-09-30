@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import {
   collectErrorGraphCandidates,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionTranscriptInstances,
@@ -11,12 +13,23 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import {
+  readSessionTranscriptEventTimeSourceFromDatabase,
+  sessionTranscriptEventTimeSourceOverlapsRange,
+  sessionTranscriptEventsOverlapRange,
+} from "../config/sessions/session-accessor.sqlite-event-time.js";
+import {
   getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readHotSessionTranscriptSnapshot } from "../config/sessions/session-cold-storage-read.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import {
+  readSessionColdTranscript,
+  SessionTranscriptColdError,
+  type SessionColdArchive,
+} from "../config/sessions/session-cold-storage-state.js";
+import type { SessionTranscriptEventTimeRange } from "../config/sessions/transcript-event-time.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
@@ -43,6 +56,9 @@ import {
 } from "./session-cost-usage-projection.js";
 import {
   canUseUsageCostRollupForPartial,
+  boundedInventoryEventTimeRange,
+  boundedInventoryStartMs,
+  cachedRollupMayOverlapEventTimeRange,
   decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
   encodeUsageCostRollup,
@@ -51,6 +67,7 @@ import {
 } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 import type {
+  CachedSummaryEventTimeLookup,
   UsageCostWorkerDatabase,
   UsageCostWorkerHostEffects,
   UsageCostWorkerHostReply,
@@ -58,6 +75,7 @@ import type {
   UsageCostWorkerReply,
   UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
+import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
 import type { WorkerTaskControl } from "./worker-task-native-sections.js";
 import { WorkerTaskError } from "./worker-task-pool.js";
@@ -70,6 +88,126 @@ class UsageCostHostEffectError extends Error {
   ) {
     super(message);
     this.name = "UsageCostHostEffectError";
+  }
+}
+
+// Cache only verified bounded-range exclusions; every hit rechecks live archive identity.
+const MAX_VERIFIED_COLD_ARCHIVE_EXCLUSIONS = 256;
+const verifiedColdArchiveExclusions = new Map<string, true>();
+
+function boundedEventTimeRangeKey(range: SessionTranscriptEventTimeRange): string | undefined {
+  const { startMs, endMs } = range;
+  if (
+    startMs === undefined ||
+    !Number.isFinite(startMs) ||
+    endMs === undefined ||
+    !Number.isFinite(endMs) ||
+    startMs > endMs
+  ) {
+    return undefined;
+  }
+  return JSON.stringify([startMs, endMs]);
+}
+
+type ColdArchiveIdentity = Pick<
+  SessionColdArchive,
+  | "session_id"
+  | "generation"
+  | "archive_name"
+  | "archive_sha256"
+  | "event_count"
+  | "raw_bytes"
+  | "archive_bytes"
+  | "last_seq"
+  | "storage"
+>;
+
+function verifiedColdArchiveExclusionKey(params: {
+  agentId: string;
+  databasePath: string;
+  storePath: string;
+  sessionId: string;
+  range: SessionTranscriptEventTimeRange;
+  archive: ColdArchiveIdentity;
+}): string | undefined {
+  const rangeKey = boundedEventTimeRangeKey(params.range);
+  const archive = params.archive;
+  if (
+    !rangeKey ||
+    archive.session_id !== params.sessionId ||
+    !archive.generation ||
+    !/^[a-f0-9]{64}$/.test(archive.archive_sha256) ||
+    !Number.isSafeInteger(archive.archive_bytes) ||
+    archive.archive_bytes < 0 ||
+    !Number.isSafeInteger(archive.event_count) ||
+    !Number.isSafeInteger(archive.raw_bytes) ||
+    !Number.isSafeInteger(archive.last_seq)
+  ) {
+    return undefined;
+  }
+  try {
+    const databaseStat = fs.statSync(params.databasePath, { bigint: true });
+    if (!databaseStat.isFile()) {
+      return undefined;
+    }
+    const databaseIdentity = [databaseStat.dev.toString(), databaseStat.ino.toString()];
+    let archiveFileIdentity: string[] | undefined;
+    if (archive.storage === "file") {
+      const archivePath = resolveSessionColdArchivePath(params.storePath, archive.archive_name);
+      const archiveStat = fs.statSync(archivePath, { bigint: true });
+      if (!archiveStat.isFile() || archiveStat.size !== BigInt(archive.archive_bytes)) {
+        return undefined;
+      }
+      archiveFileIdentity = [
+        archiveStat.dev.toString(),
+        archiveStat.ino.toString(),
+        archiveStat.size.toString(),
+        archiveStat.mtimeNs.toString(),
+        archiveStat.ctimeNs.toString(),
+      ];
+    } else if (archive.storage !== "sqlite") {
+      return undefined;
+    }
+    return JSON.stringify([
+      "cold-event-time-exclusion-v1",
+      params.agentId,
+      params.databasePath,
+      databaseIdentity,
+      params.storePath,
+      params.sessionId,
+      archive.generation,
+      archive.archive_name,
+      archive.archive_sha256,
+      archive.archive_bytes,
+      archive.event_count,
+      archive.raw_bytes,
+      archive.last_seq,
+      archive.storage,
+      archiveFileIdentity,
+      rangeKey,
+    ]);
+  } catch {
+    return undefined;
+  }
+}
+
+function hasVerifiedColdArchiveExclusion(key: string): boolean {
+  if (!verifiedColdArchiveExclusions.has(key)) {
+    return false;
+  }
+  verifiedColdArchiveExclusions.delete(key);
+  verifiedColdArchiveExclusions.set(key, true);
+  return true;
+}
+
+function rememberVerifiedColdArchiveExclusion(key: string): void {
+  verifiedColdArchiveExclusions.delete(key);
+  verifiedColdArchiveExclusions.set(key, true);
+  if (verifiedColdArchiveExclusions.size > MAX_VERIFIED_COLD_ARCHIVE_EXCLUSIONS) {
+    const oldest = verifiedColdArchiveExclusions.keys().next().value;
+    if (oldest !== undefined) {
+      verifiedColdArchiveExclusions.delete(oldest);
+    }
   }
 }
 
@@ -114,25 +252,40 @@ export async function executeUsageCostWorker(
     }
     return owned;
   };
-  const readStore = <T>(agentId: string, storePath: string, read: () => T) => {
+  const readStore = <T>(
+    agentId: string,
+    storePath: string,
+    read: () => T | Promise<T>,
+  ): Promise<T> => {
     const database = target(agentId, storePath);
     if (isIncognitoOpenClawAgentSqlitePath(database.path, { agentId: database.agentId, env })) {
       throw new Error("Memory transcript reads require the host owner");
     }
     return control.runNativeSection(() => readDatabase(database, read));
   };
+  const minMtimeMs = operation.kind === "inventory" ? operation.minMtimeMs : undefined;
+  let cachedSummaryEventTimeLookup: CachedSummaryEventTimeLookup | undefined;
   const access: UsageCostCollectionAccess = {
     env,
     materializeArchive: (sourcePath) =>
       control.runNativeSection(() => materializeSessionArchiveForRead(sourcePath)),
     readSqliteMetadata: (storePath, read) => readStore(location.agentId, storePath, read),
-    listSqliteInstances: async (agentId, storePath) => {
+    listSqliteInstances: async (agentId, storePath, includeAllWindows) => {
       const database = target(agentId, storePath);
-      return isIncognitoOpenClawAgentSqlitePath(database.path, { agentId: database.agentId, env })
-        ? host("memory-instances", { agentId, storePath })
+      const instances = await (isIncognitoOpenClawAgentSqlitePath(database.path, {
+        agentId: database.agentId,
+        env,
+      })
+        ? host("memory-instances", { agentId, storePath, includeAllWindows })
         : readStore(agentId, storePath, () =>
-            listSessionTranscriptInstances({ agentId, storePath, env, projection: "list" }),
-          );
+            listSessionTranscriptInstances(
+              { agentId, storePath, env, projection: "list" },
+              { includeAllWindows },
+            ).filter((instance) => !isInternalSessionEffectsKey(instance.sessionKey)),
+          ));
+      return minMtimeMs === undefined
+        ? instances
+        : instances.filter((instance) => instance.updatedAtMs >= minMtimeMs);
     },
     readSqliteStats: async (markers) => {
       const result: Array<SessionTranscriptStats | undefined> = Array(markers.length);
@@ -164,13 +317,91 @@ export async function executeUsageCostWorker(
       }
       return result;
     },
+    preflightSqliteEventTime: async (marker, range, updatedAtMs, file) => {
+      const database = target(marker.agentId, marker.storePath);
+      if (
+        isIncognitoOpenClawAgentSqlitePath(database.path, {
+          agentId: database.agentId,
+          env,
+        })
+      ) {
+        const cachedDecision = await cachedSummaryEventTimeLookup?.(marker, range, file);
+        if (cachedDecision !== undefined) {
+          return cachedDecision;
+        }
+        return host("memory-event-time", { marker, range, updatedAtMs });
+      }
+      const currentArchive =
+        operation.kind === "summary"
+          ? await readStore(marker.agentId, marker.storePath, () => {
+              const result = withOpenClawAgentDatabaseReadOnly(
+                (opened) => readSessionColdTranscript(opened.db, marker.sessionId),
+                { ...database, env },
+              );
+              return result.found ? result.value : undefined;
+            })
+          : undefined;
+      // Only cold archives need the rollup shortcut to avoid scanning archived events.
+      // Hot SQLite has event-time rows available and would otherwise parse a fresh rollup
+      // here, then parse the same body again while projecting the summary.
+      if (currentArchive) {
+        const cachedDecision = await cachedSummaryEventTimeLookup?.(marker, range, file);
+        if (cachedDecision !== undefined) {
+          return cachedDecision;
+        }
+      }
+      if (operation.kind !== "summary" || !boundedEventTimeRangeKey(range)) {
+        return readStore(marker.agentId, marker.storePath, () =>
+          sessionTranscriptEventsOverlapRange(marker, range, updatedAtMs, env),
+        );
+      }
+      const identity = currentArchive
+        ? verifiedColdArchiveExclusionKey({
+            agentId: marker.agentId,
+            databasePath: database.path,
+            storePath: marker.storePath,
+            sessionId: marker.sessionId,
+            range,
+            archive: currentArchive,
+          })
+        : undefined;
+      if (identity && hasVerifiedColdArchiveExclusion(identity)) {
+        return false;
+      }
+      const source = await readStore(marker.agentId, marker.storePath, () => {
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (opened) =>
+            readSessionTranscriptEventTimeSourceFromDatabase(opened, marker, range, updatedAtMs),
+          { ...database, env },
+        );
+        if (!result.found) {
+          throw new Error(`Usage transcript database is unavailable for ${marker.sessionId}`);
+        }
+        return result.value;
+      });
+      const overlaps = await sessionTranscriptEventTimeSourceOverlapsRange(source, range);
+      if (!overlaps && identity && source.kind === "cold") {
+        const verifiedIdentity = verifiedColdArchiveExclusionKey({
+          agentId: marker.agentId,
+          databasePath: database.path,
+          storePath: marker.storePath,
+          sessionId: marker.sessionId,
+          range,
+          archive: source.archive,
+        });
+        if (verifiedIdentity === identity) {
+          rememberVerifiedColdArchiveExclusion(identity);
+        }
+      }
+      return overlaps;
+    },
   };
-  const inventory = (minMtimeMs?: number, sessionsDir?: string) =>
+  const inventory = (eventTimeRange?: SessionTranscriptEventTimeRange, sessionsDir?: string) =>
     listUsageCountedTranscriptStats(location.agentId, {
       ...access,
       storePath: location.storePath,
       sessionsDir,
-      minMtimeMs,
+      eventTimeRange,
     });
   if (operation.kind === "inventory") {
     const files = operation.sessionFiles
@@ -180,7 +411,7 @@ export async function executeUsageCostWorker(
       : await listUsageCountedTranscriptSources(location.agentId, {
           ...access,
           storePath: location.storePath,
-          minMtimeMs: operation.minMtimeMs,
+          eventTimeRange: operation.eventTimeRange,
         });
     return {
       kind: "inventory",
@@ -264,22 +495,73 @@ export async function executeUsageCostWorker(
     ): Promise<UsageCostWorkerResult> => {
       // Capture cache metadata before transcript stats: a concurrent refresh must
       // not make a valid newer checkpoint appear ahead of this report's inventory.
-      const reportFiles =
-        operation.kind === "summary"
-          ? await inventory()
-          : await resolveUsageCostTranscriptFiles(
-              operation.sessions.map((session) => session.sessionFile),
-              access,
-            );
       const byPath = new Map(rows.map((row) => [row.key, row]));
+      const bodyReads = new Map<string, Promise<Uint8Array | null>>();
+      const readCachedBody = (row: SessionCostUsageRollupRow) => {
+        let pending = bodyReads.get(row.key);
+        if (!pending) {
+          pending = Promise.resolve(body(row));
+          bodyReads.set(row.key, pending);
+        }
+        return pending;
+      };
       const consumed = new Set<string>();
       const invalidRows = new Map<string, SessionCostUsageRollupRow>();
+      if (operation.kind === "summary") {
+        cachedSummaryEventTimeLookup = async (marker, range, file) => {
+          if (file.kind !== "sqlite" || file.sessionId !== marker.sessionId) {
+            return undefined;
+          }
+          const row = byPath.get(file.filePath);
+          const envelope = row
+            ? decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint)
+            : undefined;
+          if (
+            !row ||
+            !envelope ||
+            !isUsageCostRollupFresh({ checkpoint: envelope.checkpoint, file })
+          ) {
+            return undefined;
+          }
+          const entry = decodeUsageCostRollup(
+            row.valueJson,
+            operation.pricingFingerprint,
+            await readCachedBody(row),
+          );
+          if (!entry) {
+            bodyReads.delete(row.key);
+            return undefined;
+          }
+          // A fresh verified rollup covers every timed contribution used by this summary.
+          const decision = cachedRollupMayOverlapEventTimeRange(entry, range);
+          if (decision !== true) {
+            bodyReads.delete(row.key);
+          }
+          return decision;
+        };
+      }
+      let reportFiles: Array<UsageCostTranscriptFile | undefined>;
+      try {
+        reportFiles =
+          operation.kind === "summary"
+            ? await inventory(boundedInventoryEventTimeRange(operation.startMs, operation.endMs))
+            : await resolveUsageCostTranscriptFiles(
+                operation.sessions.map((session) => session.sessionFile),
+                access,
+              );
+      } finally {
+        cachedSummaryEventTimeLookup = undefined;
+      }
       const source = {
         readRow(filePath: string) {
           consumed.add(filePath);
           return byPath.get(filePath);
         },
-        readBody: body,
+        async readBody(row: SessionCostUsageRollupRow) {
+          const bytes = await readCachedBody(row);
+          bodyReads.delete(row.key);
+          return bytes;
+        },
         onInvalidBody(key: string) {
           const row = byPath.get(key);
           if (row) {
@@ -392,7 +674,11 @@ export async function executeUsageCostWorker(
   const rows = await readMetadata();
   const byPath = new Map(rows.map((row) => [row.key, row]));
 
-  const discovered = await inventory(undefined, operation.sessionsDir);
+  const inventoryStartMs = boundedInventoryStartMs(operation.startMs);
+  const discovered = await inventory(
+    boundedInventoryEventTimeRange(operation.startMs, operation.endMs),
+    operation.sessionsDir,
+  );
   const requestedFiles = (
     await resolveUsageCostTranscriptFiles(operation.sessionFiles ?? [], access)
   ).filter((file) => file !== undefined);
@@ -403,25 +689,24 @@ export async function executeUsageCostWorker(
   for (const file of requestedFiles) {
     filesByPath.set(file.filePath, file);
   }
-  for (const row of rows) {
-    if (filesByPath.has(row.key)) {
-      continue;
+  // A bounded inventory cannot decide whether older cache rows still have a source.
+  if (inventoryStartMs === undefined) {
+    for (const row of rows) {
+      if (filesByPath.has(row.key)) {
+        continue;
+      }
+      const bytes = new TextEncoder().encode(row.valueJson);
+      await host("prune-row", { key: row.key, value: bytes, updatedAt: row.updatedAt }, [
+        bytes.buffer,
+      ]);
     }
-    const bytes = new TextEncoder().encode(row.valueJson);
-    await host("prune-row", { key: row.key, value: bytes, updatedAt: row.updatedAt }, [
-      bytes.buffer,
-    ]);
+    await host("prune", {});
   }
-  await host("prune", {});
   const requestedPaths = new Set(requestedFiles.map((file) => file.filePath));
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const stale = [];
   for (const file of filesByPath.values()) {
-    if (
-      requestedPaths.size > 0
-        ? !requestedPaths.has(file.filePath)
-        : operation.startMs !== undefined && file.mtimeMs < operation.startMs
-    ) {
+    if (requestedPaths.size > 0 && !requestedPaths.has(file.filePath)) {
       continue;
     }
     const row = byPath.get(file.filePath);
