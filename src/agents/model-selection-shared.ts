@@ -767,7 +767,12 @@ export function resolveConfiguredModelRef(
       let inferredProviderManifestPlugins = manifestPlugins;
       if (
         (!inferredProvider || inferredProvider !== "openai") &&
-        hasConfiguredRowsNeedingManifestLookup(params.cfg, params.defaultProvider, params.agentId)
+        (hasConfiguredProviderRowsNeedingManifestLookup(params.cfg) ||
+          hasConfiguredModelRefsNeedingManifestLookup(
+            params.cfg,
+            params.defaultProvider,
+            params.agentId,
+          ))
       ) {
         // Non-default provider rows may normalize through plugin manifests. Avoid
         // that heavier lookup unless the cheap configured pass was ambiguous.
@@ -960,7 +965,9 @@ function buildAllowedModelSetFromPrepared(
     allowedCaseInsensitiveIdentities.add(caseInsensitiveIdentity(ref.provider, ref.model));
     return modelCatalogEntryKey({ provider: ref.provider, id: ref.model });
   };
-  for (const entry of expandModelCatalogWildcards(catalog, wildcardModelKeys)) {
+  for (const entry of catalog.filter((entry) =>
+    isModelKeyAllowedBySet(wildcardModelKeys, modelKey(entry.provider, entry.id)),
+  )) {
     allowedKeys.add(modelKey(entry.provider, entry.id));
     addAllowedCatalogRef({ provider: entry.provider, model: entry.id });
   }
@@ -1138,17 +1145,6 @@ function hasConfiguredModelRefsNeedingManifestLookup(
       const provider = normalizeProviderId(key.slice(0, slashIndex));
       return Boolean(provider && provider !== normalizedDefaultProvider);
     }),
-  );
-}
-
-function hasConfiguredRowsNeedingManifestLookup(
-  cfg: OpenClawConfig,
-  defaultProvider: string,
-  agentId?: string,
-): boolean {
-  return (
-    hasConfiguredProviderRowsNeedingManifestLookup(cfg) ||
-    hasConfiguredModelRefsNeedingManifestLookup(cfg, defaultProvider, agentId)
   );
 }
 
@@ -1378,16 +1374,6 @@ export function parseConfiguredModelVisibilityEntries(params: {
     configPath: configured.configPath,
     repairConfigPath: configured.repairConfigPath,
   };
-}
-
-/** Expand segment-boundary prefix wildcard policy entries against discovered catalog rows. */
-function expandModelCatalogWildcards<T extends { provider: string; id: string }>(
-  catalog: readonly T[],
-  wildcardModelKeys: ReadonlySet<string>,
-): T[] {
-  return catalog.filter((entry) =>
-    isModelKeyAllowedBySet(wildcardModelKeys, modelKey(entry.provider, entry.id)),
-  );
 }
 
 export function isModelKeyAllowedBySet(allowedKeys: ReadonlySet<string>, key: string): boolean {
