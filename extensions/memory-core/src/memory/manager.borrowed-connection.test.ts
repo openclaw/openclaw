@@ -15,16 +15,23 @@ import {
   ensureMemoryChunkProvenance,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import * as databaseFiles from "./manager-db.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
+import {
+  observePublishedReservations,
+  reservePublishedWriter,
+} from "./manager-publication-observer.test-support.js";
 import { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -416,6 +423,67 @@ describe("memory manager shared agent connection", () => {
     },
   );
 
+  it("retains the newest cache rows when another holder purges before queued pruning", async () => {
+    const cfg = fixture.createConfig({
+      provider: "none",
+      vectorEnabled: false,
+      cacheEnabled: true,
+      sources: ["memory"],
+    });
+    const db = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const queued = createDeferred<void>();
+    let armed = false;
+    let queuedObserved = false;
+    observePublishedReservations(db, () => {
+      if (armed) {
+        queuedObserved = true;
+        queued.resolve();
+      }
+    });
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    expect(managerDatabase(manager) === db).toBe(true);
+    await manager.sync({ reason: "baseline", force: true });
+    const owner = manager as unknown as { cache: { maxEntries: number } };
+    owner.cache.maxEntries = 2;
+    const insert = db.prepare(`INSERT INTO memory_embedding_cache
+      (provider, model, provider_key, hash, embedding, dims, updated_at)
+      VALUES ('fixture', 'fixture', 'fixture', ?, ?, 1, ?)`);
+    for (let index = 0; index < 3; index++) {
+      insert.run(`cache-${index}`, encodeMemoryEmbedding([index + 1]), index);
+    }
+    const readCache = () => db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
+    const readSources = () => db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all();
+    const before = readCache();
+    const retained = before.filter((row) => row.hash !== "cache-0");
+    const sources = readSources();
+    expect(before).toHaveLength(3);
+    expect(retained).toHaveLength(2);
+    const reservation = await reservePublishedWriter(() => {
+      expect(
+        db.prepare("DELETE FROM memory_embedding_cache WHERE hash = 'cache-0'").run().changes,
+      ).toBe(1);
+      expect(readCache()).toEqual(retained);
+    });
+    armed = true;
+    const sync = manager.sync({ reason: "watch" });
+    void sync.catch(() => undefined);
+    try {
+      await Promise.race([queued.promise, sync]);
+      expect(queuedObserved).toBe(true);
+      expect(readCache()).toEqual(before);
+      reservation.release();
+      await reservation.done;
+      await sync;
+      expect(readCache()).toEqual(retained);
+      expect(readSources()).toEqual(sources);
+    } finally {
+      armed = false;
+      reservation.release();
+      await Promise.allSettled([sync, reservation.done]);
+      await manager.close();
+    }
+  });
+
   it.each([
     "watched-file",
     "deleted-memory",
@@ -563,6 +631,80 @@ describe("memory manager shared agent connection", () => {
       }
       writer.close();
       await sync.catch(() => undefined);
+      await manager.close();
+    }
+  });
+
+  it("does not replay a committed prune batch after its native reply fails", async () => {
+    const cfg = fixture.createConfig({
+      provider: "none",
+      vectorEnabled: false,
+      cacheEnabled: true,
+      sources: ["memory"],
+    });
+    const db = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+    const interceptedSources: Array<Parameters<typeof open>[1]> = [];
+    let closeSettled: boolean;
+    const intercept = vi
+      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+      .mockImplementation(async (...args) => {
+        const [options, source, worker] = args;
+        if (
+          source !== db ||
+          worker.moduleUrl.href !==
+            resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
+        ) {
+          return await open(...args);
+        }
+        const client = await open(options, source, {
+          ...worker,
+          moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
+          input: { kind: "cache-prune-result", publication: worker.input },
+        });
+        interceptedSources.push(source);
+        const close = client.close.bind(client);
+        vi.spyOn(client, "close").mockImplementation(async () => {
+          await close();
+          closeSettled = true;
+        });
+        return client;
+      });
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    expect(managerDatabase(manager) === db).toBe(true);
+    try {
+      await manager.sync({ reason: "baseline", force: true });
+      expect(interceptedSources.includes(db)).toBe(true);
+      const owner = manager as unknown as { cache: { maxEntries: number } };
+      owner.cache.maxEntries = 2;
+      const insert = db.prepare(`INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+        VALUES ('fixture', 'fixture', 'fixture', ?, ?, 1, ?)`);
+      for (let index = 0; index < 331; index++) {
+        insert.run(`cache-${index}`, encodeMemoryEmbedding([index + 1]), index);
+      }
+      const readCache = () =>
+        db.prepare("SELECT * FROM memory_embedding_cache ORDER BY updated_at").all();
+      const readSources = () => db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all();
+      const before = readCache();
+      const sources = readSources();
+      expect(before).toHaveLength(331);
+      closeSettled = false;
+      await expect(manager.sync({ reason: "watch" })).rejects.toThrow(
+        "injected committed cache prune reply failure",
+      );
+      expect(closeSettled).toBe(true);
+      const remaining = readCache();
+      expect(remaining).toHaveLength(231);
+      expect(remaining).toEqual(before.slice(100));
+      expect(readSources()).toEqual(sources);
+
+      intercept.mockRestore();
+      await manager.sync({ reason: "explicit-prune-recovery" });
+      expect(readCache()).toEqual(before.slice(-2));
+      expect(readSources()).toEqual(sources);
+    } finally {
+      intercept.mockRestore();
       await manager.close();
     }
   });

@@ -27,6 +27,10 @@ export type MemoryPublicationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "cache.prune": {
+    input: { maxEntries: number };
+    output: MemoryPublicationResult<boolean>;
+  };
   "cache.stage.start": {
     input: { operation: string; header: MemoryEmbeddingCacheHeader; rows: number };
     output: void;
