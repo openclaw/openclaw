@@ -239,6 +239,20 @@ export function createChannelIngressQueue<
     return recovered;
   };
 
+  // Direct scans (no candidate window) remember where a bounded claim pass
+  // stopped so the next direct call resumes past a fully blocked prefix instead
+  // of re-scanning it from the front. Cleared whenever a claim succeeds or the
+  // scan reaches the end of the queue, so lanes that unblock are revisited.
+  let directScanResume:
+    | {
+        cursor: ChannelIngressClaimCursor;
+        orderBy?: "received" | "id";
+        reconcileStoredLaneKey: boolean;
+        deriveLaneKey: boolean;
+        blockedLaneKeys: string[];
+      }
+    | undefined;
+
   const claimNext: ChannelIngressQueue<
     TPayload,
     TMetadata,
@@ -290,9 +304,25 @@ export function createChannelIngressQueue<
     };
     // A fully blocked snapshot holds only the first scanLimit + repair rows; page
     // forward with a keyset cursor so a free lane beyond a blocked prefix stays
-    // reachable, bounded by the claim scan budget for stop responsiveness.
+    // reachable, bounded by the claim scan budget for stop responsiveness. When
+    // the budget runs out, the cursor is retained so the next direct call resumes
+    // past the blocked prefix instead of restarting at the queue front.
+    const directScan = candidateIds === undefined;
     let claimAfter: ChannelIngressClaimCursor | undefined;
     let claimPages = 0;
+    if (directScan && directScanResume) {
+      const resume = directScanResume;
+      const inputsMatch =
+        resume.orderBy === requestBase.orderBy &&
+        resume.reconcileStoredLaneKey === requestBase.reconcileStoredLaneKey &&
+        resume.deriveLaneKey === Boolean(deriveLaneKey) &&
+        resume.blockedLaneKeys.length === requestBase.blockedLaneKeys.length &&
+        resume.blockedLaneKeys.every((key, index) => key === requestBase.blockedLaneKeys[index]);
+      if (inputsMatch) {
+        claimAfter = resume.cursor;
+      }
+      directScanResume = undefined;
+    }
     while (true) {
       const request: ChannelIngressClaimRequest = claimAfter
         ? { ...requestBase, claimAfter }
@@ -331,6 +361,7 @@ export function createChannelIngressQueue<
           continue;
         }
         if (result.row) {
+          directScanResume = undefined;
           return claimedRecord<TPayload, TMetadata>(result.row);
         }
         if (selection.more && claimPages < CHANNEL_INGRESS_CLAIM_SCAN_PAGE_BUDGET) {
@@ -341,6 +372,24 @@ export function createChannelIngressQueue<
           claimAfter = { receivedAt: last.received_at, eventId: last.event_id };
           claimPages += 1;
           continue;
+        }
+        if (directScan) {
+          const last = snapshot.pending.at(-1);
+          if (selection.more && last) {
+            // The blocked prefix continues beyond this bounded pass; preserve
+            // progress so the next direct call resumes past it.
+            directScanResume = {
+              cursor: { receivedAt: last.received_at, eventId: last.event_id },
+              orderBy: requestBase.orderBy,
+              reconcileStoredLaneKey: Boolean(requestBase.reconcileStoredLaneKey),
+              deriveLaneKey: Boolean(deriveLaneKey),
+              blockedLaneKeys: requestBase.blockedLaneKeys,
+            };
+          } else {
+            // The scan reached the end of the queue; wrap so lanes that unblock
+            // or rows enqueued before the cursor are revisited on the next call.
+            directScanResume = undefined;
+          }
         }
         return null;
       } catch (error) {
