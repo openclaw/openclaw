@@ -8,6 +8,70 @@ import {
 } from "./realtime-handler.lifecycle.test-helpers.js";
 
 describe("Voice Call provider-owned delegation", () => {
+  it("speaks the consent-timeout goodbye before directly ending a native-delegation call", async () => {
+    let request: RealtimeVoiceBridgeCreateRequest | undefined;
+    const sendUserMessage = vi.fn();
+    const provider = makeRealtimeProvider((params) => {
+      request = params;
+      return createBridge(() => {}, { sendUserMessage });
+    });
+    const capabilities = {
+      transports: ["gateway-relay" as const],
+      inputAudioFormats: [],
+      outputAudioFormats: [],
+      handlesAgentConsult: true,
+      supportsBargeIn: false,
+      handlesInputAudioBargeIn: true,
+    };
+    const harness = createCarrierLifecycleHarness(provider.createBridge, {
+      consentWindow: { enabled: true, windowMs: 100 },
+      resolveCallRegistration: () => ({
+        agentId: "main",
+        instructions: "Ask for consent.",
+        provider,
+        providerConfig: {},
+        capabilities,
+      }),
+    });
+    const { ws, server } = await connectCarrierStream(harness.handler);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-native-consent", callSid: "CA-startup" },
+        }),
+      );
+      await vi.waitFor(() => expect(request).toBeDefined());
+
+      vi.useFakeTimers();
+      request?.onTranscript?.("assistant", "Do you consent to this call being recorded?", true);
+      // The consent playback mark is queued only once the provider reports the response done (after
+      // the question audio), so the watchdog only arms from that signal; fire it before the window
+      // is allowed to expire.
+      request?.onResponseDone?.({ status: "completed", responseId: "response-1" });
+      // No goodbye audio is emitted by the stubbed bridge, so the close waits out the
+      // bounded 20s ceiling before ending the call.
+      vi.advanceTimersByTime(31_000);
+      await Promise.resolve();
+
+      expect(sendUserMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(/Goodbye.*host will end the call/s),
+      );
+      expect(harness.endCall).toHaveBeenCalledExactlyOnceWith(harness.call.callId, {
+        reason: "timeout",
+      });
+      expect(sendUserMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.endCall.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    } finally {
+      vi.useRealTimers();
+      ws.terminate();
+      await harness.handler.close();
+      await server.close();
+    }
+  });
+
   it.each(["complete", "abort", "close", "disabled"] as const)(
     "uses the call-owned consult handler and preserves its %s outcome",
     async (outcome) => {

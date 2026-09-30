@@ -17,6 +17,7 @@ import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { normalizePhoneNumber } from "./allowlist.js";
 import { TWILIO_REGIONS } from "./providers/twilio-region.js";
+import { VoiceCallRealtimeConsentWindowConfigSchema } from "./realtime-consent.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailscale-config.js";
 
@@ -179,7 +180,6 @@ const VoiceCallProvidersConfigSchema = z
   .default({});
 
 const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
-const VoiceCallRealtimeConsultPolicySchema = z.enum(["auto", "substantive", "always"]);
 
 const VoiceCallRealtimeFastContextSourceSchema = z.enum(["memory", "sessions"]);
 
@@ -252,7 +252,9 @@ const VoiceCallRealtimeConfigSchema = z
     /** Tool policy for the shared OpenClaw agent consult tool. */
     toolPolicy: VoiceCallRealtimeToolPolicySchema.default("safe-read-only"),
     /** Guidance for when the realtime model should call the OpenClaw agent consult tool. */
-    consultPolicy: VoiceCallRealtimeConsultPolicySchema.default("auto"),
+    consultPolicy: z.enum(["auto", "substantive", "always"]).default("auto"),
+    /** Optional unanswered opening-consent watchdog. */
+    consentWindow: VoiceCallRealtimeConsentWindowConfigSchema,
     /** Optional thinking level override for the regular agent behind realtime consults. */
     consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional(),
     /** Optional fast mode override for the regular agent behind realtime consults. */
@@ -271,6 +273,7 @@ const VoiceCallRealtimeConfigSchema = z
     instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
     toolPolicy: "safe-read-only",
     consultPolicy: "auto",
+    consentWindow: { enabled: false, windowMs: 5000 },
     tools: [],
     fastContext: {
       enabled: false,
@@ -649,6 +652,9 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
         config.realtime?.consultThinkingLevel ?? defaults.realtime.consultThinkingLevel,
       ),
       consultFastMode: config.realtime?.consultFastMode ?? defaults.realtime.consultFastMode,
+      consentWindow: VoiceCallRealtimeConsentWindowConfigSchema.parse(
+        config.realtime?.consentWindow,
+      ),
       fastContext: realtimeFastContext,
       agentContext: realtimeAgentContext,
       providers: realtimeProviders,

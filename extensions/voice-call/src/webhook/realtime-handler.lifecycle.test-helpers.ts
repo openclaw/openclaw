@@ -70,6 +70,7 @@ export function createCarrierLifecycleHarness(
   options: {
     endCall?: CallManager["endCall"];
     initialMessage?: string;
+    consentWindow?: ReturnType<typeof createRealtimeConfig>["consentWindow"];
     toolPolicy?: ReturnType<typeof createRealtimeConfig>["toolPolicy"];
     resolveCallRegistration?: ResolveRealtimeCallRegistration;
     streamDisconnectLifecycle?: StreamDisconnectLifecycle;
@@ -114,6 +115,7 @@ export function createCarrierLifecycleHarness(
   const handler = new RealtimeCallHandler(
     {
       ...createRealtimeConfig(),
+      ...(options.consentWindow ? { consentWindow: options.consentWindow } : {}),
       ...(options.toolPolicy ? { toolPolicy: options.toolPolicy } : {}),
     },
     {

@@ -104,6 +104,31 @@ immediately, so no later reply is spoken. If the carrier cannot end the call,
 the bridge stays connected and the model receives an error it can explain to
 the caller. Configured `realtime.tools` cannot replace this built-in by name.
 
+The unanswered-consent watchdog is opt-in and disabled by default. Enable
+`realtime.consentWindow` only when every realtime call should begin by asking
+the caller, "Do you consent to this call being recorded?" With the default
+configuration, an unanswered opening question does not end the call.
+
+```json5
+{
+  realtime: {
+    enabled: true,
+    consentWindow: {
+      enabled: true,
+      windowMs: 5000,
+    },
+  },
+}
+```
+
+When enabled, Voice Call adds the consent question to the provider instructions
+and starts `windowMs` after the question finishes playing. If the caller stays
+silent, it prompts the provider to speak a brief goodbye. Providers with
+function tools are also asked to call `openclaw_end_call`; providers using
+native agent delegation hear the same goodbye prompt and Voice Call ends the
+carrier call directly. A direct carrier hangup remains the fallback in both
+cases.
+
 For inbound Twilio numbers, also configure a Status Callback using `POST` to
 your public webhook URL with `?type=status` appended, for example
 `https://voice.example.com/voice/webhook?type=status`. Include the `completed`

@@ -72,6 +72,26 @@ function createConfig(overrides?: Partial<VoiceCallConfig["realtime"]>): VoiceCa
 }
 
 describe("buildRealtimeVoiceInstructions", () => {
+  it("adds the opening question only for the explicit consent flow", async () => {
+    const withoutConsent = await buildRealtimeVoiceInstructions({
+      baseInstructions: "Base voice instructions.",
+      config: createConfig(),
+      coreConfig: {},
+      agentId: "voice",
+    });
+    const withConsent = await buildRealtimeVoiceInstructions({
+      baseInstructions: "Base voice instructions.",
+      config: createConfig({ consentWindow: { enabled: true, windowMs: 5000 } }),
+      coreConfig: {},
+      agentId: "voice",
+    });
+
+    expect(withoutConsent).not.toContain("Do you consent to this call being recorded?");
+    expect(withConsent).toContain(
+      'Your first spoken response must ask exactly, "Do you consent to this call being recorded?"',
+    );
+  });
+
   it("propagates a present modern composer's rejection without legacy fallback", async () => {
     const rejection = new Error("modern context rejected");
     host.rejection = rejection;

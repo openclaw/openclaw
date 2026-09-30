@@ -757,6 +757,7 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
     expect(normalized.realtime.consultPolicy).toBe("auto");
+    expect(normalized.realtime.consentWindow).toEqual({ enabled: false, windowMs: 5000 });
     expect(normalized.realtime.fastContext).toEqual({
       enabled: false,
       timeoutMs: 800,
@@ -902,6 +903,21 @@ describe("resolveVoiceCallConfig realtime settings", () => {
 
     expect(resolved.realtime.consultThinkingLevel).toBe("ultra");
     expect(resolved.realtime.consultFastMode).toBe(true);
+  });
+
+  it("keeps the consent window default-off and fills its window default when enabled", () => {
+    const defaults = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+    });
+    const enabled = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      realtime: { consentWindow: { enabled: true } },
+    });
+
+    expect(defaults.realtime.consentWindow).toEqual({ enabled: false, windowMs: 5000 });
+    expect(enabled.realtime.consentWindow).toEqual({ enabled: true, windowMs: 5000 });
   });
 
   it("rejects invalid realtime consult thinking levels", () => {

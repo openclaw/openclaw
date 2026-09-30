@@ -40,10 +40,12 @@ import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
+import { isConsentQuestionUtterance } from "../realtime-consent.js";
 import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { WebSocket, WebSocketServer } from "../websocket.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
+import { RealtimeConsentWindow } from "./realtime-consent-window.js";
 import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 import {
   type StreamFrameAdapter,
@@ -76,13 +78,27 @@ const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
+const CONSENT_WINDOW_POLL_MS = 250;
+// Hard ceiling on how long the line may stay open waiting for the goodbye to finish playing.
+const CONSENT_WINDOW_MAX_CLOSE_WAIT_MS = 20_000;
+// Upper bound on waiting for the carrier to confirm the consent question finished playing. The
+// answer window only starts once the carrier has played the question; if no mark comes back we still
+// arm, so a silent carrier cannot disable the watchdog entirely.
+const CONSENT_QUESTION_PLAYBACK_WAIT_MS = 5_000;
 const logger = createSubsystemLogger("voice-call/realtime");
 
 function buildGreetingInstructions(
   baseInstructions: string | undefined,
   greeting: string | undefined,
+  consentWindowEnabled = false,
 ): string | undefined {
   const trimmedGreeting = greeting?.trim();
+  if (consentWindowEnabled) {
+    const greetingAfterConsent = trimmedGreeting
+      ? `After the caller consents, include this greeting in your next spoken reply: "${trimmedGreeting}"`
+      : undefined;
+    return [baseInstructions, greetingAfterConsent].filter(Boolean).join("\n\n") || undefined;
+  }
   if (!trimmedGreeting) {
     return undefined;
   }
@@ -810,7 +826,11 @@ export class RealtimeCallHandler {
         "[voice-call] This realtime model uses native agent delegation; the end-call and custom realtime function tools are unavailable.",
       );
     }
-    const initialGreetingInstructions = buildGreetingInstructions(instructions, initialGreeting);
+    const initialGreetingInstructions = buildGreetingInstructions(
+      instructions,
+      initialGreeting,
+      this.config.consentWindow.enabled,
+    );
     const harness = createRealtimeVoiceSessionHarness({
       talk: {
         sessionId: `voice-call:${callId}:realtime`,
@@ -931,6 +951,186 @@ export class RealtimeCallHandler {
     const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
     let provisionalCloseReason: RealtimeVoiceCloseReason | undefined;
     let sessionClosed = false;
+    let lastAssistantAudioSentAt = 0;
+    // When the provider finalized its last assistant turn. A finalized goodbye turn -- not merely a
+    // gap in the audio -- is what tells us the sentence finished, so a mid-sentence pause cannot be
+    // mistaken for the end of the goodbye.
+    let lastAssistantFinalTurnAt = 0;
+    // Playback confirmation for the consent question. `acked` is set only by a carrier mark;
+    // `resolved` is set by that ack or, failing it, by a bounded fallback so the watchdog can still
+    // escape. The full answer window applies only after the carrier confirmed playback; the
+    // unconfirmed path gets an extra bounded grace instead of being treated as playback-confirmed.
+    let consentQuestionPlaybackAcked = false;
+    let consentQuestionMarkResolved = false;
+    let consentQuestionMarkRequested = false;
+    // Set once the finalized consent-question turn is seen, cleared when its playback mark is
+    // requested. The request itself waits for the question's response to complete so the mark cannot
+    // be acknowledged ahead of the question audio.
+    let consentQuestionAwaitingPlaybackConfirmation = false;
+    const ASSISTANT_SPEECH_TAIL_MS = 400;
+    const consentWindowMs = this.config.consentWindow.windowMs;
+    // Config explicitly admits this flow and adds the opening question to the provider
+    // instructions. Transcript punctuation is not an activation signal.
+    const tellCallerToHangUp = (): void => {
+      try {
+        session.sendUserMessage(
+          "The line could not be closed automatically. Apologise briefly and tell the caller they can hang up now.",
+        );
+      } catch (error) {
+        console.warn(
+          `[voice-call] realtime consent hangup notice failed callId=${callId}: ${formatErrorMessage(error)}`,
+        );
+      }
+    };
+    // Hold the line until the goodbye has been spoken and the carrier has confirmed it reached
+    // the line, but never longer than the cap: a stalled provider must not keep a silent caller
+    // connected indefinitely. A drained local send queue is not proof the caller heard the goodbye
+    // (the carrier can still buffer sent audio), so we place a mark after the goodbye and wait for
+    // the carrier's acknowledgement of it before forcing the hangup.
+    const endConsentCallDirectly = (): void => {
+      const promptedAt = Date.now();
+      let goodbyeMarkName: string | undefined;
+      let goodbyeMarkAcknowledged = false;
+      const attemptClose = (): void => {
+        if (sessionClosed || this.activeBridgesByCallId.get(callId) !== session) {
+          return;
+        }
+        const elapsedMs = Date.now() - promptedAt;
+        const goodbyeStarted = lastAssistantAudioSentAt > promptedAt;
+        // A finalized goodbye turn is the signal that the sentence is complete; an audio gap alone
+        // (the 400 ms tail) can fall inside a mid-sentence pause, so never place the tail mark or
+        // close on a pause.
+        const goodbyeTurnFinal = lastAssistantFinalTurnAt > promptedAt;
+        const queueDrained =
+          !audioPacer.hasPendingAudio() &&
+          Date.now() - lastAssistantAudioSentAt >= ASSISTANT_SPEECH_TAIL_MS;
+        if (elapsedMs < CONSENT_WINDOW_MAX_CLOSE_WAIT_MS) {
+          const readyToClose =
+            goodbyeStarted && goodbyeTurnFinal && queueDrained && goodbyeMarkAcknowledged;
+          if (!readyToClose) {
+            // The goodbye has finished locally but the carrier has not yet confirmed playout;
+            // place one mark at the tail and wait for its acknowledgement.
+            if (goodbyeStarted && goodbyeTurnFinal && queueDrained && !goodbyeMarkName) {
+              goodbyeMarkName = `consent-goodbye-${randomUUID()}`;
+              pendingMarkAcks.set(goodbyeMarkName, () => {
+                goodbyeMarkAcknowledged = true;
+              });
+              audioPacer.sendMark(goodbyeMarkName);
+            }
+            const wait = setTimeout(attemptClose, CONSENT_WINDOW_POLL_MS);
+            wait.unref?.();
+            return;
+          }
+        }
+        const attempt = this.manager
+          .endCall(callId, { reason: "timeout" })
+          .then((result) => {
+            if (!result.success) {
+              console.warn(
+                `[voice-call] Failed to end realtime consent call callId=${callId} providerCallId=${callSid} reason=timeout: ${result.error ?? "unknown error"}; asking the agent to hand the caller off`,
+              );
+              tellCallerToHangUp();
+              return;
+            }
+            console.log(
+              `[voice-call] Realtime consent call ended callId=${callId} providerCallId=${callSid}`,
+            );
+          })
+          .catch((error: unknown) => {
+            console.warn(
+              `[voice-call] Failed to end realtime consent call callId=${callId} providerCallId=${callSid} reason=timeout: ${formatErrorMessage(error)}; asking the agent to hand the caller off`,
+            );
+            tellCallerToHangUp();
+          });
+        this.trackShutdownWork(attempt, this.terminationAttempts);
+      };
+      const grace = setTimeout(attemptClose, CONSENT_WINDOW_POLL_MS);
+      grace.unref?.();
+    };
+    const consentWindow = new RealtimeConsentWindow({
+      enabled: this.config.consentWindow.enabled,
+      windowMs: consentWindowMs,
+      windowMsExtension: () =>
+        consentQuestionPlaybackAcked ? 0 : CONSENT_QUESTION_PLAYBACK_WAIT_MS,
+      pollMs: CONSENT_WINDOW_POLL_MS,
+      isBotSpeaking: () =>
+        audioPacer.hasPendingAudio() ||
+        Date.now() - lastAssistantAudioSentAt < ASSISTANT_SPEECH_TAIL_MS ||
+        !consentQuestionMarkResolved,
+      isCallActive: () => !sessionClosed && this.activeBridgesByCallId.get(callId) === session,
+      onExpired: () => {
+        console.log(
+          `[voice-call] realtime consent window expired callId=${callId} providerCallId=${callSid} windowMs=${consentWindowMs} - instructing the agent to apologise and end the call`,
+        );
+        // Native delegation hides function tools. Consult policy does not: the built-in end-call
+        // tool remains available whenever provider function tools are available.
+        const endCallToolAvailable = !handlesAgentConsult;
+        const hangupInstruction = endCallToolAvailable
+          ? ` Then call ${REALTIME_VOICE_END_CALL_TOOL_NAME} immediately.`
+          : " The host will end the call after you speak.";
+        try {
+          session.sendUserMessage(
+            `NO CONSENT ANSWER RECEIVED. The caller did not answer your consent question within the configured response window. Apologise briefly and warmly in ONE short sentence that ends with the word "Goodbye."${hangupInstruction} Do not ask again.`,
+          );
+        } catch (error) {
+          console.warn(
+            `[voice-call] realtime consent window prompt failed callId=${callId}: ${formatErrorMessage(error)}`,
+          );
+        }
+        endConsentCallDirectly();
+      },
+      onLateResponse: () => {
+        console.log(
+          `[voice-call] realtime caller answered after the consent window callId=${callId} providerCallId=${callSid} - call is already ending`,
+        );
+      },
+    });
+    // Start the answer window only after the carrier confirms it played the consent question. The
+    // mark is queued after the question's audio; if the carrier never acknowledges it we still
+    // confirm after a bounded wait, so a silent carrier cannot disable the watchdog. A late
+    // acknowledgment restarts the deadline so the caller's full window is measured from confirmed
+    // playback, not from the earlier bounded no-ack fallback.
+    const requestConsentQuestionPlaybackConfirmation = (): void => {
+      if (consentQuestionMarkRequested) {
+        return;
+      }
+      consentQuestionMarkRequested = true;
+      const markName = `consent-question-${randomUUID()}`;
+      const acknowledge = (): void => {
+        const wasUnconfirmed = !consentQuestionPlaybackAcked;
+        consentQuestionPlaybackAcked = true;
+        consentQuestionMarkResolved = true;
+        if (wasUnconfirmed) {
+          consentWindow.notePlaybackConfirmed();
+        }
+      };
+      pendingMarkAcks.set(markName, acknowledge);
+      audioPacer.sendMark(markName);
+      const fallback = setTimeout(() => {
+        if (!consentQuestionMarkResolved) {
+          console.warn(
+            `[voice-call] carrier never confirmed consent-question playback callId=${callId} - using the bounded no-ack escape path`,
+          );
+        }
+        consentQuestionMarkResolved = true;
+      }, CONSENT_QUESTION_PLAYBACK_WAIT_MS);
+      fallback.unref?.();
+    };
+    // Queue the answer-window playback mark once the consent question's *output audio* has finished
+    // arriving, not when its transcript is finalized: Google Live appends the finished output
+    // transcription before the audio parts of the same server message, so requesting the mark from
+    // the transcript callback could queue it ahead of the question audio and let the carrier
+    // acknowledge a mark before the caller ever heard the question. The provider reports the
+    // response complete after the model turn, so the mark is queued only from that signal; a
+    // provider that never reports completion leaves the watchdog un-armed rather than risking an
+    // early hangup.
+    const confirmConsentQuestionPlaybackAfterResponse = (): void => {
+      if (!consentQuestionAwaitingPlaybackConfirmation) {
+        return;
+      }
+      consentQuestionAwaitingPlaybackConfirmation = false;
+      requestConsentQuestionPlaybackConfirmation();
+    };
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
@@ -1024,12 +1224,14 @@ export class RealtimeCallHandler {
           }
         : {}),
       initialGreetingInstructions,
-      triggerGreetingOnReady: Boolean(initialGreetingInstructions),
+      triggerGreetingOnReady:
+        Boolean(initialGreetingInstructions) || this.config.consentWindow.enabled,
       audioSink: {
         isOpen: () => !sessionClosed && ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw, metadata) => {
           harness.recordOutputAudio(muLaw);
           audioPacer.sendAudio(muLaw, metadata);
+          lastAssistantAudioSentAt = Date.now();
         },
         // Telephony pacing knows what actually reached the line; the provider's
         // inbound media clock can run far ahead of playout.
@@ -1094,6 +1296,7 @@ export class RealtimeCallHandler {
             if (!transcript) {
               return;
             }
+            consentWindow.noteCallerResponded();
             console.log(
               `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=false chars=${text.trim().length} aggregateChars=${transcript.length}`,
             );
@@ -1110,6 +1313,7 @@ export class RealtimeCallHandler {
             rawPartial: state.rawPartial,
             final: text,
           });
+          consentWindow.noteCallerResponded();
           this.clearPartialUserTranscript(callId, userTranscriptOwner);
           this.setRecentFinalUserTranscript(callId, userTranscriptOwner, transcript);
           console.log(
@@ -1152,6 +1356,18 @@ export class RealtimeCallHandler {
           });
           void transcriptPersistence.catch(reportTranscriptFailure);
           return;
+        }
+        if (isFinal) {
+          lastAssistantFinalTurnAt = Date.now();
+          // Arm only on the finalized consent turn: a provider may stream the question text and
+          // then pause before finishing the utterance, and the answer window must wait until the
+          // carrier has played the question rather than merely drained the local queue. Gate on the
+          // opt-in flag so a default-config call never queues a consent mark or logs a missing
+          // acknowledgment for an ordinary opening question.
+          if (this.config.consentWindow.enabled && isConsentQuestionUtterance(text)) {
+            consentWindow.noteAssistantTurn();
+            consentQuestionAwaitingPlaybackConfirmation = true;
+          }
         }
         transcriptPersistence = this.manager
           .processEvent({
@@ -1249,6 +1465,9 @@ export class RealtimeCallHandler {
         if (outcome.status === "failed" || outcome.status === "incomplete") {
           console.warn(`[voice-call] realtime response ${outcome.status}: ${outcome.message}`);
         }
+        // The consent question's output audio has finished arriving; only now may its playback mark
+        // be queued so it cannot be acknowledged ahead of the question.
+        confirmConsentQuestionPlaybackAfterResponse();
       },
       onReady: () => {
         harness.emit({
@@ -1294,6 +1513,7 @@ export class RealtimeCallHandler {
         if (ownsCallState) {
           void closeBinding(telephonyBinding, reason);
         }
+        consentWindow.dispose();
         this.streamDisconnectLifecycle.retire(callSid, streamSid);
         if (ws.readyState === WebSocket.OPEN) {
           ws.close(reason === "error" ? 1011 : 1000, "Bridge disconnected");
@@ -1352,6 +1572,7 @@ export class RealtimeCallHandler {
         return;
       }
       if (speechDetector.accept({ rms: calculateMulawRms(audio), peak: 0 })) {
+        consentWindow.noteCallerResponded();
         console.log(
           `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
@@ -1371,6 +1592,7 @@ export class RealtimeCallHandler {
         return sessionClosePromise ?? Promise.resolve();
       }
       sessionClosed = true;
+      consentWindow.dispose();
       this.cancelConsultSession(callId, session);
       audioPacer.close();
       sessionClosePromise = drainProviderClose(closeSession).finally(() => {
