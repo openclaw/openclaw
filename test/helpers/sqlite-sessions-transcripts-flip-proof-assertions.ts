@@ -1,8 +1,22 @@
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect } from "vitest";
+import { formatCliCommand } from "../../src/cli/command-format.js";
 import type { runSqliteSessionsTranscriptsFlipProof } from "./sqlite-sessions-transcripts-flip-proof.ts";
 
 type SqliteFlipProofReport = Awaited<ReturnType<typeof runSqliteSessionsTranscriptsFlipProof>>;
+
+export function assertSqliteFlipStartupRefusal(
+  refusal: SqliteFlipProofReport["startupRefusal"],
+): void {
+  expect(refusal?.message).toContain(`Run "${formatCliCommand("openclaw doctor --fix")}"`);
+  expect(refusal?.preservedSourceFiles.map((filePath) => filePath.replaceAll("\\", "/"))).toEqual(
+    expect.arrayContaining([
+      "agents/main/sessions/sessions.json",
+      "agents/main/sessions/archive-fixture/cold-archive.jsonl",
+      "sessions/sessions.json",
+    ]),
+  );
+}
 
 export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   expect(report.failures).toEqual([]);
@@ -13,16 +27,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   const refusalCheckpoint = report.checkpoints.find(
     (checkpoint) => checkpoint.label === "after-startup-refusal",
   );
-  expect(report.startupRefusal?.message).toContain('Run "openclaw doctor --fix"');
-  expect(
-    report.startupRefusal?.preservedSourceFiles.map((filePath) => filePath.replaceAll("\\", "/")),
-  ).toEqual(
-    expect.arrayContaining([
-      "agents/main/sessions/sessions.json",
-      "agents/main/sessions/archive-fixture/cold-archive.jsonl",
-      "sessions/sessions.json",
-    ]),
-  );
+  assertSqliteFlipStartupRefusal(report.startupRefusal);
   expect(refusalCheckpoint?.activeJsonl).toEqual(seededCheckpoint?.activeJsonl);
   expect(refusalCheckpoint?.legacyStateJsonl).toEqual(seededCheckpoint?.legacyStateJsonl);
   expect(refusalCheckpoint?.sqlite.sessionEntries).toBe(seededCheckpoint?.sqlite.sessionEntries);
