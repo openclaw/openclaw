@@ -368,9 +368,12 @@ require registry requests.
 
 This metadata check does not reserve downloads. Plugin-only download, install,
 or load failures remain actionable warnings after an otherwise successful core
-update. Candidate rehearsal also reports a plugin source parse failure as a warning
-with the plugin ID, source path, and parser error, then continues checking other
-plugin entries. Valid ESM plugins can use `import.meta` during dependency inspection.
+update. Snapshot inventory runs from the staged candidate package, so it uses
+the target version's plugin inspector. Snapshot inventory and candidate Doctor
+share plugin source inspection. An unparseable entry produces a warning with the
+plugin ID, source path, and parser error while its files are copied unchanged and
+other entries are checked.
+Valid ESM plugins can use `import.meta` during dependency inspection.
 The updater preserves recorded choices and retains the previous plugin
 payload where possible. Follow the reported `openclaw plugins update <id>` command for a
 failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
