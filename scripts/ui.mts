@@ -352,6 +352,20 @@ function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpa
   const dist = path.join(repoRoot, "dist");
   const output = path.join(dist, "control-ui");
   fs.mkdirSync(dist, { recursive: true });
+  if (!fs.existsSync(output)) {
+    // An interrupted swap can leave the previous complete build in a retired sibling.
+    const retired = fs
+      .readdirSync(dist)
+      .filter((name) => {
+        const pid = controlUiBuildSiblingPid(name);
+        return name.endsWith(".retired") && pid !== null && isPidDefinitelyDead(pid);
+      })
+      .map((name) => path.join(dist, name))
+      .toSorted((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs)[0];
+    if (retired) {
+      fs.renameSync(retired, output);
+    }
+  }
   for (const name of fs.readdirSync(dist)) {
     const pid = controlUiBuildSiblingPid(name);
     if (pid !== null && isPidDefinitelyDead(pid)) {

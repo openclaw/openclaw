@@ -387,6 +387,7 @@ process.exitCode = ${expectedExit};\n`,
     {
       label: "a: Vite failure without prior output",
       prior: false,
+      retiredOnly: false,
       viteExit: 1,
       performanceExit: 0,
       seedSiblings: false,
@@ -400,6 +401,7 @@ process.exitCode = ${expectedExit};\n`,
     {
       label: "b: Vite failure with stale output",
       prior: true,
+      retiredOnly: false,
       viteExit: 1,
       performanceExit: 0,
       seedSiblings: false,
@@ -413,6 +415,7 @@ process.exitCode = ${expectedExit};\n`,
     {
       label: "c: performance validator failure with stale output",
       prior: true,
+      retiredOnly: false,
       viteExit: 0,
       performanceExit: 17,
       seedSiblings: false,
@@ -426,6 +429,7 @@ process.exitCode = ${expectedExit};\n`,
     {
       label: "d: success replacing stale output and cleaning dead siblings",
       prior: true,
+      retiredOnly: false,
       viteExit: 0,
       performanceExit: 0,
       seedSiblings: true,
@@ -439,6 +443,7 @@ process.exitCode = ${expectedExit};\n`,
     {
       label: "e: EPERM publication failure with stale output",
       prior: true,
+      retiredOnly: false,
       viteExit: 0,
       performanceExit: 0,
       seedSiblings: false,
@@ -449,10 +454,25 @@ process.exitCode = ${expectedExit};\n`,
       expectedDistEntries: ["control-ui"],
       expectedStderr: "Failed to publish Control UI build; previous output retained.",
     },
+    {
+      label: "f: interrupted swap restored before a failed retry",
+      prior: false,
+      retiredOnly: true,
+      viteExit: 1,
+      performanceExit: 0,
+      seedSiblings: false,
+      failPublish: false,
+      expectedExit: 1,
+      expectedHealth: "stale",
+      expectedOutputId: "stale-runtime",
+      expectedDistEntries: ["control-ui"],
+      expectedStderr: null,
+    },
   ])(
     "publishes only validated complete output ($label)",
     ({
       prior,
+      retiredOnly,
       viteExit,
       performanceExit,
       seedSiblings,
@@ -466,17 +486,29 @@ process.exitCode = ${expectedExit};\n`,
       const root = fs.realpathSync(tempDirs.make("openclaw-ui-publication-"));
       copyUiFixture(root);
       const output = path.join(root, "dist/control-ui");
+      const deadPid = 2_147_483_647;
+      if (seedSiblings || retiredOnly) {
+        expect(isPidDefinitelyDead(deadPid)).toBe(true);
+      }
       const buildId = "fixture-runtime";
       const buildFiles = (id: string) => ({
         "index.html": `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${id}-${"a".repeat(64)}"><script type="module" src="./assets/index.js"></script></html>`,
         "assets/index.js": `console.log(${JSON.stringify(id)});`,
         "assets/lazy.js": `export default ${JSON.stringify(id)};`,
       });
-      if (prior) {
+      if (prior || retiredOnly) {
+        const priorOutput = retiredOnly
+          ? path.join(root, "dist", `control-ui.build-${deadPid}-x.retired`)
+          : output;
         for (const [file, bytes] of Object.entries(buildFiles("stale-runtime"))) {
-          fs.mkdirSync(path.dirname(path.join(output, file)), { recursive: true });
-          fs.writeFileSync(path.join(output, file), bytes);
+          fs.mkdirSync(path.dirname(path.join(priorOutput, file)), { recursive: true });
+          fs.writeFileSync(path.join(priorOutput, file), bytes);
         }
+      }
+      if (retiredOnly) {
+        const unfinished = path.join(root, "dist", `control-ui.build-${deadPid}-y`);
+        fs.mkdirSync(unfinished);
+        fs.writeFileSync(path.join(unfinished, "junk"), "incomplete");
       }
       const modules = path.join(root, "node_modules");
       writeUiPackageBin(modules, "dompurify", "export {};\n");
@@ -534,8 +566,6 @@ require("node:module").syncBuiltinESMExports();
         args.unshift("--require", fsGuard);
       }
       if (seedSiblings) {
-        const deadPid = 2_147_483_647;
-        expect(isPidDefinitelyDead(deadPid)).toBe(true);
         for (const name of [
           ...liveUiBuildSiblings,
           `control-ui.build-${deadPid}-dead`,
