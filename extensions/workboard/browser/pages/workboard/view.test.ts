@@ -673,7 +673,7 @@ describe("renderWorkboard", () => {
     });
     state.detailCardId = null;
     state.bulkDialog = null;
-    state.draftOpen = "details" === "discard";
+    state.draftOpen = false;
     state.draftDiscardOpen = false;
     renderView({ pageError });
     const active = element<LitElement>(container, "openclaw-workboard-toast:not([hidden])");
@@ -769,6 +769,21 @@ describe("renderWorkboard", () => {
       position: 1000,
     });
     expect(state.cards).toContainEqual(moved);
+  });
+
+  it("hides cached card mutation controls until a lifecycle teardown reload succeeds", () => {
+    const { host, state, container, renderView } = createWorkboardView();
+    state.cards = [createWorkboardCard({ title: "Stale cached card" })];
+    resetWorkboardConnectionState(host);
+    renderView();
+    expect(buttonByLabel(container, "Edit card")).toBeNull();
+    expect(buttonByLabel(container, "Archive card")).toBeNull();
+    expect(buttonByText(container, "New card")).toBeNull();
+    expect(container.querySelector(".workboard-card")?.getAttribute("draggable")).toBe("false");
+    state.mutationReadiness = "ready";
+    renderView();
+    expect(buttonByLabel(container, "Edit card")).not.toBeNull();
+    expect(buttonByText(container, "New card")).not.toBeNull();
   });
 
   it("keeps a stale edit draft disabled until it is cancelled", async () => {

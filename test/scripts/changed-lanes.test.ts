@@ -45,6 +45,7 @@ import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = process.cwd();
 const testNodeExecPath = resolveTestNodeExecPath();
+const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
 const tsxImport = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 
 const git = (cwd: string, args: string[]) =>
@@ -550,6 +551,28 @@ describe("scripts/changed-lanes", () => {
       events.filter(({ event, args }) => event === "start" && args[0] === "config:docs:check"),
     ).toHaveLength(selected ? 1 : 0);
   });
+
+  it.each([
+    [githubActivityHelper, false],
+    [".agents/config.json", true],
+    [`${githubActivityHelper}.bak`, true],
+    [`${githubActivityHelper}/child.sh`, true],
+    [`other/${githubActivityHelper}`, true],
+    [".agents/skills/openclaw-pr-maintainer-extra/scripts/github-activity.sh", true],
+    [`./${githubActivityHelper}`, true],
+    [githubActivityHelper.replaceAll("/", "\\"), true],
+  ] as const)(
+    "keeps hidden-helper routing fail-safe for %s (all lanes: %s)",
+    (changedPath, broad) => {
+      const result = detectChangedLanes([githubActivityHelper, changedPath]);
+      const commands = createChangedCheckPlan(result).commands.map((command) => command.args[0]);
+      expectLanes(result.lanes, { all: broad, tooling: true });
+      expect(result.extensionImpactFromCore).toBe(broad);
+      expect(commands.includes("tsgo:all")).toBe(broad);
+      expect(commands.includes("lint")).toBe(broad);
+      expect(commands).not.toContain("test");
+    },
+  );
 
   it("keeps raw Git lookalikes broad without retargeting owner checks", () => {
     const paths = [" scripts/changed-lanes.mts", "scripts/changed\nlanes.mts"];

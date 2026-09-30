@@ -271,6 +271,25 @@ describe("embedded-agent active-run steering", () => {
     expect(visibleAbort).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, "message_tool_only"] as const)(
+    "preserves source-reply delivery semantics with active mode %s",
+    (sourceReplyDeliveryMode) => {
+      const handle = start({ sourceReplyDeliveryMode });
+      const options = {
+        steeringMode: "all",
+        sourceReplyDeliveryMode: "message_tool_only",
+      } as const;
+      const outcome = queueSync(sessionId, "continue", options);
+      if (sourceReplyDeliveryMode === "message_tool_only") {
+        expect(outcome.queued).toBe(true);
+        expect(handle.queueMessage).toHaveBeenCalledExactlyOnceWith("continue", options);
+      } else {
+        expect(outcome).toEqual(failure("source_reply_delivery_mode_mismatch"));
+        expect(handle.queueMessage).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("uses stopped state for non-streaming steering", () => {
     const queueMessage = vi.fn(async () => {});
     start({ isStreaming: () => false, queueMessage });

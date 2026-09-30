@@ -452,25 +452,40 @@ registerWorkspaceBootstrapTests();
 
 describe("workspace attestation survival", () => {
   it.each([
-    ["missing", undefined],
-    ["corrupt", "0".repeat(64)],
-  ])("rejects generated survival evidence with a %s AGENTS.md hash", async (_kind, hash) => {
-    await ensureWorkspace();
-    await fs.rm(workspacePath(DEFAULT_BOOTSTRAP_FILENAME));
-    const snapshot = await readWorkspaceStateSnapshot(tempDir);
-    const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
-    if (hash === undefined) {
-      generatedHashes.delete(DEFAULT_AGENTS_FILENAME);
-    } else {
-      generatedHashes.set(DEFAULT_AGENTS_FILENAME, hash);
-    }
-    await replaceWorkspaceAttestation({
-      workspaceDir: tempDir,
-      attestedAtMs: Date.now(),
-      generatedHashes,
-    });
-    await expectWorkspaceVanished(ensureWorkspace());
-  });
+    ["generated", "missing", undefined],
+    ["generated", "corrupt", "0".repeat(64)],
+    ["customized", "missing", undefined],
+  ] as const)(
+    "checks %s survival evidence with a %s AGENTS.md hash",
+    async (content, _kind, hash) => {
+      await ensureWorkspace();
+      await fs.rm(workspacePath(DEFAULT_BOOTSTRAP_FILENAME));
+      const customInstructions = "custom instructions\n";
+      if (content === "customized") {
+        await fs.writeFile(workspacePath(DEFAULT_AGENTS_FILENAME), customInstructions);
+      }
+      const snapshot = await readWorkspaceStateSnapshot(tempDir);
+      const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
+      if (hash === undefined) {
+        generatedHashes.delete(DEFAULT_AGENTS_FILENAME);
+      } else {
+        generatedHashes.set(DEFAULT_AGENTS_FILENAME, hash);
+      }
+      await replaceWorkspaceAttestation({
+        workspaceDir: tempDir,
+        attestedAtMs: Date.now(),
+        generatedHashes,
+      });
+      if (content === "customized") {
+        await expect(ensureWorkspace()).resolves.toMatchObject({ dir: tempDir });
+        await expect(fs.readFile(workspacePath(DEFAULT_AGENTS_FILENAME), "utf8")).resolves.toBe(
+          customInstructions,
+        );
+      } else {
+        await expectWorkspaceVanished(ensureWorkspace());
+      }
+    },
+  );
 });
 
 describe("ensureAgentWorkspace runtime-managed-implicit provisioning", () => {

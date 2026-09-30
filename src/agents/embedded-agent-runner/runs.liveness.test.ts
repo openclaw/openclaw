@@ -186,10 +186,16 @@ describe("runtime-owned embedded liveness", () => {
     }
   });
 
-  it("does not protect work when the runtime probe throws", () => {
-    handle.ownsLiveness = () => {
-      throw new Error("runtime probe failed");
-    };
+  it.each(["aborted", "stopped", "probe-error"] as const)("does not protect %s work", (state) => {
+    if (state === "aborted") {
+      handle.isAborted = () => true;
+    } else if (state === "stopped") {
+      handle.isStopped = () => true;
+    } else {
+      handle.ownsLiveness = () => {
+        throw new Error("runtime probe failed");
+      };
+    }
     expect(resolveActiveEmbeddedRunRecoveryBlocker(sessionId)).toBeUndefined();
   });
 

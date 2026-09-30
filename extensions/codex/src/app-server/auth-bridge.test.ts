@@ -460,25 +460,32 @@ describe("Codex auth bridge", () => {
     expectApiKeyLogin(request, "platform-api-key", true);
   });
 
-  it("rejects a desktop candidate whose exact bundled marketplace is unavailable", async ({
-    agentDir,
-  }) => {
-    desktop.marketplaceSource.mockResolvedValueOnce(undefined);
+  baseIt.each(["marketplace", "service"] as const)(
+    "rejects a desktop candidate whose exact %s is unavailable",
+    async (missingArtifact) => {
+      await withTempDir("openclaw-codex-", async (agentDir) => {
+        if (missingArtifact === "marketplace") {
+          desktop.marketplaceSource.mockResolvedValueOnce(undefined);
+        } else {
+          desktop.serviceSource.mockResolvedValueOnce(undefined);
+        }
 
-    await expect(
-      reconcileArtifacts({
-        startOptions: createStartOptions({
-          command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-        }),
-        agentDir,
-        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
-      }),
-    ).rejects.toMatchObject({
-      code: "CODEX_COMPUTER_USE_CANDIDATE_ARTIFACTS_UNAVAILABLE",
-    });
-    expect(desktop.service).not.toHaveBeenCalled();
-    expect(desktop.marketplace).not.toHaveBeenCalled();
-  });
+        await expect(
+          reconcileArtifacts({
+            startOptions: createStartOptions({
+              command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+            }),
+            agentDir,
+            pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+          }),
+        ).rejects.toMatchObject({
+          code: "CODEX_COMPUTER_USE_CANDIDATE_ARTIFACTS_UNAVAILABLE",
+        });
+        expect(desktop.service).not.toHaveBeenCalled();
+        expect(desktop.marketplace).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   baseIt.each([
     { marketplaceSource: "file:///tmp/custom-marketplace" },
@@ -777,32 +784,44 @@ describe("Codex auth bridge", () => {
     });
   });
 
-  it("clears ambient auth before prepared API-key startup", async ({ agentDir }) => {
-    const startOptions = createStartOptions({ clearEnv: ["FOO", "OPENAI_API_KEY"] });
-    const bridged = await bridgeStart({
-      startOptions,
-      agentDir,
-      authProfileId: null,
-      preparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
-    });
-    expect(bridged).toEqual({
-      ...startOptions,
-      args: EPHEMERAL_AUTH_ARGS,
-      env: { CODEX_HOME: codexHomeDir(agentDir) },
-      clearEnv: ["FOO", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
-    });
-    const spawnEnv = resolveCodexAppServerSpawnEnv(bridged, {
-      FOO: "ambient",
-      CODEX_API_KEY: "ambient-codex-key",
-      OPENAI_API_KEY: "ambient-openai-key",
-      CODEX_ACCESS_TOKEN: "ambient-access-token",
-    });
-    expect(spawnEnv).toMatchObject({ CODEX_HOME: codexHomeDir(agentDir) });
-    expect(spawnEnv).not.toHaveProperty("FOO");
-    expect(spawnEnv).not.toHaveProperty("CODEX_API_KEY");
-    expect(spawnEnv).not.toHaveProperty("OPENAI_API_KEY");
-    expect(spawnEnv).not.toHaveProperty("CODEX_ACCESS_TOKEN");
-  });
+  baseIt.each(["api-key", "profile"] as const)(
+    "clears ambient auth before prepared %s startup",
+    async (authKind) => {
+      await withTempDir("openclaw-codex-", async (agentDir) => {
+        const startOptions = createStartOptions({ clearEnv: ["FOO", "OPENAI_API_KEY"] });
+        const bridged = await bridgeStart({
+          startOptions,
+          agentDir,
+          authProfileId: authKind === "api-key" ? null : "openai:prepared",
+          preparedAuth:
+            authKind === "api-key"
+              ? { kind: "api-key", apiKey: "prepared-platform-key" }
+              : {
+                  kind: "profile",
+                  profileId: "openai:prepared",
+                  store: { version: 1, profiles: {} },
+                },
+        });
+        expect(bridged).toEqual({
+          ...startOptions,
+          args: EPHEMERAL_AUTH_ARGS,
+          env: { CODEX_HOME: codexHomeDir(agentDir) },
+          clearEnv: ["FOO", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+        });
+        const spawnEnv = resolveCodexAppServerSpawnEnv(bridged, {
+          FOO: "ambient",
+          CODEX_API_KEY: "ambient-codex-key",
+          OPENAI_API_KEY: "ambient-openai-key",
+          CODEX_ACCESS_TOKEN: "ambient-access-token",
+        });
+        expect(spawnEnv).toMatchObject({ CODEX_HOME: codexHomeDir(agentDir) });
+        expect(spawnEnv).not.toHaveProperty("FOO");
+        expect(spawnEnv).not.toHaveProperty("CODEX_API_KEY");
+        expect(spawnEnv).not.toHaveProperty("OPENAI_API_KEY");
+        expect(spawnEnv).not.toHaveProperty("CODEX_ACCESS_TOKEN");
+      });
+    },
+  );
 
   it("applies a prepared API-key handoff without selecting an available OAuth profile", async () => {
     const authProfileStore: AuthProfileStore = profileStore(

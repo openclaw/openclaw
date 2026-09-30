@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, assert, describe, expect, it } from "vitest";
@@ -1508,6 +1508,11 @@ describe("release decision policy", () => {
     ["releaseChecksCandidate", "cross_os_release_checks / Linux / packaged upgrade"],
     ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged fresh"],
     ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged upgrade"],
+    ["releaseChecksCandidate", "cross_os_release_checks / macOS / packaged fresh"],
+    ["releaseChecks", "Run QA Lab runtime-pair lane (core)"],
+    ["releaseChecks", "Run QA Lab live Telegram lane"],
+    ["npmTelegram", "Telegram package E2E"],
+    ["productPerformance", "benchmark"],
   ])("keeps %s / %s blocking alongside a Windows Node advisory", (key, name) => {
     const failure = { name, conclusion: "failure", status: "completed" };
     const snapshots = [
@@ -2389,6 +2394,58 @@ describe("release state artifacts", () => {
     ).toThrow("cancellation differs");
   });
 
+  it.each(["direct", "nested", "asymmetric"] as const)(
+    "selects downloaded state artifacts from the %s layout",
+    (layout) => {
+      const root = tempDirs.make("frv-select-");
+      const executionPlanPath = join(root, "plan.json");
+      const outputPath = join(root, "output.txt");
+      const sealedPlan = executionPlan({ rerunGroup: "ci" });
+      writeFileSync(executionPlanPath, JSON.stringify(sealedPlan));
+      const env: NodeJS.ProcessEnv = {
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_RUN_ATTEMPT: "3",
+        RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
+      };
+      for (const [mode, prefix, filename, envPrefix] of [
+        ["decision", "full-release-decision", "full-release-decision.json", "RELEASE_DECISION"],
+        [
+          "drain",
+          "full-release-diagnostics",
+          "full-release-diagnostic-manifest.json",
+          "DIAGNOSTIC_DRAIN",
+        ],
+      ] as const) {
+        const candidatesRoot = join(root, mode);
+        const attempts =
+          layout === "direct" ? [2] : layout === "asymmetric" && mode === "drain" ? [1] : [1, 2];
+        for (const attempt of attempts) {
+          const directory =
+            layout === "direct" ? candidatesRoot : join(candidatesRoot, `${prefix}-77-${attempt}`);
+          mkdirSync(directory, { recursive: true });
+          writeFileSync(
+            join(directory, filename),
+            JSON.stringify(collectorArtifact(mode, attempt, sealedPlan)),
+          );
+        }
+        env[`${envPrefix}_ATTEMPTS_PATH`] = candidatesRoot;
+        env[`${envPrefix}_PATH`] = join(root, `selected-${mode}.json`);
+      }
+      const result = runCollector("select", env);
+      expect(result.status, result.stderr).toBe(0);
+      const output = readFileSync(outputPath, "utf8");
+      for (const [mode, attempt] of [
+        ["decision", 2],
+        ["drain", layout === "asymmetric" ? 1 : 2],
+      ] as const) {
+        expect(output).toContain(`${mode}_source_attempt=${attempt}\n`);
+        expect(JSON.parse(readFileSync(join(root, `selected-${mode}.json`), "utf8"))).toMatchObject(
+          { parentRunAttempt: attempt, state: "passed" },
+        );
+      }
+    },
+  );
+
   it.each([
     {
       mutate: (drain: Record<string, any>) => {
@@ -2872,6 +2929,55 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     expect(result.stderr).toContain(
       "release validation manifest differs from the immutable execution plan",
     );
+  });
+
+  it("persists a rejected reuse plan for Release Decision to consume", () => {
+    const root = tempDirs.make("frv-classified-plan-");
+    const planPath = join(root, "plan.json");
+    const decisionPath = join(root, "decision.json");
+    const validator = join(root, "validator.mjs");
+    writeFileSync(
+      validator,
+      'console.error("sealed reuse selection rejected"); process.exit(1);\n',
+    );
+    const env = {
+      FULL_RELEASE_EXECUTION_PLAN_PATH: planPath,
+      GITHUB_RUN_ATTEMPT: "1",
+      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: validator,
+      RERUN_GROUP: "all",
+    };
+    const result = runCollector("plan", {
+      ...env,
+      FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(
+        planInput({
+          dockerPreflightResult: "skipped",
+          evidenceChangedPaths: [],
+          evidencePolicy: "exact-target-full-validation-v1",
+          evidenceReuse: true,
+          evidenceRootRunId: "99",
+          evidenceRunId: "99",
+          evidenceRunUrl: "https://example.invalid/runs/99",
+          evidenceSha: TARGET_SHA,
+        }),
+      ),
+    });
+    expect(result.status, result.stderr).toBe(2);
+    const blocker = expect.objectContaining({ kind: "reused_evidence_invalid" });
+    expect(JSON.parse(readFileSync(planPath, "utf8"))).toMatchObject({
+      blockers: [blocker],
+      errors: [],
+    });
+    const decision = runCollector("decision", {
+      ...env,
+      FAIL_FAST: "false",
+      FULL_RELEASE_STATE_PATH: decisionPath,
+    });
+    expect(decision.status, decision.stderr).toBe(1);
+    expect(JSON.parse(readFileSync(decisionPath, "utf8"))).toMatchObject({
+      state: "blocked_complete",
+      blockers: expect.arrayContaining([blocker]),
+      errors: [],
+    });
   });
 
   it.each([{ dockerPreflightResult: "failure", packagePublished: true, retiredScenario: false }])(
