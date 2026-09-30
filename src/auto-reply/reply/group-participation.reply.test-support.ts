@@ -110,6 +110,7 @@ export async function createGroupReplyFixture() {
     groupId: string,
     mentioned = false,
     commandSource?: "native" | "text",
+    inboundEventKind?: "room_event",
   ) =>
     finalizeInboundContext({
       Body: body,
@@ -127,6 +128,7 @@ export async function createGroupReplyFixture() {
       SenderName: "Alice",
       MessageSid: messageId,
       WasMentioned: mentioned,
+      InboundEventKind: inboundEventKind,
       ...(commandSource ? { CommandSource: commandSource, CommandAuthorized: true } : {}),
     });
   return {
@@ -149,9 +151,10 @@ export async function createGroupReplyFixture() {
       options?: GetReplyOptions,
       mentioned = false,
       commandSource?: "native" | "text",
+      inboundEventKind?: "room_event",
     ) =>
       getReplyFromConfig(
-        context(body, messageId, groupId, mentioned, commandSource),
+        context(body, messageId, groupId, mentioned, commandSource, inboundEventKind),
         {
           onPartialReply: (payload) => {
             if (payload.text) {
