@@ -84,33 +84,19 @@ export function createAgentAdmissionController(params: {
       return undefined;
     }
     if (params.dedupeLifecycle.isReserved()) {
-      if (!latest) {
-        if (commitOutcome) {
-          postAdmissionTimeout = buildAbortedAgentPayload(params.runId, "timeout");
-          setAbortedAgentDedupeEntries({
-            dedupe: params.context.dedupe,
-            keys: params.dedupeLifecycle.ownedReservationKeys(),
-            agentId: admissionAgentId(),
-            sessionKey: resolvedSessionKey,
-            runId: params.runId,
-            stopReason: "timeout",
-          });
-        }
-        return undefined;
-      }
-      if (!latest.ok || !isAcceptedAgentDedupePayload(latest.payload)) {
+      if (latest && (!latest.ok || !isAcceptedAgentDedupePayload(latest.payload))) {
         if (commitOutcome) {
           postAdmissionAbort = latest;
         }
         return undefined;
       }
-      if (!params.dedupeLifecycle.ownsReservation()) {
+      if (latest && !params.dedupeLifecycle.ownsReservation()) {
         if (commitOutcome) {
           postAdmissionSuperseded = true;
         }
         return undefined;
       }
-      if (!isFutureDateTimestampMs(latest.payload.expiresAtMs, { nowMs: Date.now() })) {
+      if (!latest || !isFutureDateTimestampMs(latest.payload.expiresAtMs, { nowMs: Date.now() })) {
         if (commitOutcome) {
           postAdmissionTimeout = buildAbortedAgentPayload(params.runId, "timeout");
           setAbortedAgentDedupeEntries({
