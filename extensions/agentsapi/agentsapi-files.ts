@@ -9,6 +9,34 @@ const maxFileBytes = 5 * 1024 * 1024;
 const maxTotalBytes = 10 * 1024 * 1024;
 const maxFiles = 50;
 
+/** The registered workspace provider owns self-hosted attachment staging. */
+export async function prepareSelfHostedInputs(
+  params: AgentHarnessAttemptParamsV2,
+  assertCurrent: () => void,
+  signal: AbortSignal,
+): Promise<{ files: AgentsApiInputFile[]; mappingText: string }> {
+  if (!params.media?.length && !params.userTurnTranscriptRecorder) {
+    return { files: [], mappingText: "" };
+  }
+  const { prepareAgentWorkspaceAttachments } =
+    await import("openclaw/plugin-sdk/agent-workspace-runtime");
+  assertCurrent();
+  const mappingText = await prepareAgentWorkspaceAttachments({
+    workspaceDir: params.workspaceDir,
+    turn: {
+      config: params.config,
+      media: params.media,
+      timeoutMs: params.timeoutMs,
+      abortSignal: signal,
+      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    },
+    assertCurrent,
+    requirePreparation: true,
+  });
+  assertCurrent();
+  return { files: [], mappingText: mappingText ?? "" };
+}
+
 /** Only host-prepared attachments are copied into the hosted workspace. */
 export async function prepareInputs(
   media: AgentHarnessAttemptParamsV2["media"],

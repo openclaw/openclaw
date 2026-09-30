@@ -23,6 +23,7 @@ export const loadGoogleMeetPluginHelpers = createLazyRuntimeModule(
   () => import("./plugin-helpers.js"),
 );
 export const loadGoogleMeetCliModule = createLazyRuntimeModule(() => import("./cli.js"));
+export const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./create.js"));
 export const loadGoogleMeetNodeHostModule = createLazyRuntimeModule(() => import("./node-host.js"));
 
 const loadGoogleMeetRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));

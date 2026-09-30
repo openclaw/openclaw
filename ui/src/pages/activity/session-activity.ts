@@ -15,6 +15,13 @@ import type { PresenceViewer } from "../../lib/presence-users.ts";
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
 
+export const TIME_LABELS: Record<ActivityTimeFilter, string> = {
+  "24h": "activityFeed.time24h",
+  "7d": "activityFeed.time7d",
+  "30d": "activityFeed.time30d",
+  all: "activityFeed.timeAll",
+};
+
 export type SessionActivityFilters = {
   personId: string | null;
   query: string;
@@ -132,8 +139,7 @@ function dayKey(timestamp: number): string {
 }
 
 function dayStart(timestamp: number): number {
-  const date = new Date(timestamp);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return new Date(timestamp).setHours(0, 0, 0, 0);
 }
 
 export function projectSessionActivity(

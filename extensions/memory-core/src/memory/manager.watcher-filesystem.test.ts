@@ -33,6 +33,7 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
   const turn = new AsyncLocalStorage<string>();
   const contexts: Array<string | undefined> = [];
   const subscriptions: WatchSubscription[] = [];
+  const visited = new Set<string>();
   const bootstrap = createDeferred<void>();
   const originalWatch = observation.watch;
   // Drive guarded scans explicitly so native hints cannot race the frozen settling clock.
@@ -42,6 +43,10 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
       ...options,
       mode: "poll",
       pollIntervalMs: 2_147_483_647,
+      exclude(entry) {
+        visited.add(path.resolve(authority.rootDir, entry.path));
+        return options.exclude?.(entry) ?? false;
+      },
       onInvalidate(invalidation) {
         options.onInvalidate(invalidation);
         if (invalidation.reason === "reconcile" && !invalidation.changes) {
@@ -59,6 +64,9 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
     const memory = path.join(state.workspaceDir, "memory");
     const note = path.join(memory, "note.md");
     await fs.mkdir(memory);
+    const unrelated = path.join(state.workspaceDir, "unrelated", "nested");
+    await fs.mkdir(unrelated, { recursive: true });
+    await fs.writeFile(path.join(unrelated, "unwatched.md"), "Outside memory selections.");
     const imports = path.join(state.workspaceDir, "imports");
     await fs.mkdir(imports);
     await fs.writeFile(path.join(imports, "keep.md"), "Imported sentinel.");
@@ -148,6 +156,10 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
     await fs.mkdir(memory);
     await fs.writeFile(path.join(memory, "replacement.md"), "Heliotrope replacement.");
     await flush([{ path: "memory/replacement.md", text: "Heliotrope replacement." }]);
+    expect(visited.has(path.join(imports, "keep.md"))).toBe(true);
+    expect(visited.has(note)).toBe(true);
+    expect([...visited].some((file) => file.startsWith(unrelated + path.sep))).toBe(false);
+    expect(visited.has(path.join(state.path("linked-source"), "note.md"))).toBe(false);
     expect(contexts.every((context) => context === undefined)).toBe(true);
     await activeManager.close();
     expect(subscriptions.every((entry) => entry.health().state === "closed")).toBe(true);

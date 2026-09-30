@@ -110,26 +110,10 @@ export const readSessionMessagesAroundIdWithStatsAsync = createHistoryPageReader
   (read, target, options) => read({ kind: "around-id", params: { target, options } }),
 );
 
-export function readSessionArtifacts(
+export function readSessionArtifacts<Query extends SessionArtifactReadQuery>(
   scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
-): Promise<Extract<SessionArtifactReadResult, { kind: "list" }>>;
-export function readSessionArtifacts(
-  scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "image-page" }>,
-): Promise<Extract<SessionArtifactReadResult, { kind: "image-page" }>>;
-export function readSessionArtifacts(
-  scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "image" }>,
-): Promise<Extract<SessionArtifactReadResult, { kind: "image" }>>;
-export function readSessionArtifacts(
-  scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "download-grant" }>,
-): Promise<Extract<SessionArtifactReadResult, { kind: "download-grant" }>>;
-export function readSessionArtifacts(
-  scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "download-response" }>,
-): Promise<Extract<SessionArtifactReadResult, { kind: "download-response" }>>;
+  query: Query,
+): Promise<Extract<SessionArtifactReadResult, { kind: Query["kind"] }>>;
 export async function readSessionArtifacts(
   scope: SessionTranscriptReadScope,
   inputQuery: SessionArtifactReadQuery,
