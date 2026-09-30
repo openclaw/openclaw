@@ -90,7 +90,6 @@ function buildContext(params: {
     sutPhoneE164: "+15550000002",
     target: "+15550000002",
     targetKind: "dm" as const,
-    waitForReady: vi.fn(async () => undefined),
   } satisfies WhatsAppQaMessageScenarioContext;
   return { context, pollVote };
 }

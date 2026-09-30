@@ -377,7 +377,6 @@ describe("web monitor inbox poll vote hook", () => {
             remoteJid: CHAT_JID,
             id: normalMessageId,
             fromMe: false,
-            participant: VOTER_JID,
           },
           message: { conversation: "hi, unrelated to the poll" },
           messageTimestamp: 1_700_000_101,
@@ -385,7 +384,6 @@ describe("web monitor inbox poll vote hook", () => {
       ],
     });
 
-    await waitForMessageCalls(onMessage, 1);
     await waitForInboundWorkDrained();
 
     expect(maybeEmitWhatsAppPollVoteReceivedHookMock).toHaveBeenCalledWith(
