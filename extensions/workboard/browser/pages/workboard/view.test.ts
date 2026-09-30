@@ -98,13 +98,6 @@ function buttonByText(container: Element, text: string): HTMLButtonElement | nul
   );
 }
 
-function element<T extends Element = HTMLElement>(
-  root: ParentNode | null | undefined,
-  selector: string,
-): T {
-  return expectDefined(root?.querySelector<T>(selector), selector);
-}
-
 function requireButton(root: Element, label: string) {
   return expectDefined(buttonByLabel(root, label), label);
 }
@@ -115,7 +108,10 @@ function textButton(root: Element, text: string) {
 
 async function inlineEditor(container: Element, field: "title" | "notes" | "labels") {
   const trigger = await waitForFast(() =>
-    element<HTMLButtonElement>(container, `.workboard-detail__text-trigger--${field}`),
+    expectDefined(
+      container.querySelector<HTMLButtonElement>(`.workboard-detail__text-trigger--${field}`),
+      `.workboard-detail__text-trigger--${field}`,
+    ),
   );
   const owner = expectDefined(
     trigger.closest<HTMLElement>("workboard-inline-text"),
@@ -132,7 +128,10 @@ async function inlineEditor(container: Element, field: "title" | "notes" | "labe
     open: async () => {
       trigger.click();
       return waitForFast(() =>
-        element<HTMLInputElement | HTMLTextAreaElement>(owner, "input, textarea"),
+        expectDefined(
+          owner.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea"),
+          "input, textarea",
+        ),
       );
     },
   };
@@ -166,13 +165,21 @@ function filterPicker(container: Element, label: string) {
 
 function statusButton(container: Element, label: string) {
   return requireButton(
-    element(container, '.workboard-status-tabs[role="group"][aria-label="Status"]'),
+    expectDefined(
+      container.querySelector<HTMLElement>(
+        '.workboard-status-tabs[role="group"][aria-label="Status"]',
+      ),
+      '.workboard-status-tabs[role="group"][aria-label="Status"]',
+    ),
     label,
   );
 }
 
 function toast(container: Element) {
-  return element(container, "openclaw-workboard-toast:not([hidden])");
+  return expectDefined(
+    container.querySelector<HTMLElement>("openclaw-workboard-toast:not([hidden])"),
+    "openclaw-workboard-toast:not([hidden])",
+  );
 }
 
 describe("renderWorkboard", () => {
@@ -199,8 +206,8 @@ describe("renderWorkboard", () => {
     renderView();
     requireButton(container, "Edit properties").click();
     renderView();
-    const picker = element<SelectPicker>(
-      container,
+    const picker = expectDefined(
+      container.querySelector<SelectPicker>(".workboard-bulk-dialog [data-test-select-picker]"),
       ".workboard-bulk-dialog [data-test-select-picker]",
     );
     expect(picker.accessibleLabel).toBe("Agent");
@@ -440,9 +447,15 @@ describe("renderWorkboard", () => {
       state.cards = [parent, child];
       state.selectedCardIds = new Set([parent.id, child.id]);
       renderView();
-      element<HTMLButtonElement>(container, ".workboard-selection__delete").click();
+      expectDefined(
+        container.querySelector<HTMLButtonElement>(".workboard-selection__delete"),
+        ".workboard-selection__delete",
+      ).click();
       renderView();
-      element<HTMLButtonElement>(container, '.workboard-bulk-dialog button[type="submit"]').click();
+      expectDefined(
+        container.querySelector<HTMLButtonElement>('.workboard-bulk-dialog button[type="submit"]'),
+        '.workboard-bulk-dialog button[type="submit"]',
+      ).click();
       await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
       expect(request).toHaveBeenCalledTimes(2);
       expect(request).toHaveBeenNthCalledWith(2, "workboard.cards.delete", {
@@ -486,16 +499,19 @@ describe("renderWorkboard", () => {
       state.selectedCardIds = new Set([first.id, second.id]);
       renderView();
       if (action === "move") {
-        element<SelectPicker>(container, ".workboard-selection [data-test-select-picker]").onSelect(
-          "done",
-        );
+        expectDefined(
+          container.querySelector<SelectPicker>(".workboard-selection [data-test-select-picker]"),
+          ".workboard-selection [data-test-select-picker]",
+        ).onSelect("done");
       } else {
         requireButton(container, action === "archive" ? "Archive" : "Delete").click();
         if (action === "delete") {
           setWorkboardCards(state, [first, newer]);
           renderView();
-          element<HTMLButtonElement>(
-            container,
+          expectDefined(
+            container.querySelector<HTMLButtonElement>(
+              '.workboard-bulk-dialog button[type="submit"]',
+            ),
             '.workboard-bulk-dialog button[type="submit"]',
           ).click();
         }
@@ -547,10 +563,16 @@ describe("renderWorkboard", () => {
     state.cards = [first, second];
     state.selectedCardIds = new Set([first.id, second.id]);
     renderView();
-    element<HTMLButtonElement>(container, ".workboard-selection__delete").click();
+    expectDefined(
+      container.querySelector<HTMLButtonElement>(".workboard-selection__delete"),
+      ".workboard-selection__delete",
+    ).click();
     renderView();
     expect(state.bulkDialog?.cardIds).toEqual([first.id, second.id]);
-    element<HTMLButtonElement>(container, '.workboard-bulk-dialog button[type="submit"]').click();
+    expectDefined(
+      container.querySelector<HTMLButtonElement>('.workboard-bulk-dialog button[type="submit"]'),
+      '.workboard-bulk-dialog button[type="submit"]',
+    ).click();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
     setWorkboardCards(state, [first, archived]);
     firstWrite.resolve({ deleted: true });
@@ -666,8 +688,14 @@ describe("renderWorkboard", () => {
     state.error = null;
     renderView({ pageError });
     await expectError(pageError);
-    const dialogToast = element(container, "openclaw-workboard-toast:not([hidden])");
-    element<HTMLButtonElement>(dialogToast.shadowRoot, 'button[aria-label="Close"]').click();
+    const dialogToast = expectDefined(
+      container.querySelector<HTMLElement>("openclaw-workboard-toast:not([hidden])"),
+      "openclaw-workboard-toast:not([hidden])",
+    );
+    expectDefined(
+      dialogToast.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Close"]'),
+      'button[aria-label="Close"]',
+    ).click();
     await waitForFast(() => {
       expect(dialogToast.shadowRoot?.querySelector('[role="alert"]')).toBeNull();
     });
@@ -676,7 +704,10 @@ describe("renderWorkboard", () => {
     state.draftOpen = false;
     state.draftDiscardOpen = false;
     renderView({ pageError });
-    const active = element<LitElement>(container, "openclaw-workboard-toast:not([hidden])");
+    const active = expectDefined(
+      container.querySelector<LitElement>("openclaw-workboard-toast:not([hidden])"),
+      "openclaw-workboard-toast:not([hidden])",
+    );
     await active.updateComplete;
     expect(active.shadowRoot?.querySelector('[role="alert"]')).toBeNull();
     // Recovery makes a subsequent identical failure a new visible outcome.
@@ -897,7 +928,10 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-card__alert")?.getAttribute("title")).toContain(
       `${"x".repeat(158)}🚀tail`,
     );
-    const card = element(container, ".workboard-card");
+    const card = expectDefined(
+      container.querySelector<HTMLElement>(".workboard-card"),
+      ".workboard-card",
+    );
     const descriptionId = expectDefined(
       card.getAttribute("aria-describedby"),
       "alert description ID",
@@ -924,7 +958,10 @@ describe("renderWorkboard", () => {
     renderView();
     const selectStatus = (label: string) =>
       textButton(
-        element(container, '[role="dialog"][aria-label="Status"]'),
+        expectDefined(
+          container.querySelector<HTMLElement>('[role="dialog"][aria-label="Status"]'),
+          '[role="dialog"][aria-label="Status"]',
+        ),
         label === "All" ? "All work" : label,
       );
     selectStatus("Ready").click();
@@ -968,7 +1005,10 @@ describe("renderWorkboard", () => {
     state.priorityFilter = new Set(["high"]);
     state.searchOpen = true;
     renderView();
-    const search = element<HTMLInputElement>(container, "#workboard-search-input");
+    const search = expectDefined(
+      container.querySelector<HTMLInputElement>("#workboard-search-input"),
+      "#workboard-search-input",
+    );
     search.focus();
     search.value = "release";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1051,8 +1091,14 @@ describe("renderWorkboard", () => {
     state.cards = [createWorkboardCard({ id: "todo-card", title: "Review notes", status: "todo" })];
     state.collapsedStatuses.add("todo");
     renderView();
-    const group = element(container, 'section[aria-label="Todo, 1"]');
-    const actions = element<HTMLButtonElement>(group, "button[popovertarget]");
+    const group = expectDefined(
+      container.querySelector<HTMLElement>('section[aria-label="Todo, 1"]'),
+      'section[aria-label="Todo, 1"]',
+    );
+    const actions = expectDefined(
+      group.querySelector<HTMLButtonElement>("button[popovertarget]"),
+      "button[popovertarget]",
+    );
     actions.click();
     expect(group.querySelector("h2 button")?.getAttribute("aria-expanded")).toBe("false");
     textButton(group, "Select all").click();
@@ -1134,7 +1180,10 @@ describe("renderWorkboard", () => {
     renderView();
     buttonByText(container.querySelector('[role="tablist"]')!, "Details")!.click();
     renderView();
-    const details = element(container, "#workboard-detail-panel-details");
+    const details = expectDefined(
+      container.querySelector<HTMLElement>("#workboard-detail-panel-details"),
+      "#workboard-detail-panel-details",
+    );
     expect(details.textContent).toContain("Attempt evidence survives invalid dates");
     expect(details.textContent).toContain("Proof evidence survives invalid dates");
     expect(details.textContent).not.toContain("Invalid Date");
@@ -1164,7 +1213,10 @@ describe("renderWorkboard", () => {
       }),
     ];
     renderView();
-    const card = element<HTMLElement>(container, ".workboard-card");
+    const card = expectDefined(
+      container.querySelector<HTMLElement>(".workboard-card"),
+      ".workboard-card",
+    );
     expect(card.getAttribute("aria-pressed")).toBeNull();
     expect(card.getAttribute("aria-haspopup")).toBe("dialog");
     requireButton(card, "Open session").click();
@@ -1214,7 +1266,10 @@ describe("renderWorkboard", () => {
     renderView();
     expect(state.selectedCardIds).toEqual(new Set(["first", "second"]));
     expect(second.getAttribute("aria-pressed")).toBe("true");
-    element<HTMLButtonElement>(second, ".workboard-card__menu-trigger").click();
+    expectDefined(
+      second.querySelector<HTMLButtonElement>(".workboard-card__menu-trigger"),
+      ".workboard-card__menu-trigger",
+    ).click();
     expect(state.selectedCardIds).toEqual(new Set(["first", "second"]));
     expect(state.detailCardId).toBeNull();
     requireButton(second, "Edit card").click();
@@ -1242,9 +1297,12 @@ describe("renderWorkboard", () => {
       onRequestUpdate: () => renderInto(container, props),
     });
     renderInto(container, props);
-    expect(element<HTMLElement>(container, ".workboard > openclaw-workboard-toast").hidden).toBe(
-      true,
-    );
+    expect(
+      expectDefined(
+        container.querySelector<HTMLElement>(".workboard > openclaw-workboard-toast"),
+        ".workboard > openclaw-workboard-toast",
+      ).hidden,
+    ).toBe(true);
     const dialog = container.querySelector("[data-test-dialog]")!;
     expect(dialog.getAttribute("aria-label")).toBe("New card");
     expect(dialog.getAttribute("aria-description")).toContain("Queue work");
@@ -1363,7 +1421,10 @@ describe("renderWorkboard", () => {
     for (const tab of ["Overview", "Session"]) {
       textButton(container.querySelector('[role="tablist"]')!, tab).click();
       renderView();
-      const panel = element(container, ".workboard-detail__tabpanel:not([hidden])");
+      const panel = expectDefined(
+        container.querySelector<HTMLElement>(".workboard-detail__tabpanel:not([hidden])"),
+        ".workboard-detail__tabpanel:not([hidden])",
+      );
       expect(panel.querySelector(".workboard-detail__session-name")?.textContent).toContain(
         "Release review",
       );
@@ -1388,13 +1449,16 @@ describe("renderWorkboard", () => {
     });
     state.cards = [createWorkboardCard({ status: "todo", sessionKey: "agent:main:queued" })];
     renderView();
-    const status = element<
-      LitElement & {
-        presentation: {
-          label: string;
-        };
-      }
-    >(container, "openclaw-workboard-session-status");
+    const status = expectDefined(
+      container.querySelector<
+        LitElement & {
+          presentation: {
+            label: string;
+          };
+        }
+      >("openclaw-workboard-session-status"),
+      "openclaw-workboard-session-status",
+    );
     expect(status.presentation.label).toBe("Queued");
     expect(container.querySelector(".workboard-card__session-marker")).toBeNull();
     expect(
@@ -1404,8 +1468,14 @@ describe("renderWorkboard", () => {
       "Session",
     );
     await status.updateComplete;
-    const trigger = element<HTMLButtonElement>(status, ".workboard-session-status__trigger");
-    const panel = element<HTMLElement>(status, ".workboard-session-status__popover");
+    const trigger = expectDefined(
+      status.querySelector<HTMLButtonElement>(".workboard-session-status__trigger"),
+      ".workboard-session-status__trigger",
+    );
+    const panel = expectDefined(
+      status.querySelector<HTMLElement>(".workboard-session-status__popover"),
+      ".workboard-session-status__popover",
+    );
     if (typeof panel.showPopover !== "function") {
       Object.defineProperty(panel, "showPopover", { configurable: true, value: vi.fn() });
     }
@@ -1611,7 +1681,10 @@ describe("renderWorkboard", () => {
     renderView();
     textButton(container, "New card").click();
     renderView();
-    const title = element<HTMLInputElement>(container, ".workboard-draft__title");
+    const title = expectDefined(
+      container.querySelector<HTMLInputElement>(".workboard-draft__title"),
+      ".workboard-draft__title",
+    );
     title.value = created.title;
     title.dispatchEvent(new InputEvent("input", { bubbles: true }));
     container
@@ -1656,7 +1729,10 @@ describe("renderWorkboard", () => {
     template.click();
     renderView();
     for (const [selector, value] of fields) {
-      const input = element<HTMLInputElement | HTMLTextAreaElement>(container, selector);
+      const input = expectDefined(
+        container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector),
+        selector,
+      );
       expect(input.value).toBe(value);
       input.value = `Edited ${value}`;
       input.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -1771,8 +1847,8 @@ describe("renderWorkboard", () => {
       "No recent activity.",
     );
     expect(container.textContent).not.toContain("Archived task");
-    const archivedToggle = element<HTMLInputElement>(
-      container,
+    const archivedToggle = expectDefined(
+      container.querySelector<HTMLInputElement>('.workboard-filter-archived input[role="switch"]'),
       '.workboard-filter-archived input[role="switch"]',
     );
     archivedToggle.checked = true;
@@ -1899,8 +1975,8 @@ describe("renderWorkboard", () => {
     state.cards = [createWorkboardCard({ title: "Assign me", agentId: "workboard-dispatcher" })];
     renderView();
     const draft = container.querySelector<HTMLElement>(".workboard-draft");
-    const agentSelect = element<AgentPicker>(
-      draft,
+    const agentSelect = expectDefined(
+      draft?.querySelector<AgentPicker>(".workboard-agent-select [data-test-agent-picker]"),
       ".workboard-agent-select [data-test-agent-picker]",
     );
     expect(agentSelect?.options.map((option) => option.label)).toEqual([
@@ -1934,8 +2010,10 @@ describe("renderWorkboard", () => {
     state.cards = [card];
     state.detailCardId = card.id;
     renderView();
-    const picker = element<AgentPicker>(
-      container,
+    const picker = expectDefined(
+      container.querySelector<AgentPicker>(
+        ".workboard-detail__agent-picker [data-test-agent-picker]",
+      ),
       ".workboard-detail__agent-picker [data-test-agent-picker]",
     );
     expect(picker.options.find((option) => option.value === "")).toMatchObject({
@@ -2013,7 +2091,10 @@ describe("renderWorkboard", () => {
     state.detailCardId = archivedCard.id;
     renderView();
     const drawer = container.querySelector<HTMLElement>(".workboard-detail");
-    await element<LitElement>(drawer, "workboard-inline-text").updateComplete;
+    await expectDefined(
+      drawer?.querySelector<LitElement>("workboard-inline-text"),
+      "workboard-inline-text",
+    ).updateComplete;
     expect(drawer?.textContent).toContain(archivedCard.title);
     expect(drawer?.querySelector(".workboard-card__move-select")).toBeNull();
     expect(buttonByLabel(drawer!, "Restore from archive")).not.toBeNull();
@@ -2266,7 +2347,9 @@ describe("renderWorkboard", () => {
       if (dismiss !== "none") {
         await waitForFast(() => expect(trigger.disabled).toBe(false));
         trigger.click();
-        input = await waitForFast(() => element<HTMLInputElement>(owner, "input"));
+        input = await waitForFast(() =>
+          expectDefined(owner.querySelector<HTMLInputElement>("input"), "input"),
+        );
       }
       await waitForFast(() => expect(input.readOnly).toBe(true));
       expect(input.disabled).toBe(false);
@@ -2280,7 +2363,10 @@ describe("renderWorkboard", () => {
         new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
       );
       expect(client.request).not.toHaveBeenCalled();
-      const close = element<HTMLButtonElement>(container, ".workboard-detail__close");
+      const close = expectDefined(
+        container.querySelector<HTMLButtonElement>(".workboard-detail__close"),
+        ".workboard-detail__close",
+      );
       close.click();
       expect(state.detailCardId).toBe(card.id);
       expect(input.isConnected).toBe(true);
@@ -2355,8 +2441,10 @@ describe("renderWorkboard", () => {
       state.detailCardId = card.id;
       renderView();
       const propertyOption = (value: string) =>
-        element<HTMLInputElement>(
-          container,
+        expectDefined(
+          container.querySelector<HTMLInputElement>(
+            `[name="workboard-detail-${field}-${card.id}"][value="${value}"]`,
+          ),
           `[name="workboard-detail-${field}-${card.id}"][value="${value}"]`,
         );
       propertyOption(next).click();
@@ -2404,8 +2492,8 @@ describe("renderWorkboard", () => {
     state.cards = [card];
     state.detailCardId = card.id;
     renderView();
-    const link = element<HTMLAnchorElement>(
-      container,
+    const link = expectDefined(
+      container.querySelector<HTMLAnchorElement>('.workboard-detail a[href*="/automations?job="]'),
       '.workboard-detail a[href*="/automations?job="]',
     );
     const allowed: boolean[] = [];
@@ -2418,11 +2506,17 @@ describe("renderWorkboard", () => {
     click();
     expect(allowed).toEqual([true]);
     const trigger = await waitForFast(() =>
-      element<HTMLButtonElement>(container, ".workboard-detail__text-trigger--title"),
+      expectDefined(
+        container.querySelector<HTMLButtonElement>(".workboard-detail__text-trigger--title"),
+        ".workboard-detail__text-trigger--title",
+      ),
     );
     trigger.click();
     const input = await waitForFast(() =>
-      element<HTMLInputElement>(container, ".workboard-detail__text-editor--title input"),
+      expectDefined(
+        container.querySelector<HTMLInputElement>(".workboard-detail__text-editor--title input"),
+        ".workboard-detail__text-editor--title input",
+      ),
     );
     input.value = "Unsaved title";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -2463,18 +2557,21 @@ describe("renderWorkboard", () => {
     await waitForFast(() =>
       expect(container.querySelector(".workboard-detail__labels-popover")).not.toBeNull(),
     );
-    const popup = element<HTMLElement>(container, ".workboard-detail__labels-popover");
+    const popup = expectDefined(
+      container.querySelector<HTMLElement>(".workboard-detail__labels-popover"),
+      ".workboard-detail__labels-popover",
+    );
     // Native top-layer geometry is covered in the browser; this suite covers editor ownership.
     popup.showPopover = vi.fn();
-    const trigger = element<HTMLButtonElement>(
-      container,
+    const trigger = expectDefined(
+      container.querySelector<HTMLButtonElement>(".workboard-detail__text-trigger--labels"),
       ".workboard-detail__text-trigger--labels",
     );
     trigger.click();
     await waitForFast(() => expect(popup.querySelector("input")).not.toBeNull());
     expect(trigger.isConnected).toBe(true);
     expect(trigger.textContent).toContain("review");
-    const input = element<HTMLInputElement>(popup, "input");
+    const input = expectDefined(popup.querySelector<HTMLInputElement>("input"), "input");
     input.value = " review, quality, review ";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     buttonByText(popup, "Save")!.click();
@@ -2558,8 +2655,10 @@ describe("renderWorkboard", () => {
       "Renamed",
     );
     expect(state.editingCardBase?.updatedAt).toBe(2);
-    const priority = element<HTMLInputElement>(
-      container,
+    const priority = expectDefined(
+      container.querySelector<HTMLInputElement>(
+        '.workboard-draft input[name="priority"][value="high"]',
+      ),
       '.workboard-draft input[name="priority"][value="high"]',
     );
     priority.click();
@@ -2644,7 +2743,10 @@ describe("renderWorkboard", () => {
       await waitForFast(() =>
         expect(errorToast.shadowRoot?.querySelector('[role="alert"]')).not.toBeNull(),
       );
-      const alert = element(errorToast.shadowRoot, '[role="alert"]');
+      const alert = expectDefined(
+        errorToast.shadowRoot?.querySelector<HTMLElement>('[role="alert"]'),
+        '[role="alert"]',
+      );
       expect(alert.textContent).toContain(message);
       expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(errorToast.closest('[inert], [aria-hidden="true"]')).toBeNull();
@@ -2700,7 +2802,10 @@ describe("renderWorkboard", () => {
     await waitForFast(() =>
       expect(errorToast.shadowRoot?.querySelector('[role="alert"]')).not.toBeNull(),
     );
-    const alert = element(errorToast.shadowRoot, '[role="alert"]');
+    const alert = expectDefined(
+      errorToast.shadowRoot?.querySelector<HTMLElement>('[role="alert"]'),
+      '[role="alert"]',
+    );
     expect(alert.textContent).toContain("Note unavailable");
     expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
     expect(errorToast.closest('[inert], [aria-hidden="true"]')).toBeNull();
@@ -2728,7 +2833,10 @@ describe("renderWorkboard", () => {
     renderView();
     state.detailTab = "activity";
     renderView();
-    const note = element<HTMLTextAreaElement>(container, ".workboard-detail__note");
+    const note = expectDefined(
+      container.querySelector<HTMLTextAreaElement>(".workboard-detail__note"),
+      ".workboard-detail__note",
+    );
     note.value = ` ${comment.body} `;
     note.dispatchEvent(new InputEvent("input", { bubbles: true }));
     renderView();
@@ -2776,14 +2884,20 @@ describe("renderWorkboard", () => {
       renderView();
     };
     const typeNote = () => {
-      const input = element<HTMLTextAreaElement>(container, ".workboard-comments__input");
+      const input = expectDefined(
+        container.querySelector<HTMLTextAreaElement>(".workboard-comments__input"),
+        ".workboard-comments__input",
+      );
       input.value = body;
       input.dispatchEvent(new InputEvent("input", { bubbles: true }));
       return input;
     };
     editCard(first.title);
     typeNote();
-    element<HTMLButtonElement>(container, ".workboard-comments__submit").click();
+    expectDefined(
+      container.querySelector<HTMLButtonElement>(".workboard-comments__submit"),
+      ".workboard-comments__submit",
+    ).click();
     renderView();
     requireButton(container, "Cancel").click();
     renderView();
