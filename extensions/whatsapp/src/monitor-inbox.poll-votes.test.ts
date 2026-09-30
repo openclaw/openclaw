@@ -384,6 +384,7 @@ describe("web monitor inbox poll vote hook", () => {
       ],
     });
 
+    await waitForMessageCalls(onMessage, 1);
     await waitForInboundWorkDrained();
 
     expect(maybeEmitWhatsAppPollVoteReceivedHookMock).toHaveBeenCalledWith(
