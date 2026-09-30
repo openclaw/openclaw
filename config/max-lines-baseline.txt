@@ -464,7 +464,6 @@ src/flows/doctor-core-checks.runtime.test.ts
 src/flows/doctor-core-checks.ts
 src/flows/doctor-health-contributions.test.ts
 src/flows/model-picker.ts
-src/gateway/auth.test.ts
 src/gateway/call.test.ts
 src/gateway/call.ts
 src/gateway/cli-session-history.test.ts
