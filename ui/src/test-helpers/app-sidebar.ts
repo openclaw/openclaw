@@ -63,8 +63,7 @@ export type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   connectionStatus: GatewayStatus | null;
   lastError: string | null;
-  outboxAttentionCountForSession: (sessionKey: string) => number;
-  hasSessionDraft: (sessionKey: string) => boolean;
+  storedOutboxes: AppSidebarSessionNavigationElement["storedOutboxes"];
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
@@ -242,9 +241,11 @@ export function successfulSessionPatch(key: string) {
 
 export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
+  let revision = 0;
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const notify = () => {
+    revision += 1;
     for (const listener of listeners) {
       listener(state);
     }
@@ -330,6 +331,9 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     return assigned;
   });
   const sessions = {
+    get revision() {
+      return revision;
+    },
     get state() {
       return state;
     },
@@ -580,7 +584,7 @@ export function createContext(
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },
-      subscribe: () => () => undefined,
+      subscribe: vi.fn<ApplicationOverlays["subscribe"]>(() => () => undefined),
     } as unknown as ApplicationOverlays,
   } as unknown as ApplicationContext;
 }

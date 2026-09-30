@@ -180,18 +180,10 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
   const activeGatewayWorkAdmission = params.getGatewayWorkAdmission();
-  if (!activeGatewayWorkAdmission) {
-    params.io.emitAcceptance([
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "agent run admission failed"),
-    ]);
-    return undefined;
-  }
-  const activeRunAbort = params.getAdmittedRunAbort();
-  if (!activeRunAbort || !operationalRunInstance) {
+  const activeRunAbort = activeGatewayWorkAdmission ? params.getAdmittedRunAbort() : undefined;
+  if (!activeGatewayWorkAdmission || !activeRunAbort || !operationalRunInstance) {
     activeRunAbort?.cleanup();
-    activeGatewayWorkAdmission.release();
+    activeGatewayWorkAdmission?.release();
     params.io.emitAcceptance([
       false,
       undefined,

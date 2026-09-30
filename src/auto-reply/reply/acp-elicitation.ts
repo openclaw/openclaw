@@ -97,10 +97,7 @@ function readScope(
       ...(toolCallId === undefined ? {} : { toolCallId: normalizedToolCallId ?? null }),
     };
   }
-  if (requestId === null) {
-    return { requestId };
-  }
-  if (typeof requestId === "number") {
+  if (requestId === null || typeof requestId === "number") {
     return { requestId };
   }
   const normalizedRequestId = readCorrelationText(requestId);

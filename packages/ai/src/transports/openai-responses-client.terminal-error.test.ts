@@ -3,7 +3,8 @@
 // the generic string is classified as a transient timeout by failover and
 // triggers pointless model rotation.
 import type { Model } from "@openclaw/llm-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
@@ -52,6 +53,14 @@ const model = {
   contextWindow: 200_000,
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
+
+const initialHost = getAiTransportHost();
+const logWarn = vi.fn();
+beforeEach(() => {
+  logWarn.mockClear();
+  configureAiTransportHost({ logWarn });
+});
+afterEach(() => configureAiTransportHost(initialHost));
 
 describe("managed Responses transport terminal errors", () => {
   it.each(
@@ -278,6 +287,7 @@ describe("managed Responses transport terminal errors", () => {
                 ? "error"
                 : "toolUse",
           incompleteReason: "max_output_tokens",
+          incompleteToolCallId: "call_truncated|fc_truncated",
           endTurn: "absent",
         },
       });
@@ -351,10 +361,21 @@ describe("managed Responses transport terminal errors", () => {
           stopReason: reason === "content_filter" ? "error" : "length",
           incompleteReason:
             reason === undefined || reason === "provider-private-reason" ? "unknown" : reason,
+          ...(activeTool ? { incompleteToolCallId: "call_filtered|fc_filtered" } : {}),
           endTurn: "absent",
         },
       });
       expect(JSON.stringify(result.diagnostics)).not.toContain("provider-private-reason");
+      if (result.stopReason === "error") {
+        expect(logWarn).toHaveBeenCalledWith(
+          "openai-transport",
+          expect.stringContaining(
+            `incompleteReason=${reason === undefined || reason === "provider-private-reason" ? "unknown" : reason}`,
+          ),
+          undefined,
+        );
+        expect(JSON.stringify(logWarn.mock.calls)).not.toContain("provider-private-reason");
+      }
     },
   );
 });

@@ -26,4 +26,13 @@ export const memoryCpuProcessEntrypoints = {
       distWorkerPath: "src/memory/manager-publication.worker.js",
     },
   },
+  standingIntents: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../standing-intents.worker",
+    distWorkerPath: "extensions/memory-core/standing-intents.worker.js",
+    package: {
+      name: "@openclaw/memory-core",
+      distWorkerPath: "src/standing-intents.worker.js",
+    },
+  },
 } as const;

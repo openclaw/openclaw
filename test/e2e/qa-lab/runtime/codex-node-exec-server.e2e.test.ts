@@ -454,7 +454,9 @@ describe("Codex paired-device exec-server carrier", () => {
       const nodeTmp = path.join(nodeRoot, "tmp");
       const nodeConfigPath = path.join(nodeRoot, "openclaw.json");
       await Promise.all(
-        [nodeHome, nodeState, nodeTmp].map(async (dir) => await fs.mkdir(dir, { recursive: true })),
+        [nodeHome, nodeState, nodeTmp].map(
+          async (dir) => await fs.mkdir(dir, { recursive: true, mode: 0o700 }),
+        ),
       );
 
       let provider: ProofProvider | undefined;

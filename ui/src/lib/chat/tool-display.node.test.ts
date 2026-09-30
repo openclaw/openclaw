@@ -1,9 +1,23 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest";
+import { resolveToolDisplayIcon } from "./tool-display-icon.ts";
 import { formatToolDetail, resolveEmbedSandbox, resolveToolDisplay } from "./tool-display.ts";
 
 describe("tool display", () => {
+  it("shares semantic icons across compact and full tool displays", () => {
+    for (const { name, icon } of [
+      { name: " EXEC ", icon: "squareTerminal" },
+      { name: "web_search", icon: "search" },
+      { name: "read", icon: "fileText" },
+      { name: "unknown_tool", icon: "puzzle" },
+      { name: "constructor", icon: "puzzle" },
+    ]) {
+      expect(resolveToolDisplayIcon(name)).toBe(icon);
+      expect(resolveToolDisplay({ name }).icon).toBe(icon);
+    }
+  });
+
   it.each([
     {
       name: "trimmed action with a false first detail",

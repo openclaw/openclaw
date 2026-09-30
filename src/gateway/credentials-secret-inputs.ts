@@ -14,9 +14,6 @@ import {
   trimToUndefined,
   type ExplicitGatewayAuth,
   type GatewayCredentialMode,
-  type GatewayCredentialPrecedence,
-  type GatewayRemoteCredentialFallback,
-  type GatewayRemoteCredentialPrecedence,
 } from "./credentials.js";
 import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
@@ -27,18 +24,11 @@ import {
   type SupportedGatewaySecretInputPath,
 } from "./secret-input-paths.js";
 
-type GatewayCredentialSecretInputOptions = {
+type GatewayCredentialSecretInputOptions = Omit<
+  Parameters<typeof resolveGatewayCredentialsFromConfig>[0],
+  "cfg"
+> & {
   config: OpenClawConfig;
-  explicitAuth?: ExplicitGatewayAuth;
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-  env?: NodeJS.ProcessEnv;
-  modeOverride?: GatewayCredentialMode;
-  localPrecedence?: GatewayCredentialPrecedence;
-  remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
-  remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
-  remoteTokenFallback?: GatewayRemoteCredentialFallback;
-  remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
 /** Internal options after explicit auth has been trimmed to real credential values. */

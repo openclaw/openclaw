@@ -23,8 +23,15 @@ import {
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner-types.js";
 import { buildPluginLoaderAliasMap } from "../src/plugins/sdk-alias.js";
+import { sessionActivityTimestamp } from "../src/shared/session-activity-timestamp.js";
 import { buildNewAgentWelcome } from "../src/system-agent/new-agent-welcome.js";
-import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
+import type {
+  GatewaySessionRow,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../ui/src/api/types.ts";
+import { activityPulseBoundaries } from "../ui/src/pages/activity/activity-pulse-window.ts";
+import type { ActivityTimeFilter } from "../ui/src/pages/activity/session-activity.ts";
 import {
   controlUiSessionPath,
   createControlUiMockBootstrapConfig,
@@ -1722,18 +1729,48 @@ async function createChatPickerScenario(
     fixture === "workboard-states",
   );
   const activityTime = Date.now();
-  const activityDate = new Date(activityTime);
-  const activitySince = new Date(
-    activityDate.getFullYear(),
-    activityDate.getMonth(),
-    activityDate.getDate(),
-  ).getTime();
-  const activityUntil = new Date(
-    activityDate.getFullYear(),
-    activityDate.getMonth(),
-    activityDate.getDate() + 1,
-  ).getTime();
-  const activitySessions = buildActivitySessionRows(activityTime);
+  const activitySessions: Array<
+    ReturnType<typeof sessionRow> & Pick<GatewaySessionRow, "createdAt" | "owner" | "participants">
+  > = buildActivitySessionRows(activityTime);
+  function activitySessionsListResponse(time: ActivityTimeFilter, minutes?: number) {
+    const cutoff = minutes === undefined ? undefined : activityTime - minutes * 60_000;
+    const rows = activitySessions.filter(
+      (row) => cutoff === undefined || sessionActivityTimestamp(row) >= cutoff,
+    );
+    const boundaries = activityPulseBoundaries(time, activityTime);
+    const people = new Set(
+      rows.flatMap((row) => {
+        const ownerId = row.owner?.actor.id;
+        return [
+          ...(ownerId ? [ownerId] : []),
+          ...(row.participants ?? []).map((participant) => participant.identity.id),
+        ];
+      }),
+    );
+    return {
+      ...pagedSessionsListResponse(rows, 0, MOCK_SESSION_OWNERS),
+      activityPulse: {
+        since: boundaries[0]!,
+        until: boundaries[boundaries.length - 1]!,
+        buckets: boundaries.slice(0, -1).map(
+          (start, index) =>
+            rows.filter((row) => {
+              const timestamp = sessionActivityTimestamp(row);
+              return timestamp >= start && timestamp < boundaries[index + 1]!;
+            }).length,
+        ),
+        sessions: rows.length,
+        ...(cutoff === undefined
+          ? {}
+          : {
+              started: rows.filter((row) => row.createdAt !== undefined && row.createdAt >= cutoff)
+                .length,
+            }),
+        people: people.size,
+        running: rows.filter((row) => row.hasActiveRun).length,
+      },
+    };
+  }
   const dashboardGallerySessions =
     fixture === "dashboards"
       ? (
@@ -3115,28 +3152,19 @@ async function createChatPickerScenario(
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
+          ...(
+            [
+              ["24h", 1440],
+              ["7d", 10080],
+              ["30d", 43200],
+            ] as const
+          ).map(([time, activeMinutes]) => ({
+            match: { includePeople: true, sortBy: "activity", activeMinutes },
+            response: activitySessionsListResponse(time, activeMinutes),
+          })),
           {
             match: { includePeople: true, sortBy: "activity" },
-            response: {
-              ...pagedSessionsListResponse(activitySessions, 0, MOCK_SESSION_OWNERS),
-              activityPulse: {
-                since: activitySince,
-                until: activityUntil,
-                hours: Array.from(
-                  { length: Math.ceil((activityUntil - activitySince) / 3_600_000) },
-                  (_, hour) =>
-                    hour === 10
-                      ? 12
-                      : hour === Math.floor((activityTime - activitySince) / 3_600_000)
-                        ? 4
-                        : 0,
-                ),
-                sessions: 38,
-                started: 12,
-                people: 6,
-                running: 3,
-              },
-            },
+            response: activitySessionsListResponse("all"),
           },
           ...buildSessionListCases(
             fixture === "sidebar-roster" ? sessions : [...sessions, ...archivedSessions],

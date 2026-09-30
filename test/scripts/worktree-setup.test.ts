@@ -69,8 +69,9 @@ function makePreparationFixture() {
     fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
   ).packageManager;
   json("package.json", { name: "openclaw", type: "module", packageManager: pin });
-  write("pnpm-workspace.yaml", "packages:\n  - .\n  - packages/*\n  - extensions/*\n");
+  write("pnpm-workspace.yaml", "packages:\n  - .\n  - packages/*\n  - extensions/*\n  - ui\n");
   write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+  json("ui/package.json", { name: "openclaw-control-ui", version: "0.0.0" });
   json("packages/support/package.json", { name: "@openclaw/support", version: "0.0.0" });
   json("extensions/isolated/package.json", {
     name: "@openclaw/isolated",
@@ -190,6 +191,7 @@ function makePreparationFixture() {
       "dist",
       "packages/support/node_modules",
       "extensions/isolated/node_modules",
+      "ui/node_modules",
       "apps/android/build",
     ]) {
       expect(fs.existsSync(path.join(rootDir, relative)), relative).toBe(false);
@@ -283,7 +285,7 @@ describe("explicit preparation input closure", () => {
     expect(entries.length).toBeGreaterThan(0);
     expect(buildHooks.length).toBeGreaterThan(0);
     expect(copyHooks.length).toBeGreaterThan(0);
-    const expected = new Set([pkg.name + "...", "./packages/*..."]);
+    const expected = new Set([pkg.name + "...", "./packages/*...", "./ui..."]);
     for (const entry of entries) {
       if (entry.hasPackageJson) {
         expected.add("./extensions/" + entry.id + "...");
@@ -325,6 +327,8 @@ describe("explicit preparation input closure", () => {
         "--filter",
         "./packages/*...",
         "--filter",
+        "./ui...",
+        "--filter",
         "openclaw...",
         "install",
         "--frozen-lockfile",
@@ -341,7 +345,7 @@ describe("explicit preparation input closure", () => {
     fixture.assertNoOutputs();
   });
 
-  it("accepts complete gateway cones, rejects sparse full, and preserves explicit native expansion", () => {
+  it("accepts gateway cones without ui, rejects sparse full, and preserves explicit native expansion", () => {
     const fixture = makePreparationFixture();
     fixture.git(
       "sparse-checkout",
@@ -354,9 +358,11 @@ describe("explicit preparation input closure", () => {
       ".openclaw/worktree-profiles",
     );
     expect(fs.existsSync(path.join(fixture.rootDir, "apps/android/build.gradle.kts"))).toBe(false);
+    expect(fs.existsSync(path.join(fixture.rootDir, "ui/package.json"))).toBe(false);
     const gateway = fixture.run(["gateway", "--plan"]);
     expect(gateway.status, gateway.stderr).toBe(0);
     expect(JSON.parse(gateway.stdout).requiredInputs.sparse).toBe(true);
+    expect(JSON.parse(gateway.stdout).install.args).not.toContain("./ui...");
     const patternsBefore = fixture.git("sparse-checkout", "list");
     for (const args of [["full"], ["full", "--plan"]]) {
       const result = fixture.run(args);

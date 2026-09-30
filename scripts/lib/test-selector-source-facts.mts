@@ -95,7 +95,9 @@ function sourceTokens(source: string): {
     let functionBody: boolean | undefined;
     while (offset < source.length) {
       const char = source[offset]!;
-      if (/\s/u.test(char)) {
+      const code = source.charCodeAt(offset);
+      // Keep Unicode whitespace while avoiding a regexp for the common ASCII tokens.
+      if (code === 32 || (code >= 9 && code <= 13) || (code > 127 && /\s/u.test(char))) {
         whitespace.lastIndex = offset;
         whitespace.exec(source);
         offset = whitespace.lastIndex;
@@ -147,12 +149,13 @@ function sourceTokens(source: string): {
       // skip escaped characters and character classes through the closing slash.
       const previous = tokens.at(-1);
       const startsExpression =
-        !previous ||
-        (!previous.literal &&
-          (previous.statementEnd ||
-            /^(?:[=(:,;!&|?{[+*%<>^~/-]|=>|return|throw|case|yield|await|typeof|void|delete|in|instanceof|of|else|do)$/u.test(
-              previous.value,
-            )));
+        (char === "/" || char === "<") &&
+        (!previous ||
+          (!previous.literal &&
+            (previous.statementEnd ||
+              /^(?:[=(:,;!&|?{[+*%<>^~/-]|=>|return|throw|case|yield|await|typeof|void|delete|in|instanceof|of|else|do)$/u.test(
+                previous.value,
+              ))));
       if (char === "<" && (startsExpression || previous?.value === "default")) {
         // JSX text and closing tags can hide imports behind apparent comments or regexps.
         jsxStart.lastIndex = offset;
@@ -238,7 +241,13 @@ function sourceTokens(source: string): {
           classes.pop();
         }
       }
-      if (/[\w$]/u.test(char)) {
+      if (
+        (code >= 65 && code <= 90) ||
+        (code >= 97 && code <= 122) ||
+        (code >= 48 && code <= 57) ||
+        code === 95 ||
+        code === 36
+      ) {
         const start = offset;
         word.lastIndex = offset;
         word.exec(source);

@@ -123,6 +123,7 @@ export function createSessionCapability(
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
   const thinkingClaims = createSessionThinkingClaims(gateway, () => roster.requestRevision);
+  let publicationRevision = 0;
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
   let hydratedSelfUserId: string | null = null;
@@ -131,6 +132,7 @@ export function createSessionCapability(
   let publishedErrorSource: "session-observer" | "operation" | null = null;
 
   const notifySubscribers = () => {
+    publicationRevision += 1;
     for (const listener of listeners) {
       listener(state);
     }
@@ -609,6 +611,9 @@ export function createSessionCapability(
   });
 
   return {
+    get revision() {
+      return publicationRevision;
+    },
     get state() {
       return state;
     },

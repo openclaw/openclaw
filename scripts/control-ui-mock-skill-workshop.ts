@@ -110,7 +110,7 @@ export function buildSkillWorkshopMocks(baseTime: number) {
           skillKey: proposal.skillKey,
           description: proposal.description,
         })),
-    },
+    } satisfies SkillsProposalsListResult,
     inspect: {
       cases: proposals.map((proposal) => ({
         match: { proposalId: proposal.id },
@@ -165,15 +165,12 @@ function installSkillWorkshopMock(seed: ReturnType<typeof buildSkillWorkshopMock
     gateway.setRequestHandler(
       method === "read" ? "skills.workshop.read" : `skills.proposals.${method}`,
       ({ params: input, respond }) => {
+        const reject = (message: string) =>
+          respond({ __mockError: { code: "INVALID_REQUEST", message } });
         if (method === "historyStatus" || method === "historyScan") {
-          respond({
-            __mockError: {
-              code: "INVALID_REQUEST",
-              message:
-                "Historical batch scans are retired. Start a learning session from Workshop to review past conversations.",
-            },
-          });
-          return;
+          return reject(
+            "Historical batch scans are retired. Start a learning session from Workshop to review past conversations.",
+          );
         }
         const params = (input ?? {}) as {
           agentId?: string;
@@ -185,10 +182,7 @@ function installSkillWorkshopMock(seed: ReturnType<typeof buildSkillWorkshopMock
         let scope = scopes.get(agentId);
         if (!scope) {
           scope = {
-            list: {
-              ...structuredClone(seed.list),
-              schema: "openclaw.skill-workshop.proposals-manifest.v1",
-            },
+            list: structuredClone(seed.list),
             details: new Map(
               seed.inspect.cases.map((entry) => [
                 entry.match.proposalId,
@@ -211,36 +205,25 @@ function installSkillWorkshopMock(seed: ReturnType<typeof buildSkillWorkshopMock
                 candidate.record.status === "applied" &&
                 candidate.record.target.skillKey === installed.skillKey,
             );
-          respond(
-            installed && detail
-              ? { ...installed, content: detail.content }
-              : {
-                  __mockError: {
-                    code: "INVALID_REQUEST",
-                    message: "Mock Workshop skill not found.",
-                  },
-                },
-          );
+          if (!installed || !detail) {
+            return reject("Mock Workshop skill not found.");
+          }
+          respond({ ...installed, content: detail.content });
           return;
         }
         const detail = params.proposalId ? scope.details.get(params.proposalId) : undefined;
-        const reject = (message: string) =>
-          respond({ __mockError: { code: "INVALID_REQUEST", message } });
         if (!detail) {
-          reject("Unknown mock proposal; refresh the Workshop.");
-          return;
+          return reject("Unknown mock proposal; refresh the Workshop.");
         }
         if (method === "inspect") {
           respond(detail);
           return;
         }
         if (detail.record.status !== "pending") {
-          reject("Only pending proposals can be evaluated, applied, or rejected.");
-          return;
+          return reject("Only pending proposals can be evaluated, applied, or rejected.");
         }
         if (params.expectedRevisionHash && params.expectedRevisionHash !== detail.revisionHash) {
-          reject("The proposal revision changed; refresh the proposal before retrying.");
-          return;
+          return reject("The proposal revision changed; refresh the proposal before retrying.");
         }
         const now = new Date().toISOString();
         detail.record.updatedAt = now;

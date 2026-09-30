@@ -13,11 +13,6 @@ export type DiagnosticRepeatedRequestActivity = {
 
 let mutationSequence = 0;
 
-function nextMutationSequence(): number {
-  mutationSequence += 1;
-  return mutationSequence;
-}
-
 export function recordRepeatedRequestObservation(
   activity: DiagnosticRepeatedRequestActivity,
   owners: Iterable<RepeatedRequestOwner>,
@@ -42,7 +37,7 @@ export function recordRepeatedRequestObservation(
   } else {
     activity.repeatedRequestCount = (activity.repeatedRequestCount ?? 0) + 1;
   }
-  activity.repeatedRequestMutationSequence = nextMutationSequence();
+  activity.repeatedRequestMutationSequence = ++mutationSequence;
 }
 
 export function clearRepeatedRequestActivity(
@@ -63,7 +58,7 @@ export function clearRepeatedRequestActivity(
   activity.repeatedRequestOwnerRunId = undefined;
   activity.repeatedRequestFirstStartedAt = undefined;
   activity.repeatedRequestCount = undefined;
-  activity.repeatedRequestMutationSequence = nextMutationSequence();
+  activity.repeatedRequestMutationSequence = ++mutationSequence;
   return cleared;
 }
 
