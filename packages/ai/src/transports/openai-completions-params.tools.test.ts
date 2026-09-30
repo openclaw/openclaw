@@ -58,7 +58,7 @@ const brokenTool: Tool = {
 };
 
 describe("OpenAI completions compatibility and tools", () => {
-  it("uses proxy defaults and automatic tool choice without native-only fields", () => {
+  it("keeps implicit tool choice limited to proxy endpoints", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({ provider: "custom-cpa", baseUrl: "https://proxy.example.com/v1" }),
       toolContext(),
@@ -70,6 +70,10 @@ describe("OpenAI completions compatibility and tools", () => {
     expect(params).not.toHaveProperty("store");
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
     expect(params.tool_choice).toBe("auto");
+
+    const nativeParams = buildOpenAICompletionsParams(native, toolContext(), undefined);
+    expect(nativeParams.tools).toHaveLength(1);
+    expect(nativeParams).not.toHaveProperty("tool_choice");
   });
 
   it("honors streaming usage opt-out on the Moonshot default route", () => {
