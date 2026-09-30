@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
 
 export type SandboxHostCsp = {
   connectDomains?: string[];
@@ -163,23 +164,16 @@ export function normalizeSandboxHostCsp(value: unknown): SandboxHostCsp | undefi
   return csp;
 }
 
-function encodeCsp(csp?: SandboxHostCsp): string | undefined {
-  const normalized = normalizeSandboxHostCsp(csp);
-  if (!normalized) {
-    return undefined;
-  }
-  return Buffer.from(JSON.stringify(normalized), "utf8").toString("base64url");
-}
-
 export function buildSandboxHostPath(csp?: SandboxHostCsp): string {
   const normalized = normalizeSandboxHostCsp(csp);
-  const encoded = encodeCsp(normalized);
-  const { version } = buildSandboxHostDocument(normalized);
   const query = new URLSearchParams();
-  if (encoded) {
-    query.set(SANDBOX_HOST_CSP_QUERY, encoded);
+  if (normalized) {
+    query.set(
+      SANDBOX_HOST_CSP_QUERY,
+      Buffer.from(JSON.stringify(normalized)).toString("base64url"),
+    );
   }
-  query.set("v", version);
+  query.set("v", buildSandboxHostDocument(normalized).version);
   return `${SANDBOX_HOST_PATH}?${query}`;
 }
 
@@ -219,7 +213,7 @@ export function resolveSandboxHostPort(gatewayPort: number, configuredPort?: num
 
 // Malformed input must throw: the gateway sandbox endpoint relies on it to fail
 // closed with 400 instead of serving proxy HTML under a default policy. That
-// includes valid JSON that is not a usable CSP — encodeCsp omits the query
+// includes valid JSON that is not a usable CSP — buildSandboxHostPath omits the query
 // param entirely in that case, so a present-but-empty value is never legitimate.
 export function decodeSandboxHostCsp(value: string | null): SandboxHostCsp | undefined {
   if (value === null) {
@@ -316,6 +310,15 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
         return;
       }
       if (typeof event.data?.method === "string" && event.data.method.startsWith("ui/notifications/sandbox-")) return;
+      // A frame whose root color-scheme differs from its embedding element gets
+      // an opaque UA canvas. Follow the host theme (widget theme messages, or
+      // MCP host context from ui/initialize and later changes) so this shell
+      // and the themed document both stay transparent.
+      const data = event.data;
+      const theme = data?.type === ${JSON.stringify(WIDGET_THEME_MESSAGE_TYPE)} ? data.mode
+        : data?.method === "ui/notifications/host-context-changed" ? data.params?.theme
+        : data?.result?.hostContext?.theme;
+      if (theme === "light" || theme === "dark") document.documentElement.style.colorScheme = theme;
       inner.contentWindow?.postMessage(event.data, "*");
       return;
     }

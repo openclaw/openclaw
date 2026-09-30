@@ -16,11 +16,6 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS } from "./operator-approval-store.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 
-// The walker cap must never exceed the store cap: insertOperatorApproval
-// throws past OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS, which would fail
-// every deep-lineage approval request. Deriving keeps them in lockstep.
-const MAX_APPROVAL_AUDIENCE_SESSIONS = OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS;
-
 type SubagentApprovalLineage = {
   controllerSessionKey?: string | null;
   requesterSessionKey?: string | null;
@@ -59,11 +54,14 @@ function resolveApprovalSessionAudienceFromSources(params: {
     return [];
   }
 
-  const audience: string[] = [];
   const queued = new Set<string>([sourceSessionKey]);
   const pending = [sourceSessionKey];
   const enqueue = (sessionKey: string | null) => {
-    if (!sessionKey || queued.has(sessionKey) || pending.length >= MAX_APPROVAL_AUDIENCE_SESSIONS) {
+    if (
+      !sessionKey ||
+      queued.has(sessionKey) ||
+      pending.length >= OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS
+    ) {
       return;
     }
     queued.add(sessionKey);
@@ -71,22 +69,13 @@ function resolveApprovalSessionAudienceFromSources(params: {
   };
 
   for (const sessionKey of pending) {
-    audience.push(sessionKey);
-
     const subagentLineage = params.sources.getLatestSubagentLineage(sessionKey);
-    const controllerSessionKey = canonicalizeAudienceSessionKey(
-      params.sources,
+    const registryParents = [
       subagentLineage?.controllerSessionKey,
-      sessionKey,
-    );
-    const requesterSessionKey = canonicalizeAudienceSessionKey(
-      params.sources,
       subagentLineage?.requesterSessionKey,
-      sessionKey,
-    );
-    const registryParents = [controllerSessionKey, requesterSessionKey].filter(
-      (candidate): candidate is string => Boolean(candidate),
-    );
+    ]
+      .map((parent) => canonicalizeAudienceSessionKey(params.sources, parent, sessionKey))
+      .filter((candidate): candidate is string => Boolean(candidate));
     if (registryParents.length > 0) {
       // Current registry ownership supersedes session metadata, whose spawnedBy
       // link can remain stale after steering or restart.
@@ -103,7 +92,7 @@ function resolveApprovalSessionAudienceFromSources(params: {
     enqueue(canonicalizeAudienceSessionKey(params.sources, parentSessionKey, sessionKey));
   }
 
-  return audience;
+  return pending;
 }
 
 function createRuntimeApprovalSessionAudienceSources(

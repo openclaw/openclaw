@@ -30,42 +30,6 @@ describe("broadcast routing", () => {
     });
   }
 
-  it("dispatches to all broadcast agents when bot is mentioned", async () => {
-    await dispatch("msg-broadcast-mentioned");
-
-    expect(mockDispatchReply).toHaveBeenCalledTimes(2);
-    const sessionKeys = [
-      "agent:main:feishu:group:oc-broadcast-group",
-      "agent:susan:feishu:group:oc-broadcast-group",
-    ];
-    expect(
-      builtInboundContextCalls
-        .map((call) => call.SessionKey)
-        .toSorted((left, right) => String(left).localeCompare(String(right))),
-    ).toEqual(sessionKeys);
-    const recordCalls = vi.mocked(runtimeStub.channel.session.recordInboundSession).mock.calls;
-    expect(
-      recordCalls
-        .map(([call]) => call.updateLastRoute?.sessionKey)
-        .toSorted((left, right) => String(left).localeCompare(String(right))),
-    ).toEqual(sessionKeys);
-    for (const [call] of recordCalls) {
-      expect(call.updateLastRoute).toMatchObject({
-        channel: "feishu",
-        to: "chat:oc-broadcast-group",
-      });
-    }
-    expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
-    for (const ctx of builtInboundContextCalls) {
-      expect(ctx).toMatchObject({
-        GroupSubject: "Broadcast Team",
-        ConversationLabel: "Broadcast Team",
-      });
-    }
-    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
-    expect(mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0]).toMatchObject({ agentId: "main" });
-  });
-
   it.each([
     {
       targetSessionKey: "agent:main:acp:feishu-bound",
@@ -113,6 +77,7 @@ describe("broadcast routing", () => {
 
         await dispatch("msg-broadcast-bound-route", cfg);
 
+        expect(mockDispatchReply).toHaveBeenCalledTimes(2);
         expect(
           builtInboundContextCalls
             .map((ctx) => ({ agentId: ctx.AgentId, sessionKey: ctx.SessionKey }))
@@ -121,9 +86,30 @@ describe("broadcast routing", () => {
           { agentId: "main", sessionKey: targetSessionKey },
           { agentId: "susan", sessionKey: observerSessionKey },
         ]);
+        const recordCalls = vi.mocked(runtimeStub.channel.session.recordInboundSession).mock.calls;
+        expect(
+          recordCalls
+            .map(([call]) => call.updateLastRoute?.sessionKey)
+            .toSorted((left, right) => String(left).localeCompare(String(right))),
+        ).toEqual([targetSessionKey, observerSessionKey].toSorted());
+        for (const [call] of recordCalls) {
+          expect(call.updateLastRoute).toMatchObject({
+            channel: "feishu",
+            to: "chat:oc-broadcast-group",
+          });
+        }
+        expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
+        expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
+        expect(mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0]).toMatchObject({
+          agentId: "main",
+        });
         const routeMetadataKeys = Object.getOwnPropertySymbols(route);
         expect(routeMetadataKeys).not.toHaveLength(0);
         for (const ctx of builtInboundContextCalls) {
+          expect(ctx).toMatchObject({
+            GroupSubject: "Broadcast Team",
+            ConversationLabel: "Broadcast Team",
+          });
           for (const key of routeMetadataKeys) {
             expect(Reflect.get(ctx, key)).toBe(
               ctx.AgentId === "main" ? Reflect.get(route, key) : undefined,
@@ -142,20 +128,6 @@ describe("broadcast routing", () => {
     expect(mockDispatchReply).not.toHaveBeenCalled();
     expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
     expect(mockGetChatInfo).not.toHaveBeenCalled();
-  });
-
-  it("preserves single-agent dispatch when no broadcast config", async () => {
-    await dispatch("msg-no-broadcast", { ...createBroadcastConfig(), broadcast: undefined });
-
-    expect(mockDispatchReply).toHaveBeenCalledTimes(1);
-    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
-    expect(builtInboundContextCalls).toHaveLength(1);
-    expect(builtInboundContextCalls[0]?.SessionKey).toBe(
-      "agent:main:feishu:group:oc-broadcast-group",
-    );
-    expect(builtInboundContextCalls[0]?.GroupSubject).toBe("Broadcast Team");
-    expect(builtInboundContextCalls[0]?.ConversationLabel).toBe("Broadcast Team");
-    expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
   });
 
   it("skips unknown agents not in agents.list", async () => {

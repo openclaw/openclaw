@@ -161,10 +161,6 @@ function isWildcardAllowFromEntry(entry: string): boolean {
   return entry.trim() === "*";
 }
 
-function hasWildcardAllowFrom(list: string[]): boolean {
-  return list.some((entry) => isWildcardAllowFromEntry(entry));
-}
-
 function stripWildcardAllowFrom(list: string[]): string[] {
   return list.filter((entry) => !isWildcardAllowFromEntry(entry));
 }
@@ -312,7 +308,7 @@ function resolveOwnerAuthorizationState(
   });
   const allowAll =
     !params.hadResolutionError &&
-    (params.allowFromList.length === 0 || hasWildcardAllowFrom(params.allowFromList));
+    (params.allowFromList.length === 0 || params.allowFromList.some(isWildcardAllowFromEntry));
   const channelCommandOwners = resolveOwnerCandidatesForCommands({ ...params, allowAll });
   const explicitOwners = Array.from(new Set(stripWildcardAllowFrom(configOwnerAllowFromList)));
   const contextCommandOwners = stripWildcardAllowFrom(contextOwnerAllowFromList);
@@ -352,7 +348,7 @@ function resolveCommandSenderAuthorization(params: {
     const commandsAllowFromList = params.commandsAllowFromList;
     const commandsAllowAll =
       !params.providerResolutionError &&
-      Boolean(commandsAllowFromList && hasWildcardAllowFrom(commandsAllowFromList));
+      Boolean(commandsAllowFromList && commandsAllowFromList.some(isWildcardAllowFromEntry));
     const matchedCommandsAllowFrom = commandsAllowFromList?.length
       ? params.senderCandidates.find((candidate) => commandsAllowFromList.includes(candidate))
       : undefined;

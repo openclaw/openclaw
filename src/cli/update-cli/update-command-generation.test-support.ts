@@ -13,6 +13,7 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -90,6 +91,7 @@ export function registerGenerationRecoveryTests(
         runId: createUpdateRun({ trigger: "cli", before: { version: VERSION } }, { env }).runId,
         env,
       };
+      const { recordPhase } = createUpdateCommandExecutionGuards({ run }, root);
       const configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
       const schemas = await readUpdateStateSchemaVersions({
         stateDir: env.OPENCLAW_STATE_DIR,
@@ -115,6 +117,7 @@ export function registerGenerationRecoveryTests(
         shouldRestart: true,
         jsonMode: true,
         updateRun: run,
+        recordPhase,
       });
       const previousBytes = await fs.readFile(path.join(root, "dist/index.js"));
       await fs.writeFile(

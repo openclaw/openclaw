@@ -42,7 +42,6 @@ export function createSkillWorkshopCollectionFixture() {
   const emptyManifest = { ...manifest, installedSkills: [], proposals: [] };
   return {
     manifest,
-    emptyManifest,
     featureMethods: [
       "skills.proposals.apply",
       "skills.proposals.evaluate",

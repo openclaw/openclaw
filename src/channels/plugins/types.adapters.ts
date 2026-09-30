@@ -474,14 +474,18 @@ export type ChannelLifecycleAdapter = {
   }) => ChannelLegacyStateMigrationPlan[] | Promise<ChannelLegacyStateMigrationPlan[]>;
 };
 
+type ChannelApprovalForwardingFallbackParams = {
+  cfg: OpenClawConfig;
+  approvalKind: ChannelApprovalKind;
+  target: ChannelApprovalForwardTarget;
+  request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+};
+
 type ChannelApprovalDeliveryAdapter = {
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
-  shouldSuppressForwardingFallback?: (params: {
-    cfg: OpenClawConfig;
-    approvalKind: ChannelApprovalKind;
-    target: ChannelApprovalForwardTarget;
-    request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-  }) => boolean;
+  /** Deny a fallback that cannot satisfy this request's reviewer policy, even without a native handler. */
+  shouldBlockForwardingFallback?: (params: ChannelApprovalForwardingFallbackParams) => boolean;
+  shouldSuppressForwardingFallback?: (params: ChannelApprovalForwardingFallbackParams) => boolean;
 };
 type ChannelApproveCommandBehavior =
   | { kind: "allow" }
@@ -527,21 +531,32 @@ export type ChannelApprovalAdapter = {
 };
 
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
+  /** Confirms that this channel enforces configured plugin reviewer lists for routing and decisions. */
+  supportsScopedPluginApprovalApprovers?: true;
   authorizeActorAction?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     senderId?: string | null;
     action: "approve";
     approvalKind: ChannelApprovalKind;
+    request?: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
   }) => {
     authorized: boolean;
     reason?: string;
   };
+  resolveReviewerSenderId?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    senderId?: string | null;
+    spaceId?: string | null;
+  }) => string | undefined;
   getActionAvailabilityState?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     action: "approve";
     approvalKind?: ChannelApprovalKind;
+    /** Exact pending plugin request when route availability depends on its selected tool. */
+    request?: PluginApprovalRequest;
   }) => ChannelActionAvailabilityState;
   /** Exec-native client availability for the initiating surface; distinct from same-chat auth. */
   getExecInitiatingSurfaceState?: (params: {

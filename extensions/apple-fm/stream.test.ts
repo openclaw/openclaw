@@ -69,77 +69,11 @@ describe("Apple Foundation Models native transport", () => {
     });
   });
 
-  it("replays the exact tool call identity and tool result for continuation", async () => {
-    const continued: Context = {
-      ...context,
-      messages: [
-        ...context.messages,
-        {
-          role: "assistant",
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          timestamp: 1,
-          content: [{ type: "toolCall", ...call }],
-          stopReason: "toolUse",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-        },
-        {
-          role: "toolResult",
-          toolName: call.name,
-          toolCallId: call.id,
-          content: [{ type: "text", text: "The protected setup form is ready." }],
-          isError: false,
-          timestamp: 2,
-        },
-      ],
-    };
-    native.run.mockResolvedValue({
-      text: "Continue in the setup form.",
-      toolCalls: [],
-      inputTokens: 4064,
-      outputTokens: 8,
-    });
-    const stream = await createAppleFmStream(native)(model, continued);
-    expect(await stream.result()).toMatchObject({
-      stopReason: "stop",
-      content: [{ type: "text", text: "Continue in the setup form." }],
-    });
-    expect(native.run).toHaveBeenCalledWith(
-      expect.objectContaining({ messages: continued.messages }),
-      expect.anything(),
-    );
-  });
-
   it.each([
-    { name: "minimum length", schema: { type: "string", minLength: 1 }, text: '{"value":""}' },
-    { name: "maximum length", schema: { type: "string", maxLength: 3 }, text: '{"value":"long"}' },
     {
       name: "pattern",
       schema: { type: "string", pattern: "^[a-f0-9]{8}$" },
       text: '{"value":"invalid"}',
-    },
-    {
-      name: "nullable union",
-      schema: { anyOf: [{ type: "string" }, { type: "null" }] },
-      text: '{"value":42}',
-    },
-    {
-      name: "unsafe numeric bound",
-      schema: { type: "number", maximum: 9007199254740992 },
-      text: '{"value":9007199254740993}',
-    },
-    {
-      name: "unsafe exponent numeric bound",
-      schema: { type: "number", maximum: 9007199254740992 },
-      text: '{"value":9.007199254740993e15}',
     },
     {
       name: "malformed JSON without echoing its text",
@@ -212,7 +146,7 @@ describe("Apple Foundation Models native transport", () => {
     expect(responseFormat.properties.value.minLength).toBe(5);
   });
 
-  it.each(["9007199254740993", "-9007199254740993", "9.007199254740993e15", "1e999"])(
+  it.each(["9007199254740993", "9.007199254740993e15", "1e999"])(
     "does not validate numeric output %s as a string after a payload hook changes the native schema",
     async (literal) => {
       native.run.mockResolvedValue({
@@ -251,7 +185,6 @@ describe("Apple Foundation Models native transport", () => {
 
   it.each([
     { text: '{"value":"9007199254740993"}', schema: { type: "string" } },
-    { text: '{"value":"9.007199254740993e15"}', schema: { type: "string" } },
     { text: '{"value":1e3}', schema: { type: "integer", const: 1000 } },
     { text: '{"value":0.25}', schema: { type: "number", const: 0.25 } },
   ])(

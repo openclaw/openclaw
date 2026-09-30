@@ -3,10 +3,10 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import chokidar from "chokidar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as configFileSource from "../config/source-file.js";
 import { markGatewayRestartHandled } from "../infra/restart.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -14,6 +14,7 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
   CHANNEL_BINDING_IDS,
   clearInstanceBindingProbeCoordinators,
@@ -685,17 +686,24 @@ describe("gateway plugin instance bindings", () => {
     { timeout: 600_000 },
     async ({ onTestFinished }) => {
       const { coordinator, configPath } = await prepareInstanceBindingTest({ channels: true });
-      const watch = chokidar.watch;
-      const configWatcher = vi.spyOn(chokidar, "watch").mockImplementation((paths, options) => {
-        const watchedPaths = typeof paths === "string" ? [paths] : paths;
-        if (!watchedPaths.includes(configPath)) {
-          return watch(paths, options);
-        }
-        // Explicit config writes own this case; filesystem echoes can race the next RPC.
-        const watcher = new chokidar.FSWatcher(options);
-        queueMicrotask(() => watcher.emit("ready"));
-        return watcher;
-      });
+      const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
+      const configWatcher = vi
+        .spyOn(configFileSource, "createConfigFileAdapter")
+        .mockImplementation((options) => {
+          if (options.path !== configPath) {
+            return createConfigFileAdapter(options);
+          }
+          // Explicit config writes own this case; filesystem echoes can race the next RPC.
+          const watcher = createWatcherMock();
+          const adapter = watcher.attach(options);
+          return {
+            ...adapter,
+            start() {
+              adapter.start();
+              queueMicrotask(() => watcher.emit("ready"));
+            },
+          };
+        });
       onTestFinished(() => configWatcher.mockRestore());
       const proof = coordinator.channelProof;
       if (!proof) {

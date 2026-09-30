@@ -32,27 +32,29 @@ class ChatControllerCommandControlsTest {
   fun parseChatCommandsKeepsTextAliasesAndArgumentFlag() {
     val commands =
       parseChatCommands(
-        json,
-        """
-        {
-          "commands": [
+        json
+          .parseToJsonElement(
+            """
             {
-              "name": "new",
-              "description": "Start a fresh chat",
-              "category": "session",
-              "textAliases": ["/new", "/reset"],
-              "acceptsArgs": false
-            },
-            {
-              "name": "/model",
-              "description": "Switch models",
-              "category": "options",
-              "textAliases": ["model", "/model"],
-              "acceptsArgs": true
+              "commands": [
+                {
+                  "name": "new",
+                  "description": "Start a fresh chat",
+                  "category": "session",
+                  "textAliases": ["/new", "/reset"],
+                  "acceptsArgs": false
+                },
+                {
+                  "name": "/model",
+                  "description": "Switch models",
+                  "category": "options",
+                  "textAliases": ["model", "/model"],
+                  "acceptsArgs": true
+                }
+              ]
             }
-          ]
-        }
-        """.trimIndent(),
+            """.trimIndent(),
+          ).jsonObject,
       )
 
     assertEquals(2, commands.size)

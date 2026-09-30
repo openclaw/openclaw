@@ -3,7 +3,10 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
+import {
+  resolveMergedModelProviderConfig,
+  resolveMergedModelProviderEntry,
+} from "../config/model-provider-config.js";
 import {
   getResolvedConfigEnvSecretRef,
   resolveConfigSecretRef,
@@ -91,13 +94,6 @@ export function resolveConfigAwareEnvApiKey(
   });
 }
 
-export function resolveProviderConfig(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-): ModelProviderConfig | undefined {
-  return resolveMergedModelProviderEntry(cfg, provider)?.providerConfig;
-}
-
 function resolveProviderSourceConfig(cfg: OpenClawConfig | undefined, provider: string) {
   const source = getRuntimeConfigSourceSnapshot();
   if (cfg === source) {
@@ -124,7 +120,7 @@ export function resolveProviderConfigSecretInput(
     : "";
   const resolvedEnvRef = entry ? getResolvedConfigEnvSecretRef(sourceConfig, path) : null;
   return {
-    providerConfig: resolveProviderConfig(cfg, provider),
+    providerConfig: resolveMergedModelProviderConfig(cfg, provider),
     resolvedEnvRef,
     ref: entry
       ? (resolvedEnvRef ??
@@ -244,7 +240,7 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): boolean {
-  const providerConfig = resolveProviderConfig(cfg, provider);
+  const providerConfig = resolveMergedModelProviderConfig(cfg, provider);
   return (
     resolveProviderAuthOverride(cfg, provider) === "api-key" &&
     providerConfig !== undefined &&
@@ -258,7 +254,7 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
   provider: string;
   route?: { api?: string | null; baseUrl?: unknown };
 }): boolean {
-  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
   if (authOverride && authOverride !== "api-key") {
     return false;
@@ -282,7 +278,7 @@ export function resolveProviderAuthOverride(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): ModelProviderAuthMode | undefined {
-  const entry = resolveProviderConfig(cfg, provider);
+  const entry = resolveMergedModelProviderConfig(cfg, provider);
   const auth = entry?.auth;
   if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
     return auth;
@@ -301,7 +297,7 @@ export function shouldUseImplicitAwsSdkAuth(params: {
   if (normalizeProviderId(params.provider) !== "amazon-bedrock") {
     return false;
   }
-  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   return (
     resolveProviderAuthOverride(params.cfg, params.provider) === undefined &&
     (providerConfig === undefined || !hasExplicitProviderApiKeyConfig(providerConfig))
@@ -362,10 +358,10 @@ function providerEntriesShareBaseUrl(params: {
   credentialProvider: string;
 }): boolean {
   const providerBaseUrl = normalizeProviderEntryBaseUrlForBinding(
-    resolveProviderConfig(params.cfg, params.provider)?.baseUrl,
+    resolveMergedModelProviderConfig(params.cfg, params.provider)?.baseUrl,
   );
   const credentialProviderBaseUrl = normalizeProviderEntryBaseUrlForBinding(
-    resolveProviderConfig(params.cfg, params.credentialProvider)?.baseUrl,
+    resolveMergedModelProviderConfig(params.cfg, params.credentialProvider)?.baseUrl,
   );
   return Boolean(
     providerBaseUrl && credentialProviderBaseUrl && providerBaseUrl === credentialProviderBaseUrl,
@@ -631,8 +627,11 @@ export function providerConfigMatchesRuntimeSnapshot(params: {
   runtimeConfig: OpenClawConfig | null;
   provider: string;
 }): boolean {
-  const inputProvider = resolveProviderConfig(params.inputConfig, params.provider);
-  const runtimeProvider = resolveProviderConfig(params.runtimeConfig ?? undefined, params.provider);
+  const inputProvider = resolveMergedModelProviderConfig(params.inputConfig, params.provider);
+  const runtimeProvider = resolveMergedModelProviderConfig(
+    params.runtimeConfig ?? undefined,
+    params.provider,
+  );
   const toComparableConfig = (providerConfig: ModelProviderConfig): OpenClawConfig => ({
     models: { providers: { [params.provider]: providerConfig } },
   });
@@ -658,7 +657,7 @@ export function sentinelizeConfigSecretRefEnvApiKey(params: {
     return params.apiKey;
   }
   const sourceConfig = resolveProviderSourceConfig(params.cfg, params.provider);
-  const configured = resolveProviderConfig(sourceConfig, params.provider)?.apiKey;
+  const configured = resolveMergedModelProviderConfig(sourceConfig, params.provider)?.apiKey;
   const ref = coerceSecretRef(configured);
   const envId =
     ref?.source === "env"

@@ -1,12 +1,5 @@
 import path from "node:path";
-import type { SessionArtifactReadResult } from "../../gateway/session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
-import type {
-  ReadRecentSessionMessagesResult,
-  ReadSessionMessageByIdResult,
-  ReadSessionMessagesAroundIdResult,
-  ReadSessionMessagesResult,
-} from "../../gateway/session-transcript-read-kernel.js";
 import { prepareGatewaySessionStoreReadSourcesAsync } from "../../gateway/session-utils-store-sources.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
@@ -15,7 +8,10 @@ import {
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.js";
@@ -27,10 +23,7 @@ import {
 import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.transcript-read-target.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
-  ChatHistoryPage,
   SessionHistoryDelta,
-  SessionHistoryTranscriptBinding,
-  SessionHistorySnapshot,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
@@ -143,39 +136,33 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         params: { target: capturedTarget, query: structuredClone(request.params.query) },
       };
     }
+    const captureOptions = <T>(options: T) => ({
+      target: capturedTarget,
+      options: structuredClone(options),
+    });
     if (request.kind === "message-page") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, options: structuredClone(request.params.options) },
-      };
+      return { kind: request.kind, params: captureOptions(request.params.options) };
     }
     if (request.kind === "around-id") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, options: structuredClone(request.params.options) },
-      };
+      return { kind: request.kind, params: captureOptions(request.params.options) };
     }
     if (request.kind === "source-messages") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, options: structuredClone(request.params.options) },
-      };
+      return { kind: request.kind, params: captureOptions(request.params.options) };
     }
     if (request.kind === "recent-page") {
+      return { kind: request.kind, params: captureOptions(request.params.options) };
+    }
+    if (request.kind === "conversation-binding") {
       return {
         kind: request.kind,
-        params: { target: capturedTarget, options: structuredClone(request.params.options) },
+        params: { target: capturedTarget, conversationRef: request.params.conversationRef },
       };
     }
-    if (request.kind === "transcript-binding") {
-      return {
-        kind: request.kind,
-        params: {
-          target: capturedTarget,
-        },
-      };
-    }
-    if (request.kind === "message-count") {
+    if (
+      request.kind === "transcript-binding" ||
+      request.kind === "message-count" ||
+      request.kind === "reactions"
+    ) {
       return { kind: request.kind, params: { target: capturedTarget } };
     }
     if (request.kind === "message-by-id") {
@@ -256,50 +243,30 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
   };
 }
 
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "artifacts" }>,
+type SessionHistoryPageValue<Result> = Result extends { result: infer Value }
+  ? Value
+  : Result extends { binding: infer Value }
+    ? Value
+    : Result extends { page: infer Value }
+      ? Value
+      : Result extends { snapshot: infer Value }
+        ? Value
+        : Result extends { count: infer Value }
+          ? Value
+          : Result extends { messages: infer Value }
+            ? Value
+            : Result extends { kind: "delta" }
+              ? AdmittedSessionHistoryDelta
+              : never;
+
+type SessionHistoryPageValues = {
+  [Result in SessionHistoryWorkerResult as Result["kind"]]: SessionHistoryPageValue<Result>;
+};
+
+export function readSessionHistoryPageInWorker<Request extends SessionHistoryWorkerRequest>(
+  request: Request,
   signal?: AbortSignal,
-): Promise<SessionArtifactReadResult>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "message-page" | "recent-page" }>,
-  signal?: AbortSignal,
-): Promise<ReadRecentSessionMessagesResult>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "around-id" }>,
-  signal?: AbortSignal,
-): Promise<ReadSessionMessagesAroundIdResult>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "source-messages" }>,
-  signal?: AbortSignal,
-): Promise<ReadSessionMessagesResult>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "transcript-binding" }>,
-  signal?: AbortSignal,
-): Promise<SessionHistoryTranscriptBinding | undefined>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "message-by-id" }>,
-  signal?: AbortSignal,
-): Promise<ReadSessionMessageByIdResult>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "message-count" }>,
-  signal?: AbortSignal,
-): Promise<number>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "rpc" }>,
-  signal?: AbortSignal,
-): Promise<ChatHistoryPage>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "http" }>,
-  signal?: AbortSignal,
-): Promise<SessionHistorySnapshot>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>,
-  signal?: AbortSignal,
-): Promise<AdmittedSessionHistoryDelta>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "message-lookup" | "recent" }>,
-  signal?: AbortSignal,
-): Promise<unknown[]>;
+): Promise<SessionHistoryPageValues[Request["kind"]]>;
 export async function readSessionHistoryPageInWorker(
   request: SessionHistoryWorkerRequest,
   signal?: AbortSignal,
@@ -362,17 +329,28 @@ export async function readSessionHistoryPageInWorker(
     };
     const preparedTarget = resolved;
     const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
-      const sourceReads = await prepareGatewaySessionStoreReadSourcesAsync({
-        cfg,
-        currentSource,
-        env,
-        registryPath: stateContext.admission.databasePath,
-      });
+      // Only display-history projections resolve subagent lineage across stores.
+      const sourceReads =
+        capturedRequest.kind === "rpc" ||
+        capturedRequest.kind === "http" ||
+        capturedRequest.kind === "delta"
+          ? await prepareGatewaySessionStoreReadSourcesAsync({
+              cfg,
+              currentSource,
+              env,
+              registryPath: stateContext.admission.databasePath,
+            })
+          : undefined;
+      const primaryPath = sourceReads ? undefined : createOpenClawAgentDatabasePathMatcher();
+      primaryPath?.(currentSource.path, currentSource.path);
       const assertStateCurrent = () => {
         signal?.throwIfAborted();
         stateContext.maintenanceScope?.assertAdmission();
         stateContext.admission.assertCurrent();
-        sourceReads.assertSourceCurrent();
+        sourceReads?.assertSourceCurrent();
+        if (primaryPath && !primaryPath.isCurrent()) {
+          throw new Error("Session store changed while preparing its metadata. Retry the request.");
+        }
       };
       assertStateCurrent();
       const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
@@ -387,7 +365,7 @@ export async function readSessionHistoryPageInWorker(
           path: stateContext.admission.databasePath,
           environment: stateContext.environment,
         },
-        ...(sourceReads.request
+        ...(sourceReads?.request
           ? { sourceDiscovery: sourceReads.request }
           : { sourceDatabases: {} }),
         ...(entryValidationKey ? { entryValidationKey } : {}),
@@ -522,7 +500,7 @@ export async function readSessionHistoryPageInWorker(
           throw error;
         }
       }
-      await sourceReads.revalidate(() => {
+      await sourceReads?.revalidate(() => {
         owner.assertCurrent();
         assertStateCurrent();
       });
@@ -531,13 +509,12 @@ export async function readSessionHistoryPageInWorker(
         assertCurrent: () => {
           owner.assertCurrent();
           assertStateCurrent();
-          sourceReads.assertCurrent();
+          sourceReads?.assertCurrent();
         },
       };
     });
-    const assertCurrent = () => acquired.assertCurrent();
+    const { assertCurrent, result } = acquired;
     assertCurrent();
-    const result = acquired.result;
     if (result.kind !== capturedRequest.kind) {
       throw new Error("Session history worker returned the wrong page type");
     }

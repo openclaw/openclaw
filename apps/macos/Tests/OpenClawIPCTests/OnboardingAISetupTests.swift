@@ -509,7 +509,7 @@ private func routeIdentity(
     transport: AppState.RemoteTransport = .direct,
     url: String = "",
     target: String = "",
-    localStateDir: URL = OpenClawConfigFile.stateDirURL(),
+    localStateDir: URL = OpenClawPaths.stateDirURL,
     sshRemotePort: Int = 18789
 ) -> String? {
     OnboardingSystemAgentResumeStore.routeIdentity(
@@ -1030,7 +1030,7 @@ struct OnboardingAISetupTests {
             featured: false, modelTarget: nil
         )
 
-        model.startProviderAuth(option)
+        model.startProviderWizard(option, kind: .auth)
 
         #expect(model.activeAuthOption == option)
         #expect(model.authError?.detail?.contains("openclaw onboard --auth-choice custom-api-key") == true)
@@ -1119,6 +1119,9 @@ struct OnboardingAISetupTests {
     @Test func `prepare choices use wire presentation and hide usable local models`() {
         let candidates = [
             OnboardingAISetupModel.Candidate(
+                brandId: nil,
+                icon: nil,
+                website: nil,
                 kind: "provider-auto:ollama",
                 label: "Ollama",
                 detail: "available locally",
@@ -1127,6 +1130,9 @@ struct OnboardingAISetupTests {
                 modelTarget: nil
             ),
             OnboardingAISetupModel.Candidate(
+                brandId: nil,
+                icon: nil,
+                website: nil,
                 kind: "provider-auto:other-choice",
                 label: "LM Studio",
                 detail: "available locally",
@@ -1135,6 +1141,9 @@ struct OnboardingAISetupTests {
                 modelTarget: nil
             ),
             OnboardingAISetupModel.Candidate(
+                brandId: nil,
+                icon: nil,
+                website: nil,
                 kind: "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y",
                 label: "Vendor Local",
                 detail: "available locally",
@@ -1143,6 +1152,9 @@ struct OnboardingAISetupTests {
                 modelTarget: nil
             ),
             OnboardingAISetupModel.Candidate(
+                brandId: nil,
+                icon: nil,
+                website: nil,
                 kind: "provider-auto:llama-cpp",
                 label: "Local model (llama.cpp)",
                 detail: "credentials required",
@@ -2263,7 +2275,7 @@ struct OnboardingAISetupTests {
         let option = try #require(model.authOptions.first { $0.id == choice.choiceID })
         #expect(option.label == choice.label)
         #expect(!option.featured)
-        model.startProviderAuth(option)
+        model.startProviderWizard(option, kind: .auth)
         for _ in 0 ..< 200 where model.authStep == nil {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -2729,7 +2741,7 @@ struct OnboardingAISetupTests {
         await model.detectConnections()
         let option = try #require(model.authOptions.first)
         #expect(option.modelTarget == .utility)
-        model.startProviderAuth(option)
+        model.startProviderWizard(option, kind: .auth)
         try await waitForOnboardingEntry("utility provider authentication settled") {
             model.connected || (refreshed.value && model.phase == .ready && model.activeAuthOption == nil)
         }

@@ -1,4 +1,3 @@
-// Provider selection runtime helpers resolve plugin/provider choices from config and CLI input.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 
 /** Provider descriptor fields needed for explicit or automatic selection. */
@@ -181,18 +180,11 @@ export function resolveConfiguredCapabilityProvider<
     firstUnconfigured ??= provider;
   }
 
-  if (!firstUnconfigured && firstUnavailable) {
-    return {
-      ok: false,
-      code: "provider-unavailable",
-      provider: firstUnavailable,
-    };
-  }
-
   return {
     ok: false,
-    code: "provider-not-configured",
-    provider: firstUnconfigured,
+    code:
+      !firstUnconfigured && firstUnavailable ? "provider-unavailable" : "provider-not-configured",
+    provider: firstUnconfigured ?? firstUnavailable,
   };
 }
 
@@ -229,27 +221,12 @@ function readProviderConfig(
   return providerConfig && typeof providerConfig === "object" ? providerConfig : undefined;
 }
 
-function resolveProviderCandidate<
-  TConfig,
-  TFullConfig,
-  TProvider extends AutoSelectableProvider,
->(params: {
-  configuredProviderId?: string;
-  providerConfigs?: Record<string, Record<string, unknown> | undefined>;
-  cfg: TFullConfig | undefined;
-  cfgForResolve: TFullConfig;
-  provider: TProvider;
-  resolveProviderConfig: (params: {
-    provider: TProvider;
-    cfg: TFullConfig;
-    rawConfig: Record<string, unknown>;
-  }) => TConfig;
-  isProviderConfigured: (params: {
-    provider: TProvider;
-    cfg: TFullConfig | undefined;
-    providerConfig: TConfig;
-  }) => boolean;
-}): ResolvedConfiguredProvider<TProvider, TConfig> {
+function resolveProviderCandidate<TConfig, TFullConfig, TProvider extends AutoSelectableProvider>(
+  params: Omit<
+    Parameters<typeof resolveConfiguredCapabilityProvider<TConfig, TFullConfig, TProvider>>[0],
+    "getConfiguredProvider" | "listProviders" | "isProviderAvailable"
+  > & { provider: TProvider },
+): ResolvedConfiguredProvider<TProvider, TConfig> {
   const rawProviderConfig = resolveProviderRawConfig({
     providerId: params.provider.id,
     providerAliases: params.provider.aliases,

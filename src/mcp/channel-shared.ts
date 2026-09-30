@@ -1,4 +1,3 @@
-// Shared MCP channel helpers normalize channel tool payloads and responses.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString as toText,

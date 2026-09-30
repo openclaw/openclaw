@@ -1,3 +1,4 @@
+// Shares durable session-store fixtures and run results across command tests.
 import path from "node:path";
 import { onTestFinished } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
@@ -9,6 +10,7 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { updateSessionStoreAfterAgentRun as updateSessionStoreAfterAgentRunBase } from "./session-store.js";
 
 export async function withTempSessionStore<T>(
@@ -72,4 +74,11 @@ export async function updateSessionStoreAfterAgentRun(
     agentId: params.agentId ?? "main",
     agentDir: params.agentDir ?? "/tmp/openclaw-session-store-test-agent",
   });
+}
+
+export function createRunResult(
+  agentMeta: NonNullable<EmbeddedAgentRunResult["meta"]["agentMeta"]>,
+  meta: Partial<Omit<EmbeddedAgentRunResult["meta"], "agentMeta">> = {},
+): EmbeddedAgentRunResult {
+  return { meta: { durationMs: 1, ...meta, agentMeta } };
 }

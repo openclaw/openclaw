@@ -128,7 +128,10 @@ describe("failed worker placement redispatch", () => {
     "rechecks the complete %s source in the redispatch transaction",
     async (scenario) => {
       const executionMode = scenario === "claim" ? "remote-exec" : "worker-turn";
-      const active = await advancePlacementFixtureToActive(store, database, SESSION, executionMode);
+      const active = await advancePlacementFixtureToActive(store, database, {
+        ...SESSION,
+        executionMode,
+      });
       if (scenario === "claim" || scenario === "result") {
         const claim = await store.claimTurn({
           ...SESSION,
@@ -141,7 +144,7 @@ describe("failed worker placement redispatch", () => {
         }
       } else if (scenario === "journal") {
         const basePack = Buffer.from("retained workspace rollback");
-        store.beginWorkspaceReconciliation(
+        await store.beginWorkspaceReconciliation(
           {
             sessionId: SESSION.sessionId,
             environmentId: active.environmentId,

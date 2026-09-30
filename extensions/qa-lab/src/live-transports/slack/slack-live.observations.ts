@@ -16,6 +16,7 @@ import {
   slackAuthTestSchema,
   slackPostMessageSchema,
   type SlackMessage,
+  type SlackObservedMessage,
   slackHistorySchema,
   slackRepliesSchema,
   type SlackQaWebClient as WebClient,
@@ -123,6 +124,32 @@ export function collectSlackBlockText(blocks?: unknown[]) {
 
 export function collectSlackActionValues(blocks?: unknown[]) {
   return collectSlackBlockStringFields(blocks ?? [], "value");
+}
+
+export function recordSlackObservedMessage(params: {
+  channelId: string;
+  matchedScenario: boolean;
+  message: SlackMessage;
+  observedMessages: SlackObservedMessage[];
+  scenarioId: string;
+  scenarioTitle: string;
+}) {
+  if (!params.message.ts) {
+    return;
+  }
+  params.observedMessages.push({
+    actionValues: collectSlackActionValues(params.message.blocks),
+    blockText: collectSlackBlockText(params.message.blocks),
+    botId: params.message.bot_id,
+    channelId: params.channelId,
+    matchedScenario: params.matchedScenario,
+    scenarioId: params.scenarioId,
+    scenarioTitle: params.scenarioTitle,
+    text: params.message.text ?? "",
+    threadTs: params.message.thread_ts,
+    ts: params.message.ts,
+    userId: params.message.user,
+  });
 }
 
 export function parseSlackNativeApprovalAction(value: string) {
@@ -299,11 +326,7 @@ async function waitForSlackStoredMessages(params: {
 }) {
   const startedAt = Date.now();
   while (true) {
-    const messages = await listSlackMessages({
-      channelId: params.channelId,
-      client: params.client,
-      oldestTs: params.oldestTs,
-    });
+    const messages = await listSlackMessages(params);
     const messagesById = new Map(
       messages
         .filter((message) => message.ts && isSutSlackMessage(message, params.sutIdentity))

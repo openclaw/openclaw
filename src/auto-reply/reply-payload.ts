@@ -34,7 +34,7 @@ export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string 
     return payload.text;
   }
   const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
-  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
+  return text.startsWith("BTW\nQuestion:") ? text : formatted;
 }
 
 /** True when a payload has visible or playable content for delivery. */

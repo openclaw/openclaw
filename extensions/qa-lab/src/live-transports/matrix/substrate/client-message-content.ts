@@ -1,49 +1,7 @@
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 
-type MatrixQaSendMessageContent = {
-  body: string;
-  format?: "org.matrix.custom.html";
-  formatted_body?: string;
-  "m.new_content"?: MatrixQaSendMessageContent;
-  "m.mentions"?: {
-    user_ids?: string[];
-  };
-  "m.relates_to"?:
-    | {
-        rel_type: "m.thread";
-        event_id: string;
-        is_falling_back: true;
-        "m.in_reply_to": {
-          event_id: string;
-        };
-      }
-    | {
-        rel_type: "m.replace";
-        event_id: string;
-      };
-  msgtype: "m.text";
-};
-
 type MatrixQaMediaMessageType = "m.audio" | "m.file" | "m.image" | "m.video";
-
-type MatrixQaSendMediaMessageContent = Omit<MatrixQaSendMessageContent, "msgtype"> & {
-  filename?: string;
-  info?: {
-    mimetype?: string;
-    size?: number;
-  };
-  msgtype: MatrixQaMediaMessageType;
-  url: string;
-};
-
-type MatrixQaSendReactionContent = {
-  "m.relates_to": {
-    event_id: string;
-    key: string;
-    rel_type: "m.annotation";
-  };
-};
 
 export type MatrixQaUiaaResponse = {
   completed?: string[];
@@ -77,10 +35,7 @@ function buildMatrixReplacementRelation(targetEventId: string) {
   };
 }
 
-export function buildMatrixReactionRelation(
-  messageId: string,
-  emoji: string,
-): MatrixQaSendReactionContent {
+export function buildMatrixReactionRelation(messageId: string, emoji: string) {
   const normalizedMessageId = messageId.trim();
   const normalizedEmoji = emoji.trim();
   if (!normalizedMessageId) {
@@ -91,17 +46,11 @@ export function buildMatrixReactionRelation(
   }
   return {
     "m.relates_to": {
-      rel_type: "m.annotation",
+      rel_type: "m.annotation" as const,
       event_id: normalizedMessageId,
       key: normalizedEmoji,
     },
   };
-}
-
-function buildMatrixMentionLink(userId: string) {
-  const href = `https://matrix.to/#/${encodeURIComponent(userId)}`;
-  const label = escapeHtml(userId);
-  return `<a href="${href}">${label}</a>`;
 }
 
 export function buildMatrixQaMessageContent(params: {
@@ -109,7 +58,7 @@ export function buildMatrixQaMessageContent(params: {
   mentionUserIds?: string[];
   replyToEventId?: string;
   threadRootEventId?: string;
-}): MatrixQaSendMessageContent {
+}) {
   const body = params.body;
   const uniqueMentionUserIds = uniqueStrings(params.mentionUserIds?.filter(Boolean) ?? []);
   const formattedParts: string[] = [];
@@ -119,7 +68,9 @@ export function buildMatrixQaMessageContent(params: {
   while (cursor < body.length) {
     const matchedUserId = uniqueMentionUserIds.find((userId) => body.startsWith(userId, cursor));
     if (matchedUserId) {
-      formattedParts.push(buildMatrixMentionLink(matchedUserId));
+      formattedParts.push(
+        `<a href="https://matrix.to/#/${encodeURIComponent(matchedUserId)}">${escapeHtml(matchedUserId)}</a>`,
+      );
       cursor += matchedUserId.length;
       usedFormattedMention = true;
       continue;
@@ -130,7 +81,7 @@ export function buildMatrixQaMessageContent(params: {
 
   return {
     body,
-    msgtype: "m.text",
+    msgtype: "m.text" as const,
     ...(usedFormattedMention
       ? {
           format: "org.matrix.custom.html" as const,
@@ -150,14 +101,14 @@ export function buildMatrixQaReplacementMessageContent(params: {
   body: string;
   mentionUserIds?: string[];
   targetEventId: string;
-}): MatrixQaSendMessageContent {
+}) {
   const newContent = buildMatrixQaMessageContent({
     body: params.body,
     mentionUserIds: params.mentionUserIds,
   });
   return {
     body: `* ${params.body}`,
-    msgtype: "m.text",
+    msgtype: "m.text" as const,
     "m.new_content": newContent,
     ...buildMatrixReplacementRelation(params.targetEventId),
   };
@@ -189,7 +140,7 @@ export function buildMatrixQaMediaMessageContent(params: {
   size: number;
   threadRootEventId?: string;
   url: string;
-}): MatrixQaSendMediaMessageContent {
+}) {
   const normalizedBody = params.body?.trim() || params.fileName?.trim() || "(file)";
   const content = buildMatrixQaMessageContent({
     body: normalizedBody,

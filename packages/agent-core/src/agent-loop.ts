@@ -74,41 +74,6 @@ export async function runAgentLoop(
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AgentMessage[]> {
-  return runAgentLoopCore(prompts, context, config, emit, signal, streamFn, runtime);
-}
-
-/** Continue an existing loop context and emit only newly produced messages. */
-export async function runAgentLoopContinue(
-  context: AgentContext,
-  config: AgentLoopConfig,
-  emit: AgentEventSink,
-  signal?: AbortSignal,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreStreamRuntimeDeps,
-): Promise<AgentMessage[]> {
-  assertContinuableContext(context);
-  return runAgentLoopCore([], context, config, emit, signal, streamFn, runtime);
-}
-
-function assertContinuableContext(context: AgentContext): void {
-  const lastMessage = context.messages.at(-1);
-  if (!lastMessage) {
-    throw new Error("Cannot continue: no messages in context");
-  }
-  if (lastMessage.role === "assistant") {
-    throw new TranscriptNotContinuableError(lastMessage.role);
-  }
-}
-
-async function runAgentLoopCore(
-  prompts: AgentMessage[],
-  context: AgentContext,
-  config: AgentLoopConfig,
-  emit: AgentEventSink,
-  signal?: AbortSignal,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreStreamRuntimeDeps,
-): Promise<AgentMessage[]> {
   const newMessages: AgentMessage[] = [];
   const state = { context: { ...context, messages: [...context.messages] } };
   await emit({ type: "agent_start" });
@@ -132,6 +97,29 @@ async function runAgentLoopCore(
     return [];
   }
   return runLoop(state, newMessages, config, signal, emit, streamFn, runtime);
+}
+
+/** Continue an existing loop context and emit only newly produced messages. */
+export async function runAgentLoopContinue(
+  context: AgentContext,
+  config: AgentLoopConfig,
+  emit: AgentEventSink,
+  signal?: AbortSignal,
+  streamFn?: StreamFn,
+  runtime?: AgentCoreStreamRuntimeDeps,
+): Promise<AgentMessage[]> {
+  assertContinuableContext(context);
+  return runAgentLoop([], context, config, emit, signal, streamFn, runtime);
+}
+
+function assertContinuableContext(context: AgentContext): void {
+  const lastMessage = context.messages.at(-1);
+  if (!lastMessage) {
+    throw new Error("Cannot continue: no messages in context");
+  }
+  if (lastMessage.role === "assistant") {
+    throw new TranscriptNotContinuableError(lastMessage.role);
+  }
 }
 
 /**
@@ -533,15 +521,14 @@ type ResolvedToolCallOutcome =
   | { kind: "error"; error: unknown };
 
 function hidesToolCallFromChannelProgress(
-  context: AgentContext,
+  batch: ToolBatchContext,
   toolCall: AgentToolCall,
-  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
 ): boolean {
-  const resolution = resolvedToolCalls.get(toolCall);
+  const resolution = batch.resolved.get(toolCall);
   const tool =
     resolution?.kind === "resolved"
       ? resolution.tool
-      : context.tools?.find((candidate) => candidate.name === toolCall.name);
+      : batch.currentContext.tools?.find((candidate) => candidate.name === toolCall.name);
   return tool?.hideFromChannelProgress === true;
 }
 
@@ -789,11 +776,7 @@ async function prepareToolCallEntry(
   batch: ToolBatchContext,
   toolCall: AgentToolCall,
 ): Promise<FinalizedToolCallEntry> {
-  const hideFromChannelProgress = hidesToolCallFromChannelProgress(
-    batch.currentContext,
-    toolCall,
-    batch.resolved,
-  );
+  const hideFromChannelProgress = hidesToolCallFromChannelProgress(batch, toolCall);
   await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
   const preparation = await prepareToolCall(batch, toolCall);
   if (preparation.kind === "immediate") {
@@ -1331,11 +1314,7 @@ async function completeToolLoopInterventionBatch(
   const messages: ToolResultMessage[] = [];
   const finalizedCalls: FinalizedToolCallOutcome[] = [];
   for (const toolCall of params.toolCalls) {
-    const hideFromChannelProgress = hidesToolCallFromChannelProgress(
-      batch.currentContext,
-      toolCall,
-      batch.resolved,
-    );
+    const hideFromChannelProgress = hidesToolCallFromChannelProgress(batch, toolCall);
     await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
     const isTrigger = toolCall.id === params.intervention.toolCallId;
     const text = params.terminal
@@ -1393,11 +1372,7 @@ async function completeUnstartedToolCall(
     startEmitted?: boolean;
   } = {},
 ): Promise<FinalizedToolCallOutcome> {
-  const hideFromChannelProgress = hidesToolCallFromChannelProgress(
-    batch.currentContext,
-    toolCall,
-    batch.resolved,
-  );
+  const hideFromChannelProgress = hidesToolCallFromChannelProgress(batch, toolCall);
   if (!options.startEmitted) {
     await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
   }

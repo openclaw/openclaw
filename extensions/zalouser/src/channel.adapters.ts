@@ -33,6 +33,7 @@ import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
 } from "openclaw/plugin-sdk/text-chunking";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import {
   checkZcaAuthenticated,
   listZalouserAccountIds,
@@ -273,22 +274,16 @@ export const zalouserMessageActions: ChannelMessageActionAdapter = {
     if (!result.ok) {
       throw new Error(result.error || "Failed to react on Zalo message");
     }
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text:
-            params.remove === true
-              ? `Removed reaction ${emoji} from ${ids.msgId}`
-              : `Reacted ${emoji} on ${ids.msgId}`,
-        },
-      ],
-      details: {
+    return textResult(
+      params.remove === true
+        ? `Removed reaction ${emoji} from ${ids.msgId}`
+        : `Reacted ${emoji} on ${ids.msgId}`,
+      {
         messageId: ids.msgId,
         cliMsgId: ids.cliMsgId,
         threadId: target.threadId,
       },
-    };
+    );
   },
 };
 

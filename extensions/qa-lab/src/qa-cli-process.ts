@@ -115,13 +115,9 @@ function parseQaCliJsonOutput(text: string, args: readonly string[]) {
         continue;
       }
       const jsonTail = lines.slice(index).join("\n");
-      try {
-        candidates.push(JSON.parse(jsonTail) as unknown);
-      } catch {
-        const balanced = parseBalancedJsonPayloadStart(jsonTail);
-        if (balanced !== undefined) {
-          candidates.push(balanced);
-        }
+      const balanced = parseBalancedJsonPayloadStart(jsonTail);
+      if (balanced !== undefined) {
+        candidates.push(balanced);
       }
     }
     const expectedPayload = candidates.find((value) => matchesExpectedPayload?.(value) === true);

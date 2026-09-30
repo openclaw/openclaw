@@ -38,6 +38,17 @@ describe("Anthropic server-side fallback", () => {
     ).toEqual(customOpusCost);
   });
 
+  it("preserves identical requested pricing when Sonnet 5.5 falls back to Sonnet 5", () => {
+    const requestedCost = Object.freeze({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 });
+    expect(
+      resolveAnthropicFallbackServingModelCost({
+        requestedModelId: "claude-sonnet-5-5",
+        servingModelId: "claude-sonnet-5",
+        requestedCost,
+      }),
+    ).toEqual(requestedCost);
+  });
+
   it.each([
     {
       requestedModelId: "claude-opus-5-5",

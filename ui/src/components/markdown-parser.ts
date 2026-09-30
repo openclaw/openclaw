@@ -1,5 +1,6 @@
 import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
 import { isGitHubHost } from "./github-link-eligibility.ts";
 import {
@@ -23,7 +24,6 @@ import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
 import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
 // Raw CJK suffixes delimit autolinks; percent-encoded URL content stays intact.
@@ -73,7 +73,7 @@ function renderRawMarkdownHtml(
   if (/^<br\s*\/?>$/iu.test(content.trim())) {
     return block ? "<br>\n" : "<br>";
   }
-  return escapeMarkdownHtml(content) + (block ? "\n" : "");
+  return escapeHtml(content) + (block ? "\n" : "");
 }
 
 /** Authored labels differ from labels that merely repeat the reference. */
@@ -586,7 +586,7 @@ export function createMarkdownParser(): MarkdownItParser {
   markdownParser.renderer.rules.link_favicon = (tokens, index) => {
     const hostname: unknown = tokens[index]?.meta?.hostname;
     return typeof hostname === "string"
-      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeMarkdownHtml(hostname)}" alt="" role="presentation">`
+      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeHtml(hostname)}" alt="" role="presentation">`
       : "";
   };
   markdownParser.renderer.rules.code_inline = (tokens, index, options, env, self) => {
@@ -594,10 +594,9 @@ export function createMarkdownParser(): MarkdownItParser {
     const target = tokens[index]?.meta?.fileLink as MarkdownFileLinkMeta | undefined;
     if (target) {
       const lineAttribute =
-        target.line === null ? "" : ` data-file-line="${escapeMarkdownHtml(String(target.line))}"`;
-      const titleAttribute =
-        target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
-      return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
+        target.line === null ? "" : ` data-file-line="${escapeHtml(String(target.line))}"`;
+      const titleAttribute = target.title === null ? "" : ` title="${escapeHtml(target.title)}"`;
+      return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
     }
     return rendered;
   };

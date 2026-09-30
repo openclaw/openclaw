@@ -12,13 +12,6 @@ export type { ThemeMode };
 type ThemeFamily = Exclude<BuiltinThemeId, "claw" | "knot"> | "openknot" | "custom";
 export type ResolvedTheme = "dark" | "light" | ThemeFamily | `${ThemeFamily}-light`;
 
-function prefersLightScheme(): boolean {
-  if (typeof globalThis.matchMedia !== "function") {
-    return false;
-  }
-  return globalThis.matchMedia("(prefers-color-scheme: light)").matches;
-}
-
 export function parseThemeSelection(
   themeRaw: unknown,
   modeRaw: unknown,
@@ -29,15 +22,15 @@ export function parseThemeSelection(
   return { theme: normalizedTheme, mode: normalizedMode };
 }
 
-function resolveMode(mode: ThemeMode): "light" | "dark" {
-  if (mode === "system") {
-    return prefersLightScheme() ? "light" : "dark";
-  }
-  return mode;
-}
-
 export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
-  const resolvedMode = resolveMode(mode);
+  let resolvedMode = mode;
+  if (resolvedMode === "system") {
+    resolvedMode =
+      typeof globalThis.matchMedia === "function" &&
+      globalThis.matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "dark";
+  }
   if (theme === "claw") {
     return resolvedMode;
   }

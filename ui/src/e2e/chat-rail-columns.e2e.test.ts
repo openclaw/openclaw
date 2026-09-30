@@ -874,11 +874,7 @@ suite.define(() => {
           const terminalTooltip = terminalLabel.locator("../..");
           await terminalLabel.locator("..").hover();
           await page.waitForTimeout(200);
-          expect(
-            await terminalTooltip
-              .locator("wa-tooltip")
-              .evaluate((tooltip) => Reflect.get(tooltip, "open")),
-          ).toBe(false);
+          expect(await terminalTooltip.getAttribute("open")).toBeNull();
           await openFromPlus(page, "Review");
           await sidePanel(page)
             .getByRole("button", { name: "Close tab: shell 1", exact: true })

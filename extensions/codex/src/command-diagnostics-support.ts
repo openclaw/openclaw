@@ -61,20 +61,9 @@ export function formatDiagnosticsUsage(commandPrefix: string): string {
   ].join("\n");
 }
 
-export function createCodexDiagnosticsConfirmation(params: {
-  targets: CodexDiagnosticsTarget[];
-  note?: string;
-  senderId: string;
-  channel: string;
-  accountId?: string;
-  channelId?: string;
-  messageThreadId?: string;
-  threadParentId?: string;
-  sessionKey?: string;
-  scopeKey: string;
-  privateRouted?: boolean;
-  now: number;
-}): string {
+export function createCodexDiagnosticsConfirmation(
+  params: Omit<PendingCodexDiagnosticsConfirmation, "token" | "createdAt"> & { now: number },
+): string {
   prunePendingCodexDiagnosticsConfirmations(params.now);
   if (
     !pendingCodexDiagnosticsConfirmationTokensByScope.has(params.scopeKey) &&
@@ -97,20 +86,11 @@ export function createCodexDiagnosticsConfirmation(params: {
   const token = crypto.randomBytes(6).toString("hex");
   scopeTokens.push(token);
   pendingCodexDiagnosticsConfirmationTokensByScope.set(params.scopeKey, scopeTokens);
+  const { now, ...confirmation } = params;
   pendingCodexDiagnosticsConfirmations.set(token, {
+    ...confirmation,
     token,
-    targets: params.targets,
-    note: params.note,
-    senderId: params.senderId,
-    channel: params.channel,
-    accountId: params.accountId,
-    channelId: params.channelId,
-    messageThreadId: params.messageThreadId,
-    threadParentId: params.threadParentId,
-    sessionKey: params.sessionKey,
-    scopeKey: params.scopeKey,
-    ...(params.privateRouted === undefined ? {} : { privateRouted: params.privateRouted }),
-    createdAt: params.now,
+    createdAt: now,
   });
   return token;
 }

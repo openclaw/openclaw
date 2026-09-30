@@ -357,6 +357,7 @@ describe("unproved Doctor authority callers", () => {
       const maintenance = {
         signal: new AbortController().signal,
         run: <T>(operation: () => T) => operation(),
+        repairSqliteNoCow: async () => {},
         releaseState: vi.fn(async () => {}),
         finish: vi.fn(async () => {}),
         release: vi.fn(async () => {}),
@@ -469,6 +470,7 @@ describe("unproved Doctor authority callers", () => {
       const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue({
         signal: new AbortController().signal,
         run: (operation) => operation(),
+        repairSqliteNoCow: async () => {},
         releaseState: async () => {},
         release: async () => {},
         finish: async () => {
@@ -576,7 +578,7 @@ describe("unproved Doctor authority callers", () => {
         .mockImplementationOnce(async (params) => {
           await resumePostCoreUpdate(params);
           expect(dispatched).toEqual([]);
-          expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+          expect(defaultRuntime.exit).not.toHaveBeenCalled();
           const published = publication.mock.lastCall?.[1];
           expect(published).toBeDefined();
           expect(published?.doctorLint).toBeUndefined();

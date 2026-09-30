@@ -4,7 +4,7 @@ import {
   type HovercardBootstrapTrigger,
 } from "./lazy-hovercard-registration.ts";
 import {
-  SESSION_PROGRESS_HOVER_LINK_SELECTOR,
+  SESSION_TITLE_TARGET_SELECTOR,
   sessionProgressHoverTargetFromEvent,
 } from "./session-progress-hovercard-target.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.ts";
@@ -30,8 +30,8 @@ function handleBootstrapMutations(records: MutationRecord[]): void {
         continue;
       }
       if (
-        node.matches(SESSION_PROGRESS_HOVER_LINK_SELECTOR) ||
-        node.querySelector(SESSION_PROGRESS_HOVER_LINK_SELECTOR)
+        node.matches(SESSION_TITLE_TARGET_SELECTOR) ||
+        node.querySelector(SESSION_TITLE_TARGET_SELECTOR)
       ) {
         void bootstrap.define();
         return;
@@ -73,7 +73,7 @@ bootstrap.install(activateHovercard);
 if (!customElements.get(HOVERCARD_TAG)) {
   bootstrapObserver = new MutationObserver(handleBootstrapMutations);
   bootstrapObserver.observe(document, { childList: true, subtree: true });
-  if (document.querySelector(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
+  if (document.querySelector(SESSION_TITLE_TARGET_SELECTOR)) {
     void bootstrap.define();
   }
 }

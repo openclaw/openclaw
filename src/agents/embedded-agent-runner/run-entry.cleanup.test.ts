@@ -25,7 +25,7 @@ it.each(cleanupCases)(
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS", "25");
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       "cleanup-probe",
       () => ({
         info: { id: "cleanup-probe", name: "Cleanup probe" },
@@ -111,7 +111,7 @@ it.each(cleanupCases)(
       vi.useRealTimers();
       vi.unstubAllEnvs();
       warn.mockRestore();
-      restoreRegistry();
+      await restoreRegistry();
     }
   },
 );

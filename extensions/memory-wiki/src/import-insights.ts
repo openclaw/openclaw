@@ -1,23 +1,19 @@
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  filterStringEntries,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  loadMemoryWikiCompiledDashboards,
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
   type MemoryWikiImportInsightCluster,
   type MemoryWikiImportInsightItem,
   type MemoryWikiImportInsightsStatus,
 } from "./compiled-cache.js";
-import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type { WikiPageSummary } from "./markdown.js";
 
 function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
+  return filterStringEntries(value).filter((entry) => entry.trim().length > 0);
 }
 
 function humanizeLabelSuffix(label: string): string {
@@ -266,12 +262,6 @@ function capImportInsightItem(item: MemoryWikiImportInsightItem): MemoryWikiImpo
     ...(item.createdAt ? { createdAt: shortenSentence(item.createdAt, 64) } : {}),
     ...(item.updatedAt ? { updatedAt: shortenSentence(item.updatedAt, 64) } : {}),
   };
-}
-
-export async function listMemoryWikiImportInsights(
-  config: ResolvedMemoryWikiConfig,
-): Promise<MemoryWikiImportInsightsStatus> {
-  return (await loadMemoryWikiCompiledDashboards(config)).importInsights;
 }
 
 export function projectMemoryWikiImportInsight(

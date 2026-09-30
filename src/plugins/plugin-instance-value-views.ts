@@ -35,10 +35,17 @@ class MemberReader extends PluginHostObject {
   }
 }
 
-class IteratorResultReader extends PluginHostObject {
-  #reader: { read: () => unknown; admission: PluginIteratorAdmission };
+type IteratorDataRead = { data?: object };
+type PluginIteratorResultReader = {
+  read: () => unknown;
+  readWithData: (read: IteratorDataRead) => unknown;
+  admission: PluginIteratorAdmission;
+};
 
-  constructor(value: object, reader: { read: () => unknown; admission: PluginIteratorAdmission }) {
+class IteratorResultReader extends PluginHostObject {
+  #reader: PluginIteratorResultReader;
+
+  constructor(value: object, reader: PluginIteratorResultReader) {
     super(value);
     this.#reader = reader;
   }
@@ -101,6 +108,16 @@ function hasProxyPrototype(object: object): boolean {
   return false;
 }
 
+function isNativePluginData(value: object): boolean {
+  return (
+    types.isAnyArrayBuffer(value) ||
+    types.isArrayBufferView(value) ||
+    types.isDate(value) ||
+    types.isRegExp(value) ||
+    types.isNativeError(value)
+  );
+}
+
 function isPluginData(
   value: unknown,
   seen?: Set<object>,
@@ -113,13 +130,7 @@ function isPluginData(
   if (types.isProxy(value)) {
     return false;
   }
-  if (
-    types.isAnyArrayBuffer(value) ||
-    types.isArrayBufferView(value) ||
-    types.isDate(value) ||
-    types.isRegExp(value) ||
-    types.isNativeError(value)
-  ) {
+  if (isNativePluginData(value)) {
     return true;
   }
   if (seen?.has(value)) {
@@ -559,6 +570,30 @@ export function createPluginValueView(
     return result as T;
   };
 
+  // Host readers retain their lease; the outer iterator can project their payload lazily.
+  const wrapIteratorResult = (value: object, dataRead?: IteratorDataRead): object => {
+    const result =
+      IteratorResultReader.get(value) &&
+      !pluginMemberNeedsAdmission(value, "then") &&
+      typeof Reflect.get(value, "then") !== "function"
+        ? value
+        : wrap(value);
+    if (
+      dataRead &&
+      result === value &&
+      !types.isProxy(value) &&
+      !IteratorResultReader.get(value) &&
+      !isNativePluginData(value)
+    ) {
+      // Only a complete graph inspection admits the payload for this synchronous read.
+      const payload: unknown = Object.getOwnPropertyDescriptor(value, "value")?.value;
+      if (payload !== null && typeof payload === "object") {
+        dataRead.data = payload;
+      }
+    }
+    return result;
+  };
+
   const admitIterator = (iterator: object): PluginIteratorAdmission => {
     const current = iterators.get(iterator);
     if (current?.active) {
@@ -586,7 +621,11 @@ export function createPluginValueView(
       pending += 1;
       return bindings.invoke(run, { token, release: releaseOperation });
     };
-    const readResultMember = (result: object, key: "done" | "value"): unknown => {
+    const readResultMember = (
+      result: object,
+      key: "done" | "value",
+      dataRead?: IteratorDataRead,
+    ): unknown => {
       assertActive();
       const view = MemberReader.get(result, factory);
       // Caller-defined shadow properties keep the Proxy's descriptor/identity contract.
@@ -598,21 +637,37 @@ export function createPluginValueView(
         descriptor &&
         ("value" in descriptor || (reader?.admission.active && descriptor.get === reader.read))
       ) {
-        const value: unknown = "value" in descriptor ? descriptor.value : reader?.read();
+        const value: unknown =
+          "value" in descriptor ? descriptor.value : reader?.readWithData(dataRead ?? {});
         // Ordinary data reads need authority, but only executable Promise inspection needs scope.
         if (
           value === null ||
           (typeof value !== "object" && typeof value !== "function") ||
-          ((!project || isPluginData(value)) &&
+          (((!project && !reader) || dataRead?.data === value || isPluginData(value)) &&
             !types.isPromise(value) &&
             !pluginMemberNeedsAdmission(value, "then") &&
             typeof Reflect.get(value, "then") !== "function")
         ) {
+          // Share only a completed classification in this synchronous reader chain.
+          // A later read starts fresh, so mutations never retain a data exemption.
+          if ((project || reader) && dataRead && value !== null && typeof value === "object") {
+            dataRead.data = value;
+          }
           return value;
         }
-        return invoke(() => (project ? project.read(key, source, () => value) : value));
+        if (dataRead) {
+          dataRead.data = undefined;
+        }
+        return invoke(() => {
+          const projected =
+            project ?? (reader ? MemberReader.get(wrap(result), factory) : undefined);
+          return projected ? projected.read(key, source, () => value) : value;
+        });
       }
-      return invoke(() => Reflect.get(result, key));
+      if (dataRead) {
+        dataRead.data = undefined;
+      }
+      return invoke(() => Reflect.get(reader ? wrap(result) : result, key));
     };
     const admission: PluginIteratorAdmission = {
       get done() {
@@ -649,23 +704,52 @@ export function createPluginValueView(
               }
               throw new TypeError("Plugin iterator method must be callable");
             }
-            const next: unknown = await wrapResult(Reflect.apply(method, iterator, args));
+            const next: unknown = await Reflect.apply(method, iterator, args);
             if (next === null || (typeof next !== "object" && typeof next !== "function")) {
               throw new TypeError("Plugin async iterator result must be an object");
             }
-            const complete = Boolean(readResultMember(next, "done"));
+            const doneDescriptor =
+              typeof next === "object" &&
+              !hasProxyPrototype(next) &&
+              Object.getOwnPropertyDescriptor(next, "done");
+            // Executable reflection and non-Boolean completion values keep their original projection.
+            let projected =
+              doneDescriptor &&
+              "value" in doneDescriptor &&
+              typeof doneDescriptor.value === "boolean" &&
+              !IteratorResultReader.get(next)
+                ? undefined
+                : wrapIteratorResult(next);
+            const complete = Boolean(readResultMember(projected ?? next, "done"));
             // IteratorClose ends this admission even when a generator yields in finally.
             // A later explicit next can acquire a new lease only while the instance is live.
             state = complete ? "done" : key === "return" ? "returned" : state;
-            const readValue = () =>
-              active ? readResultMember(next, "value") : Reflect.get(next, "value");
+            const readWithData = (dataRead: IteratorDataRead) => {
+              if (!projected) {
+                const prepare = () => {
+                  projected = wrapIteratorResult(next, dataRead);
+                };
+                // Result projection belongs to its first payload read, not next()'s completion.
+                // Terminal data stays readable after the iterator's admission has finished.
+                if (active) {
+                  invoke(prepare);
+                } else {
+                  prepare();
+                }
+              }
+              const result = projected!;
+              return active
+                ? readResultMember(result, "value", dataRead)
+                : Reflect.get(IteratorResultReader.get(result) ? wrap(result) : result, "value");
+            };
+            const readValue = () => readWithData({});
             // Completion may join disposal; value stays lazy and checks the exact inner lease.
             const result = Object.defineProperty({ done: complete }, "value", {
               get: readValue,
               enumerable: true,
               configurable: true,
             });
-            void new IteratorResultReader(result, { read: readValue, admission });
+            void new IteratorResultReader(result, { read: readValue, readWithData, admission });
             return result;
           } catch (error) {
             state = "done";

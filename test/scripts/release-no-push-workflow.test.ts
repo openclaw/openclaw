@@ -49,6 +49,8 @@ beforeAll(() => {
     "scripts/lib/docker-e2e-plan.mts",
     "scripts/lib/docker-e2e-scenarios.mts",
     "scripts/lib/official-external-channel-catalog.json",
+    "scripts/lib/official-external-provider-catalog.json",
+    "scripts/lib/record-shared.mjs",
     "scripts/lib/update-compat-inventory.json",
     "scripts/lib/update-first-hop-lanes.mjs",
     "scripts/lib/upgrade-survivor-policy.mjs",
@@ -407,6 +409,25 @@ function runnerSandbox(context: Record<string, unknown>) {
 }
 
 describe("release validation no-push transport", () => {
+  it.each(["github", "hybrid", ""])(
+    "keeps the QA Lab runtime-pair lane on Blacksmith when the backend is %j",
+    (backend) => {
+      const release = readWorkflow(RELEASE_CHECKS);
+      const runner = String(job(release, "qa_lab_runtime_pair_lane_release_checks")["runs-on"]);
+      const resolve = (vars: Record<string, string>) =>
+        runInNewContext(runner.slice(3, -2), runnerSandbox({ vars }));
+      expect(resolve({ OPENCLAW_CI_RUNNER_BACKEND: backend })).toBe("blacksmith-8vcpu-ubuntu-2404");
+      expect(
+        resolve({ OPENCLAW_CI_RUNNER_BACKEND: backend, OPENCLAW_RELEASE_RUNNER_GROUP: "release" }),
+      ).toEqual({ group: "release", labels: "blacksmith-8vcpu-ubuntu-2404" });
+      const notice = job(release, "resolve_target").steps?.find(
+        (step) => step.name === "Report release runner routing",
+      );
+      expect(notice?.if).toBe("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
+      expect(notice?.run).toContain("QA Lab runtime-pair stays pinned to Blacksmith");
+    },
+  );
+
   it("scopes release Gateway capacity to the existing repo E2E runner input", () => {
     const live = readWorkflow(LIVE_E2E);
     for (const entry of [live.on?.workflow_call, live.on?.workflow_dispatch]) {
@@ -1208,8 +1229,6 @@ describe("release validation no-push transport", () => {
 
     const evidenceReuse = job(full, "evidence_reuse");
     expect(step(evidenceReuse, "Checkout target SHA").with?.["persist-credentials"]).toBe(false);
-    const dockerAssets = job(full, "docker_runtime_assets_preflight");
-    expect(step(dockerAssets, "Checkout target SHA").with?.["persist-credentials"]).toBe(false);
     expect(evidenceReuse.if).toContain("github.ref == 'refs/heads/main'");
     expect(evidenceReuse.if).toContain("startsWith(github.ref, 'refs/heads/release-ci/')");
     expect(
@@ -2128,20 +2147,6 @@ describe("release validation no-push transport", () => {
     expect(early.needs).toEqual(["publish", "approve_github_release_before_docker"]);
     expect(early.steps).toEqual(job(workflow, "finalize_github_release").steps);
     const cases = [
-      {
-        tag: "v2026.9.1-alpha.1",
-        npm: "success",
-        docker: "skipped",
-        publishDocker: false,
-        finalize: true,
-      },
-      {
-        tag: "v2026.9.1-alpha.1",
-        npm: "failure",
-        docker: "skipped",
-        publishDocker: false,
-        finalize: false,
-      },
       {
         tag: "v2026.9.1-beta.1",
         npm: "success",

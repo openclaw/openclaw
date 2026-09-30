@@ -1,4 +1,3 @@
-/** Doctor health note for Claude CLI binary, auth, and workspace/project directories. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -144,11 +143,6 @@ function resolveClaudeCliWorkspaceTargets(params: {
   });
 }
 
-/**
- * Emits Claude CLI health diagnostics for every agent currently routed through the CLI backend.
- *
- * The optional deps let tests inject the CLI status probe, PATH resolution, and workspace roots.
- */
 export function noteClaudeCliHealth(
   cfg: OpenClawConfig,
   deps?: {

@@ -286,11 +286,6 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-/** True when a server-derived session key names a group/channel conversation. */
-export function sessionKeyNamesGroupConversation(sessionKey?: string | null): boolean {
-  return (resolveGroupContextFromSessionKey(sessionKey).groupIds?.length ?? 0) > 0;
-}
-
 function resolveExplicitProfileAlsoAllow(tools?: OpenClawConfig["tools"]): string[] | undefined {
   return Array.isArray(tools?.alsoAllow) ? tools.alsoAllow : undefined;
 }
@@ -305,30 +300,22 @@ function profileAllowsGatewayConfigReads(profile?: string, alsoAllow?: string[])
   return allow.length > 0 && createToolPolicyMatcher({ allow })("gateway");
 }
 
-function hasExplicitToolSection(section: unknown): boolean {
-  return section !== undefined && section !== null;
-}
-
 /** Detect removed implicit grants for migration warnings only (#47487). */
 function detectImplicitProfileGrants(params: {
   globalTools?: OpenClawConfig["tools"];
   agentTools?: AgentToolsConfig;
   includeGlobalSections: boolean;
 }): Array<{ section: string; grants: string[] }> {
-  const entries: Array<{ section: string; grants: string[] }> = [];
-  if (
-    hasExplicitToolSection(params.agentTools?.exec) ||
-    (params.includeGlobalSections && hasExplicitToolSection(params.globalTools?.exec))
-  ) {
-    entries.push({ section: "tools.exec", grants: ["exec", "process"] });
-  }
-  if (
-    hasExplicitToolSection(params.agentTools?.fs) ||
-    (params.includeGlobalSections && hasExplicitToolSection(params.globalTools?.fs))
-  ) {
-    entries.push({ section: "tools.fs", grants: ["read", "write", "edit"] });
-  }
-  return entries;
+  return [
+    { section: "exec" as const, grants: ["exec", "process"] },
+    { section: "fs" as const, grants: ["read", "write", "edit"] },
+  ]
+    .filter(
+      ({ section }) =>
+        params.agentTools?.[section] != null ||
+        (params.includeGlobalSections && params.globalTools?.[section] != null),
+    )
+    .map(({ section, grants }) => ({ section: `tools.${section}`, grants }));
 }
 
 /** Resolve the layered global, provider, agent, and profile tool policies. */

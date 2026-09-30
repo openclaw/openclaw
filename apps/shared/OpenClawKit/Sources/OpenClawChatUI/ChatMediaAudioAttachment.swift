@@ -16,7 +16,6 @@ struct ChatMediaAudioAttachment: View {
     let artifactId: String
     let label: String
     let durationSeconds: Double?
-    let playback: OpenClawChatPlaybackMode?
     let resolverReady: Bool
     let playbackAllowed: @MainActor @Sendable () -> Bool
     let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?

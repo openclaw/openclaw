@@ -222,12 +222,11 @@ export function createWorkerComputerService(
           (await prepared.catch(() => undefined))?.close("gateway-stop"),
         ),
       ]);
-      const failures = results.filter((result) => result.status === "rejected");
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
       if (failures.length) {
-        throw new AggregateError(
-          failures.map((failure) => failure.reason),
-          "Session computer cleanup failed",
-        );
+        throw new AggregateError(failures, "Session computer cleanup failed");
       }
     },
   };

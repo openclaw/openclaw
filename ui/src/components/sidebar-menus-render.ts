@@ -271,6 +271,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           unread: batchRows ? allUnread : session.unread,
           hiddenFromInvolvingMe: session.hiddenFromInvolvingMe,
           archived: allArchived,
+          snoozedUntil: session.snoozedUntil ?? null,
           archiving: rows.some((row) => context?.sessions.archiveVisibility(row.key) === "pending"),
           category: batchRows ? sharedCategory : (session.category ?? null),
           icon: batchRows ? null : (session.icon ?? null),
@@ -291,6 +292,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         .splitAllowed=${canSplitSessionView()}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .forkFromLastCompleted=${session.gatewayHasActiveRun ?? session.hasActiveRun}
+        .snoozeAllowed=${true}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
@@ -399,6 +401,16 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             case "new-group":
               void host.sessionOrganizer.createSessionGroup([session]);
               break;
+            case "snooze":
+              void host.sessionOrganizer.snoozeSessionWithUndo(session, action.snoozedUntil);
+              break;
+            case "wake":
+              void host.sessionOrganizer.patchSession(
+                session,
+                { snoozedUntil: null },
+                { sessionScope: true },
+              );
+              break;
             case "toggle-archived":
               if (session.archived) {
                 void host.sessionOrganizer.patchSession(
@@ -434,23 +446,11 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
     return nothing;
   }
   const groupDefaultsStatus = host.sessionDataContext?.sessions.groupsStatus() ?? "idle";
-  const groupActionAccess = {
-    "group-defaults": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
-      method: "sessions.groups.update",
-      requiredScope: "operator.write",
-    }),
-    "rename-group": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
-      method: "sessions.groups.rename",
-      requiredScope: "operator.write",
-    }),
-    "new-group": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    }),
-    "delete-group": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
-      method: "sessions.groups.delete",
-      requiredScope: "operator.write",
-    }),
+  const groupActionMethods = {
+    "group-defaults": "sessions.groups.update",
+    "rename-group": "sessions.groups.rename",
+    "new-group": "sessions.groups.put",
+    "delete-group": "sessions.groups.delete",
   } as const;
   return renderSidebarSessionGroupMenu({
     menu,
@@ -458,7 +458,11 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
     connected: host.connected,
     groupDefaultsUnavailable: groupDefaultsStatus === "unavailable",
     actionDisabledReasons: Object.fromEntries(
-      Object.entries(groupActionAccess).flatMap(([action, access]) => {
+      Object.entries(groupActionMethods).flatMap(([action, method]) => {
+        const access = readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
+          method,
+          requiredScope: "operator.write",
+        });
         if (!access.allowed) {
           return [[action, access.reason]];
         }
@@ -507,6 +511,8 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     return nothing;
   }
   const sessionSources = SETTINGS_ROUTE_TARGETS.sessionSources;
+  const rosterMode = host.sidebarAgentsMode === "roster";
+  const displayedGrouping = host.effectiveSessionsGrouping();
   return renderSidebarSessionSortMenu({
     position,
     trigger: controller.sessionSortMenuTrigger,
@@ -514,8 +520,8 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       pathForRoute(sessionSources.routeId, host.basePath) +
       sessionSources.search +
       sessionSources.hash,
-    grouping: host.effectiveSessionsGrouping(),
-    rosterMode: host.sidebarAgentsMode === "roster",
+    grouping: displayedGrouping,
+    rosterMode,
     sortMode: host.effectiveSessionSortMode(),
     peopleSortAvailable: host.sessionPeopleSortAvailable(),
     statusFilter: host.sessionsStatusFilter,
@@ -527,14 +533,29 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
-    // The badge counts Owners and Status; Reset also clears the other Filters rows.
-    filtersChanged:
-      countSidebarSessionFilters(host) > 0 || host.sessionsShowCron || host.sessionsShowSystem,
-    onResetFilters: () => {
+    // Reset covers the panel; the toolbar dot still counts only Owners and Status.
+    settingsChanged:
+      countSidebarSessionFilters(host) > 0 ||
+      host.sessionsShowCron ||
+      host.sessionsShowSystem ||
+      host.sessionsShowPreview ||
+      host.effectiveSessionSortMode() !== "created" ||
+      (!rosterMode &&
+        (displayedGrouping !== "category" || host.sessionsEmptyGroupsMode !== "filtering")),
+    onReset: () => {
       host.setSessionOwnerFilter(null);
       host.sessionOrganizer.setSessionsStatusFilter("active");
       host.sessionOrganizer.setSessionsShowCron(false);
       host.sessionOrganizer.setSessionsShowSystem(false);
+      host.sessionOrganizer.setSessionsShowPreview(false);
+      host.setSessionSortMode("created");
+      if (!rosterMode) {
+        // A displayed default can hide a saved Person choice until owners return.
+        if (displayedGrouping !== "category") {
+          host.sessionOrganizer.setSessionsGrouping("category");
+        }
+        host.setSessionsEmptyGroupsMode("filtering");
+      }
     },
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);

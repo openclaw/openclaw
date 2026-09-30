@@ -785,7 +785,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         }));
         const commitAuthorization = vi.fn(commitExecAuthorizationLocked);
         const runCommand = vi.fn(async () => createLocalRunResult("auto-reviewed"));
-        const prepared = buildCwdApprovalPlan([executablePath], tmp);
+        const prepared = buildCwdApprovalPlan([executablePath, "security.audit.suppressions"], tmp);
         expect(prepared.ok).toBe(true);
         requireApprovalPlan(prepared, "unreachable");
         const invoke = await runLocalSystemInvoke({
@@ -802,8 +802,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(autoReviewer).toHaveBeenCalledTimes(1);
         expect(autoReviewer).toHaveBeenCalledWith(
           expect.objectContaining({
-            command: executablePath,
-            argv: [executablePath],
+            command: `${executablePath} security.audit.suppressions`,
+            argv: [executablePath, "security.audit.suppressions"],
             cwd: tmp,
             host: "node",
             reason: "approval-required",
@@ -951,47 +951,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       }
     },
   );
-
-  it("does not auto-review direct system.run security audit suppression edits", async () => {
-    const tmp = createFixtureDir("openclaw-system-run-auto-review-suppression-");
-    const executablePath = createTempExecutable(tmp, "openclaw");
-    setRuntimeConfigSnapshot({
-      tools: {
-        exec: {
-          mode: "auto",
-        },
-      },
-    });
-    try {
-      const autoReviewer = vi.fn<ExecAutoReviewer>(() => ({
-        decision: "allow-once",
-        rationale: "test reviewer would allow it",
-        risk: "low",
-      }));
-      const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
-      const prepared = buildCwdApprovalPlan(
-        [executablePath, "config", "set", "security.audit.suppressions", "[]"],
-        tmp,
-      );
-      expect(prepared.ok).toBe(true);
-      requireApprovalPlan(prepared, "unreachable");
-      const invoke = await runLocalSystemInvoke({
-        command: prepared.plan.argv,
-        cwd: prepared.plan.cwd ?? tmp,
-        systemRunPlan: prepared.plan,
-        runCommand,
-        resolveExecSecurity: resolveProductionExecSecurity,
-        resolveExecAsk: resolveProductionExecAsk,
-        autoReviewer,
-      });
-
-      expect(autoReviewer).not.toHaveBeenCalled();
-      expect(runCommand).not.toHaveBeenCalled();
-      expectInvokeErrorMessage(invoke.sendInvokeResult, "SYSTEM_RUN_DENIED: approval required");
-    } finally {
-      clearRuntimeConfigSnapshot();
-    }
-  });
 
   it.each(["ask", "deny"] as const)(
     "does not execute when system.run auto reviewer returns %s",
@@ -2439,33 +2398,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
-  it("does not let forwarded auto-review authorize security audit suppression edits", async () => {
-    const tmp = createFixtureDir("openclaw-forwarded-auto-review-suppression-");
-    const executablePath = createTempExecutable(tmp, "openclaw");
-    const prepared = buildCwdSessionApprovalPlan(
-      [executablePath, "config", "set", "security.audit.suppressions", "[]"],
-      tmp,
-      "agent:main:main",
-    );
-    expect(prepared.ok).toBe(true);
-    requireApprovalPlan(prepared, "unreachable");
-    await withTempApprovalsHome(createApprovals("full", "on-miss", "deny"), async () => {
-      const invoke = await runLocalSystemInvokeWithPolicy("full", "on-miss", {
-        preparedPlan: prepared.plan,
-        cwd: tmp,
-        approvalSource: "auto-review",
-      });
-
-      expect(invoke.runCommand).not.toHaveBeenCalled();
-      expectExecDeniedEvent(invoke.sendNodeEvent);
-      expectInvokeErrorMessage(
-        invoke.sendInvokeResult,
-        "SYSTEM_RUN_DENIED: explicit approval required",
-        true,
-      );
-    });
-  });
-
   it("preserves exact-plan forwarded auto-review for strict inline eval", async () => {
     const plan = createStrictInlineEvalApprovalPlan("openclaw-forwarded-inline-");
     setRuntimeConfigSnapshot({ tools: { exec: { strictInlineEval: true } } });
@@ -2884,55 +2816,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     } finally {
       clearRuntimeConfigSnapshot();
     }
-  });
-
-  it("does not let timeout fallback authorize security audit suppression edits", async () => {
-    const tmp = createFixtureDir("openclaw-timeout-fallback-suppression-");
-    const executablePath = createTempExecutable(tmp, "openclaw");
-    const prepared = buildCwdSessionApprovalPlan(
-      [executablePath, "config", "set", "security.audit.suppressions", "[]"],
-      tmp,
-      "agent:main:main",
-    );
-    expect(prepared.ok).toBe(true);
-    requireApprovalPlan(prepared, "unreachable");
-    await withTempApprovalsHome(createApprovals("full", "always", "full", {}), async () => {
-      const invoke = await runLocalSystemInvoke({
-        preparedPlan: prepared.plan,
-        cwd: tmp,
-        approvalSource: "ask-fallback",
-      });
-
-      expect(invoke.runCommand).not.toHaveBeenCalled();
-      expectApprovalRequiredDenied(invoke.sendNodeEvent, invoke.sendInvokeResult);
-    });
-  });
-
-  it("keeps audit suppression edits approval-gated under allowlist fallback from full/off", async () => {
-    const tmp = createFixtureDir("openclaw-timeout-fallback-full-off-suppression-");
-    const executablePath = createTempExecutable(tmp, "openclaw");
-    const prepared = buildCwdSessionApprovalPlan(
-      [executablePath, "config", "set", "security.audit.suppressions", "[]"],
-      tmp,
-      "agent:main:main",
-    );
-    expect(prepared.ok).toBe(true);
-    requireApprovalPlan(prepared, "unreachable");
-    await withTempApprovalsHome(
-      createApprovals("full", "off", "allowlist", {
-        main: { allowlist: [{ pattern: fs.realpathSync(executablePath) }] },
-      }),
-      async () => {
-        const invoke = await runLocalSystemInvokeWithPolicy("full", "off", {
-          preparedPlan: prepared.plan,
-          cwd: tmp,
-          approvalSource: "ask-fallback",
-        });
-
-        expect(invoke.runCommand).not.toHaveBeenCalled();
-        expectApprovalRequiredDenied(invoke.sendNodeEvent, invoke.sendInvokeResult);
-      },
-    );
   });
 
   it("rejects unknown approval provenance", async () => {

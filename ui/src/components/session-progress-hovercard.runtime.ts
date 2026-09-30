@@ -3,7 +3,7 @@ import { nothing, ReactiveElement, render } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
+import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -92,8 +92,14 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   }
 
   set client(value: GatewayBrowserClient | null) {
+    if (value === this.applicationClient) {
+      return;
+    }
     this.applicationClient = value;
     this.sessionLinkTitler.client = value;
+    if (this.isConnected) {
+      this.sessionLinkTitler.refresh();
+    }
   }
 
   get context(): ApplicationContext | null {
@@ -387,21 +393,11 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       this.lastProgressCard = currentProgressCard;
     }
     const gateway = this.applicationGateway;
-    const channelAvatarAuth = {
-      authTokens: gateway
-        ? resolveControlUiAuthCandidates({
-            hello: gateway.snapshot.hello,
-            settings: { token: gateway.connection.token },
-            password: gateway.connection.password,
-          })
-        : [],
-      authReady: Boolean(
-        gateway &&
-        (gateway.snapshot.hello ||
-          gateway.connection.token.trim() ||
-          gateway.connection.password.trim()),
-      ),
-    };
+    const channelAvatarAuth = resolveControlUiAvatarAuth({
+      hello: gateway?.snapshot.hello,
+      settings: gateway?.connection,
+      password: gateway?.connection.password,
+    });
     const revision = JSON.stringify({
       progress: this.lastProgressCard?.revision ?? null,
       pullRequests: pullRequests

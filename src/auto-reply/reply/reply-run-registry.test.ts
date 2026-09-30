@@ -17,6 +17,7 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import { registerReplyOperationCompletionCases } from "./reply-run-registry.completion.cases.js";
 import { REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS } from "./reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
@@ -27,11 +28,9 @@ import {
   isReplyRunActiveForSessionId,
   interruptReplyRunTarget,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  registerReplyOperationSuccessorBarrier,
   type ReplyBackendQueueMessageOptions,
   type ReplyOperation,
   ReplyRunAlreadyActiveError,
-  ReplyRunSuccessorAdmissionBlockedError,
   replyRunRegistry,
   markReplyOperationGlobalLaneWaitProgress,
   runAfterReplyOperationClear,
@@ -39,7 +38,6 @@ import {
   supersedeReplyRunByRunId,
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
-  waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
 import {
   expireStaleReplyOperation,
@@ -264,44 +262,7 @@ describe("reply run registry", () => {
     }
   });
 
-  it("runs completeThen callbacks after active state clears", () => {
-    const operation = createTestReplyOperation({
-      sessionId: "session-complete",
-    });
-    const afterClear = vi.fn(() => {
-      expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
-      expect(isReplyRunActiveForSessionId("session-complete")).toBe(false);
-    });
-
-    operation.completeThen(afterClear);
-
-    expect(operation.result).toEqual({ kind: "completed" });
-    expect(afterClear).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps owner settlement pending after stale expiry through its completion barrier", async () => {
-    const operation = createTestReplyOperation({ sessionId: "session-stale-owner" });
-    operation.setPhase("running");
-
-    expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
-    expect(replyRunRegistry.isActive("agent:main:main")).toBe(true);
-
-    const settlement = waitForReplyOperationOwnerSettlement(operation, 1_000);
-    let settled = false;
-    void settlement.then((value) => {
-      settled = value;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    const { promise: completionBarrier, resolve: releaseCompletion } = createDeferred();
-    operation.completeWithAfterClearBarrier(completionBarrier);
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    releaseCompletion();
-    await expect(settlement).resolves.toBe(true);
-  });
+  registerReplyOperationCompletionCases();
 
   it.each(["finalization expiry", "forced clear", "terminal expiry"] as const)(
     "keeps late delivery ownership pending after %s reclaims the slot",
@@ -762,96 +723,6 @@ describe("reply run registry", () => {
       });
       next.complete();
     });
-  });
-
-  it("fences every durable alias until successor handoff settles", async () => {
-    await withFakeReplyTimers(async () => {
-      const requestKey = "agent:main:telegram:alias:request";
-      const canonicalKey = "agent:main:telegram:alias:canonical";
-      const adoptedKey = "agent:main:telegram:alias:adopted";
-      const operation = createTestReplyOperation({
-        sessionKey: requestKey,
-        sessionId: "alias-session",
-      });
-      const { promise: firstBarrier, resolve: releaseFirstBarrier } = createDeferred();
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: "alias-session",
-        sessionKeys: [requestKey, canonicalKey],
-        start: () => firstBarrier,
-      });
-      const { promise: secondBarrier, resolve: releaseSecondBarrier } = createDeferred();
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: "alias-session",
-        sessionKeys: [adoptedKey],
-        start: () => secondBarrier,
-      });
-
-      operation.updateSessionId("rotated-alias-session");
-      operation.complete();
-      for (const sessionKey of [requestKey, canonicalKey, adoptedKey]) {
-        expect(() => createTestReplyOperation({ sessionKey })).toThrow(
-          ReplyRunSuccessorAdmissionBlockedError,
-        );
-      }
-      const timedWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
-      await vi.advanceTimersByTimeAsync(100);
-      await expect(timedWait).resolves.toEqual({ settled: false });
-
-      const requestWait = waitForReplyRunSuccessorAdmission(requestKey, 100);
-      const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
-      releaseFirstBarrier();
-      for (const wait of [requestWait, canonicalWait]) {
-        await expect(wait).resolves.toEqual({
-          settled: true,
-          sources: [
-            {
-              sessionId: "rotated-alias-session",
-              sessionIds: operation.captureOwnedSessionIds(),
-              operation,
-              databaseIdentity: undefined,
-            },
-          ],
-        });
-      }
-      expect(() => createTestReplyOperation({ sessionKey: adoptedKey })).toThrow(
-        ReplyRunSuccessorAdmissionBlockedError,
-      );
-      releaseSecondBarrier();
-      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual({
-        settled: true,
-        sources: [
-          {
-            sessionId: "rotated-alias-session",
-            sessionIds: operation.captureOwnedSessionIds(),
-            operation,
-            databaseIdentity: undefined,
-          },
-        ],
-      });
-      const successor = createTestReplyOperation({ sessionKey: canonicalKey });
-      successor.complete();
-    });
-  });
-
-  it("stops a successor wait when its signal aborts", async () => {
-    const operation = createTestReplyOperation();
-    registerReplyOperationSuccessorBarrier({
-      operation,
-      sessionId: operation.sessionId,
-      sessionKeys: [operation.key],
-      start: () => new Promise<void>(() => {}),
-    });
-    operation.complete();
-    const controller = new AbortController();
-    const wait = waitForReplyRunSuccessorAdmission(operation.key, null, {
-      signal: controller.signal,
-    });
-
-    controller.abort();
-
-    await expect(wait).resolves.toEqual({ settled: false });
   });
 
   it("keeps follow-up admission blocked during an unsettled inter-block delay", async () => {

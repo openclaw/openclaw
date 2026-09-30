@@ -24,6 +24,15 @@ type LeaseWorkerOperation<T> = (
   identity: OpenClawStateLeaseIdentity,
 ) => Promise<T>;
 
+/** Keep this importer's admission and release code available across package replacement. */
+export async function prepareOpenClawStateLeaseWorkerRuntime(): Promise<void> {
+  await Promise.all([
+    import("./openclaw-state-worker-store.js"),
+    import("../infra/sqlite-worker-identity.js"),
+    import("../infra/sqlite-worker-store.js"),
+  ]);
+}
+
 function admittedWorkerOperation<T>(
   context: OpenClawStateWorkerContext,
   operation: LeaseWorkerOperation<T>,

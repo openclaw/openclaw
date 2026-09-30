@@ -3,7 +3,7 @@ import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getMSTeamsRuntime } from "./runtime.js";
 
-type MSTeamsSqliteStateOptions = {
+export type MSTeamsSqliteStateOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;

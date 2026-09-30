@@ -71,7 +71,7 @@ export function createFeishuCardInteractionEnvelope(
   };
 }
 
-export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
+function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
   const actionValue = event.action.value;
   if (isRecord(actionValue)) {
     if (typeof actionValue.text === "string") {

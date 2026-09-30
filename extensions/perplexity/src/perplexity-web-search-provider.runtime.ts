@@ -1,4 +1,7 @@
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -84,14 +87,28 @@ function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
   return model.startsWith("perplexity/") ? model.slice("perplexity/".length) : model;
 }
 
-function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Record<string, string> {
-  return {
+function buildPerplexityRequestHeaders(params: {
+  apiKey: string;
+  baseUrl?: string;
+  acceptJson?: boolean;
+}): Record<string, string> {
+  const defaultHeaders = {
     "Content-Type": "application/json",
-    ...(acceptJson ? { Accept: "application/json" } : {}),
-    Authorization: `Bearer ${apiKey}`,
-    "HTTP-Referer": "https://openclaw.ai",
-    "X-Title": "OpenClaw Web Search",
+    ...(params.acceptJson ? { Accept: "application/json" } : {}),
+    Authorization: `Bearer ${params.apiKey}`,
   };
+  return (
+    resolveProviderRequestHeaders({
+      provider: "perplexity",
+      // The direct Perplexity API is this provider's default endpoint. Other hosts such as
+      // OpenRouter keep their own endpoint so the policy attributes them as that vendor.
+      baseUrl:
+        params.baseUrl && !isDirectPerplexityBaseUrl(params.baseUrl) ? params.baseUrl : undefined,
+      capability: "other",
+      transport: "http",
+      defaultHeaders,
+    }) ?? defaultHeaders
+  );
 }
 
 function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
@@ -110,9 +127,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
       const url =
         typeof annotation.url_citation?.url === "string"
           ? annotation.url_citation.url
-          : typeof annotation.url === "string"
-            ? annotation.url
-            : undefined;
+          : annotation.url;
       const normalizedUrl = normalizeOptionalString(url);
       if (normalizedUrl) {
         citations.push(normalizedUrl);
@@ -166,7 +181,7 @@ async function runPerplexitySearchApi(params: {
     body.max_tokens_per_page = params.maxTokensPerPage;
   }
 
-  const headers = buildPerplexityRequestHeaders(params.apiKey, true);
+  const headers = buildPerplexityRequestHeaders({ apiKey: params.apiKey, acceptJson: true });
   return withTrustedWebSearchEndpoint(
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
@@ -218,7 +233,10 @@ async function runPerplexitySearch(params: {
     body.search_recency_filter = params.freshness;
   }
 
-  const headers = buildPerplexityRequestHeaders(params.apiKey);
+  const headers = buildPerplexityRequestHeaders({
+    apiKey: params.apiKey,
+    baseUrl: params.baseUrl,
+  });
   return withTrustedWebSearchEndpoint(
     {
       url: endpoint,

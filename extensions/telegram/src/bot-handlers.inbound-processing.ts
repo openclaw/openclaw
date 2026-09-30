@@ -60,7 +60,6 @@ type TelegramInboundMessage = {
   msg: Message;
   chatId: number;
   isGroup: boolean;
-  isForum: boolean;
   threadSpec: TelegramThreadSpec;
   dmPolicy: DmPolicy;
   storeAllowFrom: string[];
@@ -129,7 +128,6 @@ export function createTelegramInboundProcessing({
       msg,
       chatId,
       isGroup,
-      isForum,
       threadSpec,
       dmPolicy,
       storeAllowFrom,
@@ -156,31 +154,27 @@ export function createTelegramInboundProcessing({
     const bypassTextBuffer =
       isTelegramControlLaneText({ rawText: messageText, botUsername }) ||
       isBtwRequestText(messageText, { botUsername });
-    let abortControlAuthorized: Promise<boolean> | undefined;
-    const isAuthorizedAbortControlMessage = () => {
-      if (!isAbortControlMessage || !senderId) {
-        return Promise.resolve(false);
-      }
-      abortControlAuthorized ??= resolveTelegramCommandIngressAuthorization({
-        accountId,
-        cfg: authorizationCfg,
-        dmPolicy,
-        isGroup,
-        chatId,
-        resolvedThreadId,
-        senderId,
-        effectiveDmAllow,
-        effectiveGroupAllow,
-        eventKind: "message",
-        allowTextCommands: true,
-        hasControlCommand: true,
-        modeWhenAccessGroupsOff: "allow",
-        includeDmAllowForGroupCommands: false,
-      }).then((gate) => gate.authorized);
-      return abortControlAuthorized;
-    };
+    const abortControlAuthorized =
+      isAbortControlMessage && senderId
+        ? resolveTelegramCommandIngressAuthorization({
+            accountId,
+            cfg: authorizationCfg,
+            dmPolicy,
+            isGroup,
+            chatId,
+            resolvedThreadId,
+            senderId,
+            effectiveDmAllow,
+            effectiveGroupAllow,
+            eventKind: "message",
+            allowTextCommands: true,
+            hasControlCommand: true,
+            modeWhenAccessGroupsOff: "allow",
+            includeDmAllowForGroupCommands: false,
+          }).then((gate) => gate.authorized)
+        : Promise.resolve(false);
 
-    if (await isAuthorizedAbortControlMessage()) {
+    if (await abortControlAuthorized) {
       cancelPending({ chatId, threadSpec, senderId });
     }
 
@@ -191,7 +185,6 @@ export function createTelegramInboundProcessing({
         msg,
         chatId,
         isGroup,
-        isForum,
         threadSpec,
         storeAllowFrom,
         senderId,
@@ -214,7 +207,6 @@ export function createTelegramInboundProcessing({
       msg,
       chatId,
       isGroup,
-      isForum,
       threadSpec,
       senderId,
       effectiveGroupAllow,

@@ -1,6 +1,4 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-// Converts queue directives into normalized queue settings.
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import {
@@ -11,7 +9,6 @@ import {
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy } from "./types.js";
 
-/** Parses debounce durations in `/queue` directives. */
 function parseQueueDebounce(raw?: string): number | undefined {
   if (!raw) {
     return undefined;
@@ -59,10 +56,7 @@ function parseQueueDirectiveArgs(raw: string): {
     if (!token) {
       break;
     }
-    const lowered = normalizeOptionalLowercaseString(token);
-    if (!lowered) {
-      break;
-    }
+    const lowered = token.toLowerCase();
     if (lowered === "default" || lowered === "reset" || lowered === "clear") {
       queueReset = true;
       consumed = i;
@@ -100,7 +94,6 @@ function parseQueueDirectiveArgs(raw: string): {
       rawMode = token;
       consumed = i;
     }
-    // Stop at first unrecognized token.
     break;
   }
   return {

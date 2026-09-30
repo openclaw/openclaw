@@ -1,12 +1,3 @@
-/**
- * Nostr Profile HTTP Handler
- *
- * Handles HTTP requests for profile management:
- * - PUT /api/channels/nostr/:accountId/profile - Update and publish profile
- * - POST /api/channels/nostr/:accountId/profile/import - Import from relays
- * - GET /api/channels/nostr/:accountId/profile - Get current profile state
- */
-
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
@@ -15,7 +6,6 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import {
@@ -32,13 +22,10 @@ import {
 } from "./nostr-profile-url-safety.js";
 
 interface NostrProfileHttpContext {
-  /** Get current profile from config */
   getConfigProfile: (accountId: string) => NostrProfile | undefined;
   /** Update profile in config (after successful publish) */
   updateConfigProfile: (accountId: string, profile: NostrProfile) => Promise<void>;
-  /** Get account's public key and relays */
   getAccountInfo: (accountId: string) => { pubkey: string; relays: string[] } | null;
-  /** Logger */
   log?: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -46,8 +33,8 @@ interface NostrProfileHttpContext {
   };
 }
 
-const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 5; // 5 requests per minute
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 5;
 const RATE_LIMIT_MAX_TRACKED_KEYS = 2_048;
 const profileRateLimiter = createFixedWindowRateLimiter({
   windowMs: RATE_LIMIT_WINDOW_MS,
@@ -81,16 +68,15 @@ function normalizeProfileUpdateUrlInputs(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
   }
-  const record = value;
   let normalized: Record<string, unknown> | undefined;
   for (const field of PROFILE_URL_FIELDS) {
-    const input = record[field];
+    const input = value[field];
     if (typeof input !== "string") {
       continue;
     }
     const next = normalizeNostrProfileUrlForRuntime(input);
     if (next !== input) {
-      normalized ??= { ...record };
+      normalized ??= { ...value };
       normalized[field] = next;
     }
   }
@@ -101,12 +87,11 @@ function restoreProfileUpdateUrlInputs(profile: NostrProfile, value: unknown): N
   if (!isRecord(value)) {
     return profile;
   }
-  const record = value;
   return {
     ...profile,
-    ...(typeof record.picture === "string" ? { picture: record.picture } : {}),
-    ...(typeof record.banner === "string" ? { banner: record.banner } : {}),
-    ...(typeof record.website === "string" ? { website: record.website } : {}),
+    ...(typeof value.picture === "string" ? { picture: value.picture } : {}),
+    ...(typeof value.banner === "string" ? { banner: value.banner } : {}),
+    ...(typeof value.website === "string" ? { website: value.website } : {}),
   };
 }
 
@@ -150,17 +135,14 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 
   const ipLower = normalizeLowercaseStringOrEmpty(remoteAddress).replace(/^\[|\]$/g, "");
 
-  // IPv6 loopback
   if (ipLower === "::1") {
     return true;
   }
 
-  // IPv4 loopback (127.0.0.0/8)
   if (ipLower === "127.0.0.1" || ipLower.startsWith("127.")) {
     return true;
   }
 
-  // IPv4-mapped IPv6
   const v4Mapped = ipLower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (v4Mapped) {
     return isLoopbackRemoteAddress(v4Mapped[1]);
@@ -179,10 +161,7 @@ function isLoopbackOriginLike(value: string): boolean {
 }
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return readStringValue(value);
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function normalizeIpCandidate(raw: string): string {
@@ -223,52 +202,38 @@ function hasNonLoopbackForwardedClient(req: IncomingMessage): boolean {
   return false;
 }
 
-function enforceLoopbackMutationGuards(
-  ctx: NostrProfileHttpContext,
-  req: IncomingMessage,
-  res: ServerResponse,
-): boolean {
+function resolveLoopbackMutationRejection(req: IncomingMessage): string | undefined {
   // Mutation endpoints are local-control-plane only.
   const remoteAddress = req.socket.remoteAddress;
   if (!isLoopbackRemoteAddress(remoteAddress)) {
-    ctx.log?.warn?.(`Rejected mutation from non-loopback remoteAddress=${String(remoteAddress)}`);
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return `Rejected mutation from non-loopback remoteAddress=${String(remoteAddress)}`;
   }
 
   // If a proxy exposes client-origin headers showing a non-loopback client,
   // treat this as a remote request and deny mutation.
   if (hasNonLoopbackForwardedClient(req)) {
-    ctx.log?.warn?.("Rejected mutation with non-loopback forwarded client headers");
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return "Rejected mutation with non-loopback forwarded client headers";
   }
 
   const secFetchSite = normalizeOptionalLowercaseString(
     firstHeaderValue(req.headers["sec-fetch-site"]),
   );
   if (secFetchSite === "cross-site") {
-    ctx.log?.warn?.("Rejected mutation with cross-site sec-fetch-site header");
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return "Rejected mutation with cross-site sec-fetch-site header";
   }
 
   // CSRF guard: browsers send Origin/Referer on cross-site requests.
   const origin = firstHeaderValue(req.headers.origin);
   if (typeof origin === "string" && !isLoopbackOriginLike(origin)) {
-    ctx.log?.warn?.(`Rejected mutation with non-loopback origin=${origin}`);
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return `Rejected mutation with non-loopback origin=${origin}`;
   }
 
   const referer = firstHeaderValue(req.headers.referer ?? req.headers.referrer);
   if (typeof referer === "string" && !isLoopbackOriginLike(referer)) {
-    ctx.log?.warn?.(`Rejected mutation with non-loopback referer=${referer}`);
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return `Rejected mutation with non-loopback referer=${referer}`;
   }
 
-  return true;
+  return undefined;
 }
 
 function enforceGatewayMutationScope(
@@ -314,10 +279,13 @@ export function createNostrProfileHttpHandler(
       }
 
       if ((req.method === "PUT" && !isImport) || (req.method === "POST" && isImport)) {
-        if (
-          !enforceGatewayMutationScope(ctx, accountId, res) ||
-          !enforceLoopbackMutationGuards(ctx, req, res)
-        ) {
+        if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+          return true;
+        }
+        const rejection = resolveLoopbackMutationRejection(req);
+        if (rejection) {
+          ctx.log?.warn?.(rejection);
+          sendJson(res, 403, { ok: false, error: "Forbidden" });
           return true;
         }
         return await (isImport ? handleImportProfile : handleUpdateProfile)(
@@ -404,7 +372,6 @@ async function handleUpdateProfile(
     ...profile,
   };
 
-  // Publish with mutex to prevent concurrent publishes
   try {
     const result = await publishLocks.enqueue(accountId, async () => {
       await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
@@ -474,7 +441,7 @@ async function handleImportProfile(
   const result = await importProfileFromRelays({
     pubkey,
     relays,
-    timeoutMs: 10_000, // 10 seconds for import
+    timeoutMs: 10_000,
   });
 
   if (!result.ok) {

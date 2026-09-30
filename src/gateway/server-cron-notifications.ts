@@ -8,11 +8,13 @@ import { resolveUserTimezone } from "../agents/date-time.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
+import type { CronFailureRepairRequest } from "../cron/service/state.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type {
   CronFailureNotificationDelivery,
@@ -28,6 +30,8 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import type { GatewayContextResolver } from "./server-methods/shared-types.js";
+import { dispatchGatewayLifecycleMethod } from "./server-recovery-runtime-context.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
@@ -49,6 +53,37 @@ type CronFailureAlertParams = Parameters<
   webhookToken?: unknown;
   ssrfPolicy?: SsrFPolicy;
 };
+
+/**
+ * The owner conversation receives the repair request as an ordinary turn: its own session,
+ * workspace, and tool policy, with the reply delivered to its last route (thread included).
+ */
+export async function runGatewayCronFailureRepair(
+  request: CronFailureRepairRequest,
+  resolveGatewayContext: GatewayContextResolver | undefined,
+): Promise<void> {
+  await runWithGatewayIndependentRootWorkContinuation(
+    () =>
+      dispatchGatewayLifecycleMethod(
+        "agent",
+        {
+          ...(request.agentId ? { agentId: request.agentId } : {}),
+          sessionKey: request.sessionKey,
+          message: request.message,
+          deliver: true,
+          bestEffortDeliver: true,
+          inputProvenance: {
+            kind: "internal_system",
+            sourceTool: "cron_failure_repair",
+            jobId: request.jobId,
+          },
+          idempotencyKey: `cron-failure-repair:${request.repairId}`,
+        },
+        resolveGatewayContext ? { resolveGatewayContext } : {},
+      ),
+    "cron:failure-repair",
+  );
+}
 
 function redactWebhookUrl(url: string): string {
   try {
@@ -201,7 +236,6 @@ async function postCronWebhookStrict(params: {
   signal?: AbortSignal;
   deadlineAtMs?: number;
   onDeliveryState?: (outcome: CronWebhookDeliveryOutcome) => void;
-  onResponse?: (status: number) => void;
 }): Promise<void> {
   const remainingMs =
     params.deadlineAtMs === undefined ? CRON_WEBHOOK_TIMEOUT_MS : params.deadlineAtMs - Date.now();
@@ -213,18 +247,27 @@ async function postCronWebhookStrict(params: {
   const requestTimeoutMs = Math.min(CRON_WEBHOOK_TIMEOUT_MS, remainingMs);
   const requestDeadlineAtMs = Date.now() + requestTimeoutMs;
   assertSecretOwnerAvailable("capability", "cron-webhook");
+  let receivedResponse = false;
   const result = await fetchWithSsrFGuard({
     url: params.webhookUrl,
     timeoutMs: requestTimeoutMs,
     policy: params.ssrfPolicy,
     beforeRequest: () => params.onDeliveryState?.({ status: "unknown" }),
-    onResponse: params.onResponse,
+    onResponse: () => {
+      receivedResponse = true;
+    },
     ...(params.signal ? { signal: params.signal } : {}),
     init: {
       method: "POST",
       headers: buildCronWebhookHeaders(params.webhookToken),
       body: JSON.stringify(params.payload),
     },
+  }).catch((error: unknown) => {
+    // A connect error after a redirect does not disprove the earlier POST.
+    if (params.onDeliveryState && !receivedResponse && isProvenDeliveryNotSentError(error)) {
+      params.onDeliveryState({ status: "not-delivered", error: formatErrorMessage(error) });
+    }
+    throw error;
   });
   let accepted = false;
   try {
@@ -313,29 +356,16 @@ export async function sendGatewayCronWebhook(params: {
       label: "webhook",
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       ...(params.deadlineAtMs !== undefined ? { deadlineAtMs: params.deadlineAtMs } : {}),
-      run: async () => {
-        let receivedResponse = false;
-        try {
-          await postCronWebhookStrict({
-            webhookUrl,
-            webhookToken: normalizeOptionalString(params.webhookToken),
-            ssrfPolicy: params.ssrfPolicy,
-            payload: buildCronFinishedWebhookPayload(event),
-            signal: params.abortSignal,
-            deadlineAtMs: params.deadlineAtMs,
-            onDeliveryState: publish,
-            onResponse: () => {
-              receivedResponse = true;
-            },
-          });
-        } catch (error) {
-          // A connect error after a redirect does not disprove the earlier POST.
-          if (!receivedResponse && isProvenDeliveryNotSentError(error)) {
-            publish({ status: "not-delivered", error: formatErrorMessage(error) });
-          }
-          throw error;
-        }
-      },
+      run: () =>
+        postCronWebhookStrict({
+          webhookUrl,
+          webhookToken: normalizeOptionalString(params.webhookToken),
+          ssrfPolicy: params.ssrfPolicy,
+          payload: buildCronFinishedWebhookPayload(event),
+          signal: params.abortSignal,
+          deadlineAtMs: params.deadlineAtMs,
+          onDeliveryState: publish,
+        }),
       shouldRetryError: (error) =>
         outcome.status === "not-delivered" && !(error instanceof SsrFBlockedError),
     });
@@ -389,7 +419,13 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     mayHaveReachedRecipient ||= reachedRecipient;
   };
   try {
-    const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
+    const requestedAgentId =
+      normalizeOptionalString(params.job.agentId) ??
+      normalizeOptionalString(params.routing.defaultAgentId);
+    if (!requestedAgentId) {
+      throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+    }
+    const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(requestedAgentId);
     if (params.mode === "webhook") {
       if (!params.to) {
         throw new Error("cron failure alert webhook requires a URL");
@@ -403,9 +439,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         webhookToken: normalizeOptionalString(params.webhookToken),
         ssrfPolicy: params.ssrfPolicy,
         onDeliveryState: (outcome) => {
-          if (outcome.status === "delivered") {
-            onDeliveryAttempt(true);
-          }
+          mayHaveReachedRecipient = outcome.status !== "not-delivered";
         },
         payload: {
           jobId: params.job.id,

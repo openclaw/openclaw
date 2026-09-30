@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import CoreFoundation
 import Foundation
 
@@ -70,19 +71,11 @@ enum MacNodeClaudeSessionCatalog {
                 "archived": false,
             ]
             value["name"] = self.name ?? NSNull()
-            if let cwd {
-                value["cwd"] = cwd
-            }
-            if let createdAt {
-                value["createdAt"] = createdAt
-            }
-            if let updatedAt {
-                value["updatedAt"] = updatedAt
-                value["recencyAt"] = updatedAt
-            }
-            if let gitBranch {
-                value["gitBranch"] = gitBranch
-            }
+            value["cwd"] = self.cwd
+            value["createdAt"] = self.createdAt
+            value["updatedAt"] = self.updatedAt
+            value["recencyAt"] = self.updatedAt
+            value["gitBranch"] = self.gitBranch
             return value
         }
     }
@@ -229,24 +222,6 @@ enum MacNodeClaudeSessionCatalog {
         }
     }
 
-    private final class CatalogEnumerationObserver: @unchecked Sendable {
-        private let lock = NSLock()
-        private var observer: (@Sendable (String) -> Void)?
-
-        func set(_ observer: (@Sendable (String) -> Void)?) {
-            self.lock.lock()
-            self.observer = observer
-            self.lock.unlock()
-        }
-
-        func notify(rootPath: String) {
-            self.lock.lock()
-            let observer = self.observer
-            self.lock.unlock()
-            observer?(rootPath)
-        }
-    }
-
     private static let defaultPageLimit = 50
     private static let maxPageLimit = 100
     private static let defaultReadLimit = 20
@@ -271,12 +246,12 @@ enum MacNodeClaudeSessionCatalog {
     private static let iso8601Style = Date.ISO8601FormatStyle()
     private static let catalogDiscoveryCache = CatalogDiscoveryCache()
     private static let transcriptReadLeases = TranscriptReadLeaseCache()
-    private static let catalogEnumerationObserver = CatalogEnumerationObserver()
+    private static let catalogEnumerationObserver = LockIsolated<(@Sendable (String) -> Void)?>(nil)
 
     static func setCatalogEnumerationObserverForTesting(
         _ observer: (@Sendable (String) -> Void)?)
     {
-        self.catalogEnumerationObserver.set(observer)
+        self.catalogEnumerationObserver.setValue(observer)
     }
 
     static func shouldAdvertise(
@@ -835,7 +810,8 @@ extension MacNodeClaudeSessionCatalog {
         try Task.checkCancellation()
         let projectsURL = self.projectsURL(homeURL: homeURL)
         let rootPath = projectsURL.standardizedFileURL.path
-        self.catalogEnumerationObserver.notify(rootPath: rootPath)
+        let enumerationObserver = self.catalogEnumerationObserver.value
+        enumerationObserver?(rootPath)
         let resolvedProjectsURL = projectsURL.resolvingSymlinksInPath()
         var records: [String: SessionRecord] = [:]
         var sidechainIds = Set<String>()

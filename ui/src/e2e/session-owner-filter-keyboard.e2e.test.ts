@@ -6,6 +6,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
+  waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
 import {
   chooseSidebarOwner,
@@ -49,6 +50,7 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+      await waitForSessionRosterHydration(page);
       const trigger = page.getByRole("button", { name: "Filter & sort" });
       await trigger.focus();
       await page.keyboard.press("Enter");
@@ -76,7 +78,7 @@ suite.define(() => {
       await page.keyboard.press("Tab");
       await expectBrowser(active).toBeFocused();
       await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Archived", exact: true })).toBeChecked();
+      await expectBrowser(menu.getByRole("radio", { name: "Snoozed", exact: true })).toBeChecked();
       await page.keyboard.press("ArrowLeft");
       await expectBrowser(active).toBeChecked();
       // Row order, switches, and display submenus are covered by the sidebar
@@ -187,7 +189,7 @@ suite.define(() => {
       const active = menu.getByRole("radio", { name: "Active", exact: true });
       await active.focus();
       await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Archived", exact: true })).toBeChecked();
+      await expectBrowser(menu.getByRole("radio", { name: "Snoozed", exact: true })).toBeChecked();
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(

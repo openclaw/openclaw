@@ -192,27 +192,15 @@ function loadSkillFromFile(filePath: string, source: string): LoadSkillsResult {
   }
 }
 
-/**
- * Format skills for inclusion in a system prompt.
- * Uses XML format per Agent Skills standard.
- * See: https://agentskills.io/integrate-skills
- *
- * Skills with disableModelInvocation=true are excluded from the prompt
- * (they can only be invoked explicitly via /skill:name commands).
- */
+/** Agent Skills catalog: https://agentskills.io/integrate-skills */
 export function formatSkillsForPrompt(skills: Skill[]): string {
-  const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-  return formatSkillsForPromptBounded({ skills: visibleSkills });
+  return formatSkillsForPromptBounded({ skills: skills.filter((s) => !s.disableModelInvocation) });
 }
 
 interface LoadSkillsOptions {
-  /** Working directory for project-local skills. */
   cwd: string;
-  /** Agent config directory for global skills. */
   agentDir: string;
-  /** Explicit skill paths (files or directories) */
   skillPaths: string[];
-  /** Include default skills directories. */
   includeDefaults: boolean;
 }
 

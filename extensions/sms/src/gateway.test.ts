@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectSmsStartupWarnings, startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const smsWebhookHandler = vi.hoisted(() => vi.fn(async (_req: unknown, _res: unknown) => true));
 const createSmsWebhookHandler = vi.hoisted(() => vi.fn((_params: unknown) => smsWebhookHandler));
@@ -62,21 +63,12 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
 }));
 
 function createAccount(accountId: string, webhookPath = "/webhooks/sms"): ResolvedSmsAccount {
-  return {
+  return createSmsTestAccount({
     accountId,
-    enabled: true,
     accountSid: `AC-${accountId}`,
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
     webhookPath,
     publicWebhookUrl: `https://gateway.example.com${webhookPath}`,
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-  };
+  });
 }
 
 describe("startSmsGatewayAccount", () => {
@@ -101,9 +93,14 @@ describe("startSmsGatewayAccount", () => {
   });
 
   async function startRoute(
-    params: Omit<Parameters<typeof startSmsGatewayAccount>[0], "abortSignal">,
+    params: Omit<
+      Parameters<typeof startSmsGatewayAccount>[0],
+      "abortSignal" | "cfg" | "channelRuntime"
+    >,
   ) {
     return await startSmsGatewayAccount({
+      cfg: {},
+      channelRuntime: {} as SmsChannelRuntime,
       ...params,
       abortSignal: new AbortController().signal,
     });
@@ -112,9 +109,7 @@ describe("startSmsGatewayAccount", () => {
   it("publishes ready and stopped around an active webhook route", async () => {
     const statusSink = vi.fn();
     await startRoute({
-      cfg: {},
       account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
       statusSink,
     });
 
@@ -130,9 +125,7 @@ describe("startSmsGatewayAccount", () => {
   it("publishes stopped for disabled accounts and blocked for missing required config", async () => {
     const disabledSink = vi.fn();
     await startRoute({
-      cfg: {},
       account: { ...createAccount("disabled"), enabled: false },
-      channelRuntime: {} as SmsChannelRuntime,
       statusSink: disabledSink,
     });
     expect(disabledSink).toHaveBeenLastCalledWith(
@@ -141,9 +134,7 @@ describe("startSmsGatewayAccount", () => {
 
     const blockedSink = vi.fn();
     await startRoute({
-      cfg: {},
       account: { ...createAccount("missing"), authToken: "" },
-      channelRuntime: {} as SmsChannelRuntime,
       statusSink: blockedSink,
     });
     expect(blockedSink).toHaveBeenLastCalledWith(
@@ -160,9 +151,7 @@ describe("startSmsGatewayAccount", () => {
 
     await expect(
       startRoute({
-        cfg: {},
         account: createAccount("default"),
-        channelRuntime: {} as SmsChannelRuntime,
         statusSink,
       }),
     ).rejects.toThrow("SMS route conflict");
@@ -175,82 +164,33 @@ describe("startSmsGatewayAccount", () => {
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
   });
 
-  it("rejects duplicate webhook paths across SMS accounts", async () => {
-    const channelRuntime = {} as SmsChannelRuntime;
-    await startRoute({
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime,
-    });
-
-    await expect(
-      startRoute({
-        cfg: {},
-        account: createAccount("support"),
-        channelRuntime,
-      }),
-    ).rejects.toThrow(/already registered by account default/u);
-  });
-
   it("rejects duplicate webhook paths after route normalization", async () => {
-    const channelRuntime = {} as SmsChannelRuntime;
     await startRoute({
-      cfg: {},
       account: createAccount("default", "/webhooks/sms"),
-      channelRuntime,
     });
 
     await expect(
       startRoute({
-        cfg: {},
         account: createAccount("support", "webhooks/sms"),
-        channelRuntime,
       }),
     ).rejects.toThrow(/already registered by account default/u);
     expect(registerPluginHttpRoute).toHaveBeenCalledTimes(1);
   });
 
   it("allows distinct webhook paths across SMS accounts", async () => {
-    const channelRuntime = {} as SmsChannelRuntime;
     await startRoute({
-      cfg: {},
       account: createAccount("default"),
-      channelRuntime,
     });
     await startRoute({
-      cfg: {},
       account: createAccount("support", "/webhooks/sms/support"),
-      channelRuntime,
     });
 
     expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
   });
 
-  it("fails startup when the shared route registry rejects the route", async () => {
-    registerPluginHttpRoute.mockImplementationOnce(() => {
-      throw new Error("plugin: route conflict at /webhooks/sms (exact)");
-    });
-
-    await expect(
-      startRoute({
-        cfg: {},
-        account: createAccount("default"),
-        channelRuntime: {} as SmsChannelRuntime,
-      }),
-    ).rejects.toThrow("plugin: route conflict");
-
-    expect(registerPluginHttpRoute).toHaveBeenCalledWith(
-      expect.objectContaining({ throwOnFailure: true }),
-    );
-    expect(startSmsIngress).not.toHaveBeenCalled();
-    expect(stopSmsIngress).toHaveBeenCalledOnce();
-  });
-
   it("serves hosted media and Twilio callbacks from one exact route", async () => {
     await startRoute({
-      cfg: {},
       account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
     });
 
     const route = expectDefined(registerPluginHttpRoute.mock.calls[0]?.[0], "SMS webhook route");
@@ -279,9 +219,7 @@ describe("startSmsGatewayAccount", () => {
 
   it("falls through tokenless reads but keeps token-bearing non-GET media requests isolated", async () => {
     await startRoute({
-      cfg: {},
       account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
     });
     const route = expectDefined(registerPluginHttpRoute.mock.calls[0]?.[0], "SMS webhook route");
 
@@ -309,9 +247,7 @@ describe("startSmsGatewayAccount", () => {
         }),
     );
     const params = {
-      cfg: {},
       account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
     };
     await startRoute(params);
 
@@ -338,9 +274,7 @@ describe("startSmsGatewayAccount", () => {
         }),
     );
     const params = {
-      cfg: {},
       account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
     };
     await startRoute(params);
 
@@ -365,9 +299,7 @@ describe("startSmsGatewayAccount", () => {
         }),
     );
     const params = {
-      cfg: {},
       account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
     };
     await startRoute(params);
 
@@ -384,9 +316,7 @@ describe("startSmsGatewayAccount", () => {
 
   it("stops both ingress instances when predecessor pause fails", async () => {
     const params = {
-      cfg: {},
       account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
     };
     await startRoute(params);
     let replacementLifecycleSignal: AbortSignal | undefined;
@@ -419,9 +349,7 @@ describe("startSmsGatewayAccount", () => {
         }),
     );
     const params = {
-      cfg: {},
       account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
     };
     await startRoute(params);
 

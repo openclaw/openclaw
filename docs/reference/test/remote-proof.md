@@ -23,15 +23,23 @@ Crabbox instead.
 Do not pre-warm for anticipated work. Acquire the backend lazily when the
 first environment-sensitive command is ready, reuse the returned `tbx_...` id
 for later remote commands, sync the current checkout on every run, and stop it
-before handoff.
+before handoff. Let the previous command and its cleanup finish before
+another synchronization or reuse of that lease.
 
-After the first successful reuse, the wrapper records the lease's base,
-dependency, and Testbox workflow fingerprint under `.crabbox/testbox-leases/`.
-Source-only edits keep reusing the warmed box. A changed merge base, lockfile,
-package-manager input, wrapper, or Testbox workflow fails closed and requires a
-fresh lease. Every run still syncs the current checkout.
-`OPENCLAW_TESTBOX_ALLOW_STALE=1` is only for intentional diagnostics, not
-release proof.
+At allocation, the wrapper records the caller task, physical checkout, HEAD,
+base, dependency inputs, and Testbox preparation fingerprint under
+`.crabbox/testbox-leases/`. Reuse requires the same task, checkout, base,
+dependencies, preparation, and workflow inputs, including immediately before
+delegation. Source-only edits and commits can reuse that prepared box. The
+allocation receipt remains unchanged, while each command records its current
+source revision and syncs the checkout. A HEAD change during that command's
+preparation still stops delegation; rerun from the current candidate.
+This source-refresh contract belongs to the OpenClaw wrapper's trusted task
+path; it does not permit raw native callers or untrusted proof to reuse a
+lease across revisions.
+Older or missing receipts require stopping the owned lease and allocating a
+fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
+these checks. All providers require Crabbox 0.67.0 or newer.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
@@ -160,10 +168,18 @@ node scripts/crabbox-wrapper.mjs run --timing-json -- \
   pnpm test <path-or-filter>
 ```
 
-For several commands, warm once with
-`node scripts/crabbox-wrapper.mjs warmup --keep --timing-json`, save the returned
-lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
-`node scripts/crabbox-wrapper.mjs stop --id <tbx_id>`; stop has no `--timing-json`.
+For several commands, use a unique task label and retain the first allocation:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --keep --label <task-name> -- <first-command>
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --id <tbx_id> --label <task-name> -- <next-command>
+node scripts/crabbox-wrapper.mjs stop --provider blacksmith-testbox <tbx_id>
+```
+
+Use the returned lease ID and the same label throughout the task. Codex, Claude
+Code, and GitHub Actions also bind reuse to their session or run identity.
+Session-owned `warmup --timing-json` can allocate without a label; human shells
+use the labeled `run --keep` flow above. Stop has no `--timing-json`.
 
 - Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
   deliberately transfers that ownership and never changes repository identity.
@@ -193,14 +209,16 @@ files. Unchanged source stays in place with warm Git index stat data. Git's stag
 tracking and the final raw transport tree use separate indexes, preserving the
 same ignored-file and untracked-file selection rules. The wrapper reports copied
 and reused file counts and preparation time.
+Commits on the same retained source ref keep the mirror reusable; each command
+still records its full current witness and rechecks the source revision before sealing.
 
 The mirror remains exclusively locked for the entire command, including artifact
 preservation and lease-claim restoration. An overlapping run from the same worktree
 prints a message and builds an independent fresh capsule. Only completed cleanup
 records an idle mirror for reuse; a missing witness, unsupported staging location,
 or unresolved owner uses fresh staging. Changed source during freezing fails the
-run. Cache metadata, payload, witness, or Git-version mismatches rebuild cold before
-upload. Source enumeration and metadata checks still scale with the repository;
+run. Cache metadata, payload, witness repository or ref, or Git-version mismatches
+rebuild cold before upload. Source enumeration and metadata checks still scale with the repository;
 source-byte copying and hashing scale with changed files on warm runs.
 Private mirrors disable Git hooks and fsmonitor; source enumeration also disables
 fsmonitor in mirror mode. Other active Git callbacks retain the preparation hold
@@ -313,6 +331,15 @@ that snapshot in an independent Git repository and named ref, select it explicit
 node scripts/crabbox-wrapper.mjs staging recover <id> \
   --witness-repo /path/to/retained-repository --witness-ref refs/heads/saved-source
 ```
+
+Witness verification proves that the selected ref's objects are present and connected.
+On Git 2.50+, it skips unrelated reference-database checks, so stray files such as
+Finder `.DS_Store` under `.git/refs` do not block recovery. Explicit `staging recover`
+scales its work budget with witness object storage: 120 seconds plus 30 seconds per
+GiB, at most 30 minutes. Automatic recovery after a wrapper command keeps the
+120-second bound.
+Failure reasons distinguish an exhausted budget, reference-database errors, and
+missing or unconnected objects.
 
 Recovery does not create backup repositories, archives, or permanent refs. A stage's
 own Git objects or bundle do not count as another copy. Live or uncertain owners,

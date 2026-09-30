@@ -7,9 +7,8 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
+import { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
@@ -44,7 +43,7 @@ type ResolvedMcpOAuthConfig = McpOAuthConfig & {
   authProfileId?: unknown;
 };
 
-type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
+export type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   kind: "http";
   transportType: HttpMcpTransportType;
   url: string;
@@ -173,13 +172,7 @@ export function resolveMcpTransportConfig(
   options?: { logWarnings?: boolean },
 ): ResolvedMcpTransportConfig | null {
   const logWarnings = options?.logWarnings !== false;
-  const requestedTransport = normalizeLowercaseStringOrEmpty(
-    getStringField(rawServer, ["transport"]),
-  );
-  const requestedTransportAlias = requestedTransport
-    ? ""
-    : (resolveOpenClawMcpTransportAlias(getStringField(rawServer, ["type"])) ?? "");
-  const effectiveTransport = requestedTransport || requestedTransportAlias;
+  const effectiveTransport = resolveConfiguredMcpTransport(rawServer);
   const stdioLaunch = resolveStdioMcpServerLaunchConfig(
     rawServer,
     logWarnings

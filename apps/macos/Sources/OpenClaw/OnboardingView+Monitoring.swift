@@ -2,8 +2,7 @@ import Foundation
 
 extension OnboardingView {
     func updateDiscoveryMonitoring(for pageIndex: Int) {
-        let isConnectionPage = pageIndex == connectionPageIndex
-        let shouldMonitor = isConnectionPage
+        let shouldMonitor = pageIndex == connectionPageIndex
         if shouldMonitor, !monitoringDiscovery {
             monitoringDiscovery = true
             Task { @MainActor in

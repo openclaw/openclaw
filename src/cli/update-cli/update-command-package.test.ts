@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
+import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import {
   createNpmTarget,
   writePackageRoot,
 } from "../../infra/package-update-steps.test-support.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
@@ -20,12 +23,21 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import * as gitRunner from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateGitInstall } from "./update-command-git.js";
+import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
 import * as packageUpdate from "./update-command-package.js";
 import { runPackageInstallUpdate, stagePackageInstallUpdate } from "./update-command-package.js";
 import { UpdateCommandFailure, UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
@@ -246,9 +258,16 @@ it.each(["guidance", "staging"])(
   },
 );
 
-it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned/candidate"])(
+it.each([
+  "1.0.0",
+  "https://example.invalid/candidate.tgz",
+  "openclaw@file:/owned/candidate",
+  "openclaw@file:../candidate",
+])(
   "honors the explicit package artifact without changing registry no-op semantics: %s",
   async (tag) => {
+    // Swap bounds tests own deadline progression; artifact selection keeps real filesystem work.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
     await withTestDir({ prefix: "update-exact-artifact-" }, async (base) => {
       const { params, root, launcher, expectOriginalInstallation } =
         await createPackageInstallFixture(base);
@@ -266,6 +285,7 @@ it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned
         ...params,
         tag: tag.startsWith("openclaw@") ? "latest" : tag,
         installEnv: tag.startsWith("openclaw@") ? { OPENCLAW_UPDATE_PACKAGE_SPEC: tag } : {},
+        invocationCwd: base,
         validateCandidate,
         beforeActivate,
         onTransaction,
@@ -278,6 +298,12 @@ it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned
         await expect(update).rejects.toBe(stopped);
         expect(validateCandidate).toHaveBeenCalledOnce();
         expect(beforeActivate).toHaveBeenCalledOnce();
+      }
+      if (tag === "openclaw@file:../candidate") {
+        const install = vi
+          .mocked(processRunner.runCommandWithTimeout)
+          .mock.calls.find(([argv]) => argv.includes(tag));
+        expect(install?.[1]).toMatchObject({ cwd: base });
       }
       expect(onTransaction).not.toHaveBeenCalled();
       await expectOriginalInstallation();
@@ -354,6 +380,111 @@ it("admits a matching staged artifact without retaining or replacing the running
   });
 });
 
+it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
+  { admission: "candidate", pauseBeforeVerification: true, runtime: "PATH" },
+  { admission: "fresh profile", pauseBeforeVerification: false, runtime: "absolute" },
+])(
+  "journals the resumed $admission package publication and retires its verified rollback",
+  async ({ pauseBeforeVerification, runtime }) => {
+    const fixtures = createPackageActivationLifetimeFixture();
+    const { root: base } = fixtures.setup();
+    try {
+      const {
+        params: defaults,
+        root,
+        launcher,
+        expectOriginalInstallation,
+      } = await createPackageInstallFixture(base, "2.0.0");
+      const runtimeDir = path.join(base, "runtime");
+      const runtimePath = path.join(runtimeDir, "openclaw-test-node");
+      await fs.mkdir(runtimeDir);
+      await fs.writeFile(runtimePath, `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`, {
+        mode: 0o755,
+      });
+      const env = {
+        OPENCLAW_STATE_DIR: path.join(base, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
+      };
+      const installCommand = vi.mocked(processRunner.runCommandWithTimeout).getMockImplementation();
+      assert(installCommand);
+      vi.mocked(processRunner.runCommandWithTimeout).mockImplementation(async (argv, options) =>
+        argv[2] === "doctor"
+          ? { stdout: "", stderr: "", code: 0, signal: null, killed: false, termination: "exit" }
+          : installCommand(argv, options),
+      );
+      vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const params = {
+        ...defaults,
+        installEnv: env,
+        managedServiceEnv: env,
+      };
+      const staged = await stagePackageInstallUpdate({ ...params, pauseBeforeVerification });
+      try {
+        await fixtures.writePostCoreCapability(staged.root);
+        await writePackageDistInventory(staged.root);
+        await expectOriginalInstallation();
+        expect(readPackageActivationReceipt(root)).toBeUndefined();
+        const runId = randomUUID();
+        await withUpdateCommandExecutor(runId, async (executor) => {
+          const fence = await executor.enter(root);
+          let transaction: PackageUpdateTransaction | undefined;
+          try {
+            const result = await withEnvAsync(
+              { PATH: `${runtimeDir}${path.delimiter}${process.env.PATH ?? ""}` },
+              () =>
+                staged.run({
+                  ...params,
+                  ...createPackageUpdateActivationOptions({
+                    run: { runId, env, executorFence: fence },
+                    nodeRunner: runtime === "PATH" ? "openclaw-test-node" : process.execPath,
+                    assertCurrent: fence.assertCurrent,
+                  }),
+                  assertCurrent: fence.assertCurrent,
+                  validateCandidate: async () => [],
+                  beforeActivate: async () => {},
+                  onTransaction: (retained) => {
+                    transaction = retained;
+                  },
+                }),
+            );
+            expect(result, JSON.stringify(result)).toMatchObject({
+              status: "ok",
+              after: { version: "2.0.0" },
+            });
+            expect(readPackageActivationReceipt(root)).toMatchObject({
+              phase: "publication-complete",
+              installKey: root,
+              recoveryCommand: expect.stringContaining(
+                runtime === "PATH" ? runtimePath : await fs.realpath(process.execPath),
+              ),
+            });
+            expect(
+              JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")),
+            ).toMatchObject({
+              version: "2.0.0",
+            });
+            expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
+            assert(transaction);
+          } finally {
+            if (transaction) {
+              expect((await transaction.rollback(fence.assertCurrent)).exitCode).toBe(0);
+              await expect(
+                transaction.complete({ activationVerified: false }, fence.assertCurrent),
+              ).resolves.toBeUndefined();
+            }
+          }
+          await expectOriginalInstallation();
+          expect(readPackageActivationReceipt(root)).toMatchObject({ phase: "complete" });
+        });
+      } finally {
+        await staged.close();
+      }
+    } finally {
+      await fixtures.lifetime.cleanup();
+    }
+  },
+);
+
 it.each(["run", "close"] as const)(
   "retains the matching staged artifact without replacing the active installation before %s",
   async (action) => {
@@ -404,6 +535,71 @@ it.each(["run", "close"] as const)(
       await expectOriginalInstallation();
       for (const prefix of installedPrefixes) {
         await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    });
+  },
+);
+
+it.each([false, true])(
+  "joins a concurrent stage close while preserving cleanup uncertainty=%s",
+  async (uncertain) => {
+    await withTestDir({ prefix: "update-stage-close-" }, async (base) => {
+      const { params, installedPrefixes, expectOriginalInstallation } =
+        await createPackageInstallFixture(base, "2.0.0");
+      const staged = await stagePackageInstallUpdate(params);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const refused = uncertain
+        ? new CommandProcessCleanupError()
+        : new Error("fixture publication refused");
+      const running = staged.run({
+        ...params,
+        validateCandidate: async () => [],
+        beforeActivate: async () => {
+          entered.resolve();
+          await release.promise;
+          throw refused;
+        },
+        onTransaction: vi.fn(),
+      });
+      const runOutcome = running.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await Promise.race([
+        entered.promise,
+        runOutcome.then((cause) => {
+          throw new Error("Staged update completed before activation", { cause });
+        }),
+      ]);
+      let closeSettled = false;
+      const closing = staged.close().finally(() => {
+        closeSettled = true;
+      });
+      const closeOutcome = closing.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await Promise.resolve();
+      const waitedForOperation = !closeSettled;
+      release.resolve();
+      const [failure, cleanupFailure] = await Promise.all([runOutcome, closeOutcome]);
+      expect(waitedForOperation).toBe(true);
+      if (uncertain) {
+        expect(hasCommandProcessCleanupError(failure)).toBe(true);
+        expect(cleanupFailure).toBe(failure);
+        await expect(staged.close()).rejects.toBe(failure);
+      } else {
+        expect(failure).toBe(refused);
+        expect(cleanupFailure).toBeUndefined();
+      }
+      await expectOriginalInstallation();
+      for (const prefix of installedPrefixes) {
+        if (uncertain) {
+          expect((await fs.stat(prefix)).isDirectory()).toBe(true);
+        } else {
+          await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
+        }
       }
     });
   },

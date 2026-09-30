@@ -25,8 +25,7 @@ async function collect() {
   assert.ok(gc, "The retention child requires --expose-gc");
   const control = new WeakRef({ unowned: true });
   for (let pass = 0; pass < 8; pass += 1) {
-    // Bun can retain completed async frames during a Promise continuation.
-    // Collect in the native task before resolving the waiting continuation.
+    // JavaScriptCore's promise-microtask stack can retain completed async values.
     await new Promise<void>((resolve) => {
       scheduleImmediate(() => {
         gc();
@@ -37,12 +36,22 @@ async function collect() {
   assert.equal(control.deref(), undefined, "Unowned control must collect");
 }
 
-async function retireSuccessors() {
-  const oldest = createEmptyPluginRegistry();
+function createRetirementRegistry(withInstance: boolean) {
+  const registry = createEmptyPluginRegistry();
+  if (withInstance) {
+    const record = createPluginRecord({ id: "retirement-source" });
+    registry.plugins.push(record);
+    void new PluginInstance(record.id, { record, registry });
+  }
+  return registry;
+}
+
+async function retireSuccessors(withInstance: boolean) {
+  const oldest = createRetirementRegistry(withInstance);
   const successors: WeakRef<ReturnType<typeof createEmptyPluginRegistry>>[] = [];
   let previous = oldest;
   for (let generation = 0; generation < 3; generation += 1) {
-    const next = createEmptyPluginRegistry();
+    const next = createRetirementRegistry(withInstance);
     successors.push(new WeakRef(next));
     assert.deepEqual(
       await disposePluginRegistryInstances(previous, next, { cfg: {} }),
@@ -55,10 +64,11 @@ async function retireSuccessors() {
 }
 
 function inspectRetiredSuccessors(
+  withInstance: boolean,
   inspect: (result: Awaited<ReturnType<typeof retireSuccessors>>) => Promise<void>,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    void retireSuccessors().then((result) => {
+    void retireSuccessors(withInstance).then((result) => {
       // Inspect inside the next task so no producer or outer resolution frame stays live.
       void setImmediate().then(() => inspect(result).then(resolve, reject), reject);
     }, reject);
@@ -278,16 +288,20 @@ switch (process.argv[2]) {
     assert.equal(neverBound.hasModuleSource("library"), undefined);
     break;
   }
-  case "registry": {
-    await inspectRetiredSuccessors(async ({ oldest, successors }) => {
-      await collect();
-      assert.ok(
-        successors.every((reference) => reference.deref() === undefined),
-        "Completed retirement retained a successor registry",
-      );
-      assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
-      assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
-    });
+  case "registry":
+  case "registry-instances": {
+    await inspectRetiredSuccessors(
+      process.argv[2] === "registry-instances",
+      async ({ oldest, successors }) => {
+        await collect();
+        assert.ok(
+          successors.every((reference) => reference.deref() === undefined),
+          "Completed retirement retained a successor registry",
+        );
+        assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
+        assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
+      },
+    );
     break;
   }
   case "cache": {

@@ -46,7 +46,6 @@ class SmsManager(
     data class Error(
       val error: String,
       val to: String = "",
-      val message: String? = null,
     ) : ParseResult
   }
 
@@ -114,7 +113,6 @@ class SmsManager(
       if (to.isEmpty()) {
         return ParseResult.Error(
           error = "INVALID_REQUEST: 'to' phone number required",
-          message = message,
         )
       }
 
@@ -395,14 +393,6 @@ class SmsManager(
       }
     }
 
-    internal fun materializeByPhoneCandidate(
-      candidates: MutableMap<String, SmsMessage>,
-      identityKey: String,
-      message: SmsMessage,
-    ) {
-      candidates[identityKey] = message
-    }
-
     internal fun collectMixedByPhoneCandidate(
       topCandidates: MutableList<Pair<String, SmsMessage>>,
       materializedCandidates: MutableMap<String, SmsMessage>,
@@ -412,7 +402,7 @@ class SmsManager(
       reviewMode: Boolean,
     ) {
       if (reviewMode) {
-        materializeByPhoneCandidate(materializedCandidates, identityKey, message)
+        materializedCandidates[identityKey] = message
       } else {
         upsertTopDateCandidates(topCandidates, identityKey, message, maxCandidates)
       }
@@ -490,29 +480,15 @@ class SmsManager(
     }
   }
 
-  fun hasSmsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.SEND_SMS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasSmsPermission(): Boolean = hasPermission(Manifest.permission.SEND_SMS)
 
-  fun hasReadSmsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.READ_SMS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasReadSmsPermission(): Boolean = hasPermission(Manifest.permission.READ_SMS)
 
-  fun hasReadContactsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.READ_CONTACTS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasReadContactsPermission(): Boolean = hasPermission(Manifest.permission.READ_CONTACTS)
 
   fun canSendSms(): Boolean = hasSmsPermission() && hasTelephonyFeature()
 
-  fun canSearchSms(): Boolean = hasReadSmsPermission() && hasTelephonyFeature()
-
-  fun canReadSms(): Boolean = canSearchSms()
+  fun canReadSms(): Boolean = hasReadSmsPermission() && hasTelephonyFeature()
 
   fun hasTelephonyFeature(): Boolean = context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
 
@@ -520,7 +496,7 @@ class SmsManager(
     permissionRequester = requester
   }
 
-  suspend fun send(paramsJson: String?): SmsSendResult {
+  suspend fun send(paramsJson: String?): SmsResult {
     if (!hasTelephonyFeature()) {
       return errorResult(
         error = "SMS_UNAVAILABLE: telephony not available",
@@ -538,7 +514,6 @@ class SmsManager(
       return errorResult(
         error = parseResult.error,
         to = parseResult.to,
-        message = parseResult.message,
       )
     }
     val params = (parseResult as ParseResult.Ok).params
@@ -567,23 +542,21 @@ class SmsManager(
         )
       }
 
-      okResult(to = params.to, message = params.message)
+      okResult(to = params.to)
     } catch (e: SecurityException) {
       errorResult(
         error = "SMS_PERMISSION_REQUIRED: ${e.message}",
         to = params.to,
-        message = params.message,
       )
     } catch (e: Throwable) {
       errorResult(
         error = "SMS_SEND_FAILED: ${e.message ?: "unknown error"}",
         to = params.to,
-        message = params.message,
       )
     }
   }
 
-  suspend fun search(paramsJson: String?): SmsSearchResult =
+  suspend fun search(paramsJson: String?): SmsResult =
     withContext(Dispatchers.IO) {
       if (!hasTelephonyFeature()) {
         return@withContext queryError("SMS_UNAVAILABLE: telephony not available")
@@ -662,20 +635,17 @@ class SmsManager(
       }
     }
 
+  private fun hasPermission(permission: String): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
   private suspend fun ensurePermission(permission: String): Boolean {
-    if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) return true
+    if (hasPermission(permission)) return true
     val requester = permissionRequester ?: return false
     return requester.requestIfMissing(listOf(permission))[permission] == true
   }
 
-  private fun okResult(
-    to: String,
-    message: String,
-  ): SmsSendResult =
-    SmsSendResult(
+  private fun okResult(to: String): SmsResult =
+    SmsResult(
       ok = true,
-      to = to,
-      message = message,
       error = null,
       payloadJson = buildPayloadJson(json = json, ok = true, to = to, error = null),
     )
@@ -683,12 +653,9 @@ class SmsManager(
   private fun errorResult(
     error: String,
     to: String = "",
-    message: String? = null,
-  ): SmsSendResult =
-    SmsSendResult(
+  ): SmsResult =
+    SmsResult(
       ok = false,
-      to = to,
-      message = message,
       error = error,
       payloadJson = buildPayloadJson(json = json, ok = false, to = to, error = error),
     )
@@ -696,18 +663,16 @@ class SmsManager(
   private fun queryOk(
     messages: List<SmsMessage>,
     queryMetadata: QueryMetadata? = null,
-  ): SmsSearchResult =
-    SmsSearchResult(
+  ): SmsResult =
+    SmsResult(
       ok = true,
-      messages = messages,
       error = null,
       payloadJson = buildQueryPayloadJson(json, ok = true, messages = messages, queryMetadata = queryMetadata),
     )
 
-  private fun queryError(error: String): SmsSearchResult =
-    SmsSearchResult(
+  private fun queryError(error: String): SmsResult =
+    SmsResult(
       ok = false,
-      messages = emptyList(),
       error = error,
       payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = error),
     )

@@ -1,6 +1,6 @@
 // Enforces the package runtime contract, then warns for non-pnpm lifecycle installs.
 import { spawnSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { accessSync, constants, readFileSync, realpathSync, rmSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isNodeVersionAtLeast, parseNodeReleaseVersion } from "../node-version.mjs";
@@ -45,10 +45,6 @@ function normalizeEnvValue(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function parseNodeVersion(value) {
-  return parseNodeReleaseVersion(normalizeEnvValue(value));
-}
-
 /**
  * Checks a Node version against the standalone package engine-range subset.
  * @param {string | null} version
@@ -56,7 +52,7 @@ function parseNodeVersion(value) {
  * @returns {boolean}
  */
 export function nodeVersionSatisfiesPackageEngine(version, engine) {
-  const parsedVersion = parseNodeVersion(version);
+  const parsedVersion = parseNodeReleaseVersion(version);
   const normalizedEngine = normalizeEnvValue(engine);
   if (!parsedVersion || !normalizedEngine) {
     return false;
@@ -68,10 +64,10 @@ export function nodeVersionSatisfiesPackageEngine(version, engine) {
     if (!match) {
       return false;
     }
-    const minimum = parseNodeVersion(match[1]);
+    const minimum = parseNodeReleaseVersion(match[1]);
     const upperRaw = match[2];
     const upper = upperRaw
-      ? parseNodeVersion(upperRaw.includes(".") ? upperRaw : `${upperRaw}.0.0`)
+      ? parseNodeReleaseVersion(upperRaw.includes(".") ? upperRaw : `${upperRaw}.0.0`)
       : null;
     if (!minimum || (upperRaw && !upper)) {
       return false;
@@ -161,13 +157,16 @@ function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
 }
 
 /**
- * Finds the real Node that will launch the installed CLI after Bun removes its lifecycle PATH.
+ * Finds persistent Node, or an explicit Bun launcher after exhausting the lifecycle PATH.
  *
  * @param {{
  *   env?: NodeJS.ProcessEnv;
  *   pathEnv?: string;
  *   platform?: NodeJS.Platform;
  *   cwd?: string;
+ *   execPath?: string;
+ *   access?: (path: string, mode: number) => void;
+ *   realpath?: (path: string) => string;
  *   run?: PackageCliNodeProbeRun;
  * }} [options]
  * @returns {PackageCliNodeRuntime | null}
@@ -178,6 +177,9 @@ export function probePackageCliNodeRuntime(options = {}) {
     pathEnv = env.PATH ?? "",
     platform = process.platform,
     cwd = process.cwd(),
+    execPath = process.execPath,
+    access = accessSync,
+    realpath = realpathSync,
     run = spawnSync,
   } = options;
   const pathApi = platform === "win32" ? win32 : posix;
@@ -190,6 +192,21 @@ export function probePackageCliNodeRuntime(options = {}) {
   if (!pathEntries) {
     return null;
   }
+  const probe = (candidate) => {
+    const childEnv = { ...env };
+    for (const key of Object.keys(childEnv)) {
+      if (key.toUpperCase() === "NODE_OPTIONS") {
+        delete childEnv[key];
+      }
+    }
+    return run(candidate, ["-e", NODE_RUNTIME_PROBE_SOURCE], {
+      cwd,
+      encoding: "utf8",
+      env: childEnv,
+      timeout: PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+  };
 
   for (const entry of pathEntries) {
     if (!entry || !isStableAbsolutePath(entry, pathApi, platform)) {
@@ -203,20 +220,29 @@ export function probePackageCliNodeRuntime(options = {}) {
       continue;
     }
     seen.add(candidate);
-
-    const childEnv = { ...env };
-    for (const key of Object.keys(childEnv)) {
-      if (key.toUpperCase() === "NODE_OPTIONS") {
-        delete childEnv[key];
+    try {
+      // PATH lookup skips absent and nonexecutable files without launching them.
+      access(candidate, constants.X_OK);
+    } catch (error) {
+      if (["EACCES", "ENOENT", "ENOTDIR"].includes(error?.code)) {
+        continue;
       }
+      return null;
     }
-    const result = run(candidate, ["-e", NODE_RUNTIME_PROBE_SOURCE], {
-      cwd,
-      encoding: "utf8",
-      env: childEnv,
-      timeout: PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS,
-      windowsHide: true,
-    });
+    try {
+      // Skip stock/fork Bun lifecycle shims, never persistent node aliases.
+      if (
+        /^bun-node-(?:[0-9a-f]+|[0-9]+-(?:[0-9a-f]+|debug)(?:-[0-9a-f]{16})?)$/u.test(
+          pathApi.basename(pathApi.dirname(candidate)),
+        ) &&
+        realpath(candidate) === realpath(execPath)
+      ) {
+        continue;
+      }
+    } catch {
+      // Let the executable probe handle missing or inaccessible paths.
+    }
+    const result = probe(candidate);
     if (
       result?.error?.code === "EACCES" ||
       result?.error?.code === "ENOENT" ||
@@ -229,18 +255,21 @@ export function probePackageCliNodeRuntime(options = {}) {
     }
 
     const runtime = parseNodeRuntimeProbeOutput(result.stdout);
-    if (!runtime) {
-      return null;
-    }
     // A Bun-backed candidate from the original PATH remains first after install.
     // It cannot satisfy the package's Node engine contract, so fail closed.
-    if (runtime.bunVersion) {
+    if (!runtime || runtime.bunVersion) {
       return null;
     }
     return runtime;
   }
 
-  return null;
+  const launcher = normalizeEnvValue(env.OPENCLAW_PACKAGE_BUN_LAUNCHER);
+  if (!isStableAbsolutePath(launcher, pathApi, platform)) {
+    return null;
+  }
+  const result = probe(launcher);
+  const runtime = result?.status === 0 ? parseNodeRuntimeProbeOutput(result.stdout) : null;
+  return runtime?.bunVersion ? runtime : null;
 }
 
 /**
@@ -268,6 +297,21 @@ export function enforceSupportedNodeRuntime(
   const detectedRuntime = normalizeEnvValue(bunVersion)
     ? probeNodeRuntime()
     : { version, execPath };
+  if (detectedRuntime?.bunVersion) {
+    if (
+      isNodeVersionAtLeast(parseNodeReleaseVersion(detectedRuntime.bunVersion), {
+        major: 1,
+        minor: 4,
+        patch: 0,
+      })
+    ) {
+      return true;
+    }
+    reportError(
+      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4+ (detected ${detectedRuntime.bunVersion}).`,
+    );
+    return false;
+  }
   if (nodeVersionSatisfiesPackageEngine(detectedRuntime?.version ?? null, engine)) {
     return true;
   }

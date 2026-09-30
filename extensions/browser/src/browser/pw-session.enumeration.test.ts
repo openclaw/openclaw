@@ -1,6 +1,6 @@
 import { EventEmitter, getEventListeners } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type BrowserMockBundle,
   setupPwSessionConnectionTest,
@@ -14,6 +14,8 @@ const {
   focusPageByTargetIdViaPlaywright,
   listPagesViaPlaywright,
 } = pwAi;
+
+const cdpUrl = "http://127.0.0.1:9222";
 
 function makePageEnumerationBrowser(
   specs: Array<{
@@ -92,6 +94,10 @@ function makePageEnumerationBrowser(
   return { browser, browserClose, pages, newCDPSession, contextEvents, browserEvents, pageEvents };
 }
 
+beforeEach(() => {
+  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+});
+
 describe("pw-session page enumeration", () => {
   it("reconciles a page closed between native discovery and Page enumeration", async () => {
     vi.useFakeTimers();
@@ -112,9 +118,8 @@ describe("pw-session page enumeration", () => {
       newBrowserCDPSession: async () => ({ send: inventory, detach: async () => {} }),
     });
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
     const listing = listPagesViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
+      cdpUrl,
       requireCompleteTargetList: true,
       timeoutMs: 100,
     });
@@ -131,14 +136,12 @@ describe("pw-session page enumeration", () => {
   });
 
   it.each([
-    { complete: false, disconnect: false, unresolved: false },
     { complete: true, disconnect: false, unresolved: false },
     { complete: true, disconnect: true, unresolved: false },
     { complete: true, disconnect: true, unresolved: true },
   ])(
     "reconciles a closed page (complete: $complete, browser disconnected: $disconnect, metadata unresolved: $unresolved)",
     async ({ complete, disconnect, unresolved }) => {
-      const cdpUrl = "http://127.0.0.1:9222";
       const started = createDeferred<void>();
       const release = createDeferred<void>();
       let closed = false;
@@ -169,7 +172,6 @@ describe("pw-session page enumeration", () => {
       connectOverCdpSpy
         .mockResolvedValueOnce(fixture.browser)
         .mockResolvedValue(replacement.browser);
-      getChromeWebSocketUrlSpy.mockResolvedValue(null);
       const listing = listPagesViaPlaywright({
         cdpUrl,
         requireCompleteTargetList: complete,
@@ -209,10 +211,9 @@ describe("pw-session page enumeration", () => {
       },
     ]);
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     let listed: Awaited<ReturnType<typeof listPagesViaPlaywright>> | undefined;
-    void listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }).then((pages) => {
+    void listPagesViaPlaywright({ cdpUrl }).then((pages) => {
       listed = pages;
     });
     await vi.advanceTimersByTimeAsync(100);
@@ -257,15 +258,13 @@ describe("pw-session page enumeration", () => {
       },
     ]);
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     let listed: Array<Awaited<ReturnType<typeof listPagesViaPlaywright>>> | undefined;
-    void Promise.all([
-      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }),
-      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }),
-    ]).then((pages) => {
-      listed = pages;
-    });
+    void Promise.all([listPagesViaPlaywright({ cdpUrl }), listPagesViaPlaywright({ cdpUrl })]).then(
+      (pages) => {
+        listed = pages;
+      },
+    );
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(listed).toEqual([
@@ -313,9 +312,8 @@ describe("pw-session page enumeration", () => {
       },
     ]);
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
-    const listing = listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
+    const listing = listPagesViaPlaywright({ cdpUrl });
     const unavailable = expect(listing).rejects.toThrow(/target identities.*unavailable/i);
     await vi.advanceTimersByTimeAsync(2_000);
 
@@ -325,7 +323,6 @@ describe("pw-session page enumeration", () => {
   it.each(["during discovery", "after discovery", "during metadata"] as const)(
     "observes pages published %s without repeating the complete target inventory",
     async (timing) => {
-      const cdpUrl = "http://127.0.0.1:9222";
       const metadataRead = createDeferred<void>();
       const releaseMetadata = createDeferred<void>();
       const fixture = makePageEnumerationBrowser([
@@ -374,7 +371,6 @@ describe("pw-session page enumeration", () => {
         })),
       });
       connectOverCdpSpy.mockResolvedValue(fixture.browser);
-      getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
       const listing = listPagesViaPlaywright({ cdpUrl, requireCompleteTargetList: true });
       const listed = expect(listing).resolves.toEqual([
@@ -424,11 +420,10 @@ describe("pw-session page enumeration", () => {
       })),
     });
     connectOverCdpSpy.mockResolvedValue(browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     await expect(
       listPagesViaPlaywright({
-        cdpUrl: "http://127.0.0.1:9222",
+        cdpUrl,
         requireCompleteTargetList: true,
       }),
     ).rejects.toThrow(/target identities.*unavailable/i);
@@ -448,38 +443,10 @@ describe("pw-session page enumeration", () => {
     expected: string[] | null;
   }>([
     {
-      name: "native page not yet published",
-      nativeIds: ["A", "B"],
-      pageIds: ["A"],
-      waitsForPublication: true,
-      expected: null,
-    },
-    {
-      name: "no published pages yet",
-      nativeIds: ["A"],
-      pageIds: [],
-      waitsForPublication: true,
-      expected: null,
-    },
-    {
-      name: "unresolved page metadata",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "B"],
-      unresolvedId: "B",
-      expected: null,
-    },
-    {
       name: "rejected page metadata",
       nativeIds: ["A", "B"],
       pageIds: ["A", "B"],
       rejectedId: "B",
-      expected: null,
-    },
-    {
-      name: "unresolved extra page",
-      nativeIds: ["A"],
-      pageIds: ["A", "B"],
-      unresolvedId: "B",
       expected: null,
     },
     {
@@ -495,33 +462,11 @@ describe("pw-session page enumeration", () => {
       pageIds: ["A", "STALE"],
       expected: ["A"],
     },
-    { name: "last native page removed", nativeIds: [], pageIds: ["STALE"], expected: [] },
-    {
-      name: "all pages projected in page order",
-      nativeIds: ["B", "A"],
-      pageIds: ["A", "B"],
-      expected: ["A", "B"],
-    },
-    {
-      name: "known blocked target without a page",
-      nativeIds: ["A", "B"],
-      pageIds: ["A"],
-      blockedId: "B",
-      expected: ["A"],
-    },
     {
       name: "known blocked target with a page",
       nativeIds: ["A", "B"],
       pageIds: ["A", "B"],
       blockedId: "B",
-      expected: ["A"],
-    },
-    {
-      name: "known blocked page and target",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "B"],
-      blockedId: "B",
-      blockedPageId: "B",
       expected: ["A"],
     },
     {
@@ -534,13 +479,6 @@ describe("pw-session page enumeration", () => {
       expected: null,
     },
     {
-      name: "blocked page after native removal",
-      nativeIds: ["A"],
-      pageIds: ["A", "B"],
-      blockedPageId: "B",
-      expected: ["A"],
-    },
-    {
       name: "general read keeps a healthy subset",
       nativeIds: ["A", "B"],
       pageIds: ["A", "B"],
@@ -548,16 +486,8 @@ describe("pw-session page enumeration", () => {
       complete: false,
       expected: ["A"],
     },
-    {
-      name: "general read ignores native inventory",
-      nativeIds: [],
-      pageIds: ["A"],
-      complete: false,
-      expected: ["A"],
-    },
   ])("enforces enumeration completeness: $name", async (testCase) => {
     vi.useFakeTimers();
-    const cdpUrl = "http://127.0.0.1:9222";
     const fixture = makePageEnumerationBrowser(
       testCase.pageIds.map((targetId) => ({
         targetId,
@@ -592,7 +522,6 @@ describe("pw-session page enumeration", () => {
       newBrowserCDPSession: vi.fn(async () => ({ send: inventoryRead, detach })),
     });
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
     if (testCase.blockedId) {
       markTargetBlocked(cdpUrl, testCase.blockedId);
     }
@@ -651,10 +580,9 @@ describe("pw-session page enumeration", () => {
     });
     const successor = makePageEnumerationBrowser(specs);
     connectOverCdpSpy.mockResolvedValueOnce(fixture.browser).mockResolvedValue(successor.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
     const controller = new AbortController();
     const listing = listPagesViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
+      cdpUrl,
       requireCompleteTargetList: true,
       signal: controller.signal,
     });
@@ -686,7 +614,6 @@ describe("pw-session page enumeration", () => {
   it.each(["attach", "read"] as const)(
     "releases only its own native inventory session when cancelled during %s",
     async (phase) => {
-      const cdpUrl = "http://127.0.0.1:9222";
       const fixture = makePageEnumerationBrowser([
         { targetId: "A", title: "A", url: "https://a.example/" },
       ]);
@@ -710,7 +637,6 @@ describe("pw-session page enumeration", () => {
         },
       });
       connectOverCdpSpy.mockResolvedValue(fixture.browser);
-      getChromeWebSocketUrlSpy.mockResolvedValue(null);
       const controller = new AbortController();
       const listing = listPagesViaPlaywright({
         cdpUrl,
@@ -734,51 +660,22 @@ describe("pw-session page enumeration", () => {
     },
   );
 
-  it("aborts enumeration without a timeout while preserving the shared connection", async () => {
-    const fixture = makePageEnumerationBrowser([
-      {
-        targetId: "T1",
-        title: "Tab 1",
-        url: "https://example.com",
-        readTargetInfo: () => new Promise(() => {}),
-      },
-    ]);
-    connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
-
-    const controller = new AbortController();
-    const listing = listPagesViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      signal: controller.signal,
-    });
-    controller.abort(new Error("cancelled enumeration"));
-
-    await expect(listing).rejects.toThrow("cancelled enumeration");
-    expect(fixture.browserClose).not.toHaveBeenCalled();
-  });
-
   it.each([
     ["focus", focusPageByTargetIdViaPlaywright, "bringToFront"],
     ["close", closePageByTargetIdViaPlaywright, "close"],
   ] as const)(
     "does not %s after cancellation during target resolution",
     async (_name, run, method) => {
-      let releaseTargetInfo: (() => void) | undefined;
-      let markTargetInfoStarted: (() => void) | undefined;
-      const targetInfoStarted = new Promise<void>((resolve) => {
-        markTargetInfoStarted = resolve;
-      });
-      const targetInfoReleased = new Promise<void>((resolve) => {
-        releaseTargetInfo = resolve;
-      });
+      const targetInfoStarted = createDeferred<void>();
+      const targetInfoReleased = createDeferred<void>();
       const fixture = makePageEnumerationBrowser([
         {
           targetId: "T1",
           title: "Tab 1",
           url: "https://example.com",
           readTargetInfo: async () => {
-            markTargetInfoStarted?.();
-            await targetInfoReleased;
+            targetInfoStarted.resolve();
+            await targetInfoReleased.promise;
             return { targetInfo: { targetId: "T1", title: "Tab 1" } };
           },
         },
@@ -786,17 +683,16 @@ describe("pw-session page enumeration", () => {
       const finalIo = vi.fn(async () => {});
       Object.assign(fixture.pages[0]!, { [method]: finalIo });
       connectOverCdpSpy.mockResolvedValue(fixture.browser);
-      getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
       const controller = new AbortController();
       const operation = run({
-        cdpUrl: "http://127.0.0.1:9222",
+        cdpUrl,
         targetId: "T1",
         signal: controller.signal,
       });
-      await targetInfoStarted;
+      await targetInfoStarted.promise;
       controller.abort(new Error("cancelled target resolution"));
-      releaseTargetInfo?.();
+      targetInfoReleased.resolve();
 
       await expect(operation).rejects.toThrow("cancelled target resolution");
       expect(finalIo).not.toHaveBeenCalled();

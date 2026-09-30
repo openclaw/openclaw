@@ -4,6 +4,7 @@ import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectPackageManager } from "./detect-package-manager.js";
 import { createGitCommandError, executeGitCommand } from "./git-exec.js";
+import { readInstallOwner, type InstallOwner } from "./install-owner.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageName } from "./package-json.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
@@ -24,6 +25,7 @@ import {
 } from "./update-git-metadata.js";
 import { readBuiltRuntimeCommit, readGitRuntimeArtifactStatus } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
+import type { UpdateInstallKind } from "./update-install-kind.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 import { createUpdatePreflightFailure } from "./update-preflight-details.js";
@@ -61,7 +63,8 @@ type GitUpdateStatus = {
 };
 
 export type UpdateInstallIdentity = {
-  installKind: "git" | "package" | "unknown";
+  installKind: UpdateInstallKind;
+  installOwner?: InstallOwner;
   git?: Pick<GitUpdateStatus, "branch" | "tag" | "error">;
 };
 
@@ -107,7 +110,8 @@ type NpmTagStatus = {
 
 export type UpdateCheckResult = {
   root: string | null;
-  installKind: "git" | "package" | "unknown";
+  installKind: UpdateInstallKind;
+  installOwner?: InstallOwner;
   packageManager: PackageManager;
   git?: GitUpdateStatus;
   deps?: DepsStatus;
@@ -135,10 +139,12 @@ function isLoopbackNpmRegistry(raw: string): boolean {
   }
 }
 
-function resolveExtendedStableRegistryTarget(params: {
-  packageName?: string;
-  env?: NodeJS.ProcessEnv;
-}): { registryUrl: string; packageName: string } {
+export function resolveUpdateRegistryTarget(
+  params: {
+    packageName?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): { registryUrl: string; packageName: string } {
   const env = params.env ?? process.env;
   const packageName = params.packageName?.trim() || PUBLIC_NPM_PACKAGE_NAME;
   const packageSpecOverride = env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim();
@@ -167,7 +173,7 @@ export async function resolveExtendedStablePackage(params: {
   }
 
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
-  const registryTarget = resolveExtendedStableRegistryTarget(params);
+  const registryTarget = resolveUpdateRegistryTarget(params);
   const selector = await fetchNpmPackageTargetStatus({
     target: "extended-stable",
     timeoutMs,
@@ -225,10 +231,23 @@ async function exists(p: string): Promise<boolean> {
 export async function resolveUpdateInstallKind(
   root: string | null,
   options: GitUpdateOptions = {},
-): Promise<"git" | "package" | "unknown"> {
+): Promise<UpdateInstallKind> {
+  return (await resolveUpdateInstallOwnership(root, options)).installKind;
+}
+
+async function resolveUpdateInstallOwnership(
+  root: string | null,
+  options: GitUpdateOptions,
+): Promise<UpdateInstallIdentity> {
   options.signal?.throwIfAborted();
   if (!root) {
-    return "unknown";
+    return { installKind: "unknown" };
+  }
+  // On macOS even probing Git can launch the Command Line Tools installer.
+  const installOwner = await readInstallOwner(root);
+  options.signal?.throwIfAborted();
+  if (installOwner) {
+    return { installKind: "host", installOwner };
   }
   const result = await runUpdateGitCommand(root, ["rev-parse", "--show-toplevel"], {
     ...options,
@@ -241,11 +260,11 @@ export async function resolveUpdateInstallKind(
   }
   const gitRoot = result?.code === 0 ? result.stdout.trim() : "";
   if (gitRoot && updateInstallRootsMatch(gitRoot, root)) {
-    return "git";
+    return { installKind: "git" };
   }
   const packageName = await readPackageName(root);
   options.signal?.throwIfAborted();
-  return packageName === PUBLIC_NPM_PACKAGE_NAME ? "package" : "unknown";
+  return { installKind: packageName === PUBLIC_NPM_PACKAGE_NAME ? "package" : "unknown" };
 }
 
 /** Read the install and local Git identity needed to select an update channel. */
@@ -255,11 +274,12 @@ export async function resolveUpdateInstallIdentity(params: {
   signal?: AbortSignal;
 }): Promise<UpdateInstallIdentity> {
   const { root, ...options } = params;
-  const installKind = await resolveUpdateInstallKind(root, options);
+  const identity = await resolveUpdateInstallOwnership(root, options);
+  const { installKind } = identity;
   const git =
     installKind === "git" && root ? await readGitUpdateIdentity(root, options) : undefined;
   options.signal?.throwIfAborted();
-  return { installKind, git };
+  return { ...identity, git };
 }
 
 async function runUpdateGitCommand(root: string, args: string[], options: GitUpdateOptions) {
@@ -516,12 +536,15 @@ async function checkDepsStatus(params: {
 
 export async function fetchNpmTagVersion(params: {
   tag: string;
+  registryUrl?: string;
+  packageName?: string;
   timeoutMs?: number;
   spec?: string;
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
+  signal?: AbortSignal;
 }): Promise<NpmTagStatus> {
   const { tag, ...options } = params;
   const res = await fetchNpmPackageTargetStatus({
@@ -538,11 +561,14 @@ export async function fetchNpmTagVersion(params: {
 
 export async function resolveNpmChannelTag(params: {
   channel: UpdateChannel;
+  registryUrl?: string;
+  packageName?: string;
   timeoutMs?: number;
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
+  signal?: AbortSignal;
 }): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
   const { channel, ...options } = params;
   const channelTag = channelToNpmTag(channel);
@@ -621,11 +647,14 @@ export async function checkUpdateStatus(params: {
     };
   }
 
-  const installKind = await resolveUpdateInstallKind(root, {
+  const { installKind, installOwner } = await resolveUpdateInstallOwnership(root, {
     signal: params.signal,
     timeoutMs: params.timeoutMs,
     onGitProbeTimeout: params.onGitProbeTimeout,
   });
+  if (installKind === "host") {
+    return { root, installKind, installOwner, packageManager: "unknown" };
+  }
   const isGit = installKind === "git";
   if (installKind === "unknown") {
     const failure = createUpdatePreflightFailure(

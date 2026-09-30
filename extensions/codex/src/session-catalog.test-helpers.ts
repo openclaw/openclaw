@@ -59,7 +59,7 @@ import {
   createCodexCatalogHomeResolver as createCodexCatalogHomeResolverRuntime,
   type CodexCatalogHome,
 } from "./session-catalog-homes.js";
-import { catalogError } from "./session-catalog-parsing.js";
+import { catalogError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
@@ -69,7 +69,6 @@ import type {
   CodexSessionCatalogControlFactory,
 } from "./session-catalog-types.js";
 import {
-  CODEX_LOCAL_SESSION_HOST_ID,
   codexSessionCatalogRuntime,
   createCodexSessionCatalogControl as createCodexSessionCatalogControlRuntime,
   createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,

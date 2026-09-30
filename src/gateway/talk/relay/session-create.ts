@@ -9,6 +9,7 @@ import {
   type RealtimeVoiceCloseReason,
 } from "../../../talk/provider-types.js";
 import { createRealtimeVoiceSessionHarness } from "../../../talk/realtime-session-harness.js";
+import { resolveRealtimeVoiceInterruptResponseOnInputAudio } from "../../../talk/realtime-session-policy.js";
 import type { TalkEventInput } from "../../../talk/talk-session-controller.js";
 import {
   VOICE_TRANSCRIPT_QUEUE_POLICY,
@@ -222,7 +223,11 @@ export function createTalkRealtimeRelaySession(
     instructions: params.instructions,
     language: params.language,
     autoRespondToAudio: params.forceAgentConsultOnFinalTranscript !== true,
-    interruptResponseOnInputAudio: params.forceAgentConsultOnFinalTranscript !== true,
+    // Forced consults suppress automatic audio turns, but barge-in stays provider-owned:
+    // consult replies are long, so interruption matters more here, not less.
+    interruptResponseOnInputAudio: resolveRealtimeVoiceInterruptResponseOnInputAudio(
+      params.providerConfig.interruptResponseOnInputAudio,
+    ),
     tools: params.tools,
     ...(runControl.handleDelegationInput
       ? {
@@ -274,8 +279,7 @@ export function createTalkRealtimeRelaySession(
       },
       clearAudio: clearPlayback,
       sendMark: (markName) => {
-        const relay = getActiveRelay();
-        if (!relay) {
+        if (!getActiveRelay()) {
           return;
         }
         const outputTurnId = outputOwnership.resolve(false);
@@ -346,12 +350,11 @@ export function createTalkRealtimeRelaySession(
       if (event.type === "tool.call.cancelled" && event.itemId) {
         const relayCallId = cancelTalkRealtimeRelayProviderToolCall(relay, event.itemId);
         if (relayCallId) {
-          const cancelledEvent = {
+          broadcastToOwner(params.context, params.connId, {
             relaySessionId,
-            type: "toolCallCancelled" as const,
+            type: "toolCallCancelled",
             callId: relayCallId,
-          };
-          broadcastToOwner(params.context, params.connId, cancelledEvent);
+          });
         }
         return;
       }
@@ -365,8 +368,7 @@ export function createTalkRealtimeRelaySession(
       }
     },
     onResponseDone: (outcome) => {
-      const relay = getActiveRelay();
-      if (!relay) {
+      if (!getActiveRelay()) {
         return;
       }
       const responseId = outcome.responseId ?? outputOwnership.responseId;

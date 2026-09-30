@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
 import {
@@ -6,7 +7,6 @@ import {
   canonicalSessionActivityLocation,
   projectSessionActivity,
   sessionActivityLocation,
-  sessionActivityTimestamp,
 } from "./session-activity.ts";
 
 const people: NonNullable<SessionsListResult["people"]> = [

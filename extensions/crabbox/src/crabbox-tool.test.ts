@@ -16,7 +16,13 @@ function fixture(toolContext = context) {
   const request = vi.fn().mockResolvedValue({ environmentId: "environment-one" });
   const tool = createCrabboxTool({
     context: toolContext,
-    gateway: { isAvailable: async () => true, request },
+    gateway: {
+      isAvailable: async () => true,
+      request,
+      async readSessionFacts() {
+        throw new Error("Unexpected session facts request");
+      },
+    },
   });
   return { request, tool };
 }

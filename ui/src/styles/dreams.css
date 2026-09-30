@@ -174,7 +174,7 @@
   left: calc(50% - 200px);
   padding: 16px 20px;
   background: var(--accent-subtle);
-  border: 1px solid rgba(255, 92, 92, 0.12);
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, transparent);
   border-radius: 20px;
   display: flex;
   flex-direction: column;
@@ -210,7 +210,7 @@
   position: absolute;
   border-radius: 50%;
   background: var(--accent-subtle);
-  border: 1px solid rgba(255, 92, 92, 0.1);
+  border: 1px solid color-mix(in srgb, var(--accent) 10%, transparent);
   animation: dreams-bubble-float 6s ease-in-out infinite;
 }
 
@@ -295,7 +295,8 @@
   opacity: 0.4;
 }
 
-.dreams__phase-dot {
+.dreams__phase-dot,
+.dreams__phase-toggle-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -303,7 +304,8 @@
   opacity: 0.4;
 }
 
-.dreams__phase-dot--on {
+.dreams__phase-dot--on,
+.dreams__phase-toggle--on .dreams__phase-toggle-dot {
   background: var(--ok);
   opacity: 1;
   box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 30%, transparent);
@@ -348,21 +350,10 @@
 }
 
 .dreams__phase-toggle-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--muted);
-  opacity: 0.4;
   transition:
     background 200ms ease,
     opacity 200ms ease,
     box-shadow 200ms ease;
-}
-
-.dreams__phase-toggle--on .dreams__phase-toggle-dot {
-  background: var(--ok);
-  opacity: 1;
-  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 30%, transparent);
 }
 
 .dreams__phase-toggle--on {
@@ -895,7 +886,7 @@
 }
 
 .dreams-diary__insight-badge--high {
-  color: color-mix(in oklab, var(--danger) 82%, white);
+  color: color-mix(in oklab, var(--danger) 82%, var(--text-strong));
   background: color-mix(in oklab, var(--danger) 10%, transparent);
 }
 
@@ -966,7 +957,7 @@
   border-radius: 18px;
   border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
   background: color-mix(in oklab, var(--panel) 96%, transparent);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--shadow-xl);
   overflow: hidden;
 }
 

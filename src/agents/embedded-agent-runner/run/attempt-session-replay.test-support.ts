@@ -251,7 +251,6 @@ export async function withInterruptedTurn(
             replayAllowedToolNames: new Set(["read"]),
             resolveActiveContextEnginePluginId: () => undefined,
             sessionAgentId: "main",
-            transcriptLifecycle: lifecycle,
             withOwnedTranscriptWrite,
           }),
       });

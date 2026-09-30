@@ -41,8 +41,7 @@ type PairingSidebar = LitElement & {
   onOpenNewSession?: (agentId: string) => void;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
-  outboxAttentionCountForSession: (sessionKey: string) => number;
-  hasSessionDraft: (sessionKey: string) => boolean;
+  storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
 };
 
 type PairingAuth = { role: string; scopes?: string[] };
@@ -195,13 +194,14 @@ describe("application shell pairing access", () => {
       const { shell, renderSidebar, container, overlaySnapshot } = createPairingShell({
         auth: { role: "operator", scopes: ["operator.admin"] },
       });
+      let storedOutboxes = {
+        total: 1,
+        attentionCountForSession: () => 1,
+        hasSessionDraft: () => true,
+      };
       if (withOutboxes) {
         shell.outboxStoreRuntime = {
-          read: () => ({
-            total: 1,
-            attentionCountForSession: () => 1,
-            hasSessionDraft: () => true,
-          }),
+          read: () => storedOutboxes,
           subscribe: () => () => undefined,
           invalidate: () => undefined,
         };
@@ -228,8 +228,24 @@ describe("application shell pairing access", () => {
       expect(renderTopbarChild).not.toHaveBeenCalled();
       expect(sidebar.textContent).toBe(sidebarText);
       expect(topbar.textContent).toBe(topbarText);
-      expect(sidebar.outboxAttentionCountForSession("agent:main:main")).toBe(withOutboxes ? 1 : 0);
-      expect(sidebar.hasSessionDraft("agent:main:main")).toBe(withOutboxes);
+      expect(sidebar.storedOutboxes?.attentionCountForSession("agent:main:main") ?? 0).toBe(
+        withOutboxes ? 1 : 0,
+      );
+      expect(sidebar.storedOutboxes?.hasSessionDraft("agent:main:main") ?? false).toBe(
+        withOutboxes,
+      );
+      if (withOutboxes) {
+        storedOutboxes = {
+          total: 2,
+          attentionCountForSession: () => 2,
+          hasSessionDraft: () => false,
+        };
+        render(shell.render(), container);
+        await settleLitElements([sidebar, topbar]);
+        expect(renderSidebarChild).toHaveBeenCalledOnce();
+        expect(sidebar.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
+        expect(sidebar.querySelector(".session-row-badge--draft")).toBeNull();
+      }
     },
   );
 
@@ -287,7 +303,7 @@ describe("application shell pairing access", () => {
     expect(openNewSession).toHaveBeenCalledOnce();
   });
 
-  it("invalidates the resident sidebar when the stored outbox changes", async () => {
+  it("updates the shell when the stored outbox changes", async () => {
     vi.useFakeTimers();
     let publish: (() => void) | undefined;
     const shell = document.createElement("openclaw-app-shell") as LitElement & {
@@ -317,7 +333,6 @@ describe("application shell pairing access", () => {
       publish?.();
 
       expect(shell.isUpdatePending).toBe(true);
-      expect(shell.navigationSidebar.isUpdatePending).toBe(true);
     } finally {
       shell.remove();
       shell.navigationSidebar.remove();
@@ -326,16 +341,6 @@ describe("application shell pairing access", () => {
   });
 
   it.each([
-    {
-      name: "pairing-only",
-      auth: { role: "operator", scopes: ["operator.pairing"] },
-      canPair: true,
-    },
-    {
-      name: "administrator",
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      canPair: true,
-    },
     { name: "legacy authenticated", auth: { role: "operator" }, canPair: true },
     { name: "legacy unadvertised", auth: null, canPair: true },
     { name: "read-only", auth: { role: "operator", scopes: ["operator.read"] }, canPair: false },

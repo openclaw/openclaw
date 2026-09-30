@@ -126,16 +126,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       })
     : undefined;
   params.trackInternalModelRunTarget(internalSessionTarget);
-  let attemptSessionTarget =
-    internalSessionTarget ??
-    (sessionKey && storePath
-      ? {
-          agentId: sessionAgentId,
-          sessionId,
-          sessionKey,
-          storePath,
-        }
-      : undefined);
+  let attemptSessionTarget = internalSessionTarget ?? sessionEffectsSource;
   const attemptSessionFile = internalSessionTarget?.sessionFile ?? sessionFile;
 
   const startedAt = Date.now();

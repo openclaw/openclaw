@@ -159,10 +159,12 @@ With live configuration reload enabled, edits to `gateway.roles` and
 `gateway.auth.identityScopes` apply without restarting the Gateway. Existing
 Gateway clients reconnect to receive the current scope ceiling, except for changes
 confined to model policies as described below and identity-scope edits that leave
-a verified WebSocket login’s resolved grant set unchanged. Editing another login
-or reordering the same scopes preserves that connection and its accepted runs.
-Changing its own resolved grants revokes retained and delegated work; restoring
-the grant does not revive the original authority. Pending handshakes and
+an operator WebSocket login’s resolved grant set unchanged. Editing another login
+or reordering the same scopes preserves that connection, its accepted runs, and
+queued inputs. Changing its own resolved grants revokes retained and delegated
+work; restoring the grant does not revive the original authority. Clients without
+verified identities, node connections, HTTP requests, and plugin auth cookies do
+not consume identity-scope grants and are unaffected by these edits. Pending handshakes and
 mutations recheck the policy before acquiring authority;
 already-admitted runs retain their normal completion and cancellation lifecycle,
 including cancellation when their original access-policy grant expires or is revoked.
@@ -445,6 +447,10 @@ dispatch so authorization failures have one canonical structured response:
 - `sessions.delete` requires `operator.write` for an archived-only request
   with the supported fields, and `operator.admin` otherwise. Neither session
   scope authorizes deletion.
+- `session.reactions.list` accepts `operator.sessions.read` or broader read
+  access and requires current session visibility. `session.reactions.set` requires `operator.write`, an identified
+  author, and permission to send to or suggest in the session. A view-only
+  operator role cannot react.
 
 Project RPCs use these scopes:
 

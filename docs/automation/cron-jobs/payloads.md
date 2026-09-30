@@ -208,6 +208,8 @@ openclaw automations create "0 * * * *" \
 
 Use `--script <file|->` to read JavaScript from a file or stdin. The CLI preserves leading and trailing spaces in file paths; quote the path as one shell argument. The timeout defaults to 300 seconds and is capped at 900; the tool budget defaults to 50 calls and is capped at 200. These payload budgets are separate from the smaller trigger-gate evaluation budgets.
 
+Script payloads can call configured MCP server tools as `MCP.<server>.<tool>({ ...input })`, like interactive Code Mode. MCP is opt-in per server: name each server in the job's `toolsAllow` (`--tools`) with an exact tool such as `wispr-flow__search_meetings` or a server-scoped glob such as `wispr-flow__*`. A wildcard `*`, a missing `toolsAllow`, a glob without a server prefix, or a script that never mentions `MCP` starts no server. Within a named server, the owning agent's tool policy still applies. Each run starts its own runtime for the named servers, counts connection time against the script timeout and each call against the tool budget, and retires the runtime when the run ends. A named server that fails to start is absent from `MCP`; if the script then fails, the run error ends with `MCP server "<name>" is unavailable: <reason>`. See [Event triggers](/automation/cron-jobs/schedules#event-triggers-condition-watchers) for the shared details.
+
 The script may return an object with these optional fields:
 
 - `notify`: Text delivered through the job's `announce`, `webhook`, or `none` delivery mode. If omitted, nothing is delivered. For a `main` job, the text becomes a system event.
@@ -226,6 +228,32 @@ recovery failed and the script did not run.
 Changing a running job's script payload or saved state protects that edit from
 the old script's returned state, including when completion is recovered after a
 Gateway restart. The completed run still retains its history.
+
+## Authoring recurring jobs
+
+A recurring job re-runs the same instructions on every fire, so anything the model
+works out from scratch costs the same time and tokens each run. Keep the model for
+judgment and move the repeatable parts into code:
+
+- Put listing and diffing, dedupe, and checkpoints or watermarks in a workspace
+  script that the payload runs in a single `exec` call.
+- Keep detailed instructions in a workspace file next to the script and have the
+  message reference it (for example, "Follow `scripts/<job>.md`"), so most fixes
+  need only workspace file edits, not a job update.
+- Have the message name the exact tool ids and argument shapes the run should use,
+  instead of asking the model to discover them.
+- Cap `toolsAllow` to the tools the run actually needs.
+- When a script can decide there is nothing to do, use a condition trigger, a
+  [command payload](#command-payloads), or a [script payload](#script-payloads) so
+  quiet fires skip the model. Scripts can call a configured MCP server only when
+  `toolsAllow` names it (`<server>__<tool>` or `<server>__*`). Triggers and script
+  payloads are unavailable when `cron.triggers.enabled` is `false`.
+- When a run fails, make it fail instead of posting the error yourself: throw from
+  trigger or script payload JavaScript, or exit non-zero from a command payload. A
+  script that returns an error field still succeeds. The scheduler owns failure
+  accounting:
+  [failure notifications](/automation/cron-jobs/delivery#failure-notifications)
+  already wait for consecutive failed runs, so a one-off outage stays quiet.
 
 ## Execution styles
 
@@ -254,7 +282,9 @@ Agent-turn jobs default to the creating conversation when the create request car
   <Accordion title="Main session vs current vs isolated vs custom">
     **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
-    `current` binds conversation context and result delivery, not the original agent execution or its worktree. The detached run uses the scheduled agent's workspace and captured tool restrictions. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
+    `current` binds conversation context and result delivery, not the original agent execution or its worktree. The detached run has its own session identity and uses the scheduled agent's workspace and captured tool restrictions. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest detached run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
+
+    Custom-session agent turns use the existing session’s saved workspace and working directory, including its managed worktree. Requester-scoped jobs may use a saved workspace only for their owning conversation; trusted operator-scheduled jobs can target another conversation’s saved workspace. A missing, retired, or mismatched worktree stops the run instead of falling back to the agent’s default workspace. Filesystem containment and the job’s tool restrictions still apply; a path in the job prompt does not grant access. Persistent-session rollover keeps the saved workspace binding, permission mode, containment root, and inherited tool restrictions; detached runs do not inherit this workspace context. A new `session:custom-id` without an existing session starts in the configured agent workspace. Use `delivery: { mode: "none" }` without an external target for quiet named-session work that needs no runner fallback announcement.
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 

@@ -151,6 +151,18 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     delete canonicalValue.archivedBy;
     delete canonicalValue.archiveReason;
   }
+  // An archived entry never carries a snooze: automatic archival (cap, age,
+  // stale-dashboard) writes archive facts without the patch path, and a later
+  // restore must not resurface a still-hidden session.
+  if (
+    canonicalValue.archivedAt !== undefined ||
+    typeof canonicalValue.snoozedUntil !== "number" ||
+    !Number.isFinite(canonicalValue.snoozedUntil) ||
+    canonicalValue.snoozedUntil <= 0
+  ) {
+    delete canonicalValue.snoozedUntil;
+    delete canonicalValue.snoozedAt;
+  }
   return canonicalValue as unknown as SessionEntry;
 }
 

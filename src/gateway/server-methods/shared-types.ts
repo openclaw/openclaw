@@ -57,7 +57,12 @@ import type {
   ChannelRuntimeSnapshotOptions,
   StartChannelOptions,
 } from "../server-channel-runtime.types.js";
-import type { ChatRunEntry, ChatRunRegistration, ChatRunState } from "../server-chat-state.js";
+import type {
+  ChatRunEntry,
+  ChatRunRegistration,
+  ChatRunState,
+  SessionMessageSubscriberRegistry,
+} from "../server-chat-state.js";
 import type { GatewayCronServiceContract } from "../server-cron-contract.js";
 import type {
   GatewayApprovalEventPublisher,
@@ -70,12 +75,14 @@ import type {
 } from "../server-model-catalog.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type {
   WorkerPlacementDiskSpaceReader,
   WorkerPlacementRunnerAvailabilityReader,
+  WorkerPlacementRuntimeInstallReader,
   WorkerSessionPlacementReader,
 } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
@@ -282,7 +289,16 @@ type GatewayKernelContext = {
   recoveryRuntime?: GatewayRecoveryRuntime;
   /** Uses the lifecycle owner's module graph for plugin and detached agent turns. */
   createAgentTurnFacade?: InternalAgentTurnFacadeFactory;
-  enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
+  /** Live target facts stay with the instance owner, outside tool dispatch's import graph. */
+  resolveSessionRequestTargets?: (request: {
+    method: string;
+    requestParams: unknown;
+    connId?: string;
+  }) => SessionMutationTarget[] | undefined;
+  enforceSharedGatewayAuthGenerationForConfigWrite?: (
+    nextConfig: OpenClawConfig,
+    previousConfig: OpenClawConfig,
+  ) => void;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -359,12 +375,8 @@ type GatewayTransportContext = {
   subscribeSessionEvents: (connId: string) => void;
   unsubscribeSessionEvents: (connId: string) => void;
   forgetConnectionAncestors: (connId: string) => void;
-  subscribeSessionMessageEvents: (
-    connId: string,
-    sessionKey: string,
-    opts?: { includeApprovals?: boolean; provisional?: boolean },
-  ) => ((() => void) & { commit: () => void }) | undefined;
-  unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
+  subscribeSessionMessageEvents: SessionMessageSubscriberRegistry["subscribe"];
+  unsubscribeSessionMessageEvents: SessionMessageSubscriberRegistry["unsubscribe"];
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;
@@ -397,6 +409,8 @@ type GatewayResidentBridgeContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   /** Process-current paired-device runner proof for active placement projection. */
   workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
+  /** Process-local installation progress for the placement's session-host node. */
+  workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
   /** Use-time approval authority validation over the live run/worker owners. */
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
@@ -466,6 +480,8 @@ export type GatewayRequestOptions = {
   methodRegistry?: GatewayMethodRegistryView;
   /** Shared entry/publication precondition; never retained as accepted-run authority. */
   expectedProfileBinding?: import("../expected-profile.js").ExpectedProfileBinding;
+  /** In-process source refresh before handler entry; never retained by the handler. */
+  prepareDispatchCurrent?: () => Promise<void>;
   /** In-process Gateway lifetime guard composed into durable session mutations. */
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
@@ -501,10 +517,13 @@ export type SessionMutationAuthorization = {
 /** Normalized method invocation options passed to registered handlers. */
 export type GatewayRequestHandlerOptions = Omit<
   GatewayRequestOptions,
-  "methodRegistry" | "expectedProfileBinding"
+  "methodRegistry" | "expectedProfileBinding" | "prepareDispatchCurrent"
 > & {
   params: Record<string, unknown>;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  markSessionSubscribePhase?: (
+    phase: import("../slow-request-diagnostics.js").SessionSubscribePhase,
+  ) => void;
   /** Host-prepared session resource authority; services explicitly retain their own borrow. */
   sessionAccessAuthority?: import("../session-access-authority.js").GatewaySessionAccessAuthority;
 };

@@ -26,15 +26,11 @@ function resolveSignalAbortReason(
     : undefined;
 }
 
-function isUserAbortSignal(signal: AbortSignal | undefined): boolean {
-  return resolveSignalAbortReason(signal) === "user";
-}
-
 function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
   return (
     (replyOperation?.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_by_user") ||
-    isUserAbortSignal(replyOperation?.abortSignal)
+    resolveSignalAbortReason(replyOperation?.abortSignal) === "user"
   );
 }
 

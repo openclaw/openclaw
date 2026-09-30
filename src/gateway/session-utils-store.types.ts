@@ -1,7 +1,7 @@
 import type {
   CapturedSessionEntryReadSource,
   SessionEntryReadSource,
-} from "../config/sessions/session-accessor.types.js";
+} from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db-contract.js";

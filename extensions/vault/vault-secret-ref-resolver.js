@@ -286,10 +286,9 @@ async function resolveVaultClientToken(baseUrl) {
       return resolveVaultTokenFile();
     case "jwt":
       return await resolveVaultTokenFromJwt(baseUrl, "jwt");
-    case "kubernetes":
+    default:
       return await resolveVaultTokenFromJwt(baseUrl, "kubernetes");
   }
-  throw new Error("Unsupported Vault auth method.");
 }
 
 async function classifyVaultClientToken(baseUrl, vaultToken) {

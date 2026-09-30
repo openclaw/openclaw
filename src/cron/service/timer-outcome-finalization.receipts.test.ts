@@ -9,17 +9,19 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
-import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { reserveQueuedCronRun } from "./run-admission.js";
 import { createCronRunHandle } from "./run-history.js";
@@ -33,15 +35,15 @@ const fixtures = setupCronRegressionFixtures({ prefix: "cron-finalization-receip
 
 function claimReceipt(storePath: string, job: CronJob, startedAtMs: number) {
   const prepared = prepareCronRunReceiptClaim({
+    observed: undefined,
     storePath,
     job,
     agentId: job.agentId ?? "main",
     startedAtMs,
   });
   return runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabase({
+    claimCronRunReceiptInDatabaseForTest({
       database: db,
-      receiptSchema: prepareCronRunReceiptWriteSchema(db),
       prepared,
       resolveAgentId: (current) => current.agentId ?? "main",
     }),
@@ -76,6 +78,7 @@ describe("cron outcome receipt finalization", () => {
       retired.state.runningAtMs = startedAt;
       current.state.runningAtMs = startedAt;
       await saveCronStore(store.storePath, { version: 1, jobs: [retired, current] });
+      const runReceiptContext = captureOpenClawStateWorkerContext();
       const retiredReceipt = claimReceipt(store.storePath, retired, startedAt);
       const currentReceipt = claimReceipt(store.storePath, current, startedAt);
       const state = createCronRegressionState({
@@ -92,12 +95,13 @@ describe("cron outcome receipt finalization", () => {
       const retiredMarker = markCronJobActive(retired.id);
       const reservationIdentity = reserveQueuedCronRun(state, retired.id, startedAt, {
         runReceipt: retiredReceipt,
+        runReceiptContext,
       });
       advanceCronActiveJobGeneration();
       const currentMarker = markCronJobActive(current.id);
       let successor: ReturnType<typeof claimReceipt> | undefined;
       if (replaced) {
-        finishCronRunReceipt({
+        await finishCronRunReceiptAsync({
           handle: retiredReceipt,
           status: "superseded",
           finishedAtMs: startedAt,
@@ -113,6 +117,7 @@ describe("cron outcome receipt finalization", () => {
             activeJobMarker: retiredMarker,
             reservationIdentity,
             runReceipt: retiredReceipt,
+            runReceiptContext,
             status: "ok",
             startedAt,
             endedAt: startedAt,
@@ -122,6 +127,7 @@ describe("cron outcome receipt finalization", () => {
             job: current,
             activeJobMarker: currentMarker,
             runReceipt: currentReceipt,
+            runReceiptContext,
             status: "ok",
             startedAt,
             endedAt: startedAt,
@@ -144,7 +150,11 @@ describe("cron outcome receipt finalization", () => {
         expect(state.store?.jobs.find((job) => job.id === retired.id)).toEqual(persisted);
       } finally {
         if (successor) {
-          finishCronRunReceipt({ handle: successor, status: "skipped", finishedAtMs: startedAt });
+          await finishCronRunReceiptAsync({
+            handle: successor,
+            status: "skipped",
+            finishedAtMs: startedAt,
+          });
         }
       }
     },
@@ -166,9 +176,10 @@ describe("cron outcome receipt finalization", () => {
     stale.state.runningAtMs = startedAt;
     current.state.runningAtMs = startedAt;
     await saveCronStore(store.storePath, { version: 1, jobs: [stale, current] });
+    const runReceiptContext = captureOpenClawStateWorkerContext();
     const staleReceipt = claimReceipt(store.storePath, stale, startedAt);
     const currentReceipt = claimReceipt(store.storePath, current, startedAt);
-    finishCronRunReceipt({
+    await finishCronRunReceiptAsync({
       handle: staleReceipt,
       status: "superseded",
       finishedAtMs: startedAt + 1,
@@ -190,6 +201,7 @@ describe("cron outcome receipt finalization", () => {
         job: stale,
         activeJobMarker: markCronJobActive(stale.id),
         runReceipt: staleReceipt,
+        runReceiptContext,
         status: "ok",
         startedAt,
         endedAt: startedAt + 2,
@@ -199,6 +211,7 @@ describe("cron outcome receipt finalization", () => {
         job: current,
         activeJobMarker: markCronJobActive(current.id),
         runReceipt: currentReceipt,
+        runReceiptContext,
         status: "ok",
         startedAt,
         endedAt: startedAt + 2,
@@ -260,6 +273,7 @@ describe("cron outcome receipt finalization", () => {
     });
     imported.state.nextRunAtMs = undefined;
     await saveCronStore(store.storePath, { version: 1, jobs: [completed, imported] });
+    const runReceiptContext = captureOpenClawStateWorkerContext();
     const receipt = claimReceipt(store.storePath, completed, startedAt);
     const state = createCronRegressionState({
       storePath: store.storePath,
@@ -273,6 +287,7 @@ describe("cron outcome receipt finalization", () => {
         job: completed,
         activeJobMarker: markCronJobActive(completed.id),
         runReceipt: receipt,
+        runReceiptContext,
         status: "ok",
         startedAt,
         endedAt: startedAt + 1,
@@ -301,6 +316,7 @@ describe("cron outcome receipt finalization", () => {
     });
     sibling.state.nextRunAtMs = undefined;
     await saveCronStore(store.storePath, { version: 1, jobs: [completed, sibling] });
+    const runReceiptContext = captureOpenClawStateWorkerContext();
     const receipt = claimReceipt(store.storePath, completed, startedAt);
     const events: Array<{ action: string; jobId: string }> = [];
     const warn = vi.fn();
@@ -333,6 +349,7 @@ describe("cron outcome receipt finalization", () => {
             job: completed,
             activeJobMarker: markCronJobActive(completed.id),
             runReceipt: receipt,
+            runReceiptContext,
             status: "ok",
             startedAt,
             endedAt: startedAt + 1,

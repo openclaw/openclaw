@@ -19,6 +19,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
+import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   type SqliteWorkerReply,
@@ -63,7 +64,8 @@ async function expectRejectedOpen(
   }
 }
 
-const nodeIt = process.versions.bun ? it.skip : it;
+const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
+const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 
 describe("SQLite worker store", () => {
   it("registers storage-worker CPU sources until native close", async () => {
@@ -509,7 +511,7 @@ describe("SQLite worker store", () => {
     expect(await read(await open(file))).toEqual(["before close", "still open"]);
   });
 
-  nodeIt("keeps a new database usable while another worker retires at capacity", async () => {
+  poolIt("keeps a new database usable while another worker retires at capacity", async () => {
     const first = await open(databasePath());
     // Fill the documented four-worker budget before retiring an otherwise idle worker.
     for (let index = 0; index < 3; index += 1) {
@@ -629,7 +631,7 @@ describe("SQLite worker store", () => {
     expect(await read(survivor)).toEqual(["write before close", "after failed admission"]);
   });
 
-  nodeIt("times out a waiting open without retiring healthy workers or writes", async () => {
+  poolIt("times out a waiting open without retiring healthy workers or writes", async () => {
     const active: SqliteWorkerStore<FixtureOperations>[] = [];
     for (let index = 0; index < 4; index += 1) {
       active.push(await open(databasePath()));
@@ -686,7 +688,9 @@ describe("SQLite worker store", () => {
         );
       }
       const admitted = await open(pendingFile);
-      await expect(append(admitted, "after queue drainage")).resolves.toMatchObject({ writes: 1 });
+      await expect(append(admitted, "after queue drainage")).resolves.toMatchObject({
+        writes: 1,
+      });
       expect(await read(admitted)).toEqual(["after queue drainage"]);
     } finally {
       releaseReplies();

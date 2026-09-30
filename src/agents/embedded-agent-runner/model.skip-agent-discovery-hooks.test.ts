@@ -1,5 +1,4 @@
-// Coverage for resolving models through provider hooks while discovery is skipped.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -27,8 +26,6 @@ afterEach(async () => {
 });
 
 const mocks = vi.hoisted(() => ({
-  // Discovery mocks throw/assert by call count so skipAgentDiscovery can prove it
-  // only invokes the target provider's dynamic hooks.
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
   applyProviderResolvedTransportWithPlugin: vi.fn(() => {
@@ -78,7 +75,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   shouldPreferProviderRuntimeResolvedModel: mocks.shouldPreferProviderRuntimeResolvedModel,
 }));
 
-let resolveModelAsync: typeof import("./model.js").resolveModelAsync;
+import { resolveModelAsync } from "./model.js";
 
 function expectWorkspaceHookCall(mock: { mock: { calls: unknown[][] } }) {
   expect(mock).toHaveBeenCalledExactlyOnceWith(
@@ -88,10 +85,6 @@ function expectWorkspaceHookCall(mock: { mock: { calls: unknown[][] } }) {
     }),
   );
 }
-
-beforeAll(async () => {
-  ({ resolveModelAsync } = await import("./model.js"));
-});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -111,12 +104,11 @@ describe("resolveModelAsync skipAgentDiscovery runtime hooks", () => {
     );
 
     expect(result.error).toBeUndefined();
-    if (!result.model) {
-      throw new Error("Expected resolved model");
-    }
-    expect(result.model.provider).toBe("ollama");
-    expect(result.model.id).toBe("llama3.2:latest");
-    expect(result.model.api).toBe("ollama");
+    expect(result.model).toMatchObject({
+      provider: "ollama",
+      id: "llama3.2:latest",
+      api: "ollama",
+    });
     expect(mocks.discoverAuthStorage).not.toHaveBeenCalled();
     expect(mocks.discoverModels).not.toHaveBeenCalled();
     expectWorkspaceHookCall(mocks.prepareProviderDynamicModel);

@@ -16,21 +16,13 @@ public enum OpenClawChatSessionKey {
 /// Canonical gateway payload mapping shared by the native Apple chat transports.
 public enum OpenClawChatGatewayPayloadCodec {
     public static func decodeSessionsList(_ data: Data, agentID: String?) throws -> OpenClawChatSessionsListResponse {
-        let decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
-        return OpenClawChatSessionsListResponse(
-            ts: decoded.ts,
-            path: decoded.path,
-            count: decoded.count,
-            totalCount: decoded.totalCount,
-            offset: decoded.offset,
-            nextOffset: decoded.nextOffset,
-            hasMore: decoded.hasMore,
-            defaults: decoded.defaults,
-            sessions: decoded.sessions.map { row in
-                var row = row
-                row.agentId = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId ?? agentID
-                return row
-            })
+        var decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        decoded.sessions = decoded.sessions.map { row in
+            var row = row
+            row.agentId = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId ?? agentID
+            return row
+        }
+        return decoded
     }
 
     public static func decodeAgentsList(_ data: Data) throws -> OpenClawChatAgentsListResponse {
@@ -199,6 +191,10 @@ public enum OpenClawChatGatewayPayloadCodec {
             return .modelSelectionChanged
         case "sessions.changed":
             return decode(OpenClawChatSessionsChangedEvent.self).map(OpenClawChatTransportEvent.sessionsChanged)
+        case "session.narration":
+            // Native foreground subscriptions use full streams; bounded narration
+            // tails cannot replace transcript messages.
+            return nil
         case "session.observer":
             return decode(SessionObserverDigest.self).map(OpenClawChatTransportEvent.sessionObserver)
         case "seqGap":

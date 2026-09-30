@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
@@ -20,6 +21,7 @@ import {
 } from "../../state/openclaw-agent-execution.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
 import { updateAcpSessionStoreEntry } from "./session-meta-entry.js";
 import {
   buildAcpDatabaseSessionKey,
@@ -41,6 +43,21 @@ type AcpSessionMutationParams = Parameters<typeof upsertAcpSessionMetaNative>[0]
 export async function upsertAcpSessionMeta(
   params: AcpSessionMutationParams,
 ): Promise<SessionEntry | null> {
+  return mutateAcpSessionMeta(params);
+}
+
+/** Private control updates cannot recreate metadata that disappeared after preparation. */
+export async function upsertAcpSessionMetaForControl(
+  params: AcpSessionMutationParams,
+  constraint: AcpSessionControlConstraint,
+): Promise<SessionEntry | null> {
+  return mutateAcpSessionMeta(params, structuredClone(constraint));
+}
+
+async function mutateAcpSessionMeta(
+  params: AcpSessionMutationParams,
+  control?: AcpSessionControlConstraint,
+): Promise<SessionEntry | null> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return null;
@@ -58,13 +75,19 @@ export async function upsertAcpSessionMeta(
     assertCurrent: params.assertCommitAllowed,
   });
   const store = resolveSessionStorePathForAcp({ ...captured, sessionKey, agentId: params.agentId });
-  if (isIncognitoSessionKey(sessionKey)) {
+  const mutateNative = (assertCommitAllowed = captured.assertCurrent) => {
+    if (control) {
+      throw new Error("ACP controlled metadata mutation requires its durable worker source");
+    }
     return upsertAcpSessionMetaNative({
       ...params,
       ...captured,
       expectedControlBinding,
-      assertCommitAllowed: captured.assertCurrent,
+      assertCommitAllowed,
     });
+  };
+  if (isIncognitoSessionKey(sessionKey)) {
+    return mutateNative();
   }
   return withSessionEntryReadOnlyInWorker(
     {
@@ -81,12 +104,7 @@ export async function upsertAcpSessionMeta(
       const entry = read.value;
       const readerScope = readOwner.scope;
       if (readOwner.kind === "native") {
-        return upsertAcpSessionMetaNative({
-          ...params,
-          ...captured,
-          expectedControlBinding,
-          assertCommitAllowed: captured.assertCurrent,
-        });
+        return mutateNative();
       }
       if (!readerScope?.storePath) {
         throw new Error("ACP mutation has no retained canonical source");
@@ -97,12 +115,7 @@ export async function upsertAcpSessionMeta(
         env: captured.env,
       };
       if (!supportsOpenClawAgentDatabaseExecution(options)) {
-        return upsertAcpSessionMetaNative({
-          ...params,
-          ...captured,
-          expectedControlBinding,
-          assertCommitAllowed: readOwner.assertCurrent,
-        });
+        return mutateNative(readOwner.assertCurrent);
       }
       const identity = readDatabasePathIdentitySync(options.path);
       const context = captureOpenClawStateWorkerContext({
@@ -111,6 +124,25 @@ export async function upsertAcpSessionMeta(
       });
       const prepareMaintenance = captureMaintenanceConfigAsyncReader(captured.assertCurrent);
       const key = normalizeStoreSessionKey(store.storeSessionKey);
+      const metadataRead = {
+        keys: [
+          buildAcpDatabaseSessionKey(key, store.agentId),
+          ...legacyAcpDatabaseSessionKeys(key, store.agentId, captured.cfg),
+        ],
+        legacyKey: resolveLegacyFreeAcpSessionKey(key),
+      };
+      if (
+        control &&
+        (control.agentId !== store.agentId ||
+          control.sessionKey !== key ||
+          control.source.agentId !== options.agentId ||
+          !isDeepStrictEqual(control.source.identity, identity) ||
+          !isDeepStrictEqual(control.sharedSource.identity, context.admission.identity) ||
+          !isDeepStrictEqual(control.read.keys, metadataRead.keys) ||
+          control.read.legacyKey !== metadataRead.legacyKey)
+      ) {
+        throw new Error("ACP controlled metadata mutation does not match its prepared target");
+      }
       const updatedAt = params.now?.() ?? Date.now();
       const execution = captureOpenClawAgentDatabaseExecution(
         options,
@@ -156,20 +188,14 @@ export async function upsertAcpSessionMeta(
               type: "acp.prepareMutation",
               input: {
                 nonce,
-                read: {
-                  keys: [
-                    buildAcpDatabaseSessionKey(key, store.agentId),
-                    ...legacyAcpDatabaseSessionKeys(key, store.agentId, captured.cfg),
-                  ],
-                  legacyKey: resolveLegacyFreeAcpSessionKey(key),
-                  entry,
-                },
+                read: { ...metadataRead, entry },
                 entry,
                 updatedAt,
                 source: source(),
                 sessionKey: key,
                 agentId: store.agentId,
                 expectedControlBinding,
+                control,
               },
             }),
           {
@@ -283,10 +309,12 @@ export async function upsertAcpSessionMeta(
             sessionKey: key,
             entry: commitEntry,
             currentRowKey: preparation.currentRowKey,
+            currentRowSessionId: preparation.currentRowSessionId,
             updatedAt,
             decision: selected,
             source: source(),
             expectedControlBinding,
+            control,
           },
           assertCurrent,
         );

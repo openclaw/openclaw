@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // Materialize compiler and lint selections only after the check-planning job installs dependencies.
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { detectChangedLanes } from "./changed-lanes.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { isRecord } from "./lib/record-shared.mjs";
-import { selectTsgoCoreTestStripe } from "./lib/tsgo-core-test-shards.mts";
+import {
+  resolveChangedCiTsgoInputs,
+  selectTsgoCoreTestStripe,
+} from "./lib/tsgo-core-test-shards.mts";
 
 type CheckRow = {
   check_name: string;
@@ -15,10 +18,16 @@ type CheckRow = {
   core_type_graph_names_json?: string;
   core_type_concurrency?: number;
 };
-type StripeRow = { stripe: number; lint_selection_json?: string; type_graph_names_json?: string };
+type StripeRow = {
+  stripe: number;
+  lint_selection_json?: string;
+  type_graph_names_json?: string;
+  root_type_stripe?: string;
+};
 type Matrix<Row> = { include: Row[] };
 
 export type CiCheckPlanInput = {
+  typeGraphBoundaryOwner: "" | "check-plan" | "additional-checks";
   changedPaths: string[];
   changedCoreTestPaths: string[] | null;
   runnerProfile: string;
@@ -43,8 +52,21 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     runs("prod-types") || runs("test-types")
       ? await (
           await import("./run-tsgo-core-test-shards.mts")
-        ).createChangedCiTypeCheckPlan(input.changedPaths, { cwd: process.cwd() })
+        ).createChangedCiTypeCheckPlan(input.changedPaths, {
+          cwd: process.cwd(),
+          coreBoundaryOwner:
+            input.typeGraphBoundaryOwner === "additional-checks" ? "additional-checks" : undefined,
+        })
       : null;
+  // Full selection needs no discovery, but a boundary without another admitted owner stays here.
+  if (
+    typePlan?.mode === "full" &&
+    input.typeGraphBoundaryOwner === "check-plan" &&
+    !resolveChangedCiTsgoInputs(input.changedPaths, existsSync)
+  ) {
+    const { checkCoreTsgoGraphBoundary } = await import("./check-tsgo-core-boundary.mts");
+    await checkCoreTsgoGraphBoundary();
+  }
   const graphs = typePlan?.graphs ?? [];
   const production = graphs.filter(({ name }) => ["core", "ui", "extensions"].includes(name));
   const coreTests = graphs.filter(({ name }) => name.startsWith("core-test-"));
@@ -53,7 +75,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     !hosted && !input.changedCoreTestPaths
       ? ["extensions-test", "test-root", "scripts"]
       : ["extensions-test", "scripts", "test-root"];
-  const other = otherOrder.flatMap((name) => graphs.filter((graph) => graph.name === name));
+  let other = otherOrder.flatMap((name) => graphs.filter((graph) => graph.name === name));
   if (production.length + coreTests.length + other.length !== graphs.length) {
     throw new Error("Every selected compiler graph must have a CI execution owner");
   }
@@ -65,7 +87,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     throw new Error("Selected compiler graphs have no preflight check template");
   }
   const assignedCore = new Set<string>();
-  const coreRows =
+  const coreRows: StripeRow[] =
     typePlan && hosted
       ? input.coreTypeMatrix.include.flatMap((row) => {
           const configs = new Set(
@@ -82,6 +104,14 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
       : [];
   if (hosted && assignedCore.size !== coreTests.length) {
     throw new Error("Selected core compiler graphs have no preflight stripe template");
+  }
+  // Reuse admitted rows only; small selections keep their serial central owner.
+  // Each root partition runs after its row's concurrent core compilers settle.
+  if (coreRows.length >= 4 && other.some(({ name }) => name === "test-root")) {
+    for (const [index, row] of coreRows.slice(-4).entries()) {
+      row.root_type_stripe = `${index + 1}/4`;
+    }
+    other = other.filter(({ name }) => name !== "test-root");
   }
   const checkRows = input.checkMatrix.include.flatMap((row) => {
     if (row.task === "prod-types") {
@@ -157,7 +187,6 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     run_lint_core: coreLint.length > 0,
     run_lint_extensions: extensionLint.length > 0,
     run_changed_core_type_stripes: coreRows.length > 0,
-    type_graph_boundary_checked: typePlan !== null,
   };
 }
 
@@ -196,7 +225,16 @@ function parseInput(value: unknown): CiCheckPlanInput {
   if (!isRecord(value) || typeof value.runnerProfile !== "string") {
     throw new Error("Check planning requires its preflight input");
   }
+  const boundaryOwner = value.typeGraphBoundaryOwner;
+  if (
+    boundaryOwner !== "" &&
+    boundaryOwner !== "check-plan" &&
+    boundaryOwner !== "additional-checks"
+  ) {
+    throw new Error("Check planning requires its compiler boundary owner");
+  }
   return {
+    typeGraphBoundaryOwner: boundaryOwner,
     changedPaths: paths(value.changedPaths),
     changedCoreTestPaths:
       value.changedCoreTestPaths === null ? null : paths(value.changedCoreTestPaths),

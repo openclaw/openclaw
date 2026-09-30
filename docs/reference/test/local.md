@@ -24,6 +24,11 @@ batches of at most 64 files. Each batch keeps isolated fork workers within the
 existing full-suite worker budget. Focused selections and watch mode retain their
 usual routing.
 
+Gateway configurations marked exclusive drain other test plans before starting
+and finish before later plans are admitted. This applies to full-suite runs and
+explicit `OPENCLAW_TEST_PROJECTS_PARALLEL` overrides as well as automatic
+exact-target scheduling. Ordinary plans retain their configured parallelism.
+
 Tests that create real managed worktrees must satisfy the
 [capacity and disk-space requirements](/concepts/managed-worktrees#capacity-and-disk-space),
 including the additional allowance for executable setup scripts. Keep that space
@@ -196,9 +201,11 @@ plugin's KNN child, session transcript archive and reconciliation workers, and
 managed GitHub credential resolution. The same generation also compiles the fake-backend TUI
 fixture's four runtime roots together: the real TUI, embedded reply producer,
 reply metadata reader, and outbound normalizer. Shared chunks preserve their
-module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
-launches them with `--import tsx` for their own syntax, while Bun handles that
-syntax natively without the Node loader. Only their runtime imports change.
+module and WeakMap identity. Prepared TUI fixtures are compiled to `.mjs` and run
+as JavaScript without a TypeScript loader. Direct source fixtures
+remain `.mts`: Node launches them with `--import tsx`, while Bun handles their
+syntax natively. The session-identity PTY tests load real provider policies, so
+their runtime prerequisite prepares the built host SDK before Vitest workers start.
 Existing package build entry paths and Vitest source parents stay unchanged. The
 CLI fork-recovery regression also compiles the real CLI entry and its concurrent
 rebind's session accessor and binding helper together. Both processes use the same

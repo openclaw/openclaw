@@ -1,4 +1,3 @@
-// Builds PATH values for OpenClaw child processes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

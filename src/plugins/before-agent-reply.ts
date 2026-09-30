@@ -2,7 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { runOncePerAgentRun } from "../infra/agent-events.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { readClaimingHookAdmission, withClaimingHookAdmission } from "./hook-claim-admission.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -45,6 +47,7 @@ export function runBeforeAgentReplyForTurn(params: {
   trigger?: string;
   event: PluginHookBeforeAgentReplyEvent;
   context: PluginHookAgentContext;
+  assertCurrent?: () => void;
   onDispatch?: () => void;
   onDeclined?: () => void;
 }): Promise<PluginHookBeforeAgentReplyResult | undefined> {
@@ -53,32 +56,55 @@ export function runBeforeAgentReplyForTurn(params: {
     return Promise.resolve(undefined);
   }
   const context = { ...params.context, trigger };
-  return runOncePerAgentRun(params.runId, "before_agent_reply", async () => {
-    const hookRunner = getGlobalHookRunner();
-    if (!hookRunner?.hasHooks("before_agent_reply", context)) {
-      return undefined;
-    }
-    const observerScope = beforeAgentReplyObserver.getStore();
-    // Nested agent runs inherit async context. Bind recovery to the first runner
-    // so a hook-spawned child cannot checkpoint its parent's admitted turn.
-    const observer =
-      observerScope && (!observerScope.runId || observerScope.runId === params.runId)
-        ? observerScope
-        : undefined;
-    if (observer && !observer.runId) {
-      observer.runId = params.runId;
-    }
-    if ((await observer?.beforeDispatch()) === false) {
-      return undefined;
-    }
-    params.onDispatch?.();
-    let result = await hookRunner.runBeforeAgentReply(params.event, context);
-    if (!result?.handled) {
-      params.onDeclined?.();
-    }
-    if (observer) {
-      result = await observer.afterDispatch(result);
-    }
-    return result;
-  });
+  const inherited = readClaimingHookAdmission(context);
+  const assertCurrent = params.assertCurrent
+    ? () => {
+        inherited?.assertCurrent?.();
+        params.assertCurrent?.();
+      }
+    : inherited?.assertCurrent;
+  if (assertCurrent) {
+    withClaimingHookAdmission(context, { ...inherited, assertCurrent });
+  }
+  const run = () =>
+    runOncePerAgentRun(params.runId, "before_agent_reply", async () => {
+      const hookRunner = getGlobalHookRunner();
+      if (!hookRunner?.hasHooks("before_agent_reply", context)) {
+        return undefined;
+      }
+      const observerScope = beforeAgentReplyObserver.getStore();
+      // Nested agent runs inherit async context. Bind recovery to the first runner
+      // so a hook-spawned child cannot checkpoint its parent's admitted turn.
+      const observer =
+        observerScope && (!observerScope.runId || observerScope.runId === params.runId)
+          ? observerScope
+          : undefined;
+      if (observer && !observer.runId) {
+        observer.runId = params.runId;
+      }
+      if ((await observer?.beforeDispatch()) === false) {
+        return undefined;
+      }
+      assertCurrent?.();
+      params.onDispatch?.();
+      assertCurrent?.();
+      let result = await hookRunner.runBeforeAgentReply(params.event, context);
+      assertCurrent?.();
+      if (!result?.handled) {
+        params.onDeclined?.();
+      }
+      assertCurrent?.();
+      if (observer) {
+        result = await observer.afterDispatch(result);
+      }
+      assertCurrent?.();
+      return result;
+    });
+  return assertCurrent
+    ? withGuardedFetchRequestAuthority(assertCurrent, async () => {
+        const result = await run();
+        assertCurrent();
+        return result;
+      })
+    : run();
 }

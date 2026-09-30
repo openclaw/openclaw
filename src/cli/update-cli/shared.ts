@@ -28,6 +28,7 @@ import {
 } from "../../infra/update-global.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
+import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runStep } from "../../infra/update-runner-command.js";
@@ -61,6 +62,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
   /** Internal orchestration context, shared across update phases and child processes. */
   run?: {
     runId: string;
+    /** Immutable original bytes for this invocation; never restoration authority. */
+    originalRecoveryCapture?: UpdateRecoveryBaselineRef;
     defaultStepTimeoutMs?: number;
     activationTimeoutMs?: number;
     env: NodeJS.ProcessEnv;
@@ -74,6 +77,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     requesterAuthority?: UpdateRequesterAuthority;
     /** Live local executor only. A child must independently acquire its owner. */
     executorFence?: UpdateRecoveryFence;
+    /** A signal closes forward admission while accepted receipts settle. */
+    interrupted?: true;
     sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
   };
   acceptCapabilities?: boolean;
@@ -87,10 +92,7 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
   yes?: boolean;
 };
 
-export type UpdateStatusOptions = {
-  json?: boolean;
-  timeout?: string;
-};
+export type UpdateStatusOptions = Pick<UpdateCommandOptions, "json" | "timeout">;
 
 /** Only package updates hand admission to a privately staged candidate. */
 export function usesCandidateUpdateAdmission(
@@ -100,21 +102,18 @@ export function usesCandidateUpdateAdmission(
   return installKind === "package" && !opts.dryRun && opts.admission !== "installed";
 }
 
-export type UpdateFinalizeOptions = {
-  acceptCapabilities?: boolean;
-  json?: boolean;
-  channel?: string;
-  timeout?: string;
-  yes?: boolean;
+export type UpdateFinalizeOptions = Pick<
+  UpdateCommandOptions,
+  "acceptCapabilities" | "json" | "channel" | "timeout" | "yes"
+> & {
   /** Internal external-supervisor handshake; public repair always leaves this false. */
   deferCompletionCache?: boolean;
 };
 
-export type UpdateWizardOptions = {
-  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
-  acceptCapabilities?: boolean;
-  timeout?: string;
-};
+export type UpdateWizardOptions = Pick<
+  UpdateCommandOptions,
+  "runtimeRecoveryEnv" | "acceptCapabilities" | "timeout"
+>;
 
 export class UpdatePreMutationError<Reason extends string = string> extends Error {
   readonly origin?: "candidate-admission";
@@ -180,9 +179,6 @@ export function normalizeTag(value?: string | null): string | null {
 
 function normalizeVersionTag(tag: string): string | null {
   const trimmed = tag.trim();
-  if (!trimmed) {
-    return null;
-  }
   const cleaned = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
   return parseSemver(cleaned) ? cleaned : null;
 }
@@ -201,7 +197,7 @@ export async function resolveTargetVersion(
   if (direct) {
     return { version: direct };
   }
-  const res = await fetchNpmTagVersion({
+  return await fetchNpmTagVersion({
     tag,
     timeoutMs,
     spec: options.spec,
@@ -209,7 +205,6 @@ export async function resolveTargetVersion(
     cwd: options.cwd,
     env: options.env,
   });
-  return res;
 }
 
 export async function isGitCheckout(root: string): Promise<boolean> {
@@ -289,13 +284,9 @@ type StagedGitCheckout = (
   storageRoot: string,
 ) => Promise<void>;
 
-async function cloneGitCheckoutTransactionally(params: {
-  dir: string;
-  timeoutMs: number;
-  progress?: UpdateStepProgress;
-  env?: NodeJS.ProcessEnv;
-  useStagedCheckout?: StagedGitCheckout;
-}): Promise<GitCheckoutResult> {
+async function cloneGitCheckoutTransactionally(
+  params: Parameters<typeof ensureGitCheckout>[0],
+): Promise<GitCheckoutResult> {
   const parentDir = path.dirname(params.dir);
   await fs.mkdir(parentDir, { recursive: true });
   const canonicalParentDir = await fs.realpath(parentDir);
@@ -381,9 +372,6 @@ async function cloneGitCheckoutTransactionally(params: {
           published = true;
           return targetDir;
         }
-      }
-
-      if (!preserveDir) {
         throw new Error(
           `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
         );

@@ -59,15 +59,14 @@ export function readConnectionAuthReason(details: unknown): string | null {
 
 type AuthHintKind = "required" | "failed" | "trusted-proxy";
 
-type PairingHint =
-  | {
-      kind: "pairing-required";
-      requestId: string | null;
-    }
-  | {
-      kind: "scope-upgrade-pending" | "role-upgrade-pending" | "metadata-upgrade-pending";
-      requestId: string | null;
-    };
+type PairingHint = {
+  kind:
+    | "pairing-required"
+    | "scope-upgrade-pending"
+    | "role-upgrade-pending"
+    | "metadata-upgrade-pending";
+  requestId: string | null;
+};
 
 export function resolvePairingHint(
   connected: boolean,

@@ -6,6 +6,10 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -14,6 +18,7 @@ import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   markGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -30,11 +35,24 @@ import {
   createGatewaySuiteHarness,
   installGatewayTestHooks,
   onceMessage,
+  rpcReq,
 } from "./test-helpers.server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+
+async function closeTwice(
+  gateway: GatewayHarness,
+  options: Parameters<GatewayHarness["server"]["close"]>[0],
+  onClosed: () => void,
+) {
+  await Promise.all(
+    [options, { drainTimeoutMs: 0 }].map((closeOptions) =>
+      gateway.server.close(closeOptions).then(onClosed),
+    ),
+  );
+}
 
 describe("public Gateway close request lifetime", () => {
   it.for([
@@ -75,12 +93,7 @@ describe("public Gateway close request lifetime", () => {
           });
         }
       };
-      let phase = "server acquisition";
-      const abort = () => {
-        console.error(`agent.wait lifetime proof aborted during ${phase}`);
-        releaseWait();
-      };
-      signal.addEventListener("abort", abort, { once: true });
+      signal.addEventListener("abort", releaseWait, { once: true });
       let gateway: GatewayHarness | undefined;
       let ws: WebSocket | undefined;
       let closing: Promise<void> | undefined;
@@ -89,11 +102,18 @@ describe("public Gateway close request lifetime", () => {
         gateway = await createGatewaySuiteHarness({
           serverOptions: { bind: "loopback", auth: { mode: "none" } },
         });
-        phase = "startup settlement";
         await gateway.server.startupSettled;
-        phase = "WebSocket connection";
         ws = await gateway.openWs();
-        await connectOk(ws, { scopes: ["operator.admin"] });
+        // An ephemeral CLI avoids admitting history prewarming alongside the waiter.
+        await connectOk(ws, {
+          scopes: ["operator.admin"],
+          client: {
+            id: GATEWAY_CLIENT_IDS.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+            version: "1.0.0",
+            platform: "test",
+          },
+        });
         const response = onceMessage<Pick<ResponseFrame, "type" | "id" | "ok" | "error">>(
           ws,
           (frame) => frame.type === "res" && frame.id === "wait-for-shutdown",
@@ -112,9 +132,10 @@ describe("public Gateway close request lifetime", () => {
           }),
         );
         requestSent = true;
-        phase = "waiter admission";
         await Promise.race([entered.promise, prematureReply]);
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(
+          1,
+        );
         // A failing owner is released through the real terminal registry, not an abandoned wait.
         releaseTimer = setTimeout(() => {
           emergencyRelease = true;
@@ -124,10 +145,8 @@ describe("public Gateway close request lifetime", () => {
           const disconnected = once(ws, "close");
           ws.close();
           await disconnected;
-          phase = "disconnect settlement";
           await observed;
         } else if (finish === "drain") {
-          phase = "restart drain";
           markGatewayRestartDraining("stop (SIGTERM)");
           expect(await response).toMatchObject({
             ok: false,
@@ -147,17 +166,10 @@ describe("public Gateway close request lifetime", () => {
         if (finish === "drain") {
           expect(await waitForGatewayActiveWork(0)).toMatchObject({ drained: true });
         }
-        phase = "zero-budget close";
         const finishedAtClose: boolean[] = [];
-        const firstClose = gateway.server
-          .close({ reason: "wait lifetime proof", drainTimeoutMs: 0 })
-          .then(() => {
-            finishedAtClose.push(settled);
-          });
-        const concurrentClose = gateway.server.close({ drainTimeoutMs: 0 }).then(() => {
+        closing = closeTwice(gateway, { reason: "wait lifetime proof", drainTimeoutMs: 0 }, () => {
           finishedAtClose.push(settled);
         });
-        closing = Promise.all([firstClose, concurrentClose]).then(() => undefined);
         await closing;
         expect(emergencyRelease).toBe(false);
         expect(finishedAtClose).toEqual([true, true]);
@@ -170,7 +182,7 @@ describe("public Gateway close request lifetime", () => {
         ws?.terminate();
         await (closing ?? gateway?.server.close({ drainTimeoutMs: 0 }));
         observation.mockRestore();
-        signal.removeEventListener("abort", abort);
+        signal.removeEventListener("abort", releaseWait);
       }
     },
   );
@@ -214,14 +226,7 @@ describe("public Gateway close request lifetime", () => {
       ws = await gateway.openWs();
       await connectOk(ws, { scopes: ["operator.admin"] });
       const socket = ws;
-      const accepted = ["first", "second"].map((id) => {
-        const response = onceMessage<{ type: string; id: string; ok: boolean }>(
-          socket,
-          (frame) => frame.type === "res" && frame.id === id,
-        );
-        socket.send(JSON.stringify({ type: "req", id, method: "test.lifetime", params: {} }));
-        return response;
-      });
+      const accepted = [rpcReq(socket, "test.lifetime", {}), rpcReq(socket, "test.lifetime", {})];
       expect(await Promise.all(accepted)).toEqual([
         expect.objectContaining({ ok: true }),
         expect.objectContaining({ ok: true }),
@@ -346,21 +351,12 @@ describe("public Gateway close request lifetime", () => {
       await gateway.server.startupSettled;
       ws = await gateway.openWs();
       await connectOk(ws, { scopes: ["operator.admin"] });
-      const response = onceMessage<{
-        type: string;
-        id: string;
-        ok: boolean;
-        payload?: { catalogs: Array<{ id: string; hosts: unknown[] }> };
-      }>(ws, (frame) => frame.type === "res" && frame.id === "held-catalog");
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "held-catalog",
-          method: "sessions.catalog.list",
-          params: { catalogId: "catalog-lifetime-proof", progressId: "held-catalog" },
+      expect(
+        await rpcReq(ws, "sessions.catalog.list", {
+          catalogId: "catalog-lifetime-proof",
+          progressId: "held-catalog",
         }),
-      );
-      expect(await response).toMatchObject({
+      ).toMatchObject({
         ok: true,
         payload: { catalogs: [{ id: "catalog-lifetime-proof", hosts: [] }] },
       });
@@ -369,15 +365,9 @@ describe("public Gateway close request lifetime", () => {
       expect(providerSignal?.aborted).toBe(false);
       expect(gatewaySignal).toBeDefined();
       const disconnected = once(ws, "close");
-      const firstClose = gateway.server
-        .close({ restartExpectedMs: 0, drainTimeoutMs: 0 })
-        .then(() => {
-          finishedAtClose.push(completionSettled);
-        });
-      const concurrentClose = gateway.server.close({ drainTimeoutMs: 0 }).then(() => {
+      closing = closeTwice(gateway, { restartExpectedMs: 0, drainTimeoutMs: 0 }, () => {
         finishedAtClose.push(completionSettled);
       });
-      closing = Promise.all([firstClose, concurrentClose]).then(() => undefined);
       await disconnected;
       // The server-side release follows actual socket bookkeeping. Once its microtasks
       // settle, the held catalog completion must be the remaining required work.

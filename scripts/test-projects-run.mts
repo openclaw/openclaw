@@ -252,6 +252,7 @@ async function runVitestSpecs(
   termination: { signal: NodeJS.Signals | null },
   automatic = false,
   continueOnFailure = false,
+  stopOnFailure = false,
 ) {
   let exitCode = 0;
   let stopScheduling = false;
@@ -261,7 +262,7 @@ async function runVitestSpecs(
   const withCacheSlot = createVitestCacheSlots();
   await runVitestPlans(specs, {
     concurrency,
-    isExclusive: automatic ? (spec) => isExclusiveCiTestConfig(spec.config) : undefined,
+    isExclusive: (spec) => isExclusiveCiTestConfig(spec.config),
     shouldStop: () => stopScheduling || Boolean(termination.signal),
     run: async (spec, index) => {
       let result: Awaited<ReturnType<typeof runLoggedVitestSpec>>;
@@ -289,7 +290,7 @@ async function runVitestSpecs(
           !result.noOutputTimedOut;
         if (
           !continueOrdinaryFailure &&
-          (automatic || (concurrency === 1 && spec.continueOnFailure !== true))
+          (automatic || ((concurrency === 1 || stopOnFailure) && spec.continueOnFailure !== true))
         ) {
           stopScheduling = true;
         }
@@ -531,13 +532,17 @@ export async function runTestProjects(
       targetArgs.length === 0 &&
       changedTargetArgs === null &&
       !runSpecs.some((spec) => spec.watchMode);
+    const focusedCiShard =
+      !isFullSuiteRun &&
+      isCiLikeEnv(baseEnv) &&
+      Boolean(baseEnv.OPENCLAW_VITEST_SHARD_NAME?.trim());
     const isExplicitParallelMultiConfigRun =
       Boolean(baseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL) &&
       runSpecs.length > 1 &&
       !runSpecs.some((spec) => spec.watchMode);
     const isParallelShardRun =
       isFullSuiteRun || isFullExtensionsProjectRun(runSpecs) || isExplicitParallelMultiConfigRun;
-    // Explicit selectors keep their established ordering/continuation policy.
+    // Explicit selectors keep their ordering; focused CI shards still stop after failure.
     // Automatic overlap requires joined groups and scheduler-owned cache leaves.
     const automatic =
       exactTargetRun &&
@@ -559,6 +564,9 @@ export async function runTestProjects(
       : isParallelShardRun
         ? resolveParallelFullSuiteConcurrency(runSpecs.length, baseEnv)
         : 1;
+    if (focusedCiShard) {
+      console.error(`[test] inner parallelism ${concurrency}`);
+    }
     if (automatic) {
       console.error(
         `[test] running ${runSpecs.length} exact-target plans with parallelism ${concurrency} and joined exclusive barriers`,
@@ -594,6 +602,7 @@ export async function runTestProjects(
       termination,
       automatic,
       baseEnv.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",
+      focusedCiShard,
     );
     if (concurrency === 1 && termination.signal) {
       return;

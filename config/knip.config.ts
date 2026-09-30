@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-entries.mjs";
-import { createManagedHandoffBuildConfig } from "../scripts/lib/managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff-build-config.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
@@ -20,8 +20,14 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 const repositoryScriptEntries = [
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
+  // Linux App CI executes the injected native-auth bridge tests through Node.
+  "apps/linux/scripts/test-native-control-auth.mjs!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  // CI preflight executes the manifest from its trusted harness checkout.
+  "scripts/ci-build-manifest.mjs!",
+  // CI security-fast runs this from its trusted harness checkout.
+  "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
   "src/node-host/mac-worker-entry.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
@@ -162,6 +168,8 @@ const repositoryScriptEntries = [
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   // Generates the native browser page scripts from their UI source modules.
   "scripts/generate-browser-inspect-script-swift.mts!",
+  // The diagnostics guide invokes this offline snapshot comparison CLI by path.
+  "scripts/heap-snapshot-diff.mjs!",
   // CI executes screenshot evidence from the workflow-owned harness copy.
   "scripts/ios-screenshot-evidence.mjs!",
   "scripts/ios-release-cut.ts!",
@@ -226,6 +234,8 @@ const repositoryScriptEntries = [
   "scripts/print-live-docker-plugin-selection.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
+  // qa/README.md delegates campaign Git execution to this guarded CLI by path.
+  "scripts/qa/repository-checkpoint-admission.ts!",
   // Docker/release workflows launch the warning relay from copied harness roots.
   "scripts/relay-build-limit-warnings.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
@@ -249,8 +259,8 @@ const repositoryScriptEntries = [
   "scripts/update-clawtributors.ts!",
   // The candidate binder invokes this trusted producer-identity verifier by path.
   "scripts/verify-full-release-producer-job.mjs!",
-  // Staging and signed-app packaging execute this verifier with each bundled Node.
-  "scripts/verify-mac-node-worker.mjs!",
+  // Staging and signed-app packaging execute this verifier with each bundled Bun.
+  "scripts/verify-mac-runtime.mjs!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",
@@ -349,10 +359,10 @@ const rootEntries = [
   ...repositoryScriptEntries,
   ...listScriptShimEntries(),
   // Runtime launchers resolve these by URL rather than a static import edge.
-  ...Object.values({
-    ...runtimeProcessBuildEntries,
-    ...createManagedHandoffBuildConfig().entry,
-  }).map((source) => `${path.relative(".", source).replaceAll("\\", "/")}!`),
+  ...[
+    ...Object.values(runtimeProcessBuildEntries),
+    ...createManagedHandoffBuildConfigs().flatMap(({ entry }) => Object.values(entry)),
+  ].map((source) => `${path.relative(".", source).replaceAll("\\", "/")}!`),
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
@@ -367,6 +377,8 @@ const rootEntries = [
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Packaged postinstall imports this private compiled entry before stage activation.
+  "src/commands/doctor-update-schema-guard.ts!",
   // Built as the official image's Docker HEALTHCHECK entrypoint.
   "src/docker-healthcheck.ts!",
   // Deployed in the worker archive and launched by path, without a static host import.
@@ -418,9 +430,9 @@ const rootEntries = [
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
-  // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
-  // Jiti virtualizes openclaw/plugin-sdk/agent-sessions through this cycle-safe barrel.
+  // Jiti exposes this SDK barrel and its type-only declaration owner.
   "src/agents/sessions/extension-sdk.ts!",
+  "src/agents/sessions/extensions/types.ts!",
   // Plugin-SDK ACP facades expose the registry's runtime signatures.
   "src/acp/runtime/registry.ts!",
   "src/plugins/runtime/index.ts!",
@@ -453,6 +465,8 @@ const rootEntries = [
   "apps/linux/ui/quickchat.js!",
   // The native window-chrome owner injects this script through Rust include_str!.
   "apps/linux/ui/window-chrome.js!",
+  // The native Gateway auth owner injects this script through Rust include_str!.
+  "apps/linux/ui/native-control-auth.js!",
   "apps/linux/ui/gateway-switch.js!",
   "apps/linux/ui/gateway-notice.js!",
   "apps/linux/ui/gateways.js!",
@@ -654,6 +668,9 @@ const config = {
     // Declaration companions describe executable JavaScript modules; they are not standalone roots.
     "scripts/**/*.d.{mts,ts}",
     "**/live-*.ts",
+    // This worker-thread proof entry is loaded from its test with new URL(),
+    // which Knip cannot discover as a static import.
+    "src/worker/repro-worker-connection-closing-window.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
   ],
@@ -729,7 +746,16 @@ const config = {
         ...rootBundledPluginRuntimeDependencies,
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
-      ignoreBinaries: ["mint", "ngrok", "open", "openclaw", "sleep", "swiftlint", "xcrun"],
+      ignoreBinaries: [
+        "lsattr",
+        "mint",
+        "ngrok",
+        "open",
+        "openclaw",
+        "sleep",
+        "swiftlint",
+        "xcrun",
+      ],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [

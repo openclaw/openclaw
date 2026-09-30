@@ -106,12 +106,6 @@ export interface TelegramInboundPipeline {
   handle: (ctx: Context) => Promise<TelegramInboundDisposition>;
 }
 
-type TelegramCallbackRouteOutcome = { kind: "ignored" } | { kind: "handled" };
-
-export interface TelegramCallbackRouter {
-  route(ctx: Context): Promise<TelegramCallbackRouteOutcome>;
-}
-
 export interface TelegramEventBindings {
   registerChatMembership(): void;
   registerReaction(): void;

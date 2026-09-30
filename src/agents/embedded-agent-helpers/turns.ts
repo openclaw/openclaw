@@ -86,123 +86,61 @@ function extractToolResultMatchIds(record: object): Set<string> {
   return ids;
 }
 
-function extractToolResultMatchName(record: object): string | null {
-  return (
-    normalizeOptionalString(Reflect.get(record, "toolName")) ??
-    normalizeOptionalString(Reflect.get(record, "name")) ??
-    null
-  );
-}
-
-function collectAnyToolResultIds(message: AgentMessage): Set<string> {
+function collectFutureToolResults(
+  messages: AgentMessage[],
+  startIndex: number,
+): { ids: Set<string>; matches: Map<string, Set<string>> } {
   const ids = new Set<string>();
-  const role = (message as { role?: unknown }).role;
-  if (role === "toolResult") {
-    const toolResultId = extractToolResultId(
-      message as Extract<AgentMessage, { role: "toolResult" }>,
-    );
-    if (toolResultId) {
-      ids.add(toolResultId);
-    }
-  } else if (role === "tool") {
-    for (const id of extractToolResultMatchIds(message)) {
-      ids.add(id);
-    }
-  }
-
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return ids;
-  }
-
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    if (record.type !== "toolResult" && record.type !== "tool") {
-      continue;
-    }
-    for (const id of extractToolResultMatchIds(record)) {
-      ids.add(id);
-    }
-  }
-
-  return ids;
-}
-
-function collectTrustedToolResultMatches(message: AgentMessage): Map<string, Set<string>> {
   const matches = new Map<string, Set<string>>();
-  const role = (message as { role?: unknown }).role;
-  const addMatch = (ids: Iterable<string>, toolName: string | null) => {
-    for (const id of ids) {
+  for (let index = startIndex + 1; index < messages.length; index += 1) {
+    const candidate = messages[index];
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const role = (candidate as { role?: unknown }).role;
+    if (role === "assistant") {
+      break;
+    }
+    const content = (candidate as { content?: unknown }).content;
+    for (const block of Array.isArray(content) ? content : []) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block.type === "toolResult" || block.type === "tool")
+      ) {
+        for (const id of extractToolResultMatchIds(block)) {
+          ids.add(id);
+        }
+      }
+    }
+    // Signed thinking requires a real result turn; embedded user content is not proof.
+    if (role !== "toolResult" && role !== "tool") {
+      continue;
+    }
+    const matchIds = extractToolResultMatchIds(candidate);
+    if (role === "toolResult") {
+      const canonicalId = extractToolResultId(
+        candidate as Extract<AgentMessage, { role: "toolResult" }>,
+      );
+      if (canonicalId) {
+        ids.add(canonicalId);
+      }
+    }
+    const toolName =
+      normalizeOptionalString(Reflect.get(candidate, "toolName")) ??
+      normalizeOptionalString(Reflect.get(candidate, "name"));
+    for (const id of matchIds) {
+      if (role === "tool") {
+        ids.add(id);
+      }
       const bucket = matches.get(id) ?? new Set<string>();
       if (toolName) {
         bucket.add(toolName);
       }
       matches.set(id, bucket);
     }
-  };
-
-  if (role === "toolResult") {
-    addMatch(
-      [
-        ...extractToolResultMatchIds(message),
-        ...(() => {
-          const canonicalId = extractToolResultId(
-            message as Extract<AgentMessage, { role: "toolResult" }>,
-          );
-          return canonicalId ? [canonicalId] : [];
-        })(),
-      ],
-      extractToolResultMatchName(message),
-    );
-  } else if (role === "tool") {
-    addMatch(extractToolResultMatchIds(message), extractToolResultMatchName(message));
   }
-
-  return matches;
-}
-
-function collectFutureToolResultMatches(
-  messages: AgentMessage[],
-  startIndex: number,
-): Map<string, Set<string>> {
-  const matches = new Map<string, Set<string>>();
-  for (let index = startIndex + 1; index < messages.length; index += 1) {
-    const candidate = messages[index];
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-    if ((candidate as { role?: unknown }).role === "assistant") {
-      break;
-    }
-    for (const [id, toolNames] of collectTrustedToolResultMatches(candidate)) {
-      const bucket = matches.get(id) ?? new Set<string>();
-      for (const toolName of toolNames) {
-        bucket.add(toolName);
-      }
-      matches.set(id, bucket);
-    }
-  }
-  return matches;
-}
-
-function collectFutureToolResultIds(messages: AgentMessage[], startIndex: number): Set<string> {
-  const ids = new Set<string>();
-  for (let index = startIndex + 1; index < messages.length; index += 1) {
-    const candidate = messages[index];
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-    if ((candidate as { role?: unknown }).role === "assistant") {
-      break;
-    }
-    for (const id of collectAnyToolResultIds(candidate)) {
-      ids.add(id);
-    }
-  }
-  return ids;
+  return { ids, matches };
 }
 
 /**
@@ -244,8 +182,13 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       continue;
     }
     const hasThinking = originalContent.some((block) => isThinkingLikeBlock(block));
-    const validToolResultMatches = collectFutureToolResultMatches(messages, i);
-    const validToolUseIds = collectFutureToolResultIds(messages, i);
+    const { matches: validToolResultMatches, ids: validToolUseIds } = collectFutureToolResults(
+      messages,
+      i,
+    );
+    const omittedContent: AnthropicContentBlock[] = isAbortedAssistantTurn(msg)
+      ? []
+      : [{ type: "text", text: "[tool calls omitted]" }];
 
     if (hasThinking) {
       const allToolCallsResolvable = originalContent.every((block) => {
@@ -268,9 +211,7 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       } else {
         result.push({
           ...assistantMsg,
-          content: isAbortedAssistantTurn(msg)
-            ? []
-            : ([{ type: "text", text: "[tool calls omitted]" }] as AnthropicContentBlock[]),
+          content: omittedContent,
         } as AgentMessage);
       }
       continue;
@@ -292,19 +233,10 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       continue;
     }
 
-    if (originalContent.length > 0 && filteredContent.length === 0) {
-      result.push({
-        ...assistantMsg,
-        content: isAbortedAssistantTurn(msg)
-          ? []
-          : ([{ type: "text", text: "[tool calls omitted]" }] as AnthropicContentBlock[]),
-      } as AgentMessage);
-    } else {
-      result.push({
-        ...assistantMsg,
-        content: filteredContent,
-      } as AgentMessage);
-    }
+    result.push({
+      ...assistantMsg,
+      content: filteredContent.length === 0 ? omittedContent : filteredContent,
+    } as AgentMessage);
   }
 
   return result;

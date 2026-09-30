@@ -22,7 +22,7 @@
    both rail states. Guarded to wide viewports; narrow ones keep the gutter
    because the rail presents as a bottom strip there. */
 @media (min-width: 1121px) {
-  .content--chat:has(.chat-workbench) .chat {
+  .content--chat.content--workbench .chat {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
   }
@@ -1248,6 +1248,10 @@ openclaw-session-discussion {
 
 .session-diff__summary-spacer {
   flex: 1;
+}
+
+.session-diff__refresh:disabled svg {
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
 .session-diff__toolbar-button,

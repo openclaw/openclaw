@@ -111,10 +111,6 @@ const recoveryCoordinator = createDeliveryRecoveryCoordinator<QueuedDelivery>();
 const queuedDeliveryPayloads = (entry: QueuedDelivery) =>
   acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload);
 
-function queuedPayloadCount(entry: QueuedDelivery): number {
-  return entry.preparedBatch.sourcePayloadCount;
-}
-
 function emitRecoveredMessageSentEvents(
   entry: QueuedDelivery,
   events: readonly MessageSentEvent[],
@@ -228,6 +224,21 @@ export async function withActiveDeliveryClaim<T>(
   return recoveryCoordinator.withClaim(entryId, fn);
 }
 
+async function recordRecoveryFailure(
+  owner: QueuedDeliveryOwner,
+  error: string,
+  record = failDelivery,
+): Promise<"failed" | "already-gone"> {
+  try {
+    await owner.fail(record, error);
+  } catch (failure) {
+    if (getErrnoCode(failure) === "ENOENT") {
+      return "already-gone";
+    }
+  }
+  return "failed";
+}
+
 async function settleQueuedFailure(
   params: {
     entry: QueuedDelivery;
@@ -278,11 +289,10 @@ async function settleQueuedFailure(
     const spoolPaths = collectEntrySpoolPaths(queuedDeliveryPayloads(entry), params.stateDir);
     const leaseId =
       spoolPaths.length > 0
-        ? createDeliveryQueueMediaRetention(
+        ? await createDeliveryQueueMediaRetention(
             spoolPaths,
             "outbound-media-recovery-lease",
             params.stateDir,
-            undefined,
             stateContext,
           )
         : undefined;
@@ -296,7 +306,7 @@ async function settleQueuedFailure(
         entry,
         settlement.terminals ??
           (() =>
-            uniformOutboundAuditTerminals(queuedPayloadCount(entry), {
+            uniformOutboundAuditTerminals(entry.preparedBatch.sourcePayloadCount, {
               outcome: settlement.outcome,
               failureStage: "queue",
             })),
@@ -327,7 +337,7 @@ async function settleQueuedFailure(
       }
       await releaseSpoolArtifacts(spoolPaths, params.stateDir);
     } finally {
-      cancelDeliveryQueueMediaRetention(leaseId, params.stateDir, stateContext);
+      await cancelDeliveryQueueMediaRetention(leaseId, params.stateDir, stateContext);
     }
   } catch (error) {
     params.log.warn(
@@ -526,7 +536,7 @@ async function resolveCompletedOwnerBeforeRecovery(
       await runOutboundDeliveryCommitHooks([result]);
       emitQueuedAuditTerminals(opts.entry, () =>
         completedOutboundAuditTerminals({
-          payloadCount: queuedPayloadCount(opts.entry),
+          payloadCount: opts.entry.preparedBatch.sourcePayloadCount,
           results: [result],
           payloadOutcomes: [],
         }),
@@ -535,7 +545,7 @@ async function resolveCompletedOwnerBeforeRecovery(
   } else if (operation.state === "rejected") {
     emitQueuedAuditTerminals(opts.entry, () =>
       failedOutboundAuditTerminals({
-        payloadCount: queuedPayloadCount(opts.entry),
+        payloadCount: opts.entry.preparedBatch.sourcePayloadCount,
         results: [],
         payloadOutcomes: [],
         failureStage: "platform_send",
@@ -550,7 +560,7 @@ async function resolveCompletedOwnerBeforeRecovery(
     // A restart can separate owner suppression from queue ack. Publish only
     // after custody ends; a stale/missing owner proves no suppression.
     emitQueuedAuditTerminals(opts.entry, () =>
-      uniformOutboundAuditTerminals(queuedPayloadCount(opts.entry), {
+      uniformOutboundAuditTerminals(opts.entry.preparedBatch.sourcePayloadCount, {
         outcome: "suppressed",
         reasonCode: "no_visible_payload",
       }),
@@ -628,7 +638,7 @@ async function drainQueuedEntry(
         });
         emitQueuedAuditTerminals(entry, () =>
           completedOutboundAuditTerminals({
-            payloadCount: queuedPayloadCount(entry),
+            payloadCount: entry.preparedBatch.sourcePayloadCount,
             results: [result],
             payloadOutcomes: [],
           }),
@@ -643,15 +653,7 @@ async function drainQueuedEntry(
         const errMsg = `failed to ack reconciled sent delivery: ${formatErrorMessage(ackErr)}`;
         opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
         opts.onFailed?.(entry, errMsg);
-        try {
-          await owner.fail(failDelivery, errMsg);
-          return "failed";
-        } catch (failErr) {
-          if (getErrnoCode(failErr) === "ENOENT") {
-            return "already-gone";
-          }
-        }
-        return "failed";
+        return await recordRecoveryFailure(owner, errMsg);
       }
     }
     const reconciliationProvedPreSendFailure =
@@ -676,15 +678,7 @@ async function drainQueuedEntry(
         reconciliation.retryable === true &&
         !attemptBudgetExhausted
       ) {
-        try {
-          await owner.fail(failDelivery, errMsg);
-          return "failed";
-        } catch (failErr) {
-          if (getErrnoCode(failErr) === "ENOENT") {
-            return "already-gone";
-          }
-        }
-        return "failed";
+        return await recordRecoveryFailure(owner, errMsg);
       }
       return settleQueuedFailure({ ...opts, error: errMsg }, stateContext);
     }
@@ -789,11 +783,10 @@ async function drainQueuedEntry(
     // acks may then remove replay intent without exposing active media to GC.
     mediaRecoveryLeaseId =
       recoverySpoolPaths.length > 0
-        ? createDeliveryQueueMediaRetention(
+        ? await createDeliveryQueueMediaRetention(
             recoverySpoolPaths,
             "outbound-media-recovery-lease",
             opts.stateDir,
-            undefined,
             stateContext,
           )
         : undefined;
@@ -923,7 +916,7 @@ async function drainQueuedEntry(
     await runCommitHooksAfterAck();
     emitQueuedAuditTerminals(entry, () =>
       completedOutboundAuditTerminals({
-        payloadCount: queuedPayloadCount(entry),
+        payloadCount: entry.preparedBatch.sourcePayloadCount,
         results,
         payloadOutcomes,
       }),
@@ -965,7 +958,7 @@ async function drainQueuedEntry(
         await runCommitHooksAfterAck();
         emitQueuedAuditTerminals(entry, () =>
           failedOutboundAuditTerminals({
-            payloadCount: queuedPayloadCount(entry),
+            payloadCount: entry.preparedBatch.sourcePayloadCount,
             results: deliveredResults,
             payloadOutcomes,
             failureStage: isOutboundDeliveryError(err) ? err.stage : "platform_send",
@@ -982,7 +975,7 @@ async function drainQueuedEntry(
       // I/O. Recovery then owns the stable queue terminal on provider rejection.
       emitQueuedAuditTerminals(entry, () =>
         failedOutboundAuditTerminals({
-          payloadCount: queuedPayloadCount(entry),
+          payloadCount: entry.preparedBatch.sourcePayloadCount,
           results: deliveredResults,
           payloadOutcomes,
           failureStage: isOutboundDeliveryError(err) ? err.stage : "platform_send",
@@ -1011,7 +1004,7 @@ async function drainQueuedEntry(
           // Identified results already exited through hasSendEvidence. These
           // canonical no-send decisions retain suppression reasons across restart.
           terminals: failedOutboundAuditTerminals({
-            payloadCount: queuedPayloadCount(entry),
+            payloadCount: entry.preparedBatch.sourcePayloadCount,
             results: deliveredResults,
             payloadOutcomes,
             failureStage: "queue",
@@ -1020,24 +1013,17 @@ async function drainQueuedEntry(
         stateContext,
       );
     }
-    try {
-      const recordFailure = isProvenDeliveryNotSentError(err)
-        ? failDeliveryBeforePlatformSend
-        : failDelivery;
-      await owner.fail(recordFailure, errMsg);
-      return "failed";
-    } catch (failErr) {
-      if (getErrnoCode(failErr) === "ENOENT") {
-        return "already-gone";
-      }
-    }
-    return "failed";
+    return await recordRecoveryFailure(
+      owner,
+      errMsg,
+      isProvenDeliveryNotSentError(err) ? failDeliveryBeforePlatformSend : failDelivery,
+    );
   } finally {
     generation?.release();
     // Early fallback acks make the row non-replayable before the adapter has
     // necessarily finished reading every payload. Release only after the whole
     // recovered attempt settles, and only if no pending row still owns it.
-    cancelDeliveryQueueMediaRetention(mediaRecoveryLeaseId, opts.stateDir, stateContext);
+    await cancelDeliveryQueueMediaRetention(mediaRecoveryLeaseId, opts.stateDir, stateContext);
     const pending = await loadUnfinishedDelivery(entry.id, opts.stateDir, stateContext).catch(
       () => entry,
     );

@@ -120,10 +120,6 @@ type ModelCatalogRouteVariantCollector = {
   indexByKey: Map<string, number>;
 };
 
-function createModelCatalogRouteVariantCollector(): ModelCatalogRouteVariantCollector {
-  return { entries: [], indexByKey: new Map() };
-}
-
 function mergeCatalogRouteVariants(
   collector: ModelCatalogRouteVariantCollector,
   entries: readonly ModelCatalogEntry[],
@@ -149,11 +145,51 @@ function mergeCatalogRouteVariants(
 function createModelCatalogSnapshot(
   entries: ModelCatalogEntry[],
   routeVariants: ModelCatalogRouteVariantCollector,
+  providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"],
 ): ModelCatalogSnapshot {
   return {
-    entries: sortModelCatalogEntries(entries),
-    routeVariants: sortModelCatalogEntries(routeVariants.entries),
+    entries: sortModelCatalogEntries(applyReadyCatalogModelOrder(entries, providerOutcomes)),
+    routeVariants: sortModelCatalogEntries(
+      applyReadyCatalogModelOrder(routeVariants.entries, providerOutcomes),
+    ),
   };
+}
+
+function applyReadyCatalogModelOrder(
+  entries: ModelCatalogEntry[],
+  outcomes?: ModelCatalogSnapshot["providerOutcomes"],
+): ModelCatalogEntry[] {
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const orders = new Map<string, Map<string, number>>();
+  for (const outcome of outcomes ?? []) {
+    if (outcome.status !== "ready" || !outcome.modelOrder?.length) {
+      continue;
+    }
+    const provider = normalizeProviderId(outcome.provider);
+    const order = new Map<string, number>();
+    for (const id of outcome.modelOrder) {
+      const key = keyOf({ provider, id });
+      if (!order.has(key)) {
+        order.set(key, order.size);
+      }
+    }
+    orders.set(provider, order);
+  }
+  if (orders.size === 0) {
+    return entries;
+  }
+  return entries.map((entry) => {
+    const order = orders.get(normalizeProviderId(entry.provider));
+    if (!order) {
+      return entry;
+    }
+    const rank = order.get(keyOf(entry));
+    return {
+      ...entry,
+      providerOrder:
+        rank ?? (entry.providerOrder === undefined ? undefined : order.size + entry.providerOrder),
+    };
+  });
 }
 
 function resolveEligibleManifestCatalogPlugins(
@@ -275,7 +311,7 @@ export async function buildPreparedModelCatalogSnapshot(
   params: BuildPreparedModelCatalogParams,
 ): Promise<ModelCatalogSnapshot> {
   const models: ModelCatalogEntry[] = [];
-  const routeVariants = createModelCatalogRouteVariantCollector();
+  const routeVariants: ModelCatalogRouteVariantCollector = { entries: [], indexByKey: new Map() };
   const cfg = params.config;
   const env = params.env ?? process.env;
   const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
@@ -492,7 +528,7 @@ export async function buildPreparedModelCatalogSnapshot(
     }
     logStage("configured-models-finalized", `entries=${models.length}`);
 
-    const snapshot = createModelCatalogSnapshot(models, routeVariants);
+    const snapshot = createModelCatalogSnapshot(models, routeVariants, params.providerOutcomes);
     logStage("complete", `entries=${snapshot.entries.length}`);
     return params.providerOutcomes
       ? {

@@ -521,6 +521,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-partial-failure-recovery",
       "telegram-empty-response-after-write-recovery",
+      "telegram-prepared-delivery-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
@@ -529,6 +530,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-empty-response-after-write-recovery",
+      "telegram-prepared-delivery-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
@@ -539,6 +541,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-empty-response-after-write-recovery\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
@@ -549,6 +552,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-progress-tool-visibility\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-provider-failure-before-output",
       "telegram-queue-invalid-mode",
       "telegram-rich-inline-composition",
@@ -558,6 +562,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-provider-failure-before-output\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-queue-invalid-mode",
       "telegram-rich-inline-composition",
     ]);
@@ -566,11 +571,19 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       "id: telegram-queue-invalid-mode\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
       "telegram-rich-inline-composition",
     ]);
     writeOwner(
       "qa/scenarios/channels/telegram-rich-inline-composition.yaml",
       "id: telegram-rich-inline-composition\n",
+    );
+    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-prepared-delivery-recovery",
+    ]);
+    writeOwner(
+      "qa/scenarios/channels/telegram-prepared-delivery-recovery.yaml",
+      "id: telegram-prepared-delivery-recovery\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([]);
   });

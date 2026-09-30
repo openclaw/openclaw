@@ -5,30 +5,19 @@ import {
 } from "@openclaw/workboard-contract";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
-import {
-  dispatchAndStartWorkboardCards,
-  type WorkboardSubagentRuntime,
-  type WorkboardWorktreeRuntime,
-} from "./dispatcher.js";
+import type { ResolveAgentWorkspaceRuntime } from "./dispatcher-workspace.js";
+import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import {
   canonicalizeWorkboardWorkspaceAccess,
   resolveAgentWorkboardWorkspaceRuntime,
   resolveCommandWorkboardWorkspaceAccess,
   resolveWorkboardAgentWorkspace,
-  type WorkboardTargetWorkspaceRuntime,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
 
 const ADMIN_SCOPE = "operator.admin";
 const WRITE_SCOPE = "operator.write";
-
-type WorkboardCommandApi = {
-  runtime: {
-    subagent: WorkboardSubagentRuntime;
-    worktrees: WorkboardWorktreeRuntime;
-  };
-};
 
 function splitArgs(input: string | undefined): string[] {
   return (input ?? "").trim().split(/\s+/).filter(Boolean);
@@ -70,22 +59,16 @@ function isWorkboardStatus(value: string): value is WorkboardStatus {
   return (WORKBOARD_STATUSES as readonly string[]).includes(value);
 }
 
-function canMutateWorkboard(params: {
-  senderIsOwner?: boolean;
-  gatewayClientScopes?: readonly string[];
-}): boolean {
-  const scopes = params.gatewayClientScopes;
-  if (scopes) {
-    return scopes.includes(ADMIN_SCOPE) || scopes.includes(WRITE_SCOPE);
-  }
-  return params.senderIsOwner === true;
-}
-
 function requireWriteAccess(params: {
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
 }): { text: string; isError: true } | undefined {
-  if (canMutateWorkboard(params)) {
+  const scopes = params.gatewayClientScopes;
+  if (
+    scopes
+      ? scopes.includes(ADMIN_SCOPE) || scopes.includes(WRITE_SCOPE)
+      : params.senderIsOwner === true
+  ) {
     return undefined;
   }
   return {
@@ -95,20 +78,14 @@ function requireWriteAccess(params: {
 }
 
 async function handleWorkboardCommand(params: {
-  api: WorkboardCommandApi;
+  api: Pick<OpenClawPluginApi, "runtime">;
   store: WorkboardStore;
   args?: string;
   senderIsOwner?: boolean;
   assertOwnerCurrent?: () => void;
   gatewayClientScopes?: readonly string[];
   resolveAgentWorkspace?: (agentId?: string) => string;
-  resolveAgentWorkspaceRuntime?: (
-    agentId: string | undefined,
-    sessionKey: string,
-    workspaceDir: string,
-    modelProvider?: string,
-    modelId?: string,
-  ) => WorkboardTargetWorkspaceRuntime | Promise<WorkboardTargetWorkspaceRuntime>;
+  resolveAgentWorkspaceRuntime?: ResolveAgentWorkspaceRuntime;
   workspaceAccess?: WorkboardWorkspaceAccess;
 }): Promise<{ text: string; isError?: boolean }> {
   const [action = "list", ...rest] = splitArgs(params.args);

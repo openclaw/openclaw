@@ -33,6 +33,7 @@ it("keeps test-only ambient augmentation out of declaration roots but in test gr
   for (const config of [
     ...productionConfigs,
     ...testConfigs,
+    "config/tsconfig/oxlint.source.json",
     "extensions/tsconfig.package-boundary.paths.json",
     "extensions/tsconfig.package-boundary.base.json",
   ]) {
@@ -169,6 +170,28 @@ it("rejects semantic errors before returning valid native declarations", async (
   expect(emitted.declarations.get(path.join(root, "src/index.ts"))?.code).toContain(
     "export declare const count: number;",
   );
+});
+
+it("emits identical inferred declarations and maps across fresh compiler processes", async () => {
+  const root = fs.realpathSync.native(roots.make("native-declaration-determinism-"));
+  const fixture = createNativeFixture(root);
+  const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
+  fixture.write("src/index.ts", modules.map((name) => `export * from "./${name}.js";`).join("\n"));
+  for (const [index, name] of modules.entries()) {
+    const result =
+      index % 2 ? '{ kind: "value", value } as const' : '{ kind: "value" as const, value }';
+    fixture.write(
+      `src/${name}.ts`,
+      `export function result${index}<T>(ready: boolean, value: T) {
+        return ready ? ${result} : { kind: "unavailable" as const };
+      }`,
+    );
+  }
+  const first = await fixture.compile();
+  const second = await fixture.compile();
+  expect(first.declarations.size).toBe(modules.length + 1);
+  expect(second.declarations).toEqual(first.declarations);
+  expect(second.inputs).toEqual(first.inputs);
 });
 
 it("bounds optional SDK relative imports and manifest probes to the checkout", async () => {

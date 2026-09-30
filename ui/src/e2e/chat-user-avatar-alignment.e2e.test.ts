@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { SessionMembersListEvidenceResult } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,6 +17,15 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, {
         hasMultipleSessionSharingIdentities: true,
+        methodResponses: {
+          "session.members.listEvidence": {
+            sessionKey: "agent:main:main",
+            members: [],
+            identities: [],
+            role: "owner",
+            allowedVisibilities: ["shared", "draft"],
+          } satisfies SessionMembersListEvidenceResult,
+        },
         sessions: [{ key: "agent:main:main", visibility: "shared", sharingRole: "owner" }],
         presenceUsers: [{ ...viewer, identity: viewer, self: true }],
         historyMessages: [

@@ -605,13 +605,11 @@ describe("plugin registry runtime config scope", () => {
   it("runs gateway requests with the owning plugin scope", async () => {
     let requestScope = getPluginRuntimeGatewayRequestScope();
     const runtime = createPluginRuntime();
-    runtime.gateway = {
-      isAvailable: async () => true,
-      request: async <T>() => {
-        requestScope = getPluginRuntimeGatewayRequestScope();
-        return { ok: true } as T;
-      },
-    };
+    runtime.gateway.isAvailable = async () => true;
+    vi.spyOn(runtime.gateway, "request").mockImplementation(async () => {
+      requestScope = getPluginRuntimeGatewayRequestScope();
+      return { ok: true };
+    });
     const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createRecord("google-meet", { name: "Google Meet", origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });

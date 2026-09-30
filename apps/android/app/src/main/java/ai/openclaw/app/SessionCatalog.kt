@@ -29,10 +29,8 @@ data class SessionCatalog(
 )
 
 data class SessionCatalogHost(
-  val catalogId: String,
   val hostId: String,
   val label: String,
-  val kind: String,
   val connected: Boolean,
   val sessions: List<SessionCatalogEntry>,
   val nextCursor: String? = null,
@@ -49,10 +47,7 @@ data class SessionCatalogEntry(
   val cwd: String? = null,
   val status: String,
   val recencyAt: Double? = null,
-  val source: String? = null,
-  val modelProvider: String? = null,
   val gitBranch: String? = null,
-  val customGroup: String? = null,
   val archived: Boolean,
   val sessionKey: String? = null,
   val canContinue: Boolean,
@@ -329,10 +324,8 @@ private fun parseSessionCatalogHost(
   val host = element as? JsonObject ?: return null
   val hostId = host.string("hostId")?.takeIf(String::isNotEmpty) ?: return null
   return SessionCatalogHost(
-    catalogId = catalogId,
     hostId = hostId,
     label = host.string("label")?.takeIf(String::isNotEmpty) ?: hostId,
-    kind = host.string("kind") ?: "gateway",
     connected = host.boolean("connected") ?: false,
     sessions =
       host.array("sessions").mapNotNull { sessionElement ->
@@ -366,10 +359,7 @@ private fun parseSessionCatalogEntry(
     cwd = session.string("cwd"),
     status = session.string("status")?.takeIf(String::isNotEmpty) ?: "unknown",
     recencyAt = session.number("recencyAt") ?: session.number("updatedAt") ?: session.number("createdAt"),
-    source = session.string("source"),
-    modelProvider = session.string("modelProvider"),
     gitBranch = session.string("gitBranch"),
-    customGroup = session.string("customGroup"),
     archived = session.boolean("archived") ?: false,
     sessionKey = session.string("sessionKey")?.takeIf(String::isNotEmpty),
     canContinue = session.boolean("canContinue") ?: false,

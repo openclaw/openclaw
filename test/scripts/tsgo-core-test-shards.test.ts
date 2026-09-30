@@ -7,10 +7,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { listStagedChangedPaths } from "../../scripts/changed-lanes.mts";
 import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
 import {
+  expandTsgoExecutionGraphs,
+  resolveCiTsgoGraphs,
+  TSGO_ROOT_TEST_SHARDS,
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
+  TSGO_CI_ADDITIONAL_GRAPHS,
   selectTsgoCoreTestShards,
   selectTsgoCoreTestStripe,
   TSGO_CORE_TEST_SHARDS,
@@ -57,6 +61,7 @@ describe("tsgo core test shards", () => {
       ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
+      ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],
       ["src/gateway/server-methods/update-owner.test.ts", "gateway-methods"],
       ["src/gateway/talk/client-authority.test.ts", "gateway-other"],
       ["src/gateway/worker-environments/service.plugin-create.test.ts", "gateway-other"],
@@ -91,6 +96,71 @@ describe("tsgo core test shards", () => {
         file,
       ).toEqual([owner]);
     }
+  });
+
+  it("partitions every root-test input and preserves shared ambient context", () => {
+    const canonicalOptions = readNativeTypeScriptConfig({
+      cwd: process.cwd(),
+      configFileName: "test/tsconfig/tsconfig.test.root.json",
+    }).options;
+    const semanticOptions = (options: typeof canonicalOptions) => {
+      const { tsBuildInfoFile: _cache, configFilePath: _config, ...semantic } = options;
+      return semantic;
+    };
+    const roots = (config: string) => {
+      const parsed = readNativeTypeScriptConfig({ cwd: process.cwd(), configFileName: config });
+      const contents = JSON5.parse(fs.readFileSync(config, "utf8")) as { references?: unknown };
+      expect(contents.references ?? [], config).toEqual([]);
+      expect(semanticOptions(parsed.options), config).toEqual(semanticOptions(canonicalOptions));
+      return parsed.fileNames.map((file) =>
+        path.relative(process.cwd(), file).replaceAll(path.sep, "/"),
+      );
+    };
+    const canonicalConfig = "test/tsconfig/tsconfig.test.root.json";
+    const canonical = roots(canonicalConfig);
+    const config = JSON5.parse(fs.readFileSync(canonicalConfig, "utf8")) as { files: string[] };
+    const shared = new Set([
+      ...canonical.filter((file) => /\.d\.[cm]?ts$/u.test(file)),
+      ...config.files.map((file) => path.posix.normalize("test/tsconfig/" + file)),
+    ]);
+    const caches: string[] = [];
+    const shards = TSGO_ROOT_TEST_SHARDS.map((shard) => {
+      const files = roots(shard.config);
+      for (const file of shared) {
+        expect(files, shard.name).toContain(file);
+      }
+      const contents = JSON5.parse(fs.readFileSync(shard.config, "utf8")) as {
+        compilerOptions: { tsBuildInfoFile: string };
+      };
+      caches.push(
+        path.resolve(path.dirname(shard.config), contents.compilerOptions.tsBuildInfoFile),
+      );
+      return { name: shard.name, roots: files.filter((file) => !shared.has(file)) };
+    });
+    expect(
+      findTsgoCoreTestShardViolations({
+        canonicalRoots: canonical.filter((file) => !shared.has(file)),
+        shards,
+      }),
+    ).toEqual([]);
+    expect(new Set(caches).size).toBe(shards.length);
+    expect(
+      caches.every((file) => file.startsWith(path.resolve(".artifacts/tsgo-cache") + path.sep)),
+    ).toBe(true);
+  });
+
+  it("expands canonical root CI selection without changing core stripe ownership", () => {
+    const graphs = resolveCiTsgoGraphs(["scripts", "test-root"]);
+    expect(graphs.map((graph) => graph.name)).toEqual(["scripts", "test-root"]);
+    expect(expandTsgoExecutionGraphs(graphs)).toEqual([graphs[0], ...TSGO_ROOT_TEST_SHARDS]);
+    expect(selectTsgoCoreTestShards("root")).toEqual(TSGO_ROOT_TEST_SHARDS);
+    expect(expandTsgoExecutionGraphs(TSGO_CORE_TEST_SHARDS)).toEqual(TSGO_CORE_TEST_SHARDS);
+    const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    expect(packageJson.scripts["tsgo:test:root"]).toBe(
+      "node scripts/run-tsgo-core-test-shards.mjs root",
+    );
   });
 
   it("stripes partition the full shard list exactly once", () => {
@@ -336,6 +406,101 @@ describe("changed core test graph selection", () => {
 const lifetime = createFixtureLifetime();
 afterEach(() => lifetime.cleanup());
 
+it.runIf(process.platform !== "win32").each([
+  ["alias", ["root"], [0, 1, 2, 3]],
+  ["CI", ["--ci-graphs-json", '["test-root"]'], [0, 1, 2, 3]],
+  ["mixed CI", ["--ci-graphs-json", '["scripts", "test-root"]'], [0, 1, 2, 3]],
+  ["odd stripe", ["--root-stripe", "1/2"], [0, 2]],
+  ["even stripe", ["--root-stripe", "2/2"], [1, 3]],
+] as const)(
+  "executes assigned root partitions serially through %s",
+  async (_label, args, indices) => {
+    await lifetime.run(async () => {
+      const root = fs.realpathSync(lifetime.createTempDir("openclaw-root-shards-"));
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+      fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
+      fs.mkdirSync(path.join(root, "scripts"));
+      const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
+      fs.copyFileSync(path.resolve("scripts/run-tsgo-core-test-shards.mts"), driver);
+      fs.symlinkSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"), "dir");
+      // Exercise the CLI and evidence owner with a compiler stub that rejects
+      // overlap. Native cold graph checks separately prove the actual partitions.
+      fs.writeFileSync(
+        path.join(root, "scripts/run-tsgo.mts"),
+        `import fs from "node:fs";
+export function prepareTsgoCommand(args) { return args; }
+export async function runPreparedTsgoCommand(args, options) {
+  const fd = fs.openSync("active-compiler", "wx");
+  try {
+    const config = args[args.indexOf("-p") + 1];
+    fs.appendFileSync("calls.jsonl", JSON.stringify(config) + "\\n");
+    await new Promise((resolve) => setImmediate(resolve));
+    const code = config === "tsconfig.scripts.json" ? 2 : config.endsWith(".scripts.json") ? Number(process.env.FIXTURE_EXIT) : 0;
+    if (code === 0 || code === 2) options.onEvidence();
+    return code;
+  } finally {
+    fs.closeSync(fd);
+    fs.unlinkSync("active-compiler");
+  }
+}
+`,
+      );
+      for (const exitCode of [0, 2, 137]) {
+        fs.writeFileSync(path.join(root, "calls.jsonl"), "");
+        const result = await lifetime.track(
+          runNodeScript(
+            [
+              "--import",
+              pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+              driver,
+              ...args,
+              "--concurrency",
+              "4",
+            ],
+            {
+              ...process.env,
+              OPENCLAW_LOCAL_CHECK: "0",
+              OPENCLAW_CI_STATIC_EVIDENCE: "1",
+              FIXTURE_EXIT: String(exitCode),
+            },
+            undefined,
+            { cwd: root, requireProcessTreeExit: true },
+          ),
+        );
+        const selected = indices.map((index) => TSGO_ROOT_TEST_SHARDS[index]!);
+        const failureIndex = selected.findIndex((graph) => graph.name === "test-root-scripts");
+        const fails = exitCode !== 0 && failureIndex >= 0;
+        expect(result.status, result.stderr).toBe(_label === "mixed CI" ? 2 : fails ? exitCode : 0);
+        const calls = fs
+          .readFileSync(path.join(root, "calls.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(calls).toEqual([
+          ...(_label === "mixed CI" ? ["tsconfig.scripts.json"] : []),
+          ...selected.slice(0, fails ? failureIndex + 1 : undefined).map((graph) => graph.config),
+        ]);
+        const completion = result.stdout
+          .split("\n")
+          .find((line) => line.startsWith("[ci-static:tsgo:completion] "));
+        if (!fails && process.platform !== "win32") {
+          expect(completion).toBeDefined();
+          const evidence = JSON.parse(completion!.slice("[ci-static:tsgo:completion] ".length)) as {
+            planned: number;
+            completed: number;
+            leaves: string[];
+          };
+          const expectedLeaves = selected.length + (_label === "mixed CI" ? 1 : 0);
+          expect(evidence).toMatchObject({ planned: expectedLeaves, completed: expectedLeaves });
+          expect(new Set(evidence.leaves).size).toBe(expectedLeaves);
+        } else {
+          expect(completion).toBeUndefined();
+        }
+      }
+    });
+  },
+);
+
 it.runIf(process.platform !== "win32")(
   "checks a helper type error in its transitive test consumers without repeating enumeration",
   ({ signal }) =>
@@ -471,6 +636,83 @@ process.exit(result.status??1);
       const initial = await check([leaf], "1/5");
       expect(initial.result.status, initial.result.stderr).toBe(0);
       expect(initial.builds).toEqual([]);
+      const extension = "extensions/example/value.ts";
+      write(extension, "export type ExtensionValue = number;\n");
+      const noncoreConsumer = "test/noncore-consumer.ts";
+      write(
+        noncoreConsumer,
+        "export type { ExtensionValue } from '../extensions/example/value.js';\n",
+      );
+      for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
+        write(
+          graph.config,
+          JSON.stringify({
+            compilerOptions: {
+              noEmit: true,
+              strict: true,
+              types: [],
+              lib: ["es5"],
+              module: "nodenext",
+              target: "es2022",
+            },
+            files: [path.join(root, noncoreConsumer)],
+          }),
+        );
+      }
+      const plannerDriver = write(
+        "scripts/extension-plan-fixture.mts",
+        `import { createChangedCiTypeCheckPlan } from "./run-tsgo-core-test-shards.mts";
+import { checkCoreTsgoGraphBoundary } from "./check-tsgo-core-boundary.mts";
+if (process.argv[2] === "boundary") {
+  await checkCoreTsgoGraphBoundary();
+} else {
+  const plan = await createChangedCiTypeCheckPlan([${JSON.stringify(extension)}], {
+    cwd: process.cwd(), coreBoundaryOwner: "additional-checks",
+  });
+  console.log(JSON.stringify({ mode: plan.mode, names: plan.graphs.map(({ name }) => name) }));
+}
+`,
+      );
+      const inspectExtension = async (mode: "plan" | "boundary") => {
+        write("compiler-events.jsonl", "");
+        return await lifetime.track(
+          runNodeScript(
+            [
+              "--import",
+              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+              plannerDriver,
+              mode,
+            ],
+            env,
+            undefined,
+            { cwd: root, signal, requireProcessTreeExit: true },
+          ),
+        );
+      };
+      const extensionPlan = await inspectExtension("plan");
+      expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
+      expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
+        mode: "changed",
+        names: ["extensions", "extensions-test", "scripts", "test-root"],
+      });
+      const discovery = fs
+        .readFileSync(path.join(root, "compiler-events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      expect(discovery).toHaveLength(4);
+      expect(discovery.every((args) => args.includes("--listFilesOnly"))).toBe(true);
+      // Its parallel owner must still reject a type-only edge into an extension.
+      write(
+        consumer,
+        "export type { ExtensionValue } from '../../../extensions/example/value.js';\n",
+      );
+      const extensionBoundary = await inspectExtension("boundary");
+      expect(extensionBoundary.status).not.toBe(0);
+      expect(extensionBoundary.stderr).toContain(
+        "Core tsgo graphs include bundled extension files",
+      );
+      expect(extensionBoundary.stderr).toContain(extension);
       write(
         consumer,
         "import type {Value} from '../nested/leaf.test.js';\nconst value: Value = 1;\n",

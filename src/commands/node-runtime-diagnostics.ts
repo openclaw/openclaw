@@ -7,33 +7,33 @@ import {
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
+import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { detectRuntime } from "../infra/runtime-guard.js";
 
 const CHECK_ID = "core/doctor/node-runtime";
 
 function unsupportedNodeFinding(
   version: string | null,
-  source: "cli" | "gateway-service",
   capabilityError?: string,
+  ownerHint?: string,
 ): HealthFinding {
-  const label = source === "cli" ? "CLI" : "Gateway service";
   return {
     checkId: CHECK_ID,
     severity: "warning",
-    source,
-    message: `${label} Node ${version ?? "unknown"} is unsupported. Required: ${SUPPORTED_NODE_VERSIONS}.`,
+    source: "gateway-service",
+    message: `Gateway service Node ${version ?? "unknown"} is unsupported. Required: ${SUPPORTED_NODE_VERSIONS}.`,
     requirement: SUPPORTED_NODE_VERSIONS,
-    fixHint: [
-      ...(capabilityError ? [capabilityError] : []),
-      formatUnsupportedNodeVersionMessage(version),
-      ...(source === "gateway-service"
-        ? [
-            "After switching Node, refresh a managed Gateway with `openclaw gateway install --force`; for an externally managed service, have its deployment owner update the launcher.",
-          ]
-        : []),
-    ].join("\n"),
+    fixHint:
+      ownerHint ??
+      [
+        ...(capabilityError ? [capabilityError] : []),
+        formatUnsupportedNodeVersionMessage(version),
+        "After switching Node, refresh a managed Gateway with `openclaw gateway install --force`; for an externally managed service, have its deployment owner update the launcher.",
+      ].join("\n"),
   };
 }
 
@@ -44,6 +44,11 @@ async function collectCurrentNodeRuntimeFindings(): Promise<readonly HealthFindi
   }
   const failure = nodeRuntimeFailure(runtime.version, runtime.sqliteProbe);
   const message = failure ?? nodeRuntimeNote(runtime.version, runtime.sqliteProbe);
+  const installOwner = failure
+    ? await readInstallOwner(
+        await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, argv1: process.argv[1] }),
+      )
+    : null;
   return message
     ? [
         {
@@ -53,7 +58,13 @@ async function collectCurrentNodeRuntimeFindings(): Promise<readonly HealthFindi
           message,
           requirement: SUPPORTED_NODE_VERSIONS,
           target: runtime.execPath ?? undefined,
-          ...(failure ? { fixHint: formatUnsupportedNodeVersionMessage(runtime.version) } : {}),
+          ...(failure
+            ? {
+                fixHint: installOwner
+                  ? formatInstallOwnerMessage(installOwner)
+                  : formatUnsupportedNodeVersionMessage(runtime.version),
+              }
+            : {}),
         },
       ]
     : [];
@@ -86,8 +97,16 @@ async function collectServiceNodeRuntimeFindings(
         throw runtime.error;
       }
       if (runtime.status === "unsupported") {
+        const layout = await summarizeGatewayServiceLayout(command);
+        const owner = await readInstallOwner(
+          layout?.packageRootReal ?? layout?.packageRoot ?? null,
+        );
         findings.push(
-          unsupportedNodeFinding(runtime.version, "gateway-service", runtime.capabilityError),
+          unsupportedNodeFinding(
+            runtime.version,
+            runtime.capabilityError,
+            owner ? formatInstallOwnerMessage(owner) : undefined,
+          ),
         );
       } else if (runtime.note) {
         findings.push({

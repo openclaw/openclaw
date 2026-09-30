@@ -159,6 +159,56 @@ describe("cron history wire codec", () => {
     }
   });
 
+  it.each([
+    {
+      name: "absent optional fields",
+      fields: {},
+      wireFields: "",
+      detailFields: "",
+    },
+    {
+      name: "populated optional fields",
+      fields: {
+        delivered: false,
+        deliveryStatus: "not-delivered",
+        deliveryError: "",
+        deliverySuppressionReason: "channel_transform",
+        failureNotificationDelivery: { delivered: true, status: "delivered", error: "" },
+        delivery: { intended: { channel: "telegram", to: "123" } },
+        sessionId: "session-1",
+        sessionKey: "agent:main:cron:history-job",
+      },
+      wireFields:
+        ',"delivered":false,"deliveryStatus":"not-delivered","deliveryError":"","deliverySuppressionReason":"channel_transform","failureNotificationDelivery":{"status":"delivered","delivered":true,"error":""},"delivery":{"intended":{"channel":"telegram","to":"123"}},"sessionId":"session-1","sessionKey":"agent:main:cron:history-job"',
+      detailFields:
+        ',"delivered":false,"deliveryStatus":"not-delivered","deliveryError":"","deliverySuppressionReason":"channel_transform","failureNotificationDelivery":{"status":"delivered","delivered":true,"error":""},"delivery":{"intended":{"channel":"telegram","to":"123"}},"sessionId":"session-1"',
+    },
+  ])("preserves retained JSON bytes with $name", ({ fields, wireFields, detailFields }) => {
+    const entry = parseCronRunLogEntryObject({
+      ts: 100,
+      jobId: JOB_ID,
+      action: "finished",
+      status: "error",
+      internalFutureField: "discard",
+      ...fields,
+    });
+    if (!entry) {
+      throw new Error("Expected a valid legacy run-history entry");
+    }
+    const wire =
+      '{"ts":100,"jobId":"history-job","action":"finished","status":"error","completionStatus":"failed"' +
+      wireFields +
+      "}";
+    expect(JSON.stringify(entry)).toBe(wire);
+    const record = recordFromEntry(entry, 1, "cron-store");
+    expect(JSON.stringify(record.detail)).toBe(
+      '{"kind":"cron-run","status":"error","completionStatus":"failed","error":null,"summary":null,"storeKey":"cron-store"' +
+        detailFields +
+        "}",
+    );
+    expect(JSON.stringify(cronRunRecordToRunLogEntry(record))).toBe(wire);
+  });
+
   it("authors failure reasons on write and trusts stored values on read", () => {
     const entry = cronRunLogEntryFromEvent(
       {

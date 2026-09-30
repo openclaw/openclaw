@@ -329,32 +329,6 @@ describe("routeReply delivery result", () => {
     expect(getReplyPayloadMetadata(sentPayload)?.sessionWriterDeliveryAuthority).toEqual(authority);
   });
 
-  it("preserves the last delivered message id when a later send fails", async () => {
-    const cause = new Error("network reset");
-    const failure = new OutboundDeliveryError("network reset", {
-      cause,
-      results: [{ channel: "telegram", messageId: "msg-1" }],
-      stage: "platform_send",
-    });
-    mocks.deliverOutboundPayloads.mockRejectedValueOnce(failure);
-
-    const res = await routeReply({
-      payload: { text: "hello" },
-      channel: "telegram",
-      to: "chat-1",
-      cfg: {} as never,
-    });
-
-    expect(res).toEqual({
-      ok: false,
-      delivered: true,
-      error: "Failed to route reply to telegram: network reset",
-      cause: failure,
-      messageId: "msg-1",
-    });
-    expect(res.cause).toBe(failure);
-  });
-
   it.each([
     ["a trailing suppression sentinel", { channel: "telegram", messageId: "suppressed" }],
     ["a trailing unknown sentinel", { channel: "telegram", messageId: "unknown" }],

@@ -12,6 +12,7 @@ import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
+import { loadFlakeClassifications } from "./full-release-flake-classification.mjs";
 import {
   publicationAdmissionContract,
   publicationObservationJson,
@@ -34,7 +35,10 @@ import {
   normalizeReleaseCoveragePolicy,
   normalizeReleaseTelegramWaiver,
   releaseCompositeJobsSha256,
+  releaseAdvisoryJobs,
+  releaseChildClassificationEvidence,
   terminalPolicyPass,
+  validateReleaseManifestAdvisoryJobs,
   validateReleaseChildDispatchBinding,
   validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
@@ -1156,6 +1160,7 @@ function normalizeManifestChildEvidence(value) {
           key,
           {
             ...composite,
+            ...releaseChildClassificationEvidence(child),
             compositeJobsSha256,
             dispatchActor,
             observedRunAttempts,
@@ -1312,17 +1317,12 @@ export function validateParentManifest(value, expected) {
     );
   }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
-  if (
-    validationInputs?.laneWaiver ||
-    value.publishInputs?.stableSoakWaiver ||
-    (value.advisoryJobs !== undefined &&
-      (!Array.isArray(value.advisoryJobs) || value.advisoryJobs.length > 0))
-  ) {
+  if (validationInputs?.laneWaiver || value.publishInputs?.stableSoakWaiver) {
     throw new Error(
-      "Waived or advisory release evidence is no longer accepted; rerun Full Release Validation without waivers.",
+      "Waived release evidence is no longer accepted; rerun Full Release Validation without waivers.",
     );
   }
-  const advisoryJobs = [];
+  const advisoryJobs = validateReleaseManifestAdvisoryJobs(value);
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
     throw new Error("release validation manifest childRuns is invalid");
@@ -2126,6 +2126,9 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
   const normalizedRepository = normalizeRepository(repository);
   return {
+    loadFlakeClassifications(request) {
+      return loadFlakeClassifications({ ...request, repo: normalizedRepository });
+    },
     validateChildReuse(selection, request) {
       return validateReusableReleaseChild(selection, request);
     },
@@ -2480,6 +2483,7 @@ async function validateStrictChildRun({
         repository,
         role: child.manifestKey,
         targetSha: parentEvidence.manifest.targetSha,
+        workflowSha: parentEvidence.manifest.workflowSha,
       })
     : undefined;
   const run = reused?.run ?? (await client.getRun(runId));
@@ -2575,7 +2579,12 @@ async function validateStrictChildRun({
     });
     if (
       JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
-      JSON.stringify(sortReleaseJsonValueKeys(evidence))
+      JSON.stringify(
+        sortReleaseJsonValueKeys({
+          ...evidence,
+          ...releaseChildClassificationEvidence(childEvidence),
+        }),
+      )
     ) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
     }
@@ -2597,15 +2606,34 @@ async function validateStrictChildRun({
         ? []
         : await client.getParentJobs(runId);
   }
+  const policyChild = {
+    conclusion: run.conclusion,
+    jobs,
+    key: child.manifestKey,
+    runId,
+    status: run.status,
+  };
+  const classifications =
+    child.manifestKey === "normalCi" && run.conclusion !== "success"
+      ? await client.loadFlakeClassifications({
+          child: policyChild,
+          parentRunId: parentEvidence.manifest.runId,
+          parentRunAttempt: originAttempt,
+          targetSha: parentEvidence.manifest.targetSha,
+        })
+      : {};
+  Object.assign(policyChild, classifications);
+  if (
+    childEvidence &&
+    JSON.stringify(sortReleaseJsonValueKeys(releaseChildClassificationEvidence(childEvidence))) !==
+      JSON.stringify(sortReleaseJsonValueKeys(releaseChildClassificationEvidence(policyChild)))
+  ) {
+    throw new Error(`manifest child classification evidence mismatch: ${child.name}`);
+  }
   if (
     run.repository?.full_name !== repository ||
     run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass({
-      conclusion: run.conclusion,
-      jobs,
-      key: child.manifestKey,
-      status: run.status,
-    })
+    !terminalPolicyPass(policyChild)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
@@ -2618,7 +2646,7 @@ async function validateStrictChildRun({
   }
 
   return {
-    advisoryJobs: [],
+    advisoryJobs: releaseAdvisoryJobs([policyChild]),
     conclusion: run.conclusion,
     dispatchNonce: `full-release-validation-${reused ? childReuse.sourceParentRunId : parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
     displayTitle: run.display_title,

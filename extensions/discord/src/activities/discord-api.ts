@@ -14,16 +14,14 @@ export type FetchGuard = typeof fetchWithSsrFGuard;
 
 export function normalizeInstanceId(value: string | null): string | undefined {
   const instanceId = value?.trim();
-  let hasControlCharacter = false;
-  for (let index = 0; index < (instanceId?.length ?? 0); index += 1) {
-    const codePoint = instanceId?.charCodeAt(index) ?? 0;
-    if (codePoint < 0x20 || codePoint === 0x7f) {
-      hasControlCharacter = true;
-      break;
-    }
-  }
-  if (!instanceId || instanceId.length > INSTANCE_ID_MAX_LENGTH || hasControlCharacter) {
+  if (!instanceId || instanceId.length > INSTANCE_ID_MAX_LENGTH) {
     return undefined;
+  }
+  for (let index = 0; index < instanceId.length; index += 1) {
+    const codePoint = instanceId.charCodeAt(index);
+    if (codePoint < 0x20 || codePoint === 0x7f) {
+      return undefined;
+    }
   }
   return instanceId;
 }

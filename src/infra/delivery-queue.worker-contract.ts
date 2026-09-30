@@ -7,7 +7,10 @@ import type {
   countFailedDeliveryQueueEntriesInDatabase,
   prepareDeliveryQueueTerminalEntry,
 } from "./delivery-queue-sqlite.kernel.js";
-import type { loadDeliveryQueueMediaRetentionSnapshotInDatabase } from "./outbound/delivery-queue-media-staging.kernel.js";
+import type {
+  createDeliveryQueueMediaRetentionInDatabase,
+  loadDeliveryQueueMediaRetentionSnapshotInDatabase,
+} from "./outbound/delivery-queue-media-staging.kernel.js";
 import type { findDeliveryIntentOwnersInDatabase } from "./outbound/delivery-queue-ownership.kernel.js";
 import type {
   AckDeliveryOptions,
@@ -71,6 +74,15 @@ export type DeliveryQueueWorkerOperations = OutboundDeliveryStorageOperations & 
     output: ReturnType<typeof countFailedDeliveryQueueEntriesInDatabase>;
   };
   "deliveryQueue.pruneTombstones": { input: undefined; output: void };
+  "deliveryQueue.createMediaRetention": {
+    input: {
+      artifacts: string[];
+      entryKind: Parameters<typeof createDeliveryQueueMediaRetentionInDatabase>[2];
+      prepared: { id: string; enqueuedAt: number };
+    };
+    output: string;
+  };
+  "deliveryQueue.cancelMediaRetention": { input: { id: string }; output: void };
   "deliveryQueue.mediaRetentionSnapshot": {
     input: Parameters<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase>[1];
     output: ReturnType<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase>;

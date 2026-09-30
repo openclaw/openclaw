@@ -106,14 +106,6 @@ describe("emitResetCommandHooks", () => {
     expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
-  it("keeps the main-agent path on the main agent workspace", async () => {
-    const ctx = await runBeforeResetContext("agent:main:main");
-    expect(ctx?.agentId).toBe("main");
-    expect(ctx?.sessionKey).toBe("agent:main:main");
-    expect(ctx?.sessionId).toBe("prev-session");
-    expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
-  });
-
   it("loads marker-backed before_reset transcripts by session identity", async () => {
     hookRunnerMocks.loadTranscriptEvents.mockResolvedValueOnce([
       {

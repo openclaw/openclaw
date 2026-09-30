@@ -12,6 +12,7 @@ import type {
   DiagnosticEventPayload,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginService,
+  OpenClawPluginServiceContext,
 } from "../api.js";
 import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
 import {
@@ -758,14 +759,9 @@ type PrometheusExporterHealthUpdate = {
   status: "started" | "dropped";
   reason?: "configured";
 };
-type TrustedExporterDiagnosticsBridge = {
-  emit: (event: {
-    type: "telemetry.exporter";
-    exporter: "diagnostics-prometheus";
-    signal: "metrics";
-    status: "started" | "dropped";
-    reason?: "configured";
-  }) => void;
+type TrustedExporterDiagnosticsBridge = NonNullable<
+  OpenClawPluginServiceContext["internalDiagnostics"]
+> & {
   reportExporterHealth?: (update: PrometheusExporterHealthUpdate) => void;
 };
 
@@ -773,12 +769,18 @@ export function createDiagnosticsPrometheusExporter() {
   const store = createPrometheusMetricStore();
   let unsubscribe: (() => void) | undefined;
   let internalDiagnostics: TrustedExporterDiagnosticsBridge | undefined;
-  const reportExporterHealth = (update: PrometheusExporterHealthUpdate) => {
+  const reportExporterStatus = (update: PrometheusExporterHealthUpdate) => {
     try {
       internalDiagnostics?.reportExporterHealth?.(update);
     } catch {
       // Exporter health must never affect the exporter lifecycle.
     }
+    const { transport: _transport, ...event } = update;
+    internalDiagnostics?.emit({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-prometheus",
+      ...event,
+    });
   };
 
   const service = {
@@ -818,17 +820,10 @@ export function createDiagnosticsPrometheusExporter() {
         { exclude: ["log.record"] },
         { includePrivateData: false },
       );
-      internalDiagnostics = ctx.internalDiagnostics as unknown as TrustedExporterDiagnosticsBridge;
-      reportExporterHealth({
+      internalDiagnostics = ctx.internalDiagnostics;
+      reportExporterStatus({
         signal: "metrics",
         transport: "prometheus-scrape",
-        status: "started",
-        reason: "configured",
-      });
-      internalDiagnostics.emit({
-        type: "telemetry.exporter",
-        exporter: "diagnostics-prometheus",
-        signal: "metrics",
         status: "started",
         reason: "configured",
       });
@@ -836,15 +831,9 @@ export function createDiagnosticsPrometheusExporter() {
     stop() {
       unsubscribe?.();
       unsubscribe = undefined;
-      reportExporterHealth({
+      reportExporterStatus({
         signal: "metrics",
         transport: "prometheus-scrape",
-        status: "dropped",
-      });
-      internalDiagnostics?.emit({
-        type: "telemetry.exporter",
-        exporter: "diagnostics-prometheus",
-        signal: "metrics",
         status: "dropped",
       });
       internalDiagnostics = undefined;

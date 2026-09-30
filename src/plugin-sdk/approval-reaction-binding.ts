@@ -77,7 +77,9 @@ export function readApprovalReactionDeliveryMetadata(
     !approvalId ||
     (!options.trimApprovalId && approvalId !== approvalId.trim()) ||
     (options.requireApprovalSlug && !approvalSlug) ||
-    (record.approvalKind !== "exec" && record.approvalKind !== "plugin") ||
+    (record.approvalKind !== "exec" &&
+      record.approvalKind !== "plugin" &&
+      record.approvalKind !== "system-agent") ||
     !allowedDecisions
   ) {
     return null;

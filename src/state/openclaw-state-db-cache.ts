@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import {
+  assertStateDatabaseAccessAllowed,
+  assertStateDatabaseReadAllowed,
+} from "../infra/gateway-state-owner.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   registerNodeSqliteKyselyQueryErrorHandler,
@@ -21,7 +24,11 @@ import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import {
+  admitSqliteSchema,
+  getAdmittedSqliteSchemaFacts,
+  runSqliteReadOperationSync,
+} from "../infra/sqlite-schema-facts.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { cancelSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
@@ -44,7 +51,10 @@ import {
   type StateDatabaseBorrowers,
 } from "./openclaw-state-db-borrow.js";
 import { createStateDatabaseIdleRetirement } from "./openclaw-state-db-cache.idle.js";
-import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
+import type {
+  CachedOpenClawStateDatabase,
+  StateDatabaseLifecycle,
+} from "./openclaw-state-db-cache.types.js";
 import { createStateDatabaseWalOwner } from "./openclaw-state-db-cache.wal.js";
 import type {
   OpenClawStateDatabase,
@@ -62,7 +72,7 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
   Symbol.for("openclaw.stateDatabaseLifecycle"),
   () => ({
-    cachedDatabases: new Map<string, OpenClawStateDatabase>(),
+    cachedDatabases: new Map<string, CachedOpenClawStateDatabase>(),
     retainedDatabaseHandles: new Map<DatabaseSync, StateDatabaseHandle>(),
     idleTimers: new WeakMap(),
     idleReferences: new WeakMap(),
@@ -200,8 +210,8 @@ export const {
   borrowForRead: borrowOpenClawStateDatabaseForAsyncRead,
   retainForIndependentRead: retainOpenClawStateDatabaseForIndependentRead,
 } = createStateDatabaseRetainer(stateDatabaseLifecycle, {
-  assertOpen(pathname) {
-    assertOpenClawStateDatabaseOpenAllowed(pathname);
+  assertOpen(pathname, ownership) {
+    assertOpenClawStateDatabaseOpenAllowed(pathname, ownership);
     assertExistingOpenClawStateSchemaCacheAdmission(pathname, stateDatabaseLifecycle);
   },
   capture: (pathname) => asyncResources.capture(pathname),
@@ -314,10 +324,13 @@ function publishOpenClawStateDatabase(
 ): OpenClawStateDatabase {
   const { db, path: pathname } = database;
   admitSqliteSchema(db);
-  assertSupportedStateSchemaVersion(db, pathname);
+  const schemaFacts = runSqliteReadOperationSync(db, () => {
+    assertSupportedStateSchemaVersion(db, pathname);
+    return getAdmittedSqliteSchemaFacts(db);
+  });
   const { identity, admission } = asyncResources.publish(pathname);
   databaseIdentities.set(db, identity);
-  cachedDatabases.set(pathname, database);
+  cachedDatabases.set(pathname, Object.assign(database, { schemaFacts }));
   registerStateDatabaseWalAdmission(database, identity, admission, env);
   touchStateDatabase(database);
   openClawStateSnapshotOwners.register(database, () => cachedDatabases.get(pathname));
@@ -423,8 +436,12 @@ export async function getOpenClawStateDatabaseTerminalFailureAsync(
 }
 
 /** Reject shared-state access after a process-local terminal failure. */
-function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
-  assertStateDatabaseAccessAllowed(pathname);
+function assertOpenClawStateDatabaseOpenAllowed(pathname: string, ownership?: "cached-read"): void {
+  if (ownership === "cached-read") {
+    assertStateDatabaseReadAllowed(pathname);
+  } else {
+    assertStateDatabaseAccessAllowed(pathname);
+  }
   const { identity } = asyncResources.capture(pathname);
   const terminalFailure = terminalOpenLatch.get(pathname);
   if (terminalFailure) {
@@ -606,7 +623,11 @@ export function isOpenClawStateDatabaseOpen(pathname?: string): boolean {
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 
-/** Close shared state handles and clear terminal failure latches for test isolation. */
+/**
+ * Close shared state handles and clear terminal failure latches for test isolation.
+ * Worker retirement continues after return; await closeOpenClawStateDatabaseAsync()
+ * before raw SQLite or file access to a database that workers have used.
+ */
 export function closeOpenClawStateDatabaseForTest(): void {
   closeOpenClawStateDatabase();
   terminalOpenLatch.clearAll();

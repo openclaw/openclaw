@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
-import { createManagedHandoffBuildConfig } from "./managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
 import {
   sharedRuntimeProcessBuildEntries,
@@ -155,6 +155,18 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ] satisfies NonNullable<Parameters<typeof build>[0]>["plugins"];
   };
   const commonPlugins = createInputPlugins("");
+  const maintenanceModuleBoundaries = new Map([
+    [path.join(root, "src/daemon/service.ts"), "triage-maintenance/service.js"],
+    [
+      path.join(root, "src/daemon/service-process-membership.ts"),
+      "daemon/service-process-membership.js",
+    ],
+    [path.join(root, "src/daemon/systemd-maintenance.ts"), "daemon/systemd-maintenance.js"],
+    [
+      path.join(root, "src/cli/update-cli/update-command-service-drain.ts"),
+      "cli/update-cli/update-command-service-drain.js",
+    ],
+  ]);
   const config: NonNullable<Parameters<typeof build>[0]> = {
     config: false,
     cwd: root,
@@ -217,25 +229,34 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               expr: {
                 kind: "or",
                 args: [
-                  { kind: "id", pattern: /service\.[jt]s/, params: { cleanUrl: false } },
-                  { kind: "importerId", pattern: /service\.[jt]s/, params: { cleanUrl: false } },
+                  {
+                    kind: "id",
+                    pattern:
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                    params: { cleanUrl: false },
+                  },
+                  {
+                    kind: "importerId",
+                    pattern:
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                    params: { cleanUrl: false },
+                  },
                 ],
               },
             },
           ],
           handler(id, importer) {
-            if (
-              importer &&
-              id.startsWith(".") &&
-              path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
-                path.join(root, "src/daemon/service.ts")
-            ) {
-              return {
-                id: pathToFileURL(path.join(outDir, "triage-maintenance/service.js")).href,
-                external: "absolute",
-              };
+            if (!importer || !id.startsWith(".")) {
+              return null;
             }
-            return null;
+            const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
+            const boundary = maintenanceModuleBoundaries.get(source);
+            return boundary
+              ? {
+                  id: pathToFileURL(path.join(outDir, boundary)).href,
+                  external: "absolute",
+                }
+              : null;
           },
         },
       },
@@ -289,15 +310,17 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       });
     }
     reportPhase("standalone workers compiled");
-    await build({
-      ...createManagedHandoffBuildConfig(),
-      config: false,
-      cwd: root,
-      outDir,
-      clean: false,
-      logLevel: config.logLevel,
-      plugins: config.plugins,
-    });
+    for (const sealedConfig of createManagedHandoffBuildConfigs()) {
+      await build({
+        ...sealedConfig,
+        config: false,
+        cwd: root,
+        outDir,
+        clean: false,
+        logLevel: config.logLevel,
+        plugins: config.plugins,
+      });
+    }
     reportPhase("managed handoff compiled");
   };
   const compilePreservedModules = async () => {

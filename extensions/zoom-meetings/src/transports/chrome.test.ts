@@ -1,8 +1,8 @@
 import { defineMeetingChromeCleanupTests } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, vi } from "vitest";
-import { zoomMeetingsConfig } from "../config.js";
+import { zoomMeetingsPlugin } from "../../index.js";
 
-const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const resolveZoomMeetingsConfig = zoomMeetingsPlugin.config.resolveConfig;
 
 const engineMocks = vi.hoisted(() => ({
   localDispose: vi.fn(async () => {}),
@@ -12,6 +12,7 @@ const engineMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
   const original = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-runtime")>();
+  const adapter = original.MeetingPlatformAdapter;
   const transport = (dispose: () => Promise<void>) => ({
     clearOutput: vi.fn(async () => {}),
     dispose,
@@ -20,22 +21,21 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
     stop: dispose,
     writeOutput: vi.fn(async () => {}),
   });
-  return {
-    ...original,
-    MeetingPlatformAdapter: {
-      ...original.MeetingPlatformAdapter,
-      createChromeRuntimeBindings: () => ({
-        createBindings: original.createMeetingRealtimeEngineBindings,
+  const defineBrowserMeetingPlugin: typeof adapter.defineBrowserMeetingPlugin = (spec) =>
+    adapter.defineBrowserMeetingPlugin({
+      ...spec,
+      chromeRuntime: {
+        ...adapter.createChromeRuntimeBindings(),
         createLocalAudioTransport: () => transport(engineMocks.localDispose),
         createNodeAudioTransport: () => transport(engineMocks.nodeDispose),
         startAgentRealtimeEngine: engineMocks.startAgent,
-        startRealtimeEngine: original.startMeetingRealtimeEngine,
-      }),
-    },
+      },
+    });
+  return {
+    ...original,
+    MeetingPlatformAdapter: { ...adapter, defineBrowserMeetingPlugin },
   };
 });
-
-import { zoomMeetingsChrome } from "./chrome.js";
 
 const URL = "https://zoom.us/j/12345678905?pwd=rollback";
 
@@ -47,8 +47,8 @@ describe("Zoom meeting Chrome startup cleanup", () => {
     nodeCommand: "zoommeetings.chrome",
     preserveTrackedBrowser: true,
     resolveConfig: resolveZoomMeetingsConfig,
-    launchInChrome: zoomMeetingsChrome.launchInChrome,
-    launchOnNode: zoomMeetingsChrome.launchOnNode,
+    launchInChrome: zoomMeetingsPlugin.chrome.launchInChrome,
+    launchOnNode: zoomMeetingsPlugin.chrome.launchOnNode,
     engineMocks,
   });
 });

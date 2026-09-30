@@ -1,4 +1,3 @@
-// ClawHub-backed discovery for installable plugin package families.
 import {
   searchClawHubPackages,
   type ClawHubPackageFamily,

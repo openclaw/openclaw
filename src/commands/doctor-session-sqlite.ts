@@ -44,6 +44,7 @@ import {
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationMove,
+  type SessionSqliteMigrationMoveKind,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   readOnlySqliteValidationSnapshot,
@@ -126,10 +127,7 @@ const retainedArchivePlans = new WeakMap<
   }
 >();
 
-/**
- * Runs the targeted doctor SQLite session migration/inspection submode.
- * Destructive production callers hold the Gateway/SQLite-maintenance state lock for the full call.
- */
+/** Destructive production callers hold the Gateway/SQLite-maintenance state lock for the full call. */
 export async function runDoctorSessionSqlite(
   options: DoctorSessionSqliteOptions,
 ): Promise<DoctorSessionSqliteReport> {
@@ -1241,21 +1239,12 @@ async function archiveLegacyArtifacts(
     ) {
       continue;
     }
-    for (const source of listUnreferencedJsonlFiles(storePath, [
-      ...referencedPaths,
-      ...planned.keys(),
-    ])) {
-      if (retainedPaths.has(source)) {
-        continue;
-      }
-      if (capturedSources && !capturedSources.has(source)) {
-        continue;
-      }
+    const planUnreferencedMove = (source: string, kind: SessionSqliteMigrationMoveKind) => {
       try {
         const move = planSessionJsonlArchiveMove({
           archiveKey: "archive-tier",
           baseNameRaw: path.basename(source),
-          kind: "unreferenced-jsonl",
+          kind,
           reservedArchivePaths,
           sourcePathRaw: source,
           target: owner.target,
@@ -1269,8 +1258,57 @@ async function archiveLegacyArtifacts(
         };
         reservedArchivePaths.add(move.archivePath);
         planned.set(source, { move, owners: new Map([[owner, undefined]]) });
+        return true;
       } catch (error) {
         recordFailure(owner, source, error, true);
+        return false;
+      }
+    };
+    const pointers = new Set<string>();
+    for (const source of listUnreferencedJsonlFiles(storePath, [
+      ...referencedPaths,
+      ...planned.keys(),
+    ])) {
+      if (retainedPaths.has(source)) {
+        continue;
+      }
+      if (capturedSources && !capturedSources.has(source)) {
+        continue;
+      }
+      const pointer = resolveTrajectoryPointerPath(source);
+      if (planUnreferencedMove(source, "unreferenced-jsonl") && pointer) {
+        pointers.add(pointer);
+      }
+    }
+    // A pointer sidecar only locates its transcript's trajectory, so it settles with that
+    // transcript, including a receipt-verified one an earlier run archived without it.
+    const receiptSources = new Set(
+      owner.retainedImportVerified
+        ? (owner.verifiedSources ?? []).map((source) => source.path)
+        : [],
+    );
+    for (const transcript of receiptSources) {
+      const pointer = resolveTrajectoryPointerPath(transcript);
+      if (
+        pointer &&
+        receiptSources.has(pointer) &&
+        !owner.sourceConflicts?.has(transcript) &&
+        !fs.existsSync(transcript)
+      ) {
+        pointers.add(pointer);
+      }
+    }
+    for (const pointer of pointers) {
+      const source = canonicalMigrationFilePath(pointer);
+      if (
+        fs.existsSync(source) &&
+        !planned.has(source) &&
+        !referencedPaths.has(source) &&
+        !retainedPaths.has(source) &&
+        !owner.sourceConflicts?.has(pointer) &&
+        (!capturedSources || capturedSources.has(source))
+      ) {
+        planUnreferencedMove(source, "trajectory");
       }
     }
   }

@@ -1,8 +1,14 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
-import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import {
+  openClawStateDatabaseCache,
+  requireOpenClawStateDatabaseIdentity,
+} from "./openclaw-state-db-cache.js";
+import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertStateReadSchema } from "./openclaw-state-db-read-connection.js";
+import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { isManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
@@ -25,9 +31,11 @@ export function withCachedOpenClawStateDatabaseReadOnly<T>(
     return { reused: false };
   }
   try {
-    // Terminal failures evict this handle. Retain schema admission even while
-    // borrowing a writer; another build can migrate an idle cached database.
-    assertStateReadSchema(opened.db, pathname);
+    // Cache acquisition already checked supported-version admission. Managed
+    // existing schemas retain their stricter runtime-shape policy.
+    if (isExistingOpenClawStateSchema(pathname, opened.db)) {
+      assertStateReadSchema(opened.db, pathname);
+    }
     observeOpenClawDatabaseMaintenanceResource(opened.db);
     const value = operation(opened);
     if (ownedTransaction && isPromiseLike(value)) {
@@ -37,5 +45,24 @@ export function withCachedOpenClawStateDatabaseReadOnly<T>(
   } catch (error) {
     openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(opened, error);
     throw error;
+  }
+}
+
+/** A native read borrow can avoid copying only while its original physical path still matches. */
+export function canReadWarmNativeSourceIndependently(
+  database: OpenClawStateDatabase,
+  pathname: string,
+  admittedIdentity: string,
+): boolean {
+  const identity = requireOpenClawStateDatabaseIdentity(database);
+  if (identity.key !== admittedIdentity) {
+    return false;
+  }
+  try {
+    assertExistingDatabaseIdentity(pathname, identity.key);
+    return true;
+  } catch {
+    // An unavailable or replaced path keeps the original native snapshot source.
+    return false;
   }
 }

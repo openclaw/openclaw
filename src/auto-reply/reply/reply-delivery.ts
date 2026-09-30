@@ -5,6 +5,7 @@ import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isRenderablePayload,
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -18,7 +19,6 @@ import {
   resolveReplyDispatchErrorOutcome,
   shouldRetryReplyDispatch,
 } from "./reply-dispatch-outcome.js";
-import { isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type ReplyDirectiveParseMode = "always" | "auto" | "never";
@@ -177,13 +177,9 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
 
-    const implicitCurrentMessageAllowed =
-      payload.replyToCurrent === true
-        ? true
-        : payload.replyToCurrent === false
-          ? false
-          : params.replyThreading?.implicitCurrentMessage !== "deny";
     // Reply-to-current is implicit for block replies unless per-turn threading disables it.
+    const implicitCurrentMessageAllowed =
+      payload.replyToCurrent ?? params.replyThreading?.implicitCurrentMessage !== "deny";
 
     const normalizedText = text ? trimTextPreservingCode(text, "start") : undefined;
     const normalizedPayload = copyReplyPayloadMetadata(payload, {
@@ -234,12 +230,6 @@ export function createBlockReplyDeliveryHandler(params: {
       setReplyPayloadMetadata(blockPayload, {
         independentDeliveryIntentId: options.deliveryIntentId,
       });
-      await sendDirectBlockReply({
-        onBlockReply: params.onBlockReply,
-        directBlockDeliveries: params.directBlockDeliveries,
-        payload: blockPayload,
-        context: options,
-      });
     } else if (params.blockStreamingEnabled && params.blockReplyPipeline) {
       if (options?.completed) {
         // A completed answer is a delivery boundary, not another streaming chunk.
@@ -250,21 +240,23 @@ export function createBlockReplyDeliveryHandler(params: {
       if (options?.completed) {
         await params.blockReplyPipeline.flush({ force: true });
       }
+      return;
     } else if (
-      params.blockStreamingEnabled ||
-      options?.completed === true ||
-      blockHasNonTextContent ||
-      blockPayload.isReasoning === true ||
-      blockPayload.isCommentary === true
+      !params.blockStreamingEnabled &&
+      options?.completed !== true &&
+      !blockHasNonTextContent &&
+      blockPayload.isReasoning !== true &&
+      blockPayload.isCommentary !== true
     ) {
-      // Enabled display lanes never merge into final text, so deliver them directly
-      // even when block streaming is off.
-      await sendDirectBlockReply({
-        onBlockReply: params.onBlockReply,
-        directBlockDeliveries: params.directBlockDeliveries,
-        payload: blockPayload,
-      });
+      // With streaming off, text-only blocks are accumulated in final text.
+      return;
     }
-    // When streaming is disabled entirely, text-only blocks are accumulated in final text.
+    // Enabled display lanes never merge into final text, even with streaming off.
+    await sendDirectBlockReply({
+      onBlockReply: params.onBlockReply,
+      directBlockDeliveries: params.directBlockDeliveries,
+      payload: blockPayload,
+      context: options?.deliveryIntentId !== undefined ? options : undefined,
+    });
   };
 }

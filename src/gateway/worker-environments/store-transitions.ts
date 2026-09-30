@@ -5,6 +5,10 @@ import {
 } from "../../infra/kysely-sync.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
+import {
+  isCurrentWorkerWorkspacePendingResultOwner,
+  readWorkerWorkspaceReconciliationFacts,
+} from "./placement-workspace-result.js";
 import { assertPreparedEnvironmentAttachment } from "./prepared-environment-store.js";
 import { hasWorkerEnvironmentSessionAttachment } from "./session-attachment-store.js";
 import { WorkerSessionAlreadyAttachedError } from "./session-attachment.js";
@@ -69,7 +73,7 @@ export function createWorkerEnvironmentTransitionOps({
               .selectFrom("worker_session_placements")
               .selectAll()
               .where("environment_id", "=", environmentId)
-              .where("state", "=", "active"),
+              .where("state", "=", input.expectedReclaimResult ? "draining" : "active"),
           ).rows;
           const placement = placements.length === 1 ? placements[0] : undefined;
           if (
@@ -81,6 +85,22 @@ export function createWorkerEnvironmentTransitionOps({
             placement.worker_bundle_hash !== expectedReceipt.bundleHash
           ) {
             throw new Error("Worker placement changed during runtime refresh");
+          }
+          if (input.expectedReclaimResult) {
+            const retained = readWorkerWorkspaceReconciliationFacts(db, [placement.session_id]);
+            const pending = retained.pendingResults.get(placement.session_id);
+            if (
+              !pending ||
+              pending.claimId !== pending.runId ||
+              !pending.claimId.startsWith("reclaim-") ||
+              !isDeepStrictEqual(pending, input.expectedReclaimResult) ||
+              !isCurrentWorkerWorkspacePendingResultOwner(
+                retained.placements.get(placement.session_id),
+                pending,
+              )
+            ) {
+              throw new Error("Worker runtime refresh lost its retained Stop result");
+            }
           }
           if (
             executeSqliteQueryTakeFirstSync(
@@ -134,10 +154,10 @@ export function createWorkerEnvironmentTransitionOps({
         ) {
           throw new Error(`Worker environment ${environmentId} owner epoch changed`);
         }
-        if (to === "attached" && current.destroyRequestedAtMs !== null) {
-          throw new Error("Cannot attach worker after destroy is requested");
-        }
         if (to === "attached") {
+          if (current.destroyRequestedAtMs !== null) {
+            throw new Error("Cannot attach worker after destroy is requested");
+          }
           if (hasWorkerEnvironmentSessionAttachment(db, environmentId)) {
             throw new Error(
               "Conversation-attached environments cannot be adopted for session placement",
@@ -317,7 +337,7 @@ export function createWorkerEnvironmentTransitionOps({
           updated_at_ms: updatedAtMs,
           state_changed_at_ms: updatedAtMs,
           idle_since_at_ms: to === "idle" ? updatedAtMs : null,
-          last_error: "lastError" in patch ? patch.lastError?.trim() || null : null,
+          last_error: patch.lastError?.trim() || null,
         });
         if (patch.sshEndpoint !== undefined) {
           replaceSshFallbackPorts(db, environmentId, sshEndpoint?.fallbackPorts ?? []);

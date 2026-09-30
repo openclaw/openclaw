@@ -143,6 +143,10 @@ compiler assertions in mixed runtime suites; their cases remain enabled.
 The Node Code Mode executor suite also stays on Node: its warm-worker cleanup
 requires diagnostics-channel delivery to preserve sibling subscribers when a
 callback unsubscribes during publication. Bun can skip the next subscriber.
+The plugin runtime retention proof (`src/plugins/runtime.retention.test.ts`) also
+stays on Node: JavaScriptCore can keep a released successor registry alive past
+forced collections without any retaining path, so its WeakRef checks are
+nondeterministic on Bun.
 The complete fake-timer lane also supports Bun. Control UI keeps its GC-sensitive
 retention proofs (`chat-pane-retained-presentation.test.ts`, `chat-thread.test.ts`,
 and `usage-page-details.test.ts`) on Node and runs the remaining files on Bun.
@@ -497,9 +501,20 @@ required status closed.
 
 If the PR head changes before or during evaluation, the obsolete run stops
 successfully without publishing approval for the replacement commit. The new
-head's automatic event owns its evaluation. Changes to approval-relevant metadata
-on the same head and real evaluation errors still fail; supersession does not hide
-an earlier guard error. During long read sequences, the review checks the live
+head's automatic event owns its evaluation. Closing an unmerged PR, making it a
+draft, or changing its target also stops the obsolete evaluation successfully.
+Identity and permission changes and real evaluation errors still fail; a lifecycle
+change does not hide an earlier guard error.
+
+A merge of the scheduled revision lets the security evaluation finish, including
+when enforcement starts after the merge. Both guards retain their findings in
+statuses, comments, and workflow summaries so a force-merge does not discard that
+evidence. Automatic lockfile cleanup still requires an open PR immediately before
+its write. The resolver selects only open PRs, so this does not schedule new
+post-merge reviews. If ordinary CI is still running, the combined status can remain
+pending after merge; the CI workflow retains its own final result.
+
+During long read sequences, the review checks the live
 PR again before admitting another read after 30 seconds. Non-quota recovery waits
 check every 30 seconds too, so superseded work stops without finishing pagination
 or waiting out diff recovery. In-flight requests retain their 30-second deadline;
@@ -689,10 +704,10 @@ automation account, and SecOps-owned-path cases before declaring enforcement act
 ## Fail-fast order
 
 1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs. Canonical `main` starts immediately in one of two parity slots; each slot admits one complete run and coalesces later pushes into its newest pending tip. Downstream jobs wait for the manifest, then eligible Blacksmith jobs restore exact dependencies from the trusted warmer or fall back to the ordinary pnpm-store cache on a miss. Pushes, pull requests, and manual runs targeting the workflow revision run preflight with native Node and skip dependency setup. Manual runs targeting a different revision install dependencies and retain that target's `tsx` tooling.
-2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs. The production dependency audit sends one complete graph with up to four attempts and a four-minute total request budget, including retries and response reading. Timeouts, native fetch failures, HTTP 429, and 5xx responses retry with exponential backoff; retryable HTTP responses honor `Retry-After`. Attempts and recovery are logged. Persistent unavailability, vulnerability findings, invalid inputs, malformed advisory data, oversized responses, and permanent HTTP failures block CI. An unavailable audit is incomplete coverage, not a clean result. Local pre-commit and release dependency audits use the same bounded request owner and fail on unavailability.
+2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs. Additional checks start directly after preflight. Narrow PRs with additional checks also place the existing `check-dependencies` row there: its complete dependency, unused-file, and export scans do not consume the installed compiler/lint plan. Full selections and runs without that family retain the central row, and the aggregate requires the selected owner. Extension-only compiler inputs can be planned from the four noncore graphs when an already selected additional boundary row owns the full core graph check. This requires existing regular source files without symlink aliases; mixed source changes retain complete discovery, and missing or uncertain inputs retain full checking. Known full selections skip discovery and retain boundary proof in an already selected additional boundary row or the required planner. No extra boundary row is admitted for that optimization. The production dependency audit sends one complete graph with up to four attempts and a four-minute total request budget, including retries and response reading. Timeouts, native fetch failures, HTTP 429, and 5xx responses retry with exponential backoff; retryable HTTP responses honor `Retry-After`. Attempts and recovery are logged. Persistent unavailability, vulnerability findings, invalid inputs, malformed advisory data, oversized responses, and permanent HTTP failures block CI. An unavailable audit is incomplete coverage, not a clean result. CI dispatched by Full Release Validation or release publication records a failing audit as a warning instead, because advisories never block a release. Local pre-commit and release dependency audits use the same bounded request owner and fail on unavailability; release dependency evidence blocks only on known malware.
 3. `build-artifacts` and the locale checks overlap with the fast Linux lanes. Control UI and native app source PRs exclude generated locale snapshots/resources; their serialized refresh workflows repair and auto-merge isolated generated PRs in the background. Source CI still blocks stale source inventories and unsafe localization calls. Generated PRs, manual CI, and release prep enforce full translated/platform-generated parity. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 4. Baseline ratchets and selected Node test shards start independently after preflight. Node rows consume the manifest, not ratchet outputs. `ci-gate` still requires every selected ratchet to pass, and the PR failure monitor still cancels remaining work after a ratchet failure. Frozen targets retain their existing ratchet selection.
-5. Other platform and runtime lanes fan out independently: `checks-fast-core` (including startup corpus), `checks-fast-contracts-plugins`, `checks-fast-contracts-channels`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, the screenshot shards, and `android`.
+5. Current plans with guards run `check:coercion-helpers` there once; fast-only plans retain its standalone row. Other platform and runtime lanes fan out independently: `checks-fast-core` (including startup corpus), `checks-fast-contracts-plugins`, `checks-fast-contracts-channels`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, the screenshot shards, and `android`.
 6. For canonical-repository PRs selecting Node rows, `pr-fail-fast` watches the first attempt and classifies failures before cancelling eligible same-repository work. Fork PR monitoring is read-only and never requests cancellation; unknown failures remain blocking through normal lane results. Only that job has `actions: write`. It starts after preflight and observes failures while the installed check planner queues or runs. Clean completion combines preflight's other job counts with the planner's exact admitted check count, published by its successful `CI check job count v1: N` step. It rechecks the current PR head, auto-merge setting, and newer runs before cancellation. Retries retain native matrix fail-fast. The monitor checks out trusted base-revision scripts. It adds one 4-vCPU Blacksmith registration per eligible same-repository PR, or uses hosted Ubuntu for fork PRs and under the outage override. The hybrid hosted admission owner reserves that fork row before spending the unchanged 45-row optional-offload budget. Main, manual runs, and retries do not start it. Observation ends before the monitor's job limit; ordinary lane verification still owns the result when no failure was observed. Partial reruns ignore monitor causes and results retained from earlier attempts.
 7. `openclaw/ci-gate` waits for every selected lane. Preflight and security must succeed; downstream jobs may skip only when unselected by the manifest and existing event, runner, and compatibility conditions. An unexpected selected skip or any failed or canceled downstream job fails the aggregate. Failure-triggered cancellation preserves the originating job's identity and runs the gate to report failure, including a cancellation request with an uncertain response. The existing critical-path route already keeps trusted hybrid first attempts on the 4-vCPU Blacksmith class. A first-attempt same-repository failure also uses that class under the default or explicit Blacksmith profile so hosted assignment cannot consume the cancellation grace period. Retries and the GitHub outage override retain hosted aggregation. A superseded run without a recorded failure cause skips final reporting and releases its concurrency slot as before.
 
@@ -804,6 +819,26 @@ It no longer packs or uploads the unused `dist-runtime-build` and
 `bundled-plugin-assets` archives. Runtime shards still start after preflight;
 they do not wait for SDK declarations, the Control UI build, or artifact checks.
 Diagnostic and proof uploads remain available.
+
+Hosted Linux SDK declarations are published by the existing full main lint stripe 1,
+after lint succeeds. Hybrid uses its plugin-lint row; the GitHub profile uses its
+core row that also checks plugin stripe 1. Both use the workflow's pinned Node
+runtime and preserve the restore archive's path contract for the prepared SDK
+and its validated receipt. The warmer keeps
+its other caches and non-hosted SDK ownership, avoiding a second hosted SDK emit.
+PRs remain restore-only, and semantic source/toolchain/output checks still run.
+
+Completed canonical-main extension boundary jobs publish their existing compiler
+receipts into a cache separated by OS, architecture, and runner environment. PRs
+restore that archive, falling back to the SDK warmer's declaration-only archive.
+Every restored receipt still validates its compiler, configuration, source,
+resolution lookups, and output hashes; the negative boundary canary always runs.
+Receipts include missing candidates, directory listings, and symlink resolutions,
+so an unrelated new test can retain a hit while a newly effective type dependency
+invalidates it. Each validation snapshot shares actual probe results across
+receipts, while comparing every recorded fact. Fresh compiles still seal the
+whole resolution namespace against changes during compilation. Old or malformed
+receipts recompile. This adds no producer job or package-selection exemption.
 
 Declaration caches hash the selected writer's transitive generator imports,
 package and plugin metadata, explicit schema and build metadata inputs, and

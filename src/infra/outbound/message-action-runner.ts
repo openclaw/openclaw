@@ -6,12 +6,14 @@ import {
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
-import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import {
+  readStringArrayParam,
+  readToolStringParam,
+  textResult,
+} from "../../agents/tools/common.js";
 import {
   appendReplyMediaFailures,
   getReplyPayloadMetadata,
-  type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -103,9 +105,6 @@ async function handleBroadcastAction(
     );
   }
   const rawTargets = readStringArrayParam(params, "targets", { required: true });
-  if (rawTargets.length === 0) {
-    throw new Error("Broadcast requires at least one target in --targets.");
-  }
   const channelHint = readToolStringParam(params, "channel");
   const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg: input.cfg,
@@ -457,36 +456,6 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
     dryRun,
   };
-  return withSendNormalization(
-    {
-      kind: "send",
-      channel: INTERNAL_MESSAGE_CHANNEL,
-      action: "send",
-      to: "current-run",
-      handledBy: "internal-source",
-      payload,
-      toolResult: buildInternalSourceReplyToolResult(payload),
-      dryRun,
-    },
-    sourceReply.normalization,
-  );
-}
-
-function buildInternalSourceReplyToolResult(payload: {
-  status: string;
-  deliveryStatus: string;
-  channel: ChannelId;
-  target: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  idempotencyKey?: string;
-  sourceReplyTranscriptOwner?: true;
-  sourceReplySink?: "internal-ui";
-  sourceReply: ReplyPayload;
-  message?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  dryRun: boolean;
-}): AgentToolResult<typeof payload> {
   const action = payload.dryRun ? "Prepared" : "Sent";
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
@@ -499,18 +468,26 @@ function buildInternalSourceReplyToolResult(payload: {
       ? payload.sourceReply.text
       : undefined;
   const { sourceReplyDeliveryMode, ...details } = payload;
-  return {
-    content: [
-      {
-        type: "text",
-        text: `${action} visible reply to the current source conversation${sink}.${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
-      },
-    ],
-    details: {
+  const toolResult = textResult(
+    `${action} visible reply to the current source conversation${sink}.${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
+    {
       ...details,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
     },
-  };
+  );
+  return withSendNormalization(
+    {
+      kind: "send",
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      action: "send",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload,
+      toolResult,
+      dryRun,
+    },
+    sourceReply.normalization,
+  );
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {
@@ -599,7 +576,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
             ? mediaAccess.readFile
             : undefined;
-          const normalizationPolicy = resolveAttachmentMediaPolicy({
+          const mediaPolicy = resolveAttachmentMediaPolicy({
             sandboxRoot: input.sandboxRoot,
             sandboxContainerWorkdir: input.sandboxContainerWorkdir,
             mediaAccess,
@@ -608,15 +585,9 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
 
           await normalizeSandboxMediaParams({
             args: params,
-            mediaPolicy: normalizationPolicy,
+            mediaPolicy,
             extraParamKeys: extraActionMediaSourceParamKeys,
             structuredAttachments: structuredAttachmentMode,
-          });
-          const mediaPolicy = resolveAttachmentMediaPolicy({
-            sandboxRoot: input.sandboxRoot,
-            sandboxContainerWorkdir: input.sandboxContainerWorkdir,
-            mediaAccess,
-            mediaReadFile: sandboxMediaReadFile,
           });
           const gateway = input.gateway;
           const preserveSendBuffer =

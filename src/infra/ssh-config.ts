@@ -1,4 +1,3 @@
-// Reads effective SSH target config from the local ssh client.
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveSshClient } from "./ssh-client.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";

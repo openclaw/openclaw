@@ -18,13 +18,14 @@ import {
   scopedSessionArtifactKey,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
+import { ChatPaneReactions } from "./chat-pane-reactions.ts";
 import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
-import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
-  clearTypingActorForSessionMessage,
+  typingActorIdForSessionMessage,
   type ChatTypingActorState,
   type ChatTypingActorView,
+  type ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
 import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
 import { lockChatScroll } from "./scroll.ts";
@@ -35,7 +36,12 @@ const TYPING_DRAFT_IDLE_MS = 30_000;
 const TYPING_DRAFT_EXIT_MS = 300;
 const TYPING_PREVIEW_INTERVAL_MS = 250;
 
-export abstract class ChatPaneSharing extends ChatPaneSharingActions {
+export abstract class ChatPaneSharing extends ChatPaneReactions {
+  // The existing actor/timer owner also owns this bounded presentation cache.
+  // Every mutation below refreshes it; reconnect, route, and teardown clear it.
+  private readonly typingActiveIds = new Set<string>();
+  private typingViews: ChatTypingActorView[] = [];
+  protected typingOverflow?: ChatTypingOverflow;
   private typingRequestTimer?: number;
   private typingRequestSentAt?: number;
   private pendingTypingRequest?: () => void;
@@ -386,6 +392,8 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     }
     this.typingTimers.clear();
     this.typingActors.clear();
+    this.typingActiveIds.clear();
+    this.refreshTypingPresentation();
   }
 
   protected pruneTypingActors(): void {
@@ -405,14 +413,12 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     let changed = false;
     for (const id of this.typingActors.keys()) {
       if (!viewers.has(id)) {
-        window.clearTimeout(this.typingTimers.get(id));
-        this.typingTimers.delete(id);
-        this.typingActors.delete(id);
+        this.removeTypingActor(id);
         changed = true;
       }
     }
     if (changed) {
-      this.requestUpdate();
+      this.refreshTypingPresentation();
     }
   }
 
@@ -443,8 +449,8 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
       this.typingTimers.delete(event.actor.id);
     }
     if (!event.typing) {
-      this.typingActors.delete(event.actor.id);
-      this.requestUpdate();
+      this.removeTypingActor(event.actor.id);
+      this.refreshTypingPresentation();
       return;
     }
     if (!this.typingActors.has(event.actor.id) && state.chatHasAutoScrolled) {
@@ -456,9 +462,11 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     const idleDeadline = now + TYPING_DRAFT_IDLE_MS;
     const actor: ChatTypingActorState = {
       label: event.actor.label ?? event.actor.id,
-      expiresAt: now + activeMs,
+      retireAt: event.preview ? idleDeadline : now + activeMs,
       ...(event.preview ? { preview: event.preview } : {}),
     };
+    this.typingActiveIds.add(event.actor.id);
+    // Updating a Map entry preserves its arrival order and the two preview slots.
     this.typingActors.set(event.actor.id, actor);
     const advance = () => {
       if (this.typingActors.get(event.actor.id) !== actor) {
@@ -467,10 +475,35 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
       this.typingTimers.delete(event.actor.id);
       const remaining = idleDeadline - Date.now();
       if (!actor.preview || remaining <= 0) {
-        this.typingActors.delete(event.actor.id);
+        this.removeTypingActor(event.actor.id);
+        // Native timers run separate tasks. Retire every already-due peer before
+        // projecting, rather than promoting expired previews and rendering once
+        // per callback during a busy-room expiry burst. Renewed peers keep their
+        // new deadlines. Stop, send, and session cleanup still settle immediately.
+        const retireBefore = Date.now();
+        for (const [id, peer] of this.typingActors) {
+          if (peer.retireAt <= retireBefore) {
+            this.removeTypingActor(id);
+          }
+        }
       } else {
         // Keep one cancellable timer for active, draft, and exit phases. The
         // animation finishes inside the idle limit, even after a delayed timer.
+        if (!actor.paused) {
+          // Timers for the same input burst fire as separate tasks. Retire all
+          // already-idle active peers before projecting the bounded overflow,
+          // rather than shifting its avatar sample once per expired peer.
+          for (const id of this.typingActiveIds) {
+            const peer = this.typingActors.get(id);
+            if (
+              peer?.preview &&
+              peer.retireAt - TYPING_DRAFT_IDLE_MS + TYPING_DRAFT_ACTIVE_MS <= Date.now()
+            ) {
+              peer.paused = true;
+              this.typingActiveIds.delete(id);
+            }
+          }
+        }
         const untilExit = remaining - TYPING_DRAFT_EXIT_MS;
         if (untilExit <= 0) {
           actor.exitDurationMs = remaining;
@@ -480,10 +513,10 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
           window.setTimeout(advance, untilExit > 0 ? untilExit : remaining),
         );
       }
-      this.requestUpdate();
+      this.refreshTypingPresentation();
     };
     this.typingTimers.set(event.actor.id, window.setTimeout(advance, activeMs));
-    this.requestUpdate();
+    this.refreshTypingPresentation();
   }
 
   protected clearTypingActorForSessionMessage(payload: unknown): void {
@@ -491,34 +524,83 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     if (!state) {
       return;
     }
-    if (
-      clearTypingActorForSessionMessage(payload, this.typingActors, this.typingTimers, {
-        agentsList: this.context.agents.state.agentsList,
-        hello: this.context.gateway.snapshot.hello,
-        sessionKey: state.sessionKey,
-      })
-    ) {
-      this.requestUpdate();
+    const id = typingActorIdForSessionMessage(payload, {
+      agentsList: this.context.agents.state.agentsList,
+      hello: this.context.gateway.snapshot.hello,
+      sessionKey: state.sessionKey,
+    });
+    if (id && this.removeTypingActor(id)) {
+      this.refreshTypingPresentation();
     }
   }
 
+  private removeTypingActor(id: string): boolean {
+    const actor = this.typingActors.get(id);
+    if (!actor) {
+      return false;
+    }
+    this.typingActiveIds.delete(id);
+    window.clearTimeout(this.typingTimers.get(id));
+    this.typingTimers.delete(id);
+    return this.typingActors.delete(id);
+  }
+
+  private refreshTypingPresentation(): void {
+    const views: ChatTypingActorView[] = [];
+    // The first two actors retain the original preview slots and draft lifecycle.
+    for (const [id, actor] of this.typingActors) {
+      views.push({
+        id,
+        label: actor.label,
+        ...(actor.preview ? { preview: actor.preview } : {}),
+        ...(actor.paused ? { paused: true } : {}),
+        ...(actor.exitDurationMs !== undefined ? { exitDurationMs: actor.exitDurationMs } : {}),
+      });
+      if (views.length === 2) {
+        break;
+      }
+    }
+    // Overflow is a projection of active typing only. Paused previews retain
+    // their own timers but never keep the shared row or its avatars alive.
+    let activeOverflow = 0;
+    for (const id of this.typingActiveIds) {
+      if (id === views[0]?.id || id === views[1]?.id) {
+        continue;
+      }
+      const actor = this.typingActors.get(id);
+      if (!actor) {
+        continue;
+      }
+      activeOverflow += 1;
+      if (views.length < 7) {
+        views.push({ id, label: actor.label });
+      }
+    }
+    const overflow: ChatTypingOverflow | undefined =
+      activeOverflow > 5 ? { several: true } : undefined;
+    if (
+      views.length === this.typingViews.length &&
+      views.every((view, index) => {
+        const previous = this.typingViews[index];
+        return (
+          previous?.id === view.id &&
+          previous.label === view.label &&
+          previous.preview === view.preview &&
+          previous.paused === view.paused &&
+          previous.exitDurationMs === view.exitDurationMs
+        );
+      }) &&
+      overflow?.several === this.typingOverflow?.several
+    ) {
+      return;
+    }
+    this.typingViews = views;
+    this.typingOverflow = overflow;
+    this.requestUpdate();
+  }
+
   protected typingActorViews(): ChatTypingActorView[] {
-    const now = Date.now();
-    return [...this.typingActors]
-      .map(([id, { label, preview, expiresAt, exitDurationMs }]) => {
-        if (!preview) {
-          return { id, label };
-        }
-        const view: ChatTypingActorView = { id, label, preview };
-        if (expiresAt <= now) {
-          view.paused = true;
-        }
-        if (exitDurationMs !== undefined) {
-          view.exitDurationMs = exitDurationMs;
-        }
-        return view;
-      })
-      .toSorted((left, right) => left.label.localeCompare(right.label));
+    return this.typingViews;
   }
 
   protected sendTypingState(typing: boolean, preview?: string): void {

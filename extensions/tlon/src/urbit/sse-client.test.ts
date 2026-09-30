@@ -10,7 +10,8 @@ vi.mock("./fetch.js", () => ({
   urbitFetch: vi.fn(),
 }));
 
-vi.mock("./channel-ops.js", () => ({
+vi.mock("./channel-ops.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-ops.js")>()),
   ensureUrbitChannelOpen: vi.fn().mockResolvedValue(undefined),
   pokeUrbitChannel: vi.fn().mockResolvedValue(undefined),
   scryUrbitPath: vi.fn().mockResolvedValue({}),

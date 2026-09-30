@@ -1,4 +1,3 @@
-// Detects the package manager used by a project directory.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

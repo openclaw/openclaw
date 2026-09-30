@@ -389,7 +389,7 @@ function normalizeProjectedContextRange(
   return { start, end };
 }
 
-function resolveProjectionPromptBudgetTokens(params: {
+export function resolveProjectionPromptBudgetTokens(params: {
   contextTokenBudget: number;
   reserveTokens?: number;
 }): number {
@@ -516,7 +516,7 @@ function renderMessageBody(
 ): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
-    return truncateText(message.summary.trim(), options.maxTextPartChars);
+    return message.summary.trim();
   }
   if (!("content" in message)) {
     return "";
@@ -527,9 +527,10 @@ function renderMessageBody(
   if (toolResult && options.toolPayloadMode === "elide") {
     return `${toolResultLabel} [content omitted]`;
   }
+  // The history window bounds conversation text; per-part caps apply only to payloads.
   const body =
     typeof message.content === "string"
-      ? truncateText(message.content.trim(), options.maxTextPartChars)
+      ? message.content.trim()
       : Array.isArray(message.content)
         ? message.content
             .map((part: unknown) => renderMessagePart(part, options, toolResult))
@@ -559,9 +560,8 @@ function renderMessagePart(
   const record = part as Record<string, unknown>;
   const type = typeof record.type === "string" ? record.type : undefined;
   if (type === "text") {
-    return typeof record.text === "string"
-      ? truncateText(record.text.trim(), options.maxTextPartChars)
-      : "";
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    return toolResultBody ? truncateText(text, options.maxTextPartChars) : text;
   }
   if (type === "image") {
     return options.mediaPrepared ? "" : "[image omitted]";
@@ -600,14 +600,14 @@ function renderToolCallPayload(record: Record<string, unknown>): Record<string, 
 }
 
 function renderToolResultPayload(record: Record<string, unknown>): Record<string, unknown> {
-  const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
-  for (const [key, value] of Object.entries(record)) {
-    if (TOOL_PAYLOAD_METADATA_KEYS.has(key)) {
-      continue;
-    }
-    payload[key] = projectToolPayloadValue(value, "content", key);
-  }
-  return payload;
+  return {
+    ...pickToolPayloadMetadata(record),
+    ...Object.fromEntries(
+      Object.entries(record)
+        .filter(([key]) => !TOOL_PAYLOAD_METADATA_KEYS.has(key))
+        .map(([key, value]) => [key, projectToolPayloadValue(value, "content", key)]),
+    ),
+  };
 }
 
 const TOOL_PAYLOAD_METADATA_KEYS = new Set([
@@ -657,11 +657,12 @@ function projectToolPayloadValue(
     if (Array.isArray(value)) {
       return value.map((entry) => projectToolPayloadValue(entry, mode, key, seen));
     }
-    const out: Record<string, unknown> = {};
-    for (const [childKey, child] of Object.entries(value)) {
-      out[childKey] = projectToolPayloadValue(child, mode, childKey, seen);
-    }
-    return out;
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, child]) => [
+        childKey,
+        projectToolPayloadValue(child, mode, childKey, seen),
+      ]),
+    );
   }
   return `[${typeof value}]`;
 }

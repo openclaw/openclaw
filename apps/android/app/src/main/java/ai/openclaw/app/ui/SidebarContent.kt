@@ -254,7 +254,6 @@ internal data class SidebarCatalogWorkspace(
 
 internal data class SidebarCatalogHost(
   val stableId: String,
-  val catalogId: String,
   val label: String,
   val connected: Boolean,
   val errorText: String?,
@@ -290,10 +289,10 @@ internal fun sidebarCatalogSessionCreationEnabled(
   canMutateSessions: Boolean,
 ): Boolean = catalog.canCreateSession && canMutateSessions
 
-internal fun toggleSidebarCatalogExpansion(
-  expandedCatalogIds: List<String>,
-  catalogId: String,
-): List<String> = if (catalogId in expandedCatalogIds) expandedCatalogIds - catalogId else expandedCatalogIds + catalogId
+internal fun toggleSidebarExpansion(
+  ids: List<String>,
+  id: String,
+): List<String> = if (id in ids) ids - id else ids + id
 
 internal fun sidebarCatalogRefreshNeeded(
   catalogAgentId: String?,
@@ -347,7 +346,6 @@ internal fun sidebarCatalogHosts(catalogs: List<SessionCatalog>): List<SidebarCa
       }
       SidebarCatalogHost(
         stableId = listOf(catalog.id, host.hostId).joinToString("::"),
-        catalogId = catalog.id,
         label = host.label,
         connected = host.connected,
         errorText = host.errorText,
@@ -833,7 +831,7 @@ internal fun OpenClawSidebar(
                           null
                         },
                       onClick = {
-                        expandedCatalogIds = toggleSidebarCatalogExpansion(expandedCatalogIds, catalog.id)
+                        expandedCatalogIds = toggleSidebarExpansion(expandedCatalogIds, catalog.id)
                       },
                     )
                     if (section.expanded) {
@@ -848,20 +846,10 @@ internal fun OpenClawSidebar(
                         collapsedWorkspaceIds = collapsedCatalogWorkspaceIds.toSet(),
                         palette = palette,
                         onToggleHost = { stableId ->
-                          collapsedCatalogHostIds =
-                            if (stableId in collapsedCatalogHostIds) {
-                              collapsedCatalogHostIds - stableId
-                            } else {
-                              collapsedCatalogHostIds + stableId
-                            }
+                          collapsedCatalogHostIds = toggleSidebarExpansion(collapsedCatalogHostIds, stableId)
                         },
                         onToggleWorkspace = { stableId ->
-                          collapsedCatalogWorkspaceIds =
-                            if (stableId in collapsedCatalogWorkspaceIds) {
-                              collapsedCatalogWorkspaceIds - stableId
-                            } else {
-                              collapsedCatalogWorkspaceIds + stableId
-                            }
+                          collapsedCatalogWorkspaceIds = toggleSidebarExpansion(collapsedCatalogWorkspaceIds, stableId)
                         },
                         onSelectSession = onSelectCatalogSession,
                         onLoadMore = viewModel::loadMoreSessionCatalog,
@@ -1274,22 +1262,18 @@ private fun SidebarSessionCatalog(
           }
         }
       }
-      hosts
-        .filter(SidebarCatalogHost::canLoadMore)
-        .map(SidebarCatalogHost::catalogId)
-        .distinct()
-        .forEach { catalogId ->
-          if (catalogId in state.loadingMoreCatalogIds) {
-            SidebarCatalogStatus(nativeString("Loading more sessions"), palette, progress = true)
-          } else {
-            SidebarActionRow(
-              label = nativeString("Load more"),
-              icon = Icons.Default.KeyboardArrowDown,
-              palette = palette,
-              onClick = { onLoadMore(catalogId) },
-            )
-          }
+      if (hosts.any(SidebarCatalogHost::canLoadMore)) {
+        if (catalog.id in state.loadingMoreCatalogIds) {
+          SidebarCatalogStatus(nativeString("Loading more sessions"), palette, progress = true)
+        } else {
+          SidebarActionRow(
+            label = nativeString("Load more"),
+            icon = Icons.Default.KeyboardArrowDown,
+            palette = palette,
+            onClick = { onLoadMore(catalog.id) },
+          )
         }
+      }
     }
   }
 }

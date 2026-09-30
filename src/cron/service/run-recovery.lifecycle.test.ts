@@ -19,12 +19,14 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-h
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   finishCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
 import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
@@ -159,7 +161,7 @@ describe("one-shot recovery", () => {
           advanceCronActiveJobGeneration();
         }
         failureDatabase?.exec(`
-          CREATE TEMP TRIGGER reject_manual_terminal_row
+          CREATE TRIGGER reject_manual_terminal_row
           BEFORE UPDATE ON cron_jobs
           WHEN NEW.job_id = 'shutdown-one-shot'
             AND json_extract(NEW.state_json, '$.runningAtMs') IS NULL
@@ -181,15 +183,15 @@ describe("one-shot recovery", () => {
             }),
           );
           const prepared = prepareCronRunReceiptClaim({
+            observed: undefined,
             storePath,
             job,
             agentId: "alpha",
             startedAtMs: nowMs,
           });
           successor = runOpenClawStateWriteTransaction(({ db }) =>
-            claimCronRunReceiptInDatabase({
+            claimCronRunReceiptInDatabaseForTest({
               database: db,
-              receiptSchema: prepareCronRunReceiptWriteSchema(db),
               prepared,
               resolveAgentId: () => "alpha",
             }),
@@ -285,7 +287,11 @@ describe("one-shot recovery", () => {
         await settledStartup;
         failureDatabase?.exec("DROP TRIGGER IF EXISTS reject_manual_terminal_row");
         if (successor) {
-          finishCronRunReceipt({ handle: successor, status: "skipped", finishedAtMs: nowMs });
+          await finishCronRunReceiptAsync({
+            handle: successor,
+            status: "skipped",
+            finishedAtMs: nowMs,
+          });
           clearCronJobActive(job.id, successorMarker);
         }
       }

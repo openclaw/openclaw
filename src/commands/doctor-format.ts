@@ -1,11 +1,9 @@
-/** Formatting helpers for gateway runtime summaries and doctor repair hints. */
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
-import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import { buildGatewayRuntimeRecoveryHints } from "../daemon/runtime-hints.js";
 import {
   getSystemdCgroupHygieneSummary,
@@ -26,14 +24,6 @@ type RuntimeHintOptions = {
   env?: Record<string, string | undefined>;
 };
 
-/** Formats the platform-specific gateway service runtime into a compact status line. */
-export function formatGatewayRuntimeSummary(
-  runtime: GatewayServiceRuntime | undefined,
-): string | null {
-  return formatRuntimeStatus(runtime);
-}
-
-/** Builds follow-up hints for stopped, missing, or unhealthy gateway service runtimes. */
 export function buildGatewayRuntimeHints(
   runtime: GatewayServiceRuntime | undefined,
   options: RuntimeHintOptions = {},

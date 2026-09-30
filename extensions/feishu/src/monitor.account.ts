@@ -24,7 +24,7 @@ import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-
 import type { FeishuStatusSink } from "./monitor.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
-import { botNames, botOpenIds } from "./monitor.state.js";
+import { botOpenIds } from "./monitor.state.js";
 import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
@@ -203,16 +203,6 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
-function readFeishuIdentityField(
-  value: unknown,
-  field: "open_id" | "user_id" | "union_id",
-): string | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  return firstString(value[field]);
-}
-
 function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEvent | null {
   if (!isRecord(value)) {
     return null;
@@ -223,24 +213,21 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   if (!isRecord(action)) {
     return null;
   }
-  const operatorUserId = operator.user_id;
+  const operatorUserId = isRecord(operator.user_id) ? operator.user_id : undefined;
   const token = readString(value.token);
   const openId = firstString(
     operator.open_id,
-    readFeishuIdentityField(operatorUserId, "open_id"),
+    operatorUserId?.open_id,
     value.open_id,
     context.open_id,
   );
   const userId = firstString(
     operator.user_id,
-    readFeishuIdentityField(operatorUserId, "user_id"),
+    operatorUserId?.user_id,
     value.user_id,
     context.user_id,
   );
-  const unionId = firstString(
-    operator.union_id,
-    readFeishuIdentityField(operatorUserId, "union_id"),
-  );
+  const unionId = firstString(operator.union_id, operatorUserId?.union_id);
   const tag = readString(action.tag);
   const actionValue = action.value;
   // Prefer context.open_message_id (original card message) over value.open_message_id
@@ -316,7 +303,6 @@ function registerEventHandlers(
           cfg,
           event: syntheticEvent,
           botOpenId: myBotId,
-          botName: botNames.get(accountId),
           runtime,
           channelRuntime,
           chatHistories,
@@ -336,11 +322,10 @@ function registerEventHandlers(
       isAccountActive: context.isAccountActive,
       trackTask: context.trackTask,
       handleMessage: handleFeishuMessage,
-      resolveDebounceText: ({ event, botOpenId, botName }) =>
-        parseFeishuMessageEvent(event, botOpenId, botName).content,
+      resolveDebounceText: ({ event, botOpenId }) =>
+        parseFeishuMessageEvent(event, botOpenId).content,
       hasProcessedMessage: hasProcessedFeishuMessage,
       getBotOpenId: (id) => botOpenIds.get(id),
-      getBotName: (id) => botNames.get(id),
       resolveSequentialKey: getFeishuSequentialKey,
       resolveIngressLifecycle: context.resolveIngressLifecycle,
       ...(context.statusSink ? { statusSink: context.statusSink } : {}),
@@ -432,7 +417,6 @@ type BotOpenIdSource =
   | {
       kind: "prefetched";
       botOpenId?: string;
-      botName?: string;
       source?: "provider" | "cache";
     }
   | { kind: "fetch" };
@@ -463,11 +447,10 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     botOpenIdSource.kind === "prefetched"
       ? {
           botOpenId: botOpenIdSource.botOpenId,
-          botName: botOpenIdSource.botName,
           source: botOpenIdSource.source,
         }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
-  const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
+  const botOpenId = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
   if ((!botOpenId || botIdentity.source === "cache") && !abortSignal?.aborted) {

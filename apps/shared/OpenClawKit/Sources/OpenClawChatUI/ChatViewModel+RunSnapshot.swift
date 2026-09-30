@@ -25,7 +25,7 @@ extension OpenClawChatViewModel {
             }
         }
         guard let snapshot = payload.inFlightRun,
-              let runId = Self.normalizedRunID(snapshot.runId),
+              let runId = ChatPayloadDecoding.trimmedNonEmptyString(snapshot.runId),
               self.liveRunStateByRunID[runId]?.terminal != true
         else {
             return
@@ -52,8 +52,7 @@ extension OpenClawChatViewModel {
             // Replace stale local ownership so only that run consumes later events.
             clearPendingRuns(reason: nil)
             self.pendingRuns.insert(runId)
-            self.turnToolCallsById = [:]
-            self.updateStreamingAssistantText(nil)
+            self.clearStreamingActivity()
         }
         if self.runMessageScopesByRunID[runId] == nil {
             self.runMessageScopesByRunID[runId] = currentRunMessageScope()
