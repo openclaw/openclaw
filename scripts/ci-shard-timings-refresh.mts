@@ -44,7 +44,7 @@ const groupSchema = z.object({
   includePatterns: z.array(z.string().min(1)).min(1).optional(),
 });
 
-function timingKey(log: string): string {
+function timingKey(log: string): string | null {
   const descriptors = new Set(
     [
       ...stripVTControlCharacters(log).matchAll(
@@ -52,7 +52,11 @@ function timingKey(log: string): string {
       ),
     ].map((match) => match[1]!),
   );
-  if (descriptors.size !== 1) {
+  if (descriptors.size === 0) {
+    // Not a timing shard (e.g., compat jobs that don't produce timing data)
+    return null;
+  }
+  if (descriptors.size > 1) {
     throw new Error("Hosted timing job must record one unambiguous shard descriptor");
   }
   const groups = z
@@ -175,6 +179,10 @@ function main() {
           throw new Error(`Invalid wall clock for CI timing job ${job.id}`);
         }
         const key = timingKey(api(`actions/jobs/${job.id}/logs`));
+        if (key === null) {
+          // Skip non-timing shards (e.g., compat jobs)
+          continue;
+        }
         measurements.set(
           key,
           Math.max(measurements.get(key) ?? 0, Math.ceil((end - start) / 1000)),

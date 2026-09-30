@@ -154,11 +154,6 @@ describe("release shard timing refresh CLI", () => {
 
   it.each([
     {
-      label: "missing descriptor",
-      log: "2026-09-01T01:04:00Z [shard:fixture] end (exit 0)\n",
-      error: "one unambiguous shard descriptor",
-    },
-    {
       label: "ambiguous descriptors",
       log: log("fixture") + log("other"),
       error: "one unambiguous shard descriptor",
@@ -177,6 +172,24 @@ describe("release shard timing refresh CLI", () => {
       expect(bytes).toBe(before);
     },
   );
+
+  it("skips jobs without a shard descriptor (e.g., compat jobs)", () => {
+    // Regression test for https://github.com/openclaw/openclaw/issues/161550
+    // checks-node-compat-node24 matches the name filter but logs no descriptor
+    const compatJob = { ...job, id: 10, name: "checks-node-compat-node24" };
+    const { result, bytes } = execute({
+      jobs: [job, compatJob],
+      logs: { "1": log("fixture"), "10": "no descriptor here" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const written = JSON.parse(bytes);
+    // The compat job should be skipped, only the fixture job's timing should be recorded
+    expect(written.compactGroupSeconds.github).toEqual(
+      expect.objectContaining({ "release-full-fixture": 900 }),
+    );
+    // Ensure no error was thrown for the missing descriptor
+    expect(result.stderr).not.toContain("shard descriptor");
+  });
 
   it.each([
     { label: "run retry", after: { ...run, run_attempt: 2 } },
