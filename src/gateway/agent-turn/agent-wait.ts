@@ -3,7 +3,12 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { resolveAgentWaitSource } from "./agent-dedupe.js";
-import { captureAgentJobSession, getAgentJobSession, waitForAgentJob } from "./agent-job.js";
+import {
+  captureAgentJobSession,
+  getAgentJobSession,
+  projectAgentJobObservation,
+  waitForAgentJob,
+} from "./agent-job.js";
 
 export function prepareAgentWaitForTurn(
   context: Pick<GatewayRequestContext, "chatAbortControllers" | "chatQueuedTurns" | "dedupe">,
@@ -52,25 +57,8 @@ export function prepareAgentWaitForTurn(
         session: captureAgentJobSession(runContext) ?? initialSession,
       };
     }
-    return {
-      session: snapshot.session,
-      result: {
-        runId,
-        status: snapshot.status,
-        startedAt: snapshot.startedAt,
-        endedAt: snapshot.endedAt,
-        error: snapshot.error,
-        stopReason: snapshot.stopReason,
-        livenessState: snapshot.livenessState,
-        yielded: snapshot.yielded,
-        pendingError: snapshot.pendingError,
-        timeoutPhase: snapshot.timeoutPhase,
-        providerStarted: snapshot.providerStarted,
-        ...(snapshot.terminalDelivery ? { terminalDelivery: snapshot.terminalDelivery } : {}),
-        terminalReceipt: snapshot.terminalReceipt,
-        terminalReply: snapshot.terminalReply,
-      },
-    };
+    const { session, ...result } = projectAgentJobObservation(snapshot);
+    return { session, result: { runId, ...result } };
   };
   return { session: initialSession, wait };
 }

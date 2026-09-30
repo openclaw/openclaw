@@ -1771,6 +1771,8 @@ describe("resolveTsdownBuildInvocation", () => {
           "dist/control-ui/assets/index-AbCd1234.js.map",
           "dist/control-ui/assets/index-AbCd1234.js.br",
           "dist/control-ui/assets/nested/styles-AbCd1234.css",
+          `dist/control-ui.build-${process.pid}-fixture/assets/lazy.js`,
+          `dist/control-ui.build-${process.pid}-fixture.retired/index.html`,
           "packages/plugin-sdk/dist/keep.js",
           "packages/agent-core/src/keep.ts",
           "tmp/keep.js",

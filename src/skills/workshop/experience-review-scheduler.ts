@@ -125,29 +125,28 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         return;
       }
       pending.timer = undefined;
-      void Promise.resolve(deps.isSystemActive())
-        .then(async (active) => {
-          if (pendingBySession.get(key) !== pending || pending.generation !== generation) {
-            return;
-          }
-          if (active || reviewInFlight) {
-            arm(key, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
-            return;
-          }
-          reviewInFlight = true;
-          try {
-            pendingBySession.delete(key);
-            await deps.runReview(pending.candidate);
-          } finally {
-            reviewInFlight = false;
-          }
-        })
-        .catch((error: unknown) => {
-          log.warn(`skill experience review failed: ${formatErrorMessage(error)}`);
-          if (pendingBySession.get(key) === pending && pending.generation === generation) {
-            pendingBySession.delete(key);
-          }
-        });
+      void (async () => {
+        const active = await deps.isSystemActive();
+        if (pendingBySession.get(key) !== pending || pending.generation !== generation) {
+          return;
+        }
+        if (active || reviewInFlight) {
+          arm(key, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
+          return;
+        }
+        reviewInFlight = true;
+        try {
+          pendingBySession.delete(key);
+          await deps.runReview(pending.candidate);
+        } finally {
+          reviewInFlight = false;
+        }
+      })().catch((error: unknown) => {
+        log.warn(`skill experience review failed: ${formatErrorMessage(error)}`);
+        if (pendingBySession.get(key) === pending && pending.generation === generation) {
+          pendingBySession.delete(key);
+        }
+      });
     };
     // This timer outlives the foreground turn that armed it. Create its async
     // resource outside the parent scope so review work admits on the current generation.

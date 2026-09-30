@@ -403,6 +403,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
           createSessionsTool({
+            senderIsOwner: options?.senderIsOwner,
+            sessionControlAuthority: options?.sessionControlAuthority,
             stopAllowed: options?.swarmCollector !== true,
             controlOnly: options?.senderIsOwner === false,
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,

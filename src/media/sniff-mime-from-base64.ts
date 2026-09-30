@@ -1,4 +1,3 @@
-// Base64 mime sniffing helpers infer media types from encoded payload bytes.
 import { inspectBase64, type Base64Facts } from "@openclaw/media-core/base64";
 import { detectMime } from "@openclaw/media-core/mime";
 

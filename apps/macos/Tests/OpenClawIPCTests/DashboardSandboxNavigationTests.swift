@@ -4,7 +4,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardSandboxNavigationTests {
     @Test(arguments: [
@@ -136,16 +136,11 @@ struct DashboardSandboxNavigationTests {
         url: URL,
         ready: String = "document.readyState === 'complete'") async throws
     {
-        let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline {
-            if controller.webView.url == url, !controller.webView.isLoading, controller.canDeliverNativeCommands,
-               try await controller.webView.evaluateJavaScript(ready) as? Bool == true
-            {
-                return
-            }
-            try await Task.sleep(for: .milliseconds(20))
+        try await DashboardTestWait.document(controller, "document at \(url.path)") { controller.webView.url == url }
+        // Callers pass page-script facts that can settle after the load completes.
+        try await DashboardTestWait.state("\(ready) at \(url.path)") {
+            try await controller.webView.evaluateJavaScript(ready) as? Bool == true
         }
-        Issue.record("The dashboard did not finish loading \(url)")
     }
 
     @Test func `same URL sign in retains commands until the current document installs its shell`() async throws {
@@ -326,16 +321,11 @@ struct DashboardSandboxNavigationTests {
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         controller.loadInBackground(url: dashboardURL, auth: controller.auth)
-        let deadline = ContinuousClock.now + .seconds(10)
         var rendered = false
-        while ContinuousClock.now < deadline {
-            if await (try? controller.webView.evaluateJavaScript("document.body.dataset.appReady")) as? String ==
-                "true"
-            {
-                rendered = true
-                break
-            }
-            try await Task.sleep(for: .milliseconds(20))
+        try await DashboardTestWait.state("sandbox inner document handshake") {
+            rendered = await (try? controller.webView.evaluateJavaScript(
+                "document.body.dataset.appReady")) as? String == "true"
+            return rendered
         }
         #expect(rendered, "The real navigation delegate must admit the outer sandbox and nested srcdoc handshake")
         #expect(controller.webView.url == dashboardURL)

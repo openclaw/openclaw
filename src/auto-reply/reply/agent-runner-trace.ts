@@ -157,56 +157,38 @@ export function derivePromptSegments(
   let index = 0;
   while (index < lines.length) {
     const line = lines[index] ?? "";
+    let segmentKey: string | undefined;
+    let end = index + 2;
     if (line === "Context:") {
       const tagLine = lines[index + 1] ?? "";
       const tagMatch = tagLine.trim().match(/^<([a-z0-9_:-]+)>$/i);
       if (tagMatch) {
+        segmentKey = expectDefined(tagMatch[1], "tag match capture group 1");
         const closeTag = `</${tagMatch[1]}>`;
-        let end = index + 2;
         while (end < lines.length && lines[end]?.trim() !== closeTag) {
           end += 1;
         }
-        if (end < lines.length) {
-          addChars(
-            expectDefined(tagMatch[1], "tag match capture group 1"),
-            lines.slice(index, end + 1).join("\n").length,
-          );
-          index = end + 1;
-          while (index < lines.length && lines[index] === "") {
-            index += 1;
-          }
-          continue;
-        }
       }
-    }
-    const metadataHeaderLine = line.trim().endsWith(INBOUND_CONTEXT_MARKER) ? line : null;
-    if (metadataHeaderLine) {
-      const start = index;
+    } else if (line.trim().endsWith(INBOUND_CONTEXT_MARKER)) {
       const fence = lines[index + 1] ?? "";
       // Generated metadata blocks always use ```json fences (inbound-meta.ts,
       // channel-prompt-context.ts); other fence languages are user content and must
       // stay attributed to user_message.
       if (fence.trim() === "```json") {
-        let end = index + 2;
         while (end < lines.length && !(lines[end] ?? "").startsWith("```")) {
           end += 1;
         }
-        if (end < lines.length) {
-          const headerWithoutMarker = metadataHeaderLine
-            .trim()
-            .slice(0, -INBOUND_CONTEXT_MARKER.length)
-            .trim();
-          addChars(
-            resolveMetadataSegmentKey(headerWithoutMarker || "metadata"),
-            lines.slice(start, end + 1).join("\n").length,
-          );
-          index = end + 1;
-          while (index < lines.length && lines[index] === "") {
-            index += 1;
-          }
-          continue;
-        }
+        const headerWithoutMarker = line.trim().slice(0, -INBOUND_CONTEXT_MARKER.length).trim();
+        segmentKey = resolveMetadataSegmentKey(headerWithoutMarker || "metadata");
       }
+    }
+    if (segmentKey && end < lines.length) {
+      addChars(segmentKey, lines.slice(index, end + 1).join("\n").length);
+      index = end + 1;
+      while (index < lines.length && lines[index] === "") {
+        index += 1;
+      }
+      continue;
     }
     if (line.trim()) {
       userChars += line.length + 1;

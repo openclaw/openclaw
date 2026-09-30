@@ -626,15 +626,3 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-meeting-capture-settings")) {
   customElements.define("openclaw-meeting-capture-settings", MeetingCaptureSettings);
 }
-
-export function renderMeetingCapture(props: {
-  mutationDisabled: boolean;
-  advancedExpanded: boolean;
-  editor: TemplateResult | typeof nothing;
-}) {
-  return html`<openclaw-meeting-capture-settings
-    .mutationDisabled=${props.mutationDisabled}
-    .advancedExpanded=${props.advancedExpanded}
-    .editor=${props.editor}
-  ></openclaw-meeting-capture-settings>`;
-}

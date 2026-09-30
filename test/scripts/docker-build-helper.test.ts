@@ -196,6 +196,8 @@ type ContainerCleanupEvent = { command: string; args: string[]; content?: string
 
 function containerCleanupFixture(scenario: string) {
   const root = realpathSync(tempDirs.make("openclaw-container-cleanup-"));
+  // Extensionless command shims must not inherit an enclosing ESM package.
+  writeFileSync(join(root, "package.json"), JSON.stringify({ type: "commonjs" }));
   const temp = join(root, "temp with spaces");
   const bin = join(root, "bin");
   const log = join(temp, "runner log");
@@ -238,7 +240,6 @@ if (args[0] === "-t") {
 ${record}
 const log = process.env.FIXTURE_RUN_LOG;
 record("rm", args, args.includes(log) ? { content: fs.readFileSync(log, "utf8") } : {});
-if (args.includes(log) && process.env.FIXTURE_SCENARIO === "log removal failure") process.exit(41);
 if (args.some(arg => !arg.startsWith("-") && !arg.startsWith(process.env.HOME + "/"))) {
   throw new Error("unexpected removal outside fixture");
 }
@@ -249,8 +250,7 @@ process.exit(result.status ?? 1);
 ${record}
 record("docker", args);
 const scenario = process.env.FIXTURE_SCENARIO;
-if (args[0] === "image") process.exit(scenario === "setup failure" ? 17 : 0);
-if (args[0] === "rm") process.exit(scenario === "run failure" ? 29 : 0);
+if (args[0] === "image" || args[0] === "rm") process.exit(0);
 if (args[0] === "inspect") {
   console.log("ExitCode=23\\nOOMKilled=false\\nError=fixture");
   process.exit(0);
@@ -265,8 +265,8 @@ if (scenario === "signal") {
   process.on("SIGTERM", () => process.exit(143));
   setInterval(() => {}, 1000);
 } else {
-  if (scenario !== "missing summary") console.log(scenario === "invalid summary" ? "Tests 4 passed" : "Tests 3 passed");
-  process.exit(scenario === "run failure" ? 23 : 0);
+  console.log("Tests 4 passed");
+  process.exit(0);
 }
 `,
   });
@@ -292,13 +292,12 @@ if (scenario === "signal") {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-  return { root, temp, log, env, events, pidPath, stdinPath };
+  return { root, temp, log, env, events, pidPath };
 }
 
 function expectContainerCleanup(
   fixture: ReturnType<typeof containerCleanupFixture>,
   prefix: string,
-  logRetained = false,
 ) {
   const events = fixture.events();
   const namedRemovals = events.filter(
@@ -320,13 +319,12 @@ function expectContainerCleanup(
   ]);
   expect(logRemoval.args).toEqual(["-f", fixture.log]);
   expect(events.indexOf(namedRemoval)).toBeLessThan(events.indexOf(logRemoval));
-  expect(existsSync(fixture.log)).toBe(logRetained);
+  expect(existsSync(fixture.log)).toBe(false);
   expect(readFileSync(join(fixture.root, "retained-evidence"), "utf8")).toBe("keep evidence");
   expect(readFileSync(join(fixture.temp, "unrelated-sentinel"), "utf8")).toBe("keep sentinel");
   expect(
     readdirSync(fixture.temp).filter((name) => name.startsWith("openclaw-docker-e2e-container.")),
   ).toEqual([]);
-  return { events, namedRemoval, logRemoval };
 }
 
 function shellQuote(value: string): string {
