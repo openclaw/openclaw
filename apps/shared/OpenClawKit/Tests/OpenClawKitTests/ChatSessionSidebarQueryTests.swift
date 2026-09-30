@@ -352,6 +352,47 @@ struct ChatSessionSidebarQueryTests {
         #expect(owner.rows.map(\.sessionId) == ["replacement"])
     }
 
+    #if os(macOS)
+    @Test func `person cards include paged roster links and observe their canonical removal`() async throws {
+        let suite = "ChatSessionSidebarQueryTests.People.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let transport = SidebarQueryTransport()
+        let vm = OpenClawChatViewModel(
+            sessionKey: "agent:main:first",
+            transport: transport,
+            activeAgentId: "main",
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { vm.detachTransport() }
+        vm.enableSidebarData()
+        let owner = try #require(vm.sidebarData)
+        let first = self.page([self.row("first")], paging: #""hasMore":true,"nextOffset":200"#)
+        let initial = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: first)
+        owner.receive(initial.sessions, read: owner.beginRead(), replacingAgent: "main")
+        _ = await self.load(owner, transport, first)
+        let next = self.page([#"""
+        {"key":"agent:main:paged","sessionId":"paged","updatedAt":20,
+         "owner":{"actor":{"type":"human","identity":{"type":"profile","id":"alice"}}}}
+        """#])
+        _ = await self.load(owner, transport, next, append: true)
+        #expect(vm.sessions.map(\.sessionId) == ["first"])
+        let people = OpenClawChatSidebarPeople()
+        try people.receive(JSONDecoder().decode(HelloOk.self, from: Data(#"""
+        {"type":"hello-ok","protocol":4,"server":{"connId":"alice"},"features":{},
+         "snapshot":{"presence":[{"connectionId":"alice","ts":1,
+          "user":{"id":"alice","identity":{"type":"profile","id":"alice"}}}],
+          "health":{},"stateVersion":{"presence":1,"health":1},"uptimeMs":0},"auth":{},"policy":{}}
+        """#.utf8)))
+        let person = try #require(people.people.first)
+        let card = ChatSidebarPersonCard(
+            person: person, people: people, viewModel: vm, focused: .constant(false), dismiss: {})
+        #expect(people.cardSessions(for: person, sessions: card.sessionRows).recent.map(\.sessionId) == ["paged"])
+        let paged = try #require(owner.row(key: "agent:main:paged", agentID: "main"))
+        owner.remove(paged)
+        #expect(people.cardSessions(for: person, sessions: card.sessionRows).recent.isEmpty)
+    }
+    #endif
+
     @Test func `append reconciles missing or null cursors while replacement null terminates`() async {
         let transport = SidebarQueryTransport()
         let owner = self.owner(transport)

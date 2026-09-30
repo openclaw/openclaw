@@ -245,7 +245,7 @@ running session counts come from the Gateway across agents, independently of the
 loaded thread list; unavailable counts stay unknown and offer retry after a failure.
 
 Hover or focus a person to inspect reported connections, interaction times, and
-visible session links. Recent links stay in place while the card is open and
+visible session links, including threads loaded with **Load more**. Recent links stay in place while the card is open and
 disappear if they become ineligible. **View Activity** opens that person's Activity
 page in the Dashboard for the same Gateway. Thread rows show other viewers,
 combining duplicate connections and excluding your own identity.
