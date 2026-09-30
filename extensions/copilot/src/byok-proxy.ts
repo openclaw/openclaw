@@ -31,7 +31,7 @@ export async function createCopilotByokProxy(
 
   const targetBaseUrl = new URL(providerConfig.baseUrl);
   const nonce = randomBytes(12).toString("hex");
-  const targetPathPrefix = trimTrailingSlash(targetBaseUrl.pathname);
+  const targetPathPrefix = targetBaseUrl.pathname.replace(/\/+$/, "");
   const proxyPathPrefix = `/${nonce}${targetPathPrefix}`;
   // Azure rebuilds nonce-less /openai paths, so carry the same per-proxy secret
   // in an SDK provider header and validate it before accepting request bytes.
@@ -39,7 +39,8 @@ export async function createCopilotByokProxy(
   const proxyCredentialHeader = acceptsAzureSdkPaths
     ? createProxyCredentialHeaderName(providerConfig.headers)
     : undefined;
-  const upstreamBearerAuthorization = resolveUpstreamBearerAuthorization(providerConfig);
+  const bearerToken = providerConfig.bearerToken?.trim();
+  const upstreamBearerAuthorization = bearerToken ? `Bearer ${bearerToken}` : undefined;
   const activeFetches = new Set<AbortController>();
   const server = createServer((req, res) => {
     void handleProxyRequest(req, res, {
@@ -288,11 +289,6 @@ function buildProxyRequestHeaders(
   return out;
 }
 
-function resolveUpstreamBearerAuthorization(providerConfig: ProviderConfig): string | undefined {
-  const bearerToken = providerConfig.bearerToken?.trim();
-  return bearerToken ? `Bearer ${bearerToken}` : undefined;
-}
-
 function normalizeProxyResponseHeaders(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
   headers.forEach((value, key) => {
@@ -339,8 +335,4 @@ function isContentEncodingHeader(key: string): boolean {
     default:
       return false;
   }
-}
-
-function trimTrailingSlash(pathname: string): string {
-  return pathname.replace(/\/+$/, "");
 }

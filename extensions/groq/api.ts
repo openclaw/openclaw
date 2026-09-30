@@ -1,4 +1,3 @@
-// Groq API module exposes the plugin public contract.
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 const GROQ_QWEN3_6_27B_ID = "qwen/qwen3.6-27b";
@@ -23,17 +22,13 @@ const GROQ_QWEN_REASONING_EFFORT_MAP: Record<string, string> = {
   max: "default",
 };
 
-function normalizeGroqModelId(modelId: string | undefined): string {
-  return modelId?.trim().toLowerCase() ?? "";
-}
-
 export function resolveGroqReasoningCompatPatch(
   modelId: string,
 ): Pick<
   ModelCompatConfig,
   "supportsReasoningEffort" | "supportedReasoningEfforts" | "reasoningEffortMap"
 > | null {
-  const normalized = normalizeGroqModelId(modelId);
+  const normalized = modelId?.trim().toLowerCase() ?? "";
   if (normalized === GROQ_QWEN3_6_27B_ID) {
     return {
       supportsReasoningEffort: true,

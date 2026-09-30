@@ -132,10 +132,12 @@ store. Startup hydrates through the read-only worker scope; runtime mutations us
 the shared-state SQLite worker broker and re-read environment, credential, and
 placement authority inside the committing transaction. The broker rechecks live
 caller authority before commit, and the store fences changed authority until
-committed facts are installed. Diagnostic writes preserve keyed reads only when
-the worker proves that every environment and credential field except the error
-text and update timestamp is unchanged. Transfer capabilities keep their separate
-authority and lifetime checks. Attachment reads remain available during unrelated
+committed facts are installed. Environment reads remain available when the worker
+proves that the environment record is unchanged except for its error text and update
+timestamp; credential reads independently require the complete credential row to be
+unchanged, so credential-only commits fence credential reads without fencing environment
+reads. Transfer capabilities keep their separate authority and lifetime checks.
+Attachment reads remain available during unrelated
 metadata commits only when the worker proves that the complete attachment record
 is unchanged, including the activity timestamp used by idle-cleanup guards.
 Replacement, closure, and activity changes retain their publication fence.

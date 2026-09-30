@@ -18,6 +18,7 @@ import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import {
   loadMemoryWikiCompiledCache,
+  type MemoryWikiCompiledCacheSnapshot,
   type MemoryWikiCompiledClaim,
   type MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
@@ -97,11 +98,6 @@ export const WIKI_SEARCH_MODES = [
 ] as const;
 
 export type WikiSearchMode = (typeof WIKI_SEARCH_MODES)[number];
-
-type QueryDigestBundle = {
-  pages: MemoryWikiCompiledDigestPage[];
-  claims: MemoryWikiCompiledClaim[];
-};
 
 type WikiSearchResult = {
   corpus: "wiki" | "memory";
@@ -245,13 +241,6 @@ async function readQueryableWikiPagesByPaths(
     throwOnError: true,
   });
   return results.filter((page): page is QueryableWikiPage => page !== null);
-}
-
-async function readQueryDigestBundle(
-  config: ResolvedMemoryWikiConfig,
-): Promise<QueryDigestBundle | null> {
-  const snapshot = await loadMemoryWikiCompiledCache(config);
-  return snapshot ? { pages: snapshot.digest.pages, claims: snapshot.claims } : null;
 }
 
 function buildSnippet(raw: string, query: string): string {
@@ -605,7 +594,7 @@ function scoreWikiSearchModeBoost(params: {
 }
 
 function buildDigestCandidatePaths(params: {
-  digest: QueryDigestBundle;
+  snapshot: MemoryWikiCompiledCacheSnapshot;
   query: string;
   maxResults: number;
   mode: WikiSearchMode;
@@ -613,13 +602,13 @@ function buildDigestCandidatePaths(params: {
   const queryLower = normalizeLowercaseStringOrEmpty(params.query);
   const queryTokens = buildQueryTokens(queryLower);
   const claimsByPage = new Map<string, MemoryWikiCompiledClaim[]>();
-  for (const claim of params.digest.claims) {
+  for (const claim of params.snapshot.claims) {
     const current = claimsByPage.get(claim.pagePath) ?? [];
     current.push(claim);
     claimsByPage.set(claim.pagePath, current);
   }
 
-  return params.digest.pages
+  return params.snapshot.digest.pages
     .map((page) => {
       const claims = claimsByPage.get(page.path) ?? [];
       const metadataLower = normalizeLowercaseStringOrEmpty(
@@ -1038,11 +1027,11 @@ async function searchWikiCorpus(params: {
   mode: WikiSearchMode;
   canReadPage: (page: QueryableWikiPage) => boolean;
 }): Promise<WikiSearchResult[]> {
-  const digest = await readQueryDigestBundle(params.config);
+  const snapshot = await loadMemoryWikiCompiledCache(params.config);
   const rootDir = params.config.vault.path;
-  const candidatePaths = digest
+  const candidatePaths = snapshot
     ? buildDigestCandidatePaths({
-        digest,
+        snapshot,
         query: params.query,
         maxResults: params.maxResults,
         mode: params.mode,
@@ -1079,10 +1068,13 @@ async function searchWikiCorpus(params: {
   ];
 }
 
-function resolveDigestClaimLookup(digest: QueryDigestBundle, lookup: string): string | null {
+function resolveDigestClaimLookup(
+  snapshot: MemoryWikiCompiledCacheSnapshot,
+  lookup: string,
+): string | null {
   const trimmed = lookup.trim();
   const claimId = trimmed.replace(/^claim:/i, "");
-  const match = digest.claims.find((claim) => claim.id === claimId);
+  const match = snapshot.claims.find((claim) => claim.id === claimId);
   return match?.pagePath ?? null;
 }
 
@@ -1231,7 +1223,7 @@ export async function getMemoryWikiPage(input: {
 
   if (shouldSearchWiki(effectiveConfig)) {
     const canReadPage = createWikiPageVisibilityFilter(params);
-    const digest = await readQueryDigestBundle(effectiveConfig);
+    const digest = await loadMemoryWikiCompiledCache(effectiveConfig);
     const digestClaimPagePath = digest ? resolveDigestClaimLookup(digest, params.lookup) : null;
     const digestLookupPage = digestClaimPagePath
       ? ((

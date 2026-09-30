@@ -1,6 +1,9 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty as normalizePolicyChannelId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAgentWorkspaceEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
 import { getPolicyPath, scopedPolicyValue } from "../policy-value.js";
 import {
@@ -9,7 +12,6 @@ import {
   type PolicyScopeSelectorKind,
 } from "./metadata.js";
 import { POLICY_RULES } from "./policy-constants.js";
-import { normalizePolicyChannelId } from "./policy-runtime.js";
 import { policyShapeFinding } from "./shape-helpers.js";
 import { isPolicyValueAtLeastAsStrict } from "./strictness.js";
 import { ocPathSegment } from "./utils.js";
