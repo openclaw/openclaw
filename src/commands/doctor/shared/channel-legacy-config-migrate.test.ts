@@ -163,10 +163,10 @@ describe("bundled channel legacy config migrations", () => {
       },
     });
 
-    const config = { channels: { slack: { streaming: true } } };
+    const config = { channels: { slack: { enabled: true } } };
     const result = applyChannelDoctorCompatibilityMigrations(config);
 
-    expect(config).toEqual({ channels: { slack: { streaming: true } } });
+    expect(config).toEqual({ channels: { slack: { enabled: true } } });
     expect(result.next).toEqual(config);
     expect(result.warnings).toEqual([
       expect.stringContaining('Plugin "slack" config repair failed: fixture repair failed'),

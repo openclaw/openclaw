@@ -23,6 +23,7 @@ import { isBetaTag } from "../infra/update-channels.js";
 import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
+  mergeUpdatePostInstallDoctorPluginWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
@@ -3282,10 +3283,10 @@ describe("update-cli", () => {
           : undefined;
       await writeUpdatePostInstallDoctorResult({
         resultPath: String(resultPath),
-        result: {
-          ...createDeferredConfiguredPluginRepairDoctorResult(["deferred plugin repair"]),
-          pluginWarnings: ["Plugin hook repair failed."],
-        },
+        result: mergeUpdatePostInstallDoctorPluginWarnings(
+          createDeferredConfiguredPluginRepairDoctorResult(["deferred plugin repair"]),
+          ["Plugin hook repair failed."],
+        ),
       });
       throw Object.assign(new Error("Doctor advisory"), {
         failed: true,
