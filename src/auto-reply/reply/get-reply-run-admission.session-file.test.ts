@@ -166,6 +166,7 @@ describe("prepared reply transcript identity", () => {
       const prepared = await prepareReplyRunAdmission({
         ...context,
         effectiveQueueMode: "interrupt",
+        // @ts-expect-error Exercise the runtime fallback for a missing session key.
         params: { ...context.params, sessionKey: undefined },
       });
       expect(prepared.kind).toBe("ready");
