@@ -37,6 +37,20 @@ function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
   ) {
     throw new Error("Invalid pairing admission facts");
   }
+  for (const entry of value) {
+    if (
+      (entry.kind === "bootstrap.cloudWorkerSetup" &&
+        (typeof entry.environmentId !== "string" ||
+          typeof entry.setupId !== "string" ||
+          typeof entry.credentialDigest !== "string" ||
+          typeof entry.provisionOperationId !== "string" ||
+          typeof entry.ownerEpoch !== "number")) ||
+      ((entry.kind === "bootstrap.consume" || entry.kind === "bootstrap.token") &&
+        typeof entry.expiresAtMs !== "number")
+    ) {
+      throw new Error("Invalid pairing admission facts");
+    }
+  }
   // SAFETY: This private broker port only accepts the admitted backend's typed pairing facts.
   return value as DevicePairingAdmissionFacts[];
 }

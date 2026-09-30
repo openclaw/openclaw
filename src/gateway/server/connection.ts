@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
+import type { CloudWorkerSetupMutationAdmission } from "../../infra/device-bootstrap.worker-types.js";
 import { recordPairedNodeDisconnection } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { commitPresence, upsertPresence } from "../../infra/system-presence.js";
@@ -73,6 +74,7 @@ export type GatewayConnectionOptions = {
   preauthHandshakeTimeoutMs?: number;
   isStartupPending?: () => boolean;
   isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
+  admitsNodeSetupCompletion?: (setup: CloudWorkerSetupMutationAdmission) => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -155,6 +157,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     nodeReapprovalCoordinator,
     isStartupPending,
     isPendingWorkerNodeSetup,
+    admitsNodeSetupCompletion,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -644,6 +647,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     browserRateLimiter,
     nodeReapprovalCoordinator,
     isPendingWorkerNodeSetup,
+    admitsNodeSetupCompletion,
     gatewayMethods,
     events,
     extraHandlers,
