@@ -84,13 +84,7 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
     }
   }
 
-  for (const value of Object.values(imported)) {
-    if (isBuiltChannelConfigSchema(value)) {
-      return value;
-    }
-  }
-
-  return null;
+  return Object.values(imported).find(isBuiltChannelConfigSchema) ?? null;
 }
 
 function getModuleLoader(modulePath: string) {

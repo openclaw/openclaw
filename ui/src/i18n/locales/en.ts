@@ -23,6 +23,7 @@ export const en: TranslationMap & {
         | "showLess"
         | "showMore"
         | "tooLargeToDisplay"
+        | "unattributedSender"
         | "toolSender"
         | "errorSender",
         string
@@ -1869,6 +1870,7 @@ export const en: TranslationMap & {
     moreActions: "More actions",
     copyUrl: "Copy URL",
     openNewTab: "Open in new tab",
+    openWithinOpenClaw: "Open in OpenClaw",
     toggle: "Toggle browser panel",
     close: "Close browser panel",
     resize: "Resize browser panel",
@@ -2157,6 +2159,9 @@ export const en: TranslationMap & {
       cancelFailed: "Could not confirm cancellation: {error}",
       sessionExpired:
         "The Gateway no longer has this setup session. It may already have finished. Close this dialog and choose Check again to review the current setup.",
+      gatewayNotResponding:
+        "The Gateway is not responding. Check that it is running, then try again.",
+      gatewayReconnecting: "The Gateway is not responding. Waiting for it to reconnect.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
   },
@@ -2388,21 +2393,13 @@ export const en: TranslationMap & {
     idle: "Idle",
     offline: "Offline",
     sessions: {
-      all: "All",
-      open: "Open",
-      running: "Running",
-      runningOnly: "Only people with running sessions",
-      sortOpen: "Sort people by open sessions",
-      sortRunning: "Sort people by running sessions",
+      openCount: "{count}\u00a0open",
+      runningCount: "{count}\u00a0running",
       openHint:
         "Owned, unarchived conversations you can access across agents. Excludes hidden subagents, automation, and system sessions.",
       runningHint: "Open sessions actively executing an agent turn. Queued work is not running.",
       counts: "{open} open sessions, {running} running",
       unavailable: "Session counts unavailable",
-      noneRunning: "No sessions running.",
-      total: "Total",
-      scope:
-        "Totals for the people shown, across agents. Only sessions you can access are counted.",
       retry: "Counts may be out of date. Retry",
     },
     card: {
@@ -2478,7 +2475,6 @@ export const en: TranslationMap & {
     agent: "Agent override",
     publishAs: "Publish as @{account}",
     account: "Publication account",
-    choose: "Choose an account",
     newAction: "Choose a new publication",
     capacity:
       'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
@@ -2499,12 +2495,9 @@ export const en: TranslationMap & {
     effectPush: "push",
     effectPullRequest: "pull request",
     personalWorkspace:
-      "My GitHub requires an idle, reconciled local workspace. Wait for work to finish and reclaim the workspace. System and agent publication keep their existing shared flow.",
-    scopeHelp:
-      "My GitHub applies only to this explicit Publish PR action. Agent commands, previews, and cloud workers keep the shared account.",
+      "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
     unidentified: "Sign in with a personal profile to use My GitHub.",
-    connectHelp:
-      "Connect or repair My GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
+    connectHelp: "Connect GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
   },
   githubConnections: {
     title: "GitHub connections",
@@ -3030,6 +3023,13 @@ export const en: TranslationMap & {
       criticalBody:
         "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
     },
+    workerRuntimeInstall: {
+      transferringTitle: "Updating worker runtime · {transferred} of {total} ({percent}%)",
+      installingTitle: "Installing worker runtime",
+      transferringBody:
+        "Transferring the new worker runtime to this device: {transferred} of {total} ({percent}%). The next turn starts when it finishes.",
+      installingBody: "Installing the new worker runtime on this device.",
+    },
     sendErrors: {
       outboxPayloadCopied:
         "This queued message was copied from another tab. Check the conversation and retry only if it has not arrived.",
@@ -3216,6 +3216,9 @@ export const en: TranslationMap & {
       dismiss: "Dismiss {author}'s suggestion",
       typing: "{name} is typing…",
       typingMany: "{names} are typing…",
+      typingSeveral: "Several people are typing…",
+      typingOthers: "{count} others",
+      otherCollaborators: "Other collaborators",
       typingDraftState: "is typing...",
       pausedDraftState: "Draft",
       state: {
@@ -3583,7 +3586,6 @@ export const en: TranslationMap & {
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} sessions",
-      toolActivity: "Using {tool}",
       catalogDiscoveryHelp:
         "{error}. Configure automatic session discovery in Settings > Appearance > Session sources.",
       catalogPaginationFailed: "Session catalog returned a repeated page cursor",
@@ -3669,7 +3671,7 @@ export const en: TranslationMap & {
     },
     questions: {
       other: "Type your own answer here",
-      multilineHint: "Enter adds a line · Ctrl/⌘+Enter to continue",
+      multilineHint: "Enter adds a line · {shortcut} to continue",
       answer: "Answer",
       answerPlaceholder: "{label}",
       openLink: "Open link",
@@ -3723,6 +3725,7 @@ export const en: TranslationMap & {
       showLess: "Show less",
       showMore: "Show more",
       tooLargeToDisplay: "This message is too large to display here.",
+      unattributedSender: "Message",
       toolSender: "Tool",
       errorSender: "Error",
     },
@@ -3764,6 +3767,10 @@ export const en: TranslationMap & {
       askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askImageQuestion: "What does this image show?",
+      selectionTooLong:
+        "These comments are too long for Side chat. Use a shorter selection or comment.",
+      selectionQuoteOnly:
+        "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
       askPending: "Answering from this session…",
       askBusy: "Side chat is already answering a question.",
@@ -4194,6 +4201,8 @@ export const en: TranslationMap & {
     workRun: {
       workedFor: "Worked for {duration}",
       worked: "Worked",
+      toolCallsOne: "1 tool call",
+      toolCallsMany: "{count} tool calls",
     },
     sessionDiff: {
       title: "Changes",

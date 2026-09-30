@@ -749,8 +749,7 @@ extension AppState {
     }
 
     private func startConfigWatcher() {
-        let configUrl = OpenClawConfigFile.url()
-        self.configWatcher = ConfigFileWatcher(url: configUrl) { [weak self] in
+        self.configWatcher = ConfigFileWatcher(url: OpenClawPaths.configURL) { [weak self] in
             Task { @MainActor in
                 self?.applyConfigFromDisk()
             }
@@ -758,7 +757,7 @@ extension AppState {
         self.configWatcher?.start()
     }
 
-    private func applyConfigFromDisk() {
+    func applyConfigFromDisk() {
         let root = OpenClawConfigFile.loadDict()
         let fingerprint = Self.configFingerprint(root)
         guard fingerprint != self.lastConfigFingerprint else { return }
@@ -768,7 +767,7 @@ extension AppState {
         NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
     }
 
-    private static func configFingerprint(_ root: [String: Any]) -> Data? {
+    static func configFingerprint(_ root: [String: Any]) -> Data? {
         var comparableRoot = root
         if var meta = comparableRoot["meta"] as? [String: Any] {
             // Writers refresh these bookkeeping fields without changing runtime configuration.
@@ -942,7 +941,7 @@ extension AppState {
         }
     }
 
-    private func applyConfigOverrides(_ root: [String: Any]) {
+    func applyConfigOverrides(_ root: [String: Any]) {
         let gatewayFingerprint = Self.gatewayRoutingFingerprint(root)
         if gatewayFingerprint != self.lastObservedGatewayFingerprint {
             self.advanceGatewayRoutingGeneration()
@@ -983,7 +982,7 @@ extension AppState {
     }
 
     @discardableResult
-    private func reconcilePreferredGatewayRouteBinding() -> Bool {
+    func reconcilePreferredGatewayRouteBinding() -> Bool {
         let binding = GatewayDiscoveryPreferences.routeBinding(
             connectionMode: self.connectionMode,
             remoteTransport: self.remoteTransport,
@@ -1126,7 +1125,7 @@ extension AppState {
 }
 
 extension AppState {
-    private static func syncedGatewayRoot(
+    static func syncedGatewayRoot(
         currentRoot: [String: Any],
         draft: GatewayConfigSyncDraft)
         -> (root: [String: Any], changed: Bool, removesGatewayMode: Bool)
@@ -1232,7 +1231,7 @@ extension AppState {
         self.gatewayRoutingGeneration &+= 1
     }
 
-    private static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
+    static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
         if draft.clearsPrimaryGateway { return true }
         let ownsRemoteRoute = draft.dirtyFields.contains(.remoteTransport) ||
             draft.dirtyFields.contains(.remoteUrl) ||
@@ -1575,10 +1574,6 @@ extension AppState {
 #if DEBUG
 @MainActor
 extension AppState {
-    static func _testConfigFingerprint(_ root: [String: Any]) -> Data? {
-        self.configFingerprint(root)
-    }
-
     static func _testUpdatedRemoteGatewayConfig(
         current: [String: Any],
         draft: RemoteGatewayConfigDraft) -> [String: Any]
@@ -1586,27 +1581,6 @@ extension AppState {
         self.updatedRemoteGatewayConfig(
             current: current,
             draft: draft).remote
-    }
-
-    static func _testSyncedGatewayRoot(
-        currentRoot: [String: Any],
-        draft: GatewayConfigSyncDraft) -> (root: [String: Any], changed: Bool, removesGatewayMode: Bool)
-    {
-        self.syncedGatewayRoot(
-            currentRoot: currentRoot,
-            draft: draft)
-    }
-
-    static func _testGatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
-        self.gatewayDraftCanPersist(draft)
-    }
-
-    func _testApplyConfigOverrides(_ root: [String: Any]) {
-        self.applyConfigOverrides(root)
-    }
-
-    func _testApplyConfigFromDisk() {
-        self.applyConfigFromDisk()
     }
 
     func _testEnableGatewayConfigSync() {
@@ -1617,21 +1591,12 @@ extension AppState {
         await self.gatewayConfigSyncTask?.value
     }
 
-    var _testGatewayConfigIsCurrentForRouting: Bool {
-        self.gatewayConfigIsCurrentForRouting
-    }
-
     var _testDirtyGatewayConfigFields: [String] {
         self.dirtyGatewayConfigFields.map(\.rawValue).sorted()
     }
 
     var _testConflictedGatewayConfigFields: [String] {
         self.conflictedGatewayConfigFields.map(\.rawValue).sorted()
-    }
-
-    @discardableResult
-    func _testReconcilePreferredGatewayRouteBinding() -> Bool {
-        self.reconcilePreferredGatewayRouteBinding()
     }
 }
 #endif

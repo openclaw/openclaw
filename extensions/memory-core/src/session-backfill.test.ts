@@ -11,7 +11,6 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -23,6 +22,7 @@ import {
   clearMemoryCoreWorkspaceNamespace,
   SESSION_BACKFILL_REWIND_NAMESPACE,
 } from "./dreaming-state.js";
+import { failMemoryEntryOriginWrites } from "./memory-entry-origins-fault.test-support.js";
 import { listMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -812,14 +812,22 @@ describe("runSessionBackfill", () => {
     ]);
     const diaryPath = path.join(workspaceDir, "DREAMS.md");
     await fs.writeFile(diaryPath, "Keep this operator note.\n");
-    openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
-      CREATE TRIGGER reject_diary_origin BEFORE INSERT ON memory_entry_origins
-      BEGIN SELECT RAISE(ABORT, 'injected diary origin failure'); END;
-    `);
-    await expect(
-      runSessionBackfill({ agentId: "main", workspaceDir, rem: true, timezone: "UTC" }),
-    ).rejects.toThrow("injected diary origin failure");
-    expect(await fs.readFile(diaryPath, "utf8")).toBe("Keep this operator note.\n");
+    const restoreOriginFailure = failMemoryEntryOriginWrites({
+      agentId: "main",
+      trigger: "reject_diary_origin",
+      createSql: `
+        CREATE TRIGGER reject_diary_origin BEFORE INSERT ON memory_entry_origins
+        BEGIN SELECT RAISE(ABORT, 'injected diary origin failure'); END;
+      `,
+    });
+    try {
+      await expect(
+        runSessionBackfill({ agentId: "main", workspaceDir, rem: true, timezone: "UTC" }),
+      ).rejects.toThrow("injected diary origin failure");
+      expect(await fs.readFile(diaryPath, "utf8")).toBe("Keep this operator note.\n");
+    } finally {
+      restoreOriginFailure();
+    }
   });
 
   it("stages idempotently, converges duplicate facts, and rolls back staged artifacts", async () => {

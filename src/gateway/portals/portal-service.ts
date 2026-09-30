@@ -20,6 +20,7 @@ import type { GatewayPortalIngressConfig } from "../../config/types.gateway.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { getTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import {
@@ -230,22 +231,8 @@ export function createGatewayPortalService(params: {
     };
   };
 
-  const serialize = async <T>(id: string, operation: () => Promise<T>): Promise<T> => {
-    const previous = operations.get(id) ?? Promise.resolve();
-    const result = previous.then(operation, operation);
-    const completion = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    operations.set(id, completion);
-    try {
-      return await result;
-    } finally {
-      if (operations.get(id) === completion) {
-        operations.delete(id);
-      }
-    }
-  };
+  const serialize = <T>(id: string, operation: () => Promise<T>): Promise<T> =>
+    enqueueKeyedTask({ tails: operations, key: id, task: operation });
 
   const closeEntry = async (id: string): Promise<void> => {
     const runtime = entries.get(id);

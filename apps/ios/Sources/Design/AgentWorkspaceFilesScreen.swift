@@ -90,7 +90,7 @@ struct AgentWorkspaceDirectoryList: View {
     }
 
     private func entryRow(_ entry: AgentsWorkspaceEntry) -> some View {
-        let isDirectory = self.isDirectory(entry)
+        let isDirectory = (entry.kind.value as? String) == "directory"
         return NavigationLink {
             if isDirectory {
                 ZStack {
@@ -149,10 +149,6 @@ struct AgentWorkspaceDirectoryList: View {
         .disabled(self.loadingMore)
     }
 
-    private func isDirectory(_ entry: AgentsWorkspaceEntry) -> Bool {
-        (entry.kind.value as? String) == "directory"
-    }
-
     private func entryDetail(_ entry: AgentsWorkspaceEntry) -> String? {
         var parts: [String] = []
         if let size = entry.size {
@@ -196,21 +192,15 @@ struct AgentWorkspaceDirectoryList: View {
                 path: self.path.isEmpty ? nil : self.path,
                 offset: offset == 0 ? nil : offset,
                 limit: nil)
-            let paramsJSON = try Self.encodeParams(params)
             let data = try await self.appModel.operatorSession.request(
                 method: "agents.workspace.list",
-                paramsJSON: paramsJSON,
+                paramsJSON: String(bytes: JSONEncoder().encode(params), encoding: .utf8)!,
                 timeoutSeconds: 12)
             return try JSONDecoder().decode(AgentsWorkspaceListResult.self, from: data)
         } catch {
             self.errorText = "Could not load this folder."
             return nil
         }
-    }
-
-    static func encodeParams(_ params: some Encodable) throws -> String {
-        let data = try JSONEncoder().encode(params)
-        return String(data: data, encoding: .utf8) ?? "{}"
     }
 }
 
@@ -334,10 +324,9 @@ struct AgentWorkspaceFilePreview: View {
         defer { self.loading = false }
         do {
             let params = AgentsWorkspaceGetParams(agentid: self.agentId, path: self.path)
-            let paramsJSON = try AgentWorkspaceDirectoryList.encodeParams(params)
             let data = try await self.appModel.operatorSession.request(
                 method: "agents.workspace.get",
-                paramsJSON: paramsJSON,
+                paramsJSON: String(bytes: JSONEncoder().encode(params), encoding: .utf8)!,
                 timeoutSeconds: 20)
             self.file = try JSONDecoder().decode(AgentsWorkspaceGetResult.self, from: data).file
         } catch {
@@ -345,8 +334,6 @@ struct AgentWorkspaceFilePreview: View {
         }
     }
 
-    /// Mirrors the chat transcript export flow: write a temp copy, then hand
-    /// it to the system share sheet.
     private func share() {
         guard let file else { return }
         let safeName = (file.name as NSString).lastPathComponent

@@ -16,6 +16,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { readPresenceEntries, type PresencePayload } from "../../app/user-profile.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
@@ -488,10 +489,6 @@ class ActivityPage extends OpenClawLightDomElement {
     }
   }
 
-  private clearEntries() {
-    this.liveActivity?.clear();
-  }
-
   private renderMode(route: ActivityRouteData, location: RouteLocation, pending: boolean) {
     if (pending && route.mode === "run") {
       return renderLoadingState();
@@ -600,7 +597,7 @@ class ActivityPage extends OpenClawLightDomElement {
           this.statusFilters = { ...this.statusFilters, [status]: enabled };
         },
         onToggleAutoFollow: (next) => (this.autoFollow = next),
-        onClear: () => this.clearEntries(),
+        onClear: () => this.liveActivity?.clear(),
         onExpandAll: () => {
           this.expandedIds = new Set(this.entries.map((entry) => entry.id));
         },
@@ -657,7 +654,7 @@ class ActivityPage extends OpenClawLightDomElement {
       </div>
     `;
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
           ${
@@ -673,7 +670,10 @@ class ActivityPage extends OpenClawLightDomElement {
 export const activityPageComponent = {
   header: true,
   render: (location: RouteLocation | undefined) =>
-    html`<openclaw-activity-page .routeLocation=${location}></openclaw-activity-page>`,
+    html`<openclaw-activity-page
+      .routeLocation=${location}
+      ${shellLayoutTraits({ activityPage: true })}
+    ></openclaw-activity-page>`,
 };
 
 if (!customElements.get("openclaw-activity-page")) {

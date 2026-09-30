@@ -23,8 +23,6 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
-export { applyDefaultModel } from "./provider-model-primary.js";
-
 export function resolveProviderMatch(
   providers: ProviderPlugin[],
   rawProvider?: string,

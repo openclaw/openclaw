@@ -17,8 +17,11 @@ import {
   normalizeReleaseCoveragePolicy,
   isSplitChangelogEvidenceDelta,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
+  validateReleaseManifestAdvisoryJobs,
+  validateRetiredReleaseRetryFields,
 } from "./full-release-validation-policy.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
 
 const FULL_RELEASE_WORKFLOW = "Full Release Validation";
@@ -71,6 +74,9 @@ function displayValue(value) {
 /**
  * @typedef {object} FullReleaseValidationManifest
  * @property {unknown} [version]
+ * @property {unknown} [advisoryJobs]
+ * @property {unknown} [childEvidence]
+ * @property {unknown} [childRuns]
  * @property {unknown} [workflowName]
  * @property {unknown} [runId]
  * @property {unknown} [runAttempt]
@@ -89,7 +95,7 @@ function displayValue(value) {
  * @property {unknown} [publicationAdmission]
  * @property {unknown} [sourceParentRunAttempt]
  * @property {{ package?: { version?: unknown } }} [candidateBinding]
- * @property {{ coveragePolicy?: unknown, targetVersion?: unknown, targetContextRef?: unknown }} [validationInputs]
+ * @property {{ coveragePolicy?: unknown, targetVersion?: unknown, targetContextRef?: unknown, knownFlakyJobsJson?: unknown }} [validationInputs]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
  */
 /**
@@ -161,6 +167,13 @@ export function validateFullReleaseValidationEvidence({
   isTrustedMainAncestor,
   validateEvidenceReuseStrictly,
 }) {
+  if (
+    expectedReleaseTag?.includes("-alpha.") ||
+    expectedCoreNpmPublication?.npmDistTag === "alpha" ||
+    expectedTrustedWorkflowFullRef?.includes("tideclaw/alpha/")
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (expectedPublicationSelection && expectedCoreNpmPublication) {
     throw new Error("Publication evidence requires one actual consumption selection.");
   }
@@ -219,6 +232,15 @@ export function validateFullReleaseValidationEvidence({
     throw new Error(
       `Full release validation manifest must use version 3 or 4, got ${displayValue(manifest.version)}.`,
     );
+  }
+  validateReleaseManifestAdvisoryJobs(manifest);
+  validateRetiredReleaseRetryFields(manifest);
+  resolveReleasePublishInputs(manifest);
+  if (
+    manifest.validationInputs?.knownFlakyJobsJson !== undefined &&
+    manifest.validationInputs.knownFlakyJobsJson !== "[]"
+  ) {
+    throw new Error("release validation manifest knownFlakyJobsJson must be empty");
   }
   const coveragePolicy = normalizeReleaseCoveragePolicy({
     ...manifest.validationInputs,
@@ -583,11 +605,9 @@ async function main() {
               JSON.stringify({
                 route: process.env.PREPARED_PLUGINS?.trim()
                   ? "prepared"
-                  : process.env.RELEASE_NPM_DIST_TAG === "alpha"
-                    ? "alpha"
-                    : process.env.RELEASE_NPM_DIST_TAG === "extended-stable"
-                      ? "extended-stable"
-                      : "normal",
+                  : process.env.RELEASE_NPM_DIST_TAG === "extended-stable"
+                    ? "extended-stable"
+                    : "normal",
                 npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
                 publishOpenclawNpm: process.env.PUBLISH_OPENCLAW_NPM === "true",
                 pluginPublishScope: process.env.PLUGIN_PUBLISH_SCOPE,

@@ -240,18 +240,6 @@ function pluginCliRegistrarOwnsRoot(
   return roots.includes(primaryCommand);
 }
 
-function listPluginCliRootOwnerIds(registry: PluginRegistry, primaryCommand: string): string[] {
-  const normalizedPrimary = normalizeLowercaseStringOrEmpty(primaryCommand);
-  if (!normalizedPrimary) {
-    return [];
-  }
-  return uniqueStrings(
-    registry.cliRegistrars
-      .filter((entry) => pluginCliRegistrarOwnsRoot(entry, normalizedPrimary))
-      .map((entry) => entry.pluginId),
-  );
-}
-
 async function resolvePrimaryCommandPluginIds(
   prepared: PreparedPluginCliLoad,
   primaryCommand: string | undefined,
@@ -273,7 +261,11 @@ async function resolvePrimaryCommandPluginIds(
     loaderOptions,
   );
   prepared.assertCurrent();
-  return listPluginCliRootOwnerIds(registry, normalizedPrimary);
+  return uniqueStrings(
+    registry.cliRegistrars
+      .filter((entry) => pluginCliRegistrarOwnsRoot(entry, normalizedPrimary))
+      .map((entry) => entry.pluginId),
+  );
 }
 
 async function loadPluginCliMetadataRegistryWithContext(

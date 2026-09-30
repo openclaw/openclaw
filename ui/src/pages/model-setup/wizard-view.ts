@@ -54,7 +54,11 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
           </h2>
         </div>
         <div class="model-setup-wizard__body">
-          ${[props.refreshWarning, props.cancellationNotice].map((warning) =>
+          ${[
+            props.refreshWarning,
+            props.cancellationNotice,
+            props.state.phase === "starting" ? props.state.notice : undefined,
+          ].map((warning) =>
             warning ? html`<div class="callout warning" role="alert">${warning}</div>` : nothing,
           )}
           ${

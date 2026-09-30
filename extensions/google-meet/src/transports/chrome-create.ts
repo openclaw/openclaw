@@ -5,6 +5,13 @@ import {
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import {
+  asRecord,
+  asOptionalObjectRecord,
+  readStringValue,
+  filterStringEntries,
+  asFiniteNumber,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { GoogleMeetBrowserManualActionError } from "../browser-manual-action-error.js";
 import type { GoogleMeetConfig } from "../config.js";
 import { callBrowserProxyOnNode, resolveChromeNode } from "./chrome-browser-proxy.js";
@@ -67,50 +74,8 @@ function isGoogleMeetCreateTab(tab: MeetingBrowserCandidateTab): boolean {
   );
 }
 
-async function findGoogleMeetCreateTab(params: {
-  runtime: PluginRuntime;
-  nodeId: string;
-  timeoutMs: number;
-}): Promise<MeetingBrowserCandidateTab | undefined> {
-  const tabs = asMeetingBrowserTabs(
-    await callBrowserProxyOnNode({
-      runtime: params.runtime,
-      nodeId: params.nodeId,
-      method: "GET",
-      path: "/tabs",
-      timeoutMs: params.timeoutMs,
-    }),
-  );
-  return tabs.find(isGoogleMeetCreateTab);
-}
-
-async function focusBrowserTab(params: {
-  runtime: PluginRuntime;
-  nodeId: string;
-  targetId: string;
-  timeoutMs: number;
-}): Promise<void> {
-  await callBrowserProxyOnNode({
-    runtime: params.runtime,
-    nodeId: params.nodeId,
-    method: "POST",
-    path: "/tabs/focus",
-    body: { targetId: params.targetId },
-    timeoutMs: params.timeoutMs,
-  });
-}
-
-function readStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
-}
-
 function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionState | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const action = value as Record<string, unknown>;
+  const action = asRecord(value);
   return typeof action.reason === "string" && typeof action.message === "string"
     ? {
         reason: action.reason as GoogleMeetBrowserManualActionState["reason"],
@@ -120,21 +85,15 @@ function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionS
 }
 
 function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
-  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-  const nested =
-    record.result && typeof record.result === "object"
-      ? (record.result as Record<string, unknown>)
-      : record;
+  const record = asRecord(result);
+  const nested = asOptionalObjectRecord(record.result) ?? record;
   return {
-    meetingUri: typeof nested.meetingUri === "string" ? nested.meetingUri : undefined,
-    browserUrl: typeof nested.browserUrl === "string" ? nested.browserUrl : undefined,
-    browserTitle: typeof nested.browserTitle === "string" ? nested.browserTitle : undefined,
+    meetingUri: readStringValue(nested.meetingUri),
+    browserUrl: readStringValue(nested.browserUrl),
+    browserTitle: readStringValue(nested.browserTitle),
     manualAction: readBrowserManualAction(nested.manualAction),
-    notes: readStringArray(nested.notes),
-    retryAfterMs:
-      typeof nested.retryAfterMs === "number" && Number.isFinite(nested.retryAfterMs)
-        ? nested.retryAfterMs
-        : undefined,
+    notes: Array.isArray(nested.notes) ? filterStringEntries(nested.notes) : undefined,
+    retryAfterMs: asFiniteNumber(nested.retryAfterMs),
   };
 }
 
@@ -244,16 +203,22 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   );
   const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
   let openedByPlugin = false;
-  let tab = await findGoogleMeetCreateTab({
-    runtime: params.runtime,
-    nodeId,
-    timeoutMs: stepTimeoutMs,
-  });
-  if (tab?.targetId) {
-    await focusBrowserTab({
+  let tab = asMeetingBrowserTabs(
+    await callBrowserProxyOnNode({
       runtime: params.runtime,
       nodeId,
-      targetId: tab.targetId,
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: stepTimeoutMs,
+    }),
+  ).find(isGoogleMeetCreateTab);
+  if (tab?.targetId) {
+    await callBrowserProxyOnNode({
+      runtime: params.runtime,
+      nodeId,
+      method: "POST",
+      path: "/tabs/focus",
+      body: { targetId: tab.targetId },
       timeoutMs: stepTimeoutMs,
     });
     // Meet automation scripts match English UI labels; a reused tab may have

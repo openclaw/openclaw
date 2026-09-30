@@ -153,14 +153,12 @@ export function verifyTelegramQaFiles(
         actual: `${observed.cases.length} complete case observations; inspect linked evidence for exact HTML payloads`,
         source_path: "qa-observations.json",
       },
-    ].map((observation) => ({
-      id: observation.id,
-      expected: observation.expected,
-      actual: observation.actual,
-      source_path: observation.source_path,
-      sha256: createHash("sha256").update(files[observation.source_path]!).digest("hex"),
-      authority: "trusted_observer" as const,
-      availability: "present" as const,
-    })),
+    ].map((observation) =>
+      Object.assign(observation, {
+        sha256: createHash("sha256").update(files[observation.source_path]!).digest("hex"),
+        authority: "trusted_observer" as const,
+        availability: "present" as const,
+      }),
+    ),
   };
 }

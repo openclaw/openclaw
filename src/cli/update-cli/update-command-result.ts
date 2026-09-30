@@ -12,7 +12,7 @@ import {
 } from "../../infra/error-diagnostics.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import type { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
@@ -433,11 +433,7 @@ export async function reportUpdateCommandPendingRecovery(
 }
 
 /** Reporting-only marker: the outcome was recorded and printed; no follow-up triage. */
-export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure {
-  constructor(result: UpdateRunResult) {
-    super(result, 1);
-  }
-}
+export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure {}
 
 export function mergeWindowsTaskRecoveryFailure(
   failure: { error: unknown } | undefined,
@@ -517,6 +513,7 @@ export type UpdateAdmissionReportParams = {
   recoverySteps?: readonly UpdateRecoveryStep[];
   failureFacts?: readonly UpdateFailureFact[];
   root: string;
+  serviceRoot?: string;
   installKind: "git" | "package" | "unknown";
   reason: string;
   message?: string;

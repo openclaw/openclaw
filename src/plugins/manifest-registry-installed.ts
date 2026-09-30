@@ -24,6 +24,7 @@ import {
 } from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
+import { normalizeManifestObjectList } from "./manifest-capability-normalizers.js";
 import {
   loadPluginManifestRegistryCore,
   type PluginManifestRecord,
@@ -198,17 +199,11 @@ function normalizePackageChannelDoctorCapabilities(
 function normalizePackageChannelCliOptions(
   cliAddOptions: unknown,
 ): PluginPackageChannel["cliAddOptions"] | undefined {
-  if (!Array.isArray(cliAddOptions)) {
-    return undefined;
-  }
-  const normalized = cliAddOptions.flatMap<PluginPackageChannelCliOption>((option) => {
-    if (!isRecord(option)) {
-      return [];
-    }
+  return normalizeManifestObjectList<PluginPackageChannelCliOption>(cliAddOptions, (option) => {
     const flags = normalizeOptionalString(option.flags);
     const description = normalizeOptionalString(option.description);
     if (!flags || !description) {
-      return [];
+      return undefined;
     }
     const defaultValue =
       typeof option.defaultValue === "boolean" || typeof option.defaultValue === "string"
@@ -216,16 +211,13 @@ function normalizePackageChannelCliOptions(
         : undefined;
     const valueType =
       option.valueType === "int" || option.valueType === "list" ? option.valueType : undefined;
-    return [
-      {
-        flags,
-        description,
-        ...(defaultValue !== undefined ? { defaultValue } : {}),
-        ...(valueType ? { valueType } : {}),
-      },
-    ];
+    return {
+      flags,
+      description,
+      ...(defaultValue !== undefined ? { defaultValue } : {}),
+      ...(valueType ? { valueType } : {}),
+    };
   });
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["setup"] | undefined {

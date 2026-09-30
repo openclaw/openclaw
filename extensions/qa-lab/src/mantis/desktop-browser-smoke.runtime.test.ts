@@ -14,7 +14,7 @@ vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) 
     ...actual,
     ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
       binary,
-      version: "0.55.0",
+      version: "999.0.0",
     })),
   };
 });
@@ -49,7 +49,7 @@ describe("mantis desktop browser smoke runtime", () => {
   it("uses the managed binary to lease a desktop, run a browser, copy artifacts, and stop", async () => {
     vi.mocked(ensureManagedCrabboxBinary).mockResolvedValueOnce({
       binary: "/tmp/crabbox",
-      version: "0.55.0",
+      version: "999.0.0",
     });
     await fs.mkdir(path.join(repoRoot, "qa-artifacts"), { recursive: true });
     await fs.writeFile(path.join(repoRoot, "qa-artifacts", "timeline.html"), "<h1>Mantis</h1>");

@@ -46,7 +46,7 @@ import {
   type WizardConfigWriteOptions,
 } from "./setup.shared.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
-import { resolveSetupWorkspaceSelection } from "./setup.workspace.js";
+import { resolveSetupWorkspaceSelection, validateSetupWorkspacePath } from "./setup.workspace.js";
 
 type SetupFlowChoice = WizardFlow | "import" | "keep-model" | `import:${string}`;
 
@@ -480,6 +480,8 @@ async function runSetupWizardOnce(
       : await prompter.text({
           message: t("wizard.setup.workspaceDirectory"),
           initialValue: baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
+          validate: (value) =>
+            validateSetupWorkspacePath(value.trim() || onboardHelpers.DEFAULT_WORKSPACE),
         }));
 
   const requestedWorkspaceDir = resolveUserPath(
@@ -585,8 +587,7 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
-    const { createChannelSetupHooks, setupChannels } =
-      await import("../commands/onboard-channels.js");
+    const { createChannelSetupHooks, setupChannels } = await import("../flows/channel-setup.js");
     const channelSetup = createChannelSetupHooks({ runtime });
     const quickstartAllowFromChannels =
       flow === "quickstart"

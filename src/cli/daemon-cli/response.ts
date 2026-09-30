@@ -1,4 +1,3 @@
-// JSON/text response helpers for Gateway service lifecycle commands.
 import { Writable } from "node:stream";
 import { currentGatewayServiceRebindReceipt } from "../../daemon/service-rebind.js";
 import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
@@ -11,7 +10,6 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 
-/** Gateway service action emitted by lifecycle commands. */
 type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
 
 /** Stable hint category for machine-readable daemon command output. */
@@ -24,13 +22,11 @@ type DaemonHintKind =
   | "wsl-systemd"
   | "generic";
 
-/** Classified daemon recovery hint item. */
 type DaemonHintItem = {
   kind: DaemonHintKind;
   text: string;
 };
 
-/** Machine-readable response shape for service lifecycle commands. */
 type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
@@ -78,15 +74,6 @@ function classifyDaemonHintText(text: string): DaemonHintKind {
   return "generic";
 }
 
-/** Classify plain-text hints for JSON daemon responses. */
-function buildDaemonHintItems(hints: string[] | undefined): DaemonHintItem[] | undefined {
-  if (!hints?.length) {
-    return undefined;
-  }
-  return hints.map((text) => ({ kind: classifyDaemonHintText(text), text }));
-}
-
-/** Build the service metadata snapshot embedded in JSON action responses. */
 export function buildDaemonServiceSnapshot(service: GatewayService, loaded: boolean) {
   return {
     label: service.label,
@@ -98,7 +85,6 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
 
 type DaemonEmit = (payload: Omit<DaemonActionResponse, "action">) => void;
 
-/** Emit the no-op success returned when a service is already running. */
 export function emitDaemonAlreadyRunning(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -119,7 +105,6 @@ export function emitDaemonAlreadyRunning(params: {
   });
 }
 
-/** Emit a service-manager restart that has been accepted but not completed. */
 export function emitDaemonScheduledRestart(params: {
   emitMessage: DaemonEmit;
   result: string;
@@ -138,7 +123,6 @@ export function emitDaemonScheduledRestart(params: {
   return true;
 }
 
-/** Writable sink used when JSON output should suppress service command stdout. */
 export function createNullWriter(): Writable {
   return new Writable({
     write(_chunk, _encoding, callback) {
@@ -147,7 +131,6 @@ export function createNullWriter(): Writable {
   });
 }
 
-/** Create stdout/warning/emit/fail helpers for one daemon lifecycle action. */
 export function createDaemonActionContext(params: {
   action: DaemonAction;
   json: boolean;
@@ -164,7 +147,11 @@ export function createDaemonActionContext(params: {
       action: params.action,
       ...(definitionBackup ? { definitionBackup } : {}),
       ...payload,
-      hintItems: payload.hintItems ?? buildDaemonHintItems(payload.hints),
+      hintItems:
+        payload.hintItems ??
+        (payload.hints?.length
+          ? payload.hints.map((text) => ({ kind: classifyDaemonHintText(text), text }))
+          : undefined),
       warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
     });
   };
@@ -212,7 +199,6 @@ async function buildInstallFailureHints(error: unknown): Promise<string[] | unde
   });
 }
 
-/** Install a service, convert platform install failures to hints, and emit the final response. */
 export async function installDaemonServiceAndEmit(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -256,8 +242,6 @@ export async function installDaemonServiceAndEmit(params: {
     );
     return;
   }
-  // Post-success diagnostics run only on the verified-success path, so a
-  // failed install or verification never carries their warnings.
   if (params.onVerified) {
     try {
       await params.onVerified();

@@ -1,5 +1,9 @@
 /** Handles inline slash commands, skill invocations, and abort actions before model runs. */
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeNullableString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
@@ -118,29 +122,15 @@ type InlineActionResult =
     };
 
 function extractTextFromToolResult(result: unknown): string | null {
-  if (!result || typeof result !== "object") {
-    return null;
-  }
-  const content = (result as { content?: unknown }).content;
-  const text = typeof content === "string" ? content : collectTextContentBlocks(content).join("");
-  const trimmed = text.trim();
-  return trimmed ? trimmed : null;
+  const content = asOptionalObjectRecord(result)?.content;
+  return normalizeNullableString(
+    typeof content === "string" ? content : collectTextContentBlocks(content).join(""),
+  );
 }
 
 function extractBlockedToolReason(result: unknown): string | null {
-  if (!result || typeof result !== "object") {
-    return null;
-  }
-  const details = (result as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
-    return null;
-  }
-  const status = (details as { status?: unknown }).status;
-  if (status !== "blocked") {
-    return null;
-  }
-  const reason = (details as { reason?: unknown }).reason;
-  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
+  const details = asOptionalObjectRecord(asOptionalObjectRecord(result)?.details);
+  return details?.status === "blocked" ? normalizeNullableString(details.reason) : null;
 }
 
 /** Handles inline actions or returns continue when the message should become a model turn. */
@@ -237,6 +227,10 @@ export async function handleInlineActions(params: {
     abortedLastRun: initialAbortedLastRun,
     skillFilter,
   } = params;
+  const finishCommand = (reply?: ReplyPayload | ReplyPayload[]): InlineActionResult => {
+    typing.cleanup();
+    return { kind: "reply", reply: markCommandReplyForDelivery(reply) };
+  };
   const notifyInlineCommandSessionMetadataChanges = () => {
     const changes = takeCommandSessionMetadataChangesFromTargets([sessionCtx, ctx]);
     if (changes) {
@@ -419,13 +413,7 @@ export async function handleInlineActions(params: {
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
-        typing.cleanup();
-        return {
-          kind: "reply",
-          reply: markCommandReplyForDelivery({
-            text: `❌ Tool not available: ${dispatch.toolName}`,
-          }),
-        };
+        return finishCommand({ text: `❌ Tool not available: ${dispatch.toolName}` });
       }
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;
@@ -448,22 +436,13 @@ export async function handleInlineActions(params: {
         const result = await tool.execute(toolCallId, toolArgs, opts?.abortSignal);
         const blockedReason = extractBlockedToolReason(result);
         if (blockedReason) {
-          typing.cleanup();
-          return {
-            kind: "reply",
-            reply: markCommandReplyForDelivery({ text: `❌ Tool call blocked: ${blockedReason}` }),
-          };
+          return finishCommand({ text: `❌ Tool call blocked: ${blockedReason}` });
         }
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
-        typing.cleanup();
-        return { kind: "reply", reply: markCommandReplyForDelivery({ text }) };
+        return finishCommand({ text });
       } catch (err) {
         const message = formatErrorMessage(err);
-        typing.cleanup();
-        return {
-          kind: "reply",
-          reply: markCommandReplyForDelivery({ text: `❌ ${message}` }),
-        };
+        return finishCommand({ text: `❌ ${message}` });
       }
     }
 
@@ -515,11 +494,7 @@ export async function handleInlineActions(params: {
 
   if (referenced) {
     if (referenced.error) {
-      typing.cleanup();
-      return {
-        kind: "reply",
-        reply: markCommandReplyForDelivery({ text: referenced.error }),
-      };
+      return finishCommand({ text: referenced.error });
     }
     if (referenced.skills.length > 0) {
       skillSelections = mergeSelections(skillSelections, toSelections(referenced.skills));
@@ -631,8 +606,7 @@ export async function handleInlineActions(params: {
     notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!cleanedBody) {
-        typing.cleanup();
-        return { kind: "reply", reply: markCommandReplyForDelivery(inlineResult.reply) };
+        return finishCommand(inlineResult.reply);
       }
       await sendInlineReply(inlineResult.reply);
     }
@@ -685,8 +659,7 @@ export async function handleInlineActions(params: {
   skillSelections = mergeSelections(skillSelections, commandResult.explicitSkillSelections);
   notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
-    typing.cleanup();
-    return { kind: "reply", reply: markCommandReplyForDelivery(commandResult.reply) };
+    return finishCommand(commandResult.reply);
   }
   if (command.commandBodyNormalized !== commandBodyBeforeRun) {
     cleanedBody = command.commandBodyNormalized;

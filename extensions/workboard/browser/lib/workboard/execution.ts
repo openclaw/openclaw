@@ -1,7 +1,7 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { isRecord, truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { requestSessionCreate } from "../sessions/index.ts";
+import { requestSessionCreate } from "../sessions/create.ts";
 import { replaceCard, workboardCardRunId, workboardCardSessionKey } from "./card-state.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload } from "./normalization.ts";
@@ -170,13 +170,12 @@ export async function startWorkboardCard(params: {
     const shouldClearManualSchedule = params.card.metadata?.automation?.scheduledAt !== undefined;
     const shouldUnscheduleManual = params.card.status === "scheduled";
     const nextCardStatus = shouldUnscheduleManual ? "todo" : params.card.status;
-    const created = await requestSessionCreate(params.client, {
+    const sessionKey = await requestSessionCreate(params.client, {
       ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
       label: buildCardSessionLabel(params.card),
       ...(model ? { model } : {}),
     });
     assertCurrentCard(state, params.card);
-    const sessionKey = created.key.trim() || null;
     const payload = await params.client.request("workboard.cards.update", {
       id: params.card.id,
       expectedUpdatedAt: params.card.updatedAt,

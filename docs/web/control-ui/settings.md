@@ -28,6 +28,8 @@ In **Models**, **Connect provider** offers the credential-only sign-in methods d
 
 Model pickers show the authentication methods available to the selected agent. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
 
+During first-run **Model Setup**, reloading the browser resumes an unfinished provider wizard on the same running Gateway without repeating your answers. Continue from its current question, or choose **Cancel** to release provider choices once the Gateway confirms cancellation. Unsubmitted input is not saved. If the Gateway restarted or no longer has the wizard, **Check again** refreshes the current setup without starting another provider attempt; the recovery guard remains until a model can be verified or the pending attempt expires.
+
 ## Environment identity
 
 When you run several Gateways, set `gateway.controlUi.environment` to distinguish their browser tabs and windows:
@@ -180,7 +182,10 @@ to open web links outside OpenClaw instead of in built-in readers or browser pan
 In a web browser, links use ordinary browser navigation; in a native app, they open
 in the system's default browser. The switch is off by default, preserving current
 behavior. Turning it off restores built-in readers and any existing **Open links
-in Control UI browser** preference. Explicit context-menu choices still work.
+in Control UI browser** preference. Browser preview cards also follow this setting
+when you click their image or **Open** button. Their three-dot menu offers
+**Open in OpenClaw** when external opening is enabled, or **Open in new tab**
+when it is disabled. Explicit context-menu choices still work.
 
 This preference is stored only in the current browser or app webview, separately
 for each Gateway. It does not change shared Gateway configuration or sync across
@@ -595,7 +600,7 @@ The page redacts credential-bearing URL-like values before rendering and quotes 
 Open **Activity** from the sidebar's page picker, or visit `/activity` under the Control UI's base path. It has two tabs plus a deep-link inspector:
 
 - **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Sessions sort newest first by their latest input or completed run, using the same time as the row's age and day group. Pins do not affect this order. Each row shows the human attribution and configured agent avatar/name. Subagent sessions are excluded from the feed, search results, and people counts. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
-- The **Today** pulse shows one bar per hour of the local day, with counts of active sessions, new sessions, associated people, and sessions running now. It follows the current filters and counts matches beyond the 100-row window. Each session contributes to the hour of its latest activity.
+- The pulse card above the list describes the selected time window: hourly bars for **Last 24 hours**, daily bars for **Last 7 days** and **Last 30 days**, and monthly bars for the last 12 months under **All time**, using local time. Its counts of active sessions, sessions started in the window (omitted for All time), associated people, and sessions running now follow the current filters and include matches beyond the 100-row window; All time counts every match even though its bars cover 12 months. Each session contributes to the bar of its latest activity.
 - Each session can show a rolling recap in one to three sentences: what was done and where the work stands. Recaps use the agent's [utility model](/gateway/config-agents/models#agents-defaults-model) and are shared across clients and Gateway restarts. Initial loading uses shimmer placeholders; an existing recap shimmers while refreshing. A failed refresh keeps the last recap and identifies the refresh failure. **Retry recap** requests another attempt after the Gateway's cooldown. Read-only viewers can read cached recaps but cannot request generation. On a page with mixed permissions, view-only sessions do not block recap generation for writable sessions.
 - Sessions with a GitHub checkout show associated branch PRs and their added/removed line counts. Hover or keyboard-focus a PR to preview its details, or select it to open GitHub. Before an open PR exists, the branch shows its diff against the default branch, including uncommitted work. These are checkout/PR statistics, not cumulative session edit counts; unavailable counts stay hidden, and retained stale data carries a warning.
 - Sessions can show up to four transcript images in one compact horizontal row. On narrow screens, scroll the previews sideways to see the remaining images. Select an image to expand it in the image viewer. Previews load as rows approach the viewport, reading bounded recent transcript pages; **Older images** continues when more history remains. Existing thumbnails remain visible during refreshes and failed retries. Changing the session or connection clears the previous gallery.

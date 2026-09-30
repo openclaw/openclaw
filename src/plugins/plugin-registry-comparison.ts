@@ -61,13 +61,9 @@ function resolvePluginRegistryRecordContent(
   if (!packageJson || !comparePackageJsonPath) {
     return stableRecord;
   }
-  const {
-    fileSignature: _fileSignature,
-    path: packageJsonPath,
-    ...stablePackageJson
-  } = packageJson;
+  const { fileSignature: _fileSignature, ...stablePackageJson } = packageJson;
   return Object.assign(stableRecord, {
-    packageJson: Object.assign(stablePackageJson, { path: packageJsonPath }),
+    packageJson: stablePackageJson,
   });
 }
 
@@ -128,11 +124,8 @@ export function diffPluginRegistryRecords(
     ...derivedPlugins.keys(),
     ...Object.keys(persisted.installRecords),
     ...Object.keys(derived.installRecords),
-    ...persisted.diagnostics.flatMap((diagnostic) =>
-      diagnostic.pluginId ? [diagnostic.pluginId] : [],
-    ),
-    ...derived.diagnostics.flatMap((diagnostic) =>
-      diagnostic.pluginId ? [diagnostic.pluginId] : [],
+    ...[...persistedDiagnostics.keys(), ...derivedDiagnostics.keys()].filter(
+      (pluginId): pluginId is string => Boolean(pluginId),
     ),
   ]);
   return [...pluginIds]

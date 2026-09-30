@@ -88,9 +88,9 @@ function sessionIdentity(key: string, agentId: string, input: PersonCardInput): 
   return `${scope}\u0000${canonical}`;
 }
 
-function observedTimestamp(values: (number | undefined)[], order: "first" | "last") {
+function firstObservedTimestamp(values: (number | undefined)[]) {
   const known = values.filter((value): value is number => value !== undefined);
-  return known.length ? (order === "first" ? Math.min(...known) : Math.max(...known)) : undefined;
+  return known.length ? Math.min(...known) : undefined;
 }
 
 function elapsed(
@@ -202,9 +202,7 @@ function renderSessions(
               },
             )}
           </div>`
-        : html`<p class="person-activity-card__muted">
-            ${t(recent ? "presence.card.noRecentSessions" : "presence.card.noVisibleSessions")}
-          </p>`
+        : html`<p class="person-activity-card__muted">${t("presence.card.noRecentSessions")}</p>`
     }
   </section>`;
 }
@@ -251,10 +249,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
   const observed = user.entries !== undefined;
   const offline = user.entries?.length === 0;
   const entries = user.entries ?? [];
-  const onlineSince = observedTimestamp(
-    entries.map((entry) => entry.onlineSince),
-    "first",
-  );
+  const onlineSince = firstObservedTimestamp(entries.map((entry) => entry.onlineSince));
   const lastActivityAt = presenceViewerLastActivity(user);
   const activity = presenceViewerActivity(user);
   const where = connections(user);

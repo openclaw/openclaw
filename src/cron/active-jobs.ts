@@ -318,9 +318,11 @@ export function noteActiveCronJobMessageSourceAuthorityMutation(jobId: string): 
 export function noteActiveCronJobRemoval(
   jobId: string,
   commitGuard?: () => void,
+  afterRemoval?: (marker: CronActiveJobMarker | undefined) => void,
 ): CronActiveJobMarker | undefined {
   const marker = getCurrentCronActiveJobMarker(jobId);
   if (!marker) {
+    afterRemoval?.(undefined);
     return undefined;
   }
   // A reused ID names a new job, not a reschedule of the old invocation.
@@ -329,10 +331,15 @@ export function noteActiveCronJobRemoval(
   marker.jobRemoved = true;
   // Check the exact live admission again after persistence, while retaining its
   // marker for duplicate exclusion and deferred session cleanup until completion.
-  if (!commitGuard || getCronActiveJobState().selfRemovalOwners.get(commitGuard)?.() !== marker) {
-    requestCronActiveJobMarkerCancellation(marker, "Cron job removed by operator.");
-  } else {
-    marker.selfRemovalAccepted = true;
+  try {
+    if (!commitGuard || getCronActiveJobState().selfRemovalOwners.get(commitGuard)?.() !== marker) {
+      requestCronActiveJobMarkerCancellation(marker, "Cron job removed by operator.");
+    } else {
+      marker.selfRemovalAccepted = true;
+    }
+  } finally {
+    // Cleanup belongs to the committed removal even if its cancellation listener throws.
+    afterRemoval?.(marker);
   }
   return marker;
 }

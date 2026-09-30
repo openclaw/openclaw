@@ -18,6 +18,7 @@ import type {
 } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
+import { isTerminalWorkerEnvironmentState } from "./state.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 export type WorkerDispatchPlacement = WorkerSessionPlacementRecord;
@@ -73,6 +74,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "abandonWorkspaceResult"
   | "listForReconcile"
   | "releaseTurn"
+  | "retainInterruptedTurnWorkspace"
   | "bindPreparedEnvironment"
   | "startDispatch"
   | "startDrain"
@@ -93,6 +95,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "createWithRequest"
   | "destroy"
   | "get"
+  | "fenceWorkerTurnForRecovery"
   | "reconcileEnvironment"
   | "reconcileOnce"
   | "startTunnel"
@@ -149,11 +152,7 @@ export function workerDisappearanceError(
   if (!environment) {
     return new Error("cloud worker disappeared: environment record missing");
   }
-  if (
-    environment.state !== "destroyed" &&
-    environment.state !== "failed" &&
-    environment.state !== "orphaned"
-  ) {
+  if (!isTerminalWorkerEnvironmentState(environment.state)) {
     return undefined;
   }
   return new Error(
@@ -167,9 +166,7 @@ export function isUnavailableEnvironment(
   return (
     environment.state === "draining" ||
     environment.state === "destroying" ||
-    environment.state === "destroyed" ||
-    environment.state === "failed" ||
-    environment.state === "orphaned"
+    isTerminalWorkerEnvironmentState(environment.state)
   );
 }
 
@@ -278,12 +275,7 @@ export function createPlacementFailureActions(deps: {
       return undefined;
     }
     const environment = environments.get(placement.environmentId);
-    if (
-      !environment ||
-      environment.state === "destroyed" ||
-      environment.state === "failed" ||
-      environment.state === "orphaned"
-    ) {
+    if (!environment || isTerminalWorkerEnvironmentState(environment.state)) {
       return undefined;
     }
     const teardownErrors = await cleanupEnvironment({
@@ -417,12 +409,7 @@ export function createPlacementFailureActions(deps: {
       );
       return;
     }
-    if (
-      !environment ||
-      environment.state === "destroyed" ||
-      environment.state === "failed" ||
-      environment.state === "orphaned"
-    ) {
+    if (!environment || isTerminalWorkerEnvironmentState(environment.state)) {
       finishReconcilingFailure(reconciling, claimedTurnError, []);
       return;
     }

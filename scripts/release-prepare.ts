@@ -122,8 +122,12 @@ export function createReleasePrepareSteps(
   const parsedVersion = parseReleaseVersion(args.version);
   if (!parsedVersion) {
     throw new Error(
-      `Invalid release version '${args.version}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-alpha.N, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
+      `Invalid release version '${args.version}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
     );
+  }
+
+  if (parsedVersion.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
 
   const versionArgs = [

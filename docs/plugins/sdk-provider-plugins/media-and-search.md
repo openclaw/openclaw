@@ -165,6 +165,10 @@ plugins](/plugins/sdk-provider-plugins) guide.
     `pollProviderOperationJson` adds the standard HTTP JSON transport.
     Keep vendor authentication and deadline scope in the provider adapter.
 
+    Reuse `createProviderOperationTimeoutError(deadline)` when a custom body
+    reader exhausts that same deadline. It preserves the operation label and
+    optional timeout in the shared error format.
+
     `readGeneratedVideoAsset` from `openclaw/plugin-sdk/media-generation-runtime`
     reads a response under a byte cap and derives the asset's MIME type and filename.
     Set `validateBinaryResponse` to reject non-video responses. An optional

@@ -79,16 +79,10 @@ function isRuntimeModuleReference(node: ts.Node): boolean {
   if (ts.isImportDeclaration(node)) {
     return node.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword;
   }
-  if (ts.isExportDeclaration(node)) {
+  if (ts.isExportDeclaration(node) || ts.isImportEqualsDeclaration(node)) {
     return !node.isTypeOnly;
   }
-  if (ts.isImportTypeNode(node)) {
-    return false;
-  }
-  if (ts.isImportEqualsDeclaration(node)) {
-    return !node.isTypeOnly;
-  }
-  return true;
+  return !ts.isImportTypeNode(node);
 }
 
 function compareEntries(left: PluginSdkViolation, right: PluginSdkViolation): number {
@@ -125,50 +119,46 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
       repoPath.startsWith("src/") && !isTestLikeTypeScriptFile(filePath, extraTestSuffixes);
     const sourceFile = parser.parseSourceFile(filePath, sourceText);
 
-    function push(kind: string, node: ts.Node, specifierNode: ts.Node, specifier: string): void {
-      const subpath = parsePluginSdkSubpath(specifier);
-      if (!subpath) {
-        return;
-      }
-      if (privateLocalOnlySubpaths.has(subpath)) {
-        if (isCoreRuntimeFile && isRuntimeModuleReference(node)) {
-          violations.push({
-            file: repoPath,
-            line: toLine(sourceFile, specifierNode),
-            kind,
-            specifier,
-            subpath,
-            reason: "private runtime helper used by core must use a relative import",
-          });
-        }
-        return;
-      }
-
-      const missingFrom: string[] = [];
-      if (!entrypoints.has(subpath)) {
-        missingFrom.push("scripts/lib/plugin-sdk-entrypoints.json");
-      }
-      if (!exports.has(subpath)) {
-        missingFrom.push("package.json exports");
-      }
-      if (missingFrom.length === 0) {
-        return;
-      }
-
-      violations.push({
-        file: repoPath,
-        line: toLine(sourceFile, specifierNode),
-        kind,
-        specifier,
-        subpath,
-        reason: `missing from ${missingFrom.join(" and ")}`,
-      });
-    }
-
     visitModuleSpecifiers(
       sourceFile,
       ({ kind, node, specifier, specifierNode }) => {
-        push(kind, node, specifierNode, specifier);
+        const subpath = parsePluginSdkSubpath(specifier);
+        if (!subpath) {
+          return;
+        }
+        if (privateLocalOnlySubpaths.has(subpath)) {
+          if (isCoreRuntimeFile && isRuntimeModuleReference(node)) {
+            violations.push({
+              file: repoPath,
+              line: toLine(sourceFile, specifierNode),
+              kind,
+              specifier,
+              subpath,
+              reason: "private runtime helper used by core must use a relative import",
+            });
+          }
+          return;
+        }
+
+        const missingFrom: string[] = [];
+        if (!entrypoints.has(subpath)) {
+          missingFrom.push("scripts/lib/plugin-sdk-entrypoints.json");
+        }
+        if (!exports.has(subpath)) {
+          missingFrom.push("package.json exports");
+        }
+        if (missingFrom.length === 0) {
+          return;
+        }
+
+        violations.push({
+          file: repoPath,
+          line: toLine(sourceFile, specifierNode),
+          kind,
+          specifier,
+          subpath,
+          reason: `missing from ${missingFrom.join(" and ")}`,
+        });
       },
       { includeCommonJs: true, includeImportTypes: true },
     );

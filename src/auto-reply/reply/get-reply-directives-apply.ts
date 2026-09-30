@@ -5,6 +5,7 @@ import { resolveContextConfigProviderForRuntime } from "../../agents/openai-rout
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
@@ -22,12 +23,13 @@ import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
-import type { InlineDirectives } from "./directive-handling.parse.js";
+import { hasSessionDirectives, type InlineDirectives } from "./directive-handling.parse.js";
 import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { ReplyPreRunRejectionCode } from "./reply-operation-run-state.js";
+import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -45,14 +47,7 @@ const directivePersistLoader = createLazyImportLoader(
 function hasOnlyModelDirective(directives: InlineDirectives): boolean {
   return (
     directives.hasModelDirective &&
-    !directives.hasThinkDirective &&
-    !directives.hasFastDirective &&
-    !directives.hasVerboseDirective &&
-    !directives.hasTraceDirective &&
-    !directives.hasReasoningDirective &&
-    !directives.hasElevatedDirective &&
-    !directives.hasExecDirective &&
-    !directives.hasQueueDirective &&
+    !hasSessionDirectives(directives, "model") &&
     !directives.hasStatusDirective
   );
 }
@@ -113,6 +108,7 @@ const directiveRejection = (
 
 export async function applyInlineDirectiveOverrides(params: {
   ctx: MsgContext;
+  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
@@ -298,17 +294,7 @@ export async function applyInlineDirectiveOverrides(params: {
     }
   }
 
-  const hasAnyDirective =
-    directives.hasThinkDirective ||
-    directives.hasFastDirective ||
-    directives.hasVerboseDirective ||
-    directives.hasTraceDirective ||
-    directives.hasReasoningDirective ||
-    directives.hasElevatedDirective ||
-    directives.hasExecDirective ||
-    directives.hasModelDirective ||
-    directives.hasQueueDirective ||
-    directives.hasStatusDirective;
+  const hasAnyDirective = hasSessionDirectives(directives) || directives.hasStatusDirective;
 
   if (!hasAnyDirective && !modelState.resetModelOverride && !modelState.resetModelOverrideReason) {
     return {
@@ -346,6 +332,7 @@ export async function applyInlineDirectiveOverrides(params: {
     persistenceState?: NonNullable<HandleDirectiveOnlyParams["persistenceState"]>,
   ) => {
     let rejected = false;
+    assertReplyPreprocessingActive(params.abortSignal);
     const currentLevels = await (
       await directiveLevelsLoader.load()
     ).resolveCurrentDirectiveLevels({
@@ -354,10 +341,21 @@ export async function applyInlineDirectiveOverrides(params: {
       agentCfg,
       resolveDefaultThinkingLevel:
         !persistenceState || directives.hasThinkDirective
-          ? () => modelState.resolveDefaultThinkingLevel()
+          ? () => {
+              assertReplyPreprocessingActive(params.abortSignal);
+              return racePromiseWithAbortSignal(
+                modelState.resolveDefaultThinkingLevel(),
+                params.abortSignal,
+              );
+            }
           : async () => undefined,
     });
-    const thinkingCatalog = await modelState.resolveThinkingCatalog();
+    assertReplyPreprocessingActive(params.abortSignal);
+    const thinkingCatalog = await racePromiseWithAbortSignal(
+      modelState.resolveThinkingCatalog(),
+      params.abortSignal,
+    );
+    assertReplyPreprocessingActive(params.abortSignal);
     const reply = await (
       await directiveImplLoader.load()
     ).handleDirectiveOnly({

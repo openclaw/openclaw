@@ -289,6 +289,7 @@ describe("SQLite historical session disk budget", () => {
         updatedAt: 100,
         archivedAt: 100,
         archiveReason: "active-session-cap",
+        skillsSnapshot: { prompt: "retained archived instructions", skills: [] },
       },
     );
     settlePhysicalUsage();
@@ -557,7 +558,7 @@ describe("SQLite historical session disk budget", () => {
           archiveReason: "active-session-cap",
         },
       );
-      const reclamation = await import("./session-accessor.sqlite-reclamation.js");
+      const reclamation = await import("./session-accessor.sqlite-reclamation-run.js");
       const reclaim = reclamation.runSqliteSessionReclamation;
       const historyRequests: string[] = [];
       let protectionChanged = false;

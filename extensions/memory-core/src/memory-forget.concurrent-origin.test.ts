@@ -45,7 +45,7 @@ describe("Forget with origins committed by another workspace", () => {
       );
       const publishOrigin = () =>
         withMemoryWorkspaceLock(otherWorkspace, async () => {
-          recordMemoryEntryOrigins({
+          await recordMemoryEntryOrigins({
             agentId: "main",
             origins: [
               {

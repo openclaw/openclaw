@@ -1,4 +1,5 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
+import { normalizeIMessageMessageId } from "../message-guid.js";
 import { resolveIMessageEchoMediaKey } from "../state-contract.js";
 import { normalizeIMessageEchoText } from "./echo-text-corruption.js";
 import { hasPersistedIMessageEcho } from "./persisted-echo-cache.js";
@@ -38,17 +39,6 @@ export type SentMessageCache = {
 const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
-function normalizeEchoMessageIdKey(messageId: string | undefined): string | null {
-  if (!messageId) {
-    return null;
-  }
-  const normalized = messageId.trim();
-  if (!normalized || normalized === "ok" || normalized === "unknown") {
-    return null;
-  }
-  return normalized;
-}
-
 class DefaultSentMessageCache implements SentMessageCache {
   private textCache = new Map<string, number>();
   private textBackedByIdCache = new Map<string, number>();
@@ -65,7 +55,7 @@ class DefaultSentMessageCache implements SentMessageCache {
     if (mediaKey) {
       this.mediaCache.set(`${scope}:${mediaKey}`, Date.now());
     }
-    const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
+    const messageIdKey = normalizeIMessageMessageId(lookup.messageId);
     if (messageIdKey) {
       this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
       if (textKey) {
@@ -100,7 +90,7 @@ class DefaultSentMessageCache implements SentMessageCache {
     }
     const textKey = normalizeIMessageEchoText(lookup.text);
     const mediaKey = resolveIMessageEchoMediaKey(lookup.media);
-    const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
+    const messageIdKey = normalizeIMessageMessageId(lookup.messageId);
     let canUseMediaFallback = !messageIdKey;
     if (messageIdKey) {
       const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);

@@ -24,7 +24,7 @@ export function renderSkillWorkshopProposalList(params: {
           .value=${props.query}
           @input=${(event: Event) =>
             // SAFETY: handler is bound on the <input> itself, so currentTarget is that element.
-            props.onQueryChange((event.currentTarget as HTMLInputElement).value ?? "")}
+            props.onQueryChange((event.currentTarget as HTMLInputElement).value)}
         />
       </div>
       <div class="sw-queue__body">

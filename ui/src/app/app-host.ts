@@ -73,6 +73,7 @@ import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { isApplyingServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
 import { capturePlacementStartupConnection } from "./session-placement-startup.ts";
 import { setSettingsChangeListener } from "./settings.ts";
+import { ShellLayoutController } from "./shell-layout-traits.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -97,6 +98,8 @@ class OpenClawShell
   @property({ attribute: false }) onboarding = false;
 
   @state() navDrawerOpen = false;
+  @state() navResizing = false;
+  readonly shellLayout = new ShellLayoutController(this);
   @state() desktopNavigationExpanded = false;
   @state() activeSessionKey = "";
   @state() settingsSearchQuery = "";
@@ -130,9 +133,7 @@ class OpenClawShell
   // Desktop and modal navigation are two slots for the same live sidebar.
   // Moving its element preserves session controllers and the resident pet
   // instead of resetting their lifecycle at every responsive breakpoint.
-  readonly navigationSidebar: HTMLElement & { requestUpdate?: () => void } = document.createElement(
-    APP_SIDEBAR_ELEMENT.tagName,
-  );
+  readonly navigationSidebar: HTMLElement = document.createElement(APP_SIDEBAR_ELEMENT.tagName);
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
@@ -485,10 +486,8 @@ class OpenClawShell
   }
 
   private readonly refreshStoredOutboxPresentation = () => {
-    // A sidebar update may already be queued when the outbox publishes.
     this.refreshStoredOutboxSummary();
     this.requestUpdate();
-    this.navigationSidebar.requestUpdate?.();
   };
 
   private resetForContextEpoch() {

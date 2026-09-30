@@ -23,6 +23,8 @@ extension DashboardManager {
         var browserSession: GatewayBrowserSession?
         var signedOut: DashboardFailurePage.SignedOut?
         var autoStartSignIn = false
+        var legacyNativeCredentials: DashboardNativeGatewayAuth.LegacyCredentials?
+        var nativeAuthProvider: DashboardNativeGatewayAuth.Provider?
     }
 
     struct SupersededDashboardPresentation: Error {}
@@ -94,6 +96,10 @@ extension DashboardManager {
         },
         browserIdentityURLProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
             -> URL?)? = { _, _ in nil },
+        legacyCredentialsProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.EndpointSnapshot) async throws
+            -> DashboardNativeGatewayAuth.LegacyCredentials)? = { _, _ in
+            .init(credentials: [:], isCurrent: { true }, waitForInvalidation: nil)
+        },
         routeProbe: @escaping @Sendable (DashboardRouteProbePurpose) async -> Void = { _ in },
         endpointStateProvider: @escaping @Sendable () async -> GatewayEndpointState = {
             .unavailable(mode: .unconfigured, reason: "not configured")
@@ -114,6 +120,7 @@ extension DashboardManager {
             authTokenProvider: authTokenProvider,
             connectionProvider: connectionProvider,
             browserIdentityURLProvider: browserIdentityURLProvider,
+            legacyCredentialsProvider: legacyCredentialsProvider,
             routeProbe: routeProbe,
             endpointStateProvider: endpointStateProvider,
             observeGatewayChanges: observeGatewayChanges,
@@ -140,6 +147,8 @@ extension DashboardManager {
         present: Bool,
         restoringRoute: URL? = nil)
     {
+        controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
+        controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
         if let page = configuration.signedOut {
             controller.showSignedOut(page, present: present, autoStart: configuration.autoStartSignIn)
         } else if present {
@@ -213,18 +222,28 @@ extension DashboardManager {
         let identityURL = mode == .remote
             ? try await browserIdentityURLProvider(target, config)
             : nil
-        let dashboardConfig: GatewayConnection.Config = browserSession == nil
-            ? config : (url: config.url, token: nil, password: nil)
+        // Device grants remain challenge-only. Shared startup credentials retain
+        // the released UI contract, but come only from the native accepted binding.
+        let dashboardConfig: GatewayConnection.Config = (url: config.url, token: nil, password: nil)
         let url = try identityURL ?? GatewayEndpointStore.dashboardURL(
-            for: dashboardConfig, mode: mode, authToken: browserSession == nil ? token : nil)
+            for: dashboardConfig, mode: mode)
         try browserSession?.validate(for: url)
+        let legacyCredentials: DashboardNativeGatewayAuth.LegacyCredentials? = if identityURL == nil,
+                                                                                  browserSession == nil
+        {
+            try await self.legacyCredentialsProvider(target, endpoint)
+        } else {
+            nil
+        }
+        guard legacyCredentials?.isCurrent() != false else { throw CancellationError() }
         let auth: DashboardWindowAuth = if identityURL != nil || browserSession != nil {
             .browserIdentity(gatewayUrl: Self.websocketURLString(for: url))
         } else {
-            DashboardWindowAuth(
+            .nativeDevice(
                 gatewayUrl: Self.websocketURLString(for: url),
                 token: token,
-                password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+                password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+                legacyCredentials: legacyCredentials?.credentials)
         }
         let name = target == .primary ? "OpenClaw"
             : self.gatewayEntries.first { $0.id == target.bridgeID }?.name ?? url.host ?? "Gateway"
@@ -236,7 +255,23 @@ extension DashboardManager {
             tlsParams: identityURL == nil && browserSession == nil ? endpoint.tls?.params : nil,
             mode: mode,
             displayName: name,
-            browserSession: browserSession)
+            browserSession: browserSession,
+            legacyNativeCredentials: legacyCredentials,
+            nativeAuthProvider: auth.usesNativeDevice ? self
+                .nativeAuthProvider(target: target, endpoint: endpoint) : nil)
+    }
+}
+
+extension DashboardManager {
+    func nativeAuthProvider(
+        target: DashboardGatewayTarget,
+        endpoint: GatewayConnection.EndpointSnapshot) -> DashboardNativeGatewayAuth.Provider
+    {
+        let connectionProvider = self.connectionProvider
+        return { nonce, signedAt in
+            let connection = await connectionProvider(target)
+            return try await connection.controlUiNativeAuth(endpoint: endpoint, nonce: nonce, signedAt: signedAt)
+        }
     }
 }
 
@@ -250,7 +285,7 @@ extension DashboardManager {
     {
         // A saved renewal may reach the catalog before its serialized cookie
         // write finishes. The existing account lease remains valid throughout.
-        !controller.hasTLSParams(configuration.tlsParams) ||
+        controller.tlsParams != configuration.tlsParams ||
             controller.auth != configuration.auth ||
             !controller.hasCurrentBrowserSession ||
             controller.browserSession?.browserDataPrincipal != configuration.browserSession?.browserDataPrincipal ||

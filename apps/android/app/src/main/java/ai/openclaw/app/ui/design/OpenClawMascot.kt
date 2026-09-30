@@ -305,7 +305,7 @@ private fun DrawScope.drawEffect(pose: MascotPose) {
     MascotEffect.Sparkles -> {
       repeat(6) { index ->
         val phase = (pose.effectPhase + index * 0.37) % 1.0
-        val alpha = effectBell(phase)
+        val alpha = mascotBell(phase)
         if (alpha > 0.05) {
           val angle = PI + PI * (index + 0.5) / 6.0
           val center =
@@ -363,7 +363,7 @@ private fun DrawScope.drawEffect(pose: MascotPose) {
     }
 
     MascotEffect.Sweat -> {
-      val alpha = effectBell(pose.effectPhase)
+      val alpha = mascotBell(pose.effectPhase)
       if (alpha > 0.02) {
         val center = Offset(42f, (24.0 + 7.0 * pose.effectPhase).toFloat())
         val drop =
@@ -411,10 +411,4 @@ private fun DrawScope.drawZ(
     alpha = alpha * 0.9f,
     style = Stroke(width = max(1.2f, size * 0.16f), cap = StrokeCap.Round, join = StrokeJoin.Round),
   )
-}
-
-private fun effectBell(value: Double): Double {
-  val t = value.coerceIn(0.0, 1.0)
-  val edge = if (t < 0.5) t * 2.0 else (1.0 - t) * 2.0
-  return edge * edge * (3.0 - 2.0 * edge)
 }

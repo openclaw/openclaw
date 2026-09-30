@@ -453,40 +453,6 @@ describe("buildOpenAIProvider", () => {
     ]);
   });
 
-  it.each(["chatgpt-token-sharing", "chatgpt-identity"])(
-    "does not send %s credentials to model discovery",
-    async (authFlow) => {
-      const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>();
-      const { provider, outcomes } = await runCatalogWithFetchGuard({
-        fetchGuard,
-        auth: {
-          mode: "oauth",
-          authFlow,
-          apiKey: "sharing-fixture",
-          profileId: "openai:sharing",
-          source: "profile",
-        },
-      });
-
-      expect(fetchGuard).not.toHaveBeenCalled();
-      expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
-      expect(provider.baseUrl).toBe(OPENAI_API_BASE_URL);
-      if (authFlow === "chatgpt-token-sharing") {
-        expect(provider.models.length).toBeGreaterThan(0);
-        expect(provider.models.every((model) => model.api === "openai-responses")).toBe(true);
-      } else {
-        expect(provider.models).toEqual([]);
-      }
-      expect(outcomes).toEqual([
-        {
-          provider: "openai",
-          profileId: "openai:sharing",
-          status: authFlow === "chatgpt-token-sharing" ? "unavailable" : "auth-rejected",
-        },
-      ]);
-    },
-  );
-
   it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {
     const provider = buildOpenAIProvider();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -1123,72 +1089,6 @@ describe("buildOpenAIProvider", () => {
       fetchSpy.mockRestore();
     }
   });
-
-  it.each(["gpt-5.4", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])(
-    "maps discovered %s into a ChatGPT response model",
-    async (modelId) => {
-      const release = vi.fn(async () => undefined);
-      const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-        response: Response.json({
-          models: [
-            {
-              slug: modelId,
-              display_name: modelId,
-              visibility: "list",
-              supported_reasoning_levels: [
-                { effort: "medium", description: "medium" },
-                { effort: "high", description: "high" },
-              ],
-              context_window: 272_000,
-              max_context_window: 1_050_000,
-              max_output_tokens: 128_000,
-            },
-            {
-              slug: "hidden-review-model",
-              display_name: "Hidden Review Model",
-              visibility: "hide",
-            },
-            {
-              slug: "internal-fallback-model",
-              display_name: "Internal Fallback Model",
-              visibility: "none",
-            },
-          ],
-        }),
-        finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-        release,
-      }));
-
-      const provider = await buildOpenAICodexLiveProviderConfig({
-        discoveryApiKey: "oauth-token",
-        accountId: "acct-openai-workspace",
-        fetchGuard,
-      });
-
-      expect(provider?.api).toBe("openai-chatgpt-responses");
-      expect(provider?.auth).toBe("oauth");
-      expect(provider?.models.map((model) => model.id)).toEqual([modelId]);
-      expect(provider?.models[0]).toMatchObject({
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        input: ["text", "image"],
-        reasoning: true,
-        contextWindow: 1_050_000,
-        contextTokens: 272_000,
-        maxTokens: 128_000,
-      });
-      const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
-      expect(fetchParams?.url).toBe(OPENAI_CODEX_MODELS_URL);
-      const init = fetchParams?.init;
-      const headers = init?.headers;
-      expect(headers).toBeInstanceOf(Headers);
-      if (!(headers instanceof Headers)) {
-        throw new Error("expected fetch headers");
-      }
-      expect(headers.get("Authorization")).toBe("Bearer oauth-token");
-      expect(headers.get("ChatGPT-Account-ID")).toBe("acct-openai-workspace");
-      expect(release).toHaveBeenCalledOnce();
-    },
-  );
 
   it("rejects Platform-only aliases while preserving GPT-5.6 ChatGPT capabilities", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({

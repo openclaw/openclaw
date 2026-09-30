@@ -235,6 +235,28 @@ describe("login gate failure recovery", () => {
     ).toEqual(["openclaw gateway auth-token --show", "openclaw doctor --generate-gateway-token"]);
   });
 
+  it("recovers an invalid one-time pairing link without blaming the Gateway secret", async () => {
+    const element = await mountFailure(
+      "unauthorized: bootstrap token invalid",
+      ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
+      "Pairing link is no longer valid",
+    );
+    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toMatch(
+      /expired|already been used/,
+    );
+    expect(failure?.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
+      "openclaw dashboard",
+    );
+    const steps = failure?.querySelector(".login-gate__failure-steps");
+    expect(steps?.textContent).toContain("browserUrl");
+    expect(steps?.querySelector("code")?.textContent?.trim()).toBe("openclaw dashboard --json");
+    expect(failure?.textContent).not.toMatch(/Gateway secret rejected|Replace the Gateway secret/);
+    expect(element.props.onConnect).not.toHaveBeenCalled();
+  });
+
   it("edits and reveals one Gateway secret without choosing a credential type", async () => {
     const element = await mountFailure("", null, "old-secret");
     const input = element.querySelector<HTMLInputElement>("#login-gate-credential")!;

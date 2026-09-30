@@ -1,11 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
-import { parse } from "yaml";
+import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { runBelongsToPullRequest } from "../verify-pr-hosted-gates.mts";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhJson } from "./github.mjs";
+import {
+  qualifyPriorCiCancelledRoots,
+  verifyPriorCiCancellation,
+} from "./merge-prior-ci-cancellation.mjs";
 import { verifyPriorCiSecurity } from "./merge-prior-ci-security.mjs";
 import { readMergePolicy, readRequiredMergeChecks } from "./merge-rest.mjs";
 
@@ -23,6 +26,128 @@ function requireEvidence(condition, message) {
   if (!condition) {
     throw new Error(`Prior-CI admin admission: ${message}`);
   }
+}
+
+function qualifyProviderRejection(recordJson, source) {
+  const record = JSON.parse(recordJson);
+  const attempt = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const captureName =
+    /^merge-output\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.log$/;
+  requireEvidence(
+    record?.version === 1 &&
+      record.phase === "intent" &&
+      record.accepted === false &&
+      record.landed === null &&
+      record.route === "admin" &&
+      record.method === "squash" &&
+      typeof record.head === "string" &&
+      oid.test(record.head) &&
+      typeof record.attempt === "string" &&
+      attempt.test(record.attempt) &&
+      positiveInteger(record.pr) &&
+      nonempty(record.repo?.nameWithOwner) &&
+      record.repo.url === `https://github.com/${record.repo.nameWithOwner}` &&
+      record.priorCiAdmin?.version === 1 &&
+      record.priorCiAdmin.dispatchTransport === "rest" &&
+      record.priorCiAdmin.head === record.head &&
+      record.priorCiAdmin.pr === record.pr &&
+      record.priorCiAdmin.repository === record.repo.nameWithOwner,
+    "provider rejection requires an unaccepted exact-head prior-CI admin REST squash intent",
+  );
+  const capture = `merge-output.${record.attempt}.log`;
+  const inherited = record.recovery?.providerRejection;
+  const inheritedFiles = inherited === undefined ? {} : inherited?.files;
+  requireEvidence(
+    inherited === undefined ||
+      (inherited?.kind === "github-base-modified-405" &&
+        inheritedFiles &&
+        typeof inheritedFiles === "object" &&
+        !Array.isArray(inheritedFiles) &&
+        captureName.test(inherited.capture ?? "") &&
+        Object.hasOwn(inheritedFiles, inherited.capture) &&
+        Object.entries(inheritedFiles).every(
+          ([name, value]) => captureName.test(name) && typeof value === "string" && oid.test(value),
+        )),
+    "invalid inherited provider-rejection captures",
+  );
+  requireEvidence(
+    !Object.hasOwn(inheritedFiles, capture),
+    "provider rejection must name a new attempt capture",
+  );
+  const expected = [capture, ...Object.keys(inheritedFiles)].toSorted();
+  const retained = /^git:([0-9a-f]{40})$/.exec(source ?? "")?.[1];
+  requireEvidence(
+    source === ".local" || retained,
+    "provider rejection source must be .local or a retained Git commit",
+  );
+  let entries;
+  if (retained) {
+    requireEvidence(
+      git(["cat-file", "-t", retained]).toString("utf8").trim() === "commit",
+      "provider rejection source must be a retained commit",
+    );
+    entries = git(["ls-tree", "-z", retained])
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean)
+      .map((line) => {
+        const match = /^(\d+) (\S+) ([0-9a-f]{40})\t(.*)$/su.exec(line);
+        requireEvidence(match, "invalid retained provider-rejection tree entry");
+        return { name: match[4], mode: match[1], type: match[2], oid: match[3] };
+      });
+  } else {
+    const stat = lstatSync(source);
+    requireEvidence(
+      stat.isDirectory() && !stat.isSymbolicLink(),
+      "provider rejection directory must not be a symlink",
+    );
+    entries = readdirSync(source).map((name) => ({ name }));
+  }
+  const actual = entries.filter((entry) => /^merge-output(?:\..+)?\.log$/u.test(entry.name));
+  requireEvidence(
+    JSON.stringify(actual.map((entry) => entry.name).toSorted()) === JSON.stringify(expected),
+    "provider rejection requires exactly the original attempt and inherited captures; other attempts remain unresolved",
+  );
+  // The request reached GitHub. This exact response qualifies provider rejection,
+  // never a claim that dispatch did not happen or permission for an automatic retry.
+  const response = Buffer.from(
+    '{"message":"Base branch was modified. Review and try the merge again.","documentation_url":"https://docs.github.com/rest/pulls/pulls#merge-a-pull-request","status":"405"}gh: Base branch was modified. Review and try the merge again. (HTTP 405)\n',
+  );
+  const files = {};
+  for (const name of expected) {
+    let bytes;
+    if (retained) {
+      const entry = actual.find((value) => value.name === name);
+      requireEvidence(
+        entry.mode === "100644" && entry.type === "blob",
+        "retained provider captures must be regular root blobs",
+      );
+      bytes = git(["cat-file", "blob", entry.oid]);
+    } else {
+      const path = `${source}/${name}`;
+      const stat = lstatSync(path);
+      requireEvidence(
+        stat.isFile() && !stat.isSymbolicLink(),
+        "provider captures must be regular nonsymlink files",
+      );
+      bytes = readFileSync(path);
+    }
+    requireEvidence(
+      bytes.equals(response),
+      "require the complete exact GitHub base-modified HTTP 405 rejection",
+    );
+    const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+    requireEvidence(
+      !retained || actual.find((entry) => entry.name === name).oid === blob,
+      "retained provider-rejection blob does not match its bytes",
+    );
+    requireEvidence(
+      !Object.hasOwn(inheritedFiles, name) || inheritedFiles[name] === blob,
+      "inherited provider-rejection capture changed",
+    );
+    files[name] = blob;
+  }
+  return { kind: "github-base-modified-405", capture, files };
 }
 
 function priorCiDelta(priorHead, head) {
@@ -120,57 +245,6 @@ function verifyUnchangedEvidence(path, expected) {
   return { evidenceSha256: expected };
 }
 
-function verifyMatrixCancellation(evidence, run, cancellation, members) {
-  const workflowJob = "checks-node-core-test-nondist-shard";
-  requireEvidence(
-    run.event === "pull_request" &&
-      cancellation.workflowJob === workflowJob &&
-      cancellation.jobId === undefined &&
-      cancellation.step === undefined,
-    "matrix cancellation requires the existing PR Node matrix owner",
-  );
-  const workflowPath = ".github/workflows/ci.yml";
-  const baseline = git(["rev-parse", `${evidence.priorHead}:${workflowPath}`])
-    .toString("utf8")
-    .trim();
-  const workflowBlob = git(["rev-parse", `${evidence.testedMerge}:${workflowPath}`])
-    .toString("utf8")
-    .trim();
-  requireEvidence(
-    oid.test(workflowBlob) && workflowBlob === baseline,
-    "matrix cancellation workflow changed in the tested PR merge",
-  );
-  const workflow = parse(git(["show", `${evidence.testedMerge}:${workflowPath}`]).toString("utf8"));
-  const owner = workflow?.jobs?.[workflowJob];
-  requireEvidence(
-    owner?.name === "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}" &&
-      Array.isArray(owner.needs) &&
-      owner.needs.includes("preflight") &&
-      owner.strategy?.matrix ===
-        "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}" &&
-      [true, "${{ github.event_name == 'pull_request' }}"].includes(
-        owner.strategy?.["fail-fast"],
-      ) &&
-      [undefined, false].includes(owner["continue-on-error"]),
-    "the tested workflow must enable the existing PR matrix fail-fast contract",
-  );
-  // GitHub jobs omit their matrix owner. Membership and cause remain inspected
-  // operator attestations; exact names/IDs bind them without inferring from prefixes.
-  requireEvidence(
-    Array.isArray(cancellation.members) &&
-      cancellation.members.length === members.length &&
-      new Set(cancellation.members.map((member) => member?.jobId)).size === members.length &&
-      cancellation.members.every(
-        (member) =>
-          positiveInteger(member?.jobId) &&
-          nonempty(member.name) &&
-          members.some((job) => job.id === member.jobId && job.name === member.name),
-      ),
-    "matrix membership bindings must name every admitted root and cancelled job exactly",
-  );
-  return { ...cancellation, workflowBlob };
-}
-
 async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repositoryId) {
   verifyFailureArtifacts(evidence);
   const references = (entry) =>
@@ -242,8 +316,18 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
     (check) => check.name === "openclaw/ci-gate" && positiveInteger(check.statusId),
   );
   requireEvidence(combined.length === 1, "current combined CI/security status is required");
+  const cancelledRoots = qualifyPriorCiCancelledRoots({
+    evidence,
+    run,
+    jobs,
+    gate: gates[0],
+    git,
+    requireEvidence,
+  });
   const failed = jobs.filter(
-    (job) => ["failure", "timed_out"].includes(job.conclusion) && job !== gates[0],
+    (job) =>
+      job !== gates[0] &&
+      (["failure", "timed_out"].includes(job.conclusion) || cancelledRoots.has(job.id)),
   );
   const attributions = evidence.failures;
   requireEvidence(
@@ -292,6 +376,8 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
       sourcePaths: entry.sourcePaths,
       evidence: entry.evidence,
       sourceObjects,
+      deadline: cancelledRoots.get(entry.jobId)?.deadline,
+      failedStep: cancelledRoots.get(entry.jobId)?.failedStep,
     };
   });
   const rootIds = failures.map((entry) => entry.jobId).toSorted((a, b) => a - b);
@@ -303,59 +389,17 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
     evidence.aggregate?.jobId === gates[0].id && causedByRoots(evidence.aggregate),
     "the failed CI aggregate needs inspected attribution to the admitted root failures",
   );
-  const cancelled = jobs.filter((job) => job.conclusion === "cancelled" && job !== gates[0]);
-  let matrixCancellation;
-  if (cancelled.length > 0) {
-    const cancellation = evidence.cancellation;
-    requireEvidence(
-      causedByRoots(cancellation) &&
-        Array.isArray(cancellation.jobIds) &&
-        JSON.stringify(cancellation.jobIds.toSorted((a, b) => a - b)) ===
-          JSON.stringify(cancelled.map((job) => job.id).toSorted((a, b) => a - b)),
-      "all cancelled jobs require explicit inspected fail-fast provenance; cancellation is not passing coverage",
-    );
-    requireEvidence(
-      cancelled.every(
-        (job) =>
-          Array.isArray(job.steps) &&
-          job.steps.every(
-            (step) =>
-              !["failure", "timed_out", "action_required", "startup_failure"].includes(
-                step.conclusion,
-              ),
-          ),
-      ),
-      "cancelled jobs must not hide failed steps or omit step evidence",
-    );
-    if (cancellation.kind === "matrix-fail-fast") {
-      matrixCancellation = verifyMatrixCancellation(evidence, run, cancellation, [
-        ...failed,
-        ...cancelled,
-      ]);
-    } else {
-      const owner = jobs.find((job) => job.id === cancellation.jobId);
-      requireEvidence(
-        [undefined, "pr-fail-fast"].includes(cancellation.kind) &&
-          owner?.name === "pr-fail-fast" &&
-          owner.conclusion === "success" &&
-          positiveInteger(cancellation.step) &&
-          Array.isArray(owner.steps) &&
-          owner.steps.some(
-            (step) =>
-              step.number === cancellation.step &&
-              step.name === "Cancel remaining PR work after a failure" &&
-              step.status === "completed" &&
-              step.conclusion === "success",
-          ),
-        "all cancelled jobs require explicit inspected fail-fast provenance; cancellation is not passing coverage",
-      );
-    }
-  } else {
-    requireEvidence(
-      evidence.cancellation === undefined,
-      "cancellation attribution has no matching jobs",
-    );
-  }
+  const cancellationProof = verifyPriorCiCancellation({
+    evidence,
+    run,
+    jobs,
+    failed,
+    gate: gates[0],
+    causedByRoots,
+    references,
+    git,
+    requireEvidence,
+  });
   const securityReview = await verifyPriorCiSecurity({
     repository: evidence.repository,
     repositoryId,
@@ -375,10 +419,9 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
   );
   return {
     failures,
-    cancelledJobIds: cancelled.map((job) => job.id).toSorted((a, b) => a - b),
+    ...cancellationProof,
     gateCheckRunId: current[0].checkRunId,
     securityReview,
-    ...(matrixCancellation ? { cancellation: matrixCancellation } : {}),
   };
 }
 
@@ -438,10 +481,10 @@ async function verifyPriorCiAdmin({ evidencePath, repository, pr, head, actor, m
         typeof parameters.required_review_thread_resolution === "boolean",
       "effective review requirements are incomplete",
     );
+    // Code-owner review is conditional on changed paths; GitHub's per-PR
+    // reviewDecision below owns that applicability, including REVIEW_REQUIRED.
     requireReviews ||=
-      parameters.required_approving_review_count > 0 ||
-      parameters.require_code_owner_review ||
-      parameters.require_last_push_approval;
+      parameters.required_approving_review_count > 0 || parameters.require_last_push_approval;
     requireThreads ||= parameters.required_review_thread_resolution;
   }
   const query =
@@ -631,20 +674,22 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         ? priorCiDelta(...args)
         : mode === "unchanged"
           ? verifyUnchangedEvidence(...args)
-          : mode === "verify"
-            ? await verifyPriorCiAdmin({
-                evidencePath: args[0],
-                repository: args[1],
-                pr: Number(args[2]),
-                head: args[3],
-                actor: args[4],
-                main: args[5],
-              })
-            : (() => {
-                throw new Error(
-                  "Expected delta <prior-head> <head>, unchanged <evidence> <sha256>, or verify <evidence> <repo> <PR> <head> <actor> [main]",
-                );
-              })();
+          : mode === "provider-rejection"
+            ? qualifyProviderRejection(...args)
+            : mode === "verify"
+              ? await verifyPriorCiAdmin({
+                  evidencePath: args[0],
+                  repository: args[1],
+                  pr: Number(args[2]),
+                  head: args[3],
+                  actor: args[4],
+                  main: args[5],
+                })
+              : (() => {
+                  throw new Error(
+                    "Expected delta <prior-head> <head>, unchanged <evidence> <sha256>, provider-rejection <record-json> <.local|git:outcome>, or verify <evidence> <repo> <PR> <head> <actor> [main]",
+                  );
+                })();
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

@@ -64,7 +64,7 @@ type ChildSessionQuery = {
 /** Gateway-backed session-list and external-catalog data ownership. */
 export class SessionDataController implements ReactiveController, SessionCatalogDataOwner {
   sessionCatalogs: SessionCatalog[] = [];
-  readonly pendingCatalogArchives = new Set<string>();
+  pendingCatalogArchives: ReadonlySet<string> = new Set();
   sessionCatalogRefreshStatus: PanelRefreshStatus = createPanelRefreshStatus();
   loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
   visibleSessionLimits = new Map<string, number>();
@@ -242,7 +242,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   retireSessionCatalogData(): void {
     this.sessionScopeGeneration += 1;
-    this.pendingCatalogArchives.clear();
+    this.pendingCatalogArchives = new Set();
     this.sessionsLoading = false;
     this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogLive.clear();
@@ -429,12 +429,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     const available = isGatewayAvailable(gateway.snapshot);
     const becameAvailable = available && !this.gatewayAvailable;
     this.gatewayAvailable = available;
-    if (!sourceOrClientChanged && !connectionChanged) {
-      this.synchronizeOwnerSessionCounts();
-    }
     // Presence and auth snapshots must not retire this client's in-flight
     // native or catalog pages unless its connection phase actually changes.
     if (!sourceOrClientChanged && !connectionChanged) {
+      this.synchronizeOwnerSessionCounts();
       const { awaitingGateway, error } = this.sessionCatalogRefreshStatus;
       const requesting = this.sessionCatalogLive.requestGeneration !== null;
       if (becameAvailable && (awaitingGateway || error !== null || requesting)) {
@@ -478,7 +476,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sessionsAgentId = null;
     this.sessionResultsByAgent = {};
     this.resetChildSessionState();
-    this.visibleSessionLimits.clear();
+    this.visibleSessionLimits = new Map();
     this.requestSessionDataUpdate();
   }
 
@@ -678,7 +676,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
-    this.visibleSessionLimits.set(sectionId, limit);
+    this.visibleSessionLimits = new Map(this.visibleSessionLimits).set(sectionId, limit);
     this.requestSessionDataUpdate();
   }
 
@@ -690,7 +688,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   resetSessionList(): void {
     this.retireFilteredSessions();
     this.sessionsLoading = false;
-    this.visibleSessionLimits.clear();
+    this.visibleSessionLimits = new Map();
     // A filter transition owns a new child/lineage generation; otherwise a
     // pending request from the retired view can repopulate its cleared rows.
     this.resetChildSessionState();

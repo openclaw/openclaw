@@ -8,6 +8,7 @@ import {
   normalizeOpenAIStrictCompatSchema,
   stripUnsupportedSchemaKeywords,
 } from "@openclaw/ai/internal/tool-schema";
+import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 // Provider tool helpers expose shared tool-call payload contracts for provider plugins.
 import type { TSchema } from "typebox";
 import type {
@@ -47,12 +48,8 @@ export function findUnsupportedSchemaKeywords(
   }
   const record = schema as Record<string, unknown>;
   const violations: string[] = [];
-  const properties =
-    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
-      ? (record.properties as Record<string, unknown>)
-      : undefined;
-  if (properties) {
-    for (const [key, value] of Object.entries(properties)) {
+  if (isSchemaRecord(record.properties)) {
+    for (const [key, value] of Object.entries(record.properties)) {
       violations.push(
         ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
       );
@@ -381,11 +378,7 @@ function flattenObjectVariants(
   let required: string[] | undefined;
   for (const variant of variants) {
     const variantProperties = variant.properties;
-    if (
-      !variantProperties ||
-      typeof variantProperties !== "object" ||
-      Array.isArray(variantProperties)
-    ) {
+    if (!isSchemaRecord(variantProperties)) {
       return undefined;
     }
     for (const [key, value] of Object.entries(variantProperties)) {
@@ -511,10 +504,6 @@ function poolLiteralEnum(left: unknown, right: unknown): Record<string, unknown>
   const merged: Record<string, unknown> = { ...left, enum: values };
   delete merged.const;
   return merged;
-}
-
-function isSchemaRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function literalValidationConstraints(schema: Record<string, unknown>): Record<string, unknown> {

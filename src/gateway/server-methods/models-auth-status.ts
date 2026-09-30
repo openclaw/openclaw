@@ -1,5 +1,3 @@
-// Model auth status methods report provider credential health, profile expiry,
-// usage windows, cleanup actions, and auth-state refreshes.
 import {
   findNormalizedProviderKey,
   normalizeProviderId,

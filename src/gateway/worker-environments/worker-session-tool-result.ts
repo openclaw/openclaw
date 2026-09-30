@@ -48,6 +48,10 @@ export function workerSessionToolErrorResult(error: unknown) {
   });
 }
 
+export function serializeWorkerSessionToolError(error: unknown): string {
+  return serializeWorkerSessionToolResult(workerSessionToolErrorResult(error));
+}
+
 export function serializeWorkerSessionToolResult(result: unknown): string {
   const resultJson = JSON.stringify(result);
   const frameBytes = Buffer.byteLength(

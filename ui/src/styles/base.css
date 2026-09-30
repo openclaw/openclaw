@@ -33,7 +33,11 @@
   --muted: #8b8b94;
   --muted-strong: #898990;
   --muted-foreground: #8b8b94;
-  --file-icon-glyph: #a3a3a3;
+  --file-icon-glyph: var(--muted);
+
+  /* GitHub references share an opaque neutral surface; only their ink carries status. */
+  --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 10%, var(--bg));
 
   /* Border - Whisper-thin, barely there */
   --border: #1e2028;
@@ -84,7 +88,7 @@
   --accent-hover: #ff7070;
   --accent-muted: #ff5c5c;
   --accent-subtle: rgba(255, 92, 92, 0.1);
-  --accent-foreground: #fafafa;
+  --accent-foreground: #0e1015;
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
   --inbox-attention-hover: color-mix(in srgb, var(--inbox-attention) 88%, black);
@@ -110,7 +114,9 @@
   --selection-bg: #005fcc;
   --selection-fg: #ffffff;
   --primary: #d13c3c;
-  --primary-hover: #c22e2e;
+  /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
+     contrast intact; built-in palettes override with audited hover colors. */
+  --primary-hover: var(--primary);
   --primary-foreground: #ffffff;
 
   /* Secondary */
@@ -189,18 +195,18 @@
   --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.08);
   --destructive: #ef4444;
+  --destructive-hover: var(--destructive);
   --destructive-foreground: #fafafa;
   --warn: #f59e0b;
   --warn-muted: rgba(245, 158, 11, 0.75);
   --warn-subtle: rgba(245, 158, 11, 0.08);
+  /* Presence dots are indicators, not text: idle keeps this amber in every theme. */
+  --presence-idle: #f59e0b;
   --danger: #f87171;
   --danger-muted: rgba(248, 113, 113, 0.75);
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
-  --warn-bright: #f59e0b;
-  --warn-strong: #d97706;
-  --danger-solid-hover: #dc2626;
   --pr-merged: #a78bfa;
 
   /* Focus */
@@ -222,9 +228,36 @@
   --hljs-deletion: #ffa198;
   --hljs-addition: #7ee787;
 
-  /* Theme transition */
-  --theme-switch-x: 50%;
-  --theme-switch-y: 50%;
+  /* Web Awesome shadow parts otherwise retain its independent blue-gray palette.
+     Map its semantic colors once so menus, form controls, tabs, and dialogs
+     inherit built-in, imported, and personal themes together. */
+  --wa-color-surface-default: var(--bg);
+  --wa-color-surface-raised: var(--popover);
+  --wa-color-surface-lowered: var(--bg-muted);
+  --wa-color-surface-border: var(--border);
+  --wa-color-text-normal: var(--text);
+  --wa-color-text-quiet: var(--muted);
+  --wa-color-text-link: var(--link);
+  --wa-color-focus: var(--ring);
+  --wa-color-neutral-fill-quiet: var(--bg-muted);
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+  --wa-color-neutral-border-normal: var(--border-strong);
+  --wa-color-neutral-border-loud: var(--muted);
+  --wa-color-neutral-on-quiet: var(--muted);
+  --wa-color-neutral-on-normal: var(--text);
+  --wa-color-brand-fill-quiet: var(--accent-subtle);
+  --wa-color-brand-fill-loud: var(--accent);
+  --wa-color-brand-on-quiet: var(--accent);
+  --wa-color-danger-fill-normal: var(--danger-subtle);
+  --wa-color-danger-on-quiet: var(--danger);
+  --wa-color-danger-on-normal: var(--danger);
+  --wa-form-control-background-color: var(--bg);
+  --wa-form-control-border-color: var(--border-strong);
+  --wa-form-control-activated-color: var(--accent);
+  --wa-form-control-label-color: var(--text);
+  --wa-form-control-value-color: var(--text);
+  --wa-form-control-hint-color: var(--muted);
+  --wa-form-control-placeholder-color: var(--muted);
 
   /* Typography */
   --mono:
@@ -271,7 +304,8 @@
   --space-8: 40px;
 
   /* Shared by mobile headers, transcripts, and independently loaded composers. */
-  --chat-mobile-edge-inset: var(--space-3);
+  --chat-mobile-edge-inset: var(--space-4);
+  --shell-popup-inline-gutter: 12px;
 
   /* One inset shared by every widget frame (chat preview panel, board card)
      so agent-authored widget documents meet identical breathing room on all
@@ -329,14 +363,24 @@
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
+  --shell-viewport-base: 100vh;
+  --shell-safe-area-bottom: var(--safe-area-bottom);
+  --shell-canvas-height: min(
+    var(--shell-viewport-base),
+    var(--shell-viewport-height, var(--shell-viewport-base))
+  );
+  --shell-content-height: calc(
+    var(--shell-canvas-height) - var(--safe-area-top) - var(--shell-safe-area-bottom)
+  );
 
   /* Layering */
   --z-dropdown: 100;
   --z-toast: 2000;
 
-  /* Custom select chevron. Data URIs cannot read var(--muted), so the stroke
-     color is baked per theme mode; light mode overrides the whole image. */
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  /* Two gradient strokes keep native select chevrons on the live muted ink. */
+  --select-chevron:
+    linear-gradient(45deg, transparent 40%, var(--muted) 40% 60%, transparent 60%),
+    linear-gradient(-45deg, transparent 40%, var(--muted) 40% 60%, transparent 60%);
 
   color-scheme: dark;
 }
@@ -499,16 +543,15 @@
   }
 }
 
-/* Named palette overrides win even when their stylesheet loads before the app. */
-:root:where([data-theme]) {
-  --primary-hover: var(--accent-hover);
-}
-
 /* The claw family deepens text-bearing primary and destructive fills. */
 :root[data-theme="dark"] {
   --primary-hover: #c22e2e;
   --destructive: #d32f2f;
   --destructive-hover: #bc2a2a;
+}
+
+:root[data-theme="light"] {
+  --primary-hover: var(--accent-hover);
 }
 
 /* Light theme tokens apply to every light-mode family. */
@@ -553,7 +596,8 @@
   --muted: #6e6960;
   --muted-strong: #56524a;
   --muted-foreground: #6e6960;
-  --file-icon-glyph: #737373;
+  --github-item-bg: color-mix(in srgb, var(--text) 5%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 9%, var(--bg));
 
   --border: #e8e4dc;
   --border-strong: #d6d0c5;
@@ -655,8 +699,6 @@
   --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
   --overlay-shadow: 0 1px 2px rgb(60 42 24 / 0.035), 0 8px 24px rgb(60 42 24 / 0.065);
 
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-
   color-scheme: light;
 }
 
@@ -736,8 +778,12 @@ summary,
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  html:has(.shell--chat),
-  body:has(.shell--chat) {
+  :root {
+    --shell-popup-inline-gutter: var(--chat-mobile-edge-inset);
+  }
+
+  html.control-ui-chat-shell,
+  .control-ui-chat-shell body {
     /* iOS Safari exposes the document canvas around its browser chrome; keep
        that canvas on the same semantic surface as the narrow transcript. */
     background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
@@ -762,44 +808,15 @@ summary,
   }
 }
 
-/* Theme transition */
-@keyframes theme-circle-transition {
-  0% {
-    clip-path: circle(0% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
-  }
-  100% {
-    clip-path: circle(150% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
-  }
-}
-
-html.theme-transition {
-  view-transition-name: theme;
-}
-
-html.theme-transition::view-transition-old(theme) {
-  mix-blend-mode: normal;
-  animation: none;
-  z-index: 1;
-}
-
-html.theme-transition::view-transition-new(theme) {
-  mix-blend-mode: normal;
-  z-index: 2;
-  animation: theme-circle-transition 0.4s var(--ease-out) forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html.theme-transition::view-transition-old(theme),
-  html.theme-transition::view-transition-new(theme) {
-    animation: none !important;
-  }
-}
-
 openclaw-app {
   display: block;
   position: relative;
   z-index: 1;
-  height: 100%;
+  /* One safe-area owner for every in-flow route, including native embeds.
+     Fixed/portaled surfaces consume the same geometry at the viewport edge. */
+  height: var(--shell-canvas-height);
+  padding: var(--safe-area-top) var(--safe-area-right) var(--shell-safe-area-bottom)
+    var(--safe-area-left);
 }
 
 /* Empty contribution hosts must not add layout boxes before the plugin runtime loads. */
@@ -807,21 +824,23 @@ openclaw-plugin-contributions {
   display: contents;
 }
 
+@supports (height: 100dvh) {
+  :root {
+    --shell-viewport-base: 100dvh;
+  }
+}
+
 @media (display-mode: standalone) {
-  @supports (height: 100dvh) {
-    html,
-    body {
-      height: 100dvh;
-    }
+  html,
+  body {
+    /* Keep the root clipping box on the CSS canvas. The app can shrink within
+       it to the visible bound without changing the keyboard layout reference. */
+    height: var(--shell-viewport-base);
   }
 
   body {
     position: fixed;
     inset: 0;
-    padding-top: var(--safe-area-top);
-    padding-right: var(--safe-area-right);
-    padding-bottom: var(--safe-area-bottom);
-    padding-left: var(--safe-area-left);
   }
 }
 
@@ -923,6 +942,13 @@ wa-dropdown-item {
 
 wa-dropdown-item[disabled] {
   cursor: not-allowed;
+}
+
+/* Options are menu rows, not solid primary actions. Keep their keyboard-current
+   fill and ink paired even when a theme has a very bright or dark accent. */
+wa-option {
+  --wa-form-control-activated-color: var(--bg-hover);
+  --current-text-color: var(--text);
 }
 
 /* The submenu safe triangle follows the pointer and can cover sibling rows,

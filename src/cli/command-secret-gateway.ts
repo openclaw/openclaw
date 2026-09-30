@@ -124,12 +124,7 @@ function targetsRuntimeWebResolution(params: {
   targetIds: ReadonlySet<string>;
   allowedPaths?: ReadonlySet<string>;
 }): boolean {
-  for (const path of params.allowedPaths ?? params.targetIds) {
-    if (targetsRuntimeWebPath(path)) {
-      return true;
-    }
-  }
-  return false;
+  return [...(params.allowedPaths ?? params.targetIds)].some(targetsRuntimeWebPath);
 }
 
 function collectConfiguredTargetRefPaths(params: {
@@ -171,13 +166,6 @@ function classifyConfiguredTargetRefs(params: {
   hasUnknownConfiguredRef: boolean;
   diagnostics: string[];
 } {
-  if (params.configuredTargetRefPaths.size === 0) {
-    return {
-      hasActiveConfiguredRef: false,
-      hasUnknownConfiguredRef: false,
-      diagnostics: [],
-    };
-  }
   const context = createResolverContext({
     sourceConfig: params.config,
     env: process.env,
@@ -763,46 +751,31 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         : {}),
     });
   } catch (err) {
-    let forcedActiveCompatFailure: Error | undefined;
+    const forcedActiveCompatFailure =
+      hasForcedActivePaths(params.forcedActivePaths) &&
+      isAllowedPathsSecretsResolveCompatError(err);
     try {
       const fallback = await resolveLocally();
       const recoveredLocally = Object.values(fallback.targetStatesByPath).some(
         (state) => state === "resolved_local",
       );
-      if (
-        hasForcedActivePaths(params.forcedActivePaths) &&
-        isAllowedPathsSecretsResolveCompatError(err) &&
-        (!recoveredLocally || fallback.hadUnresolvedTargets)
-      ) {
-        forcedActiveCompatFailure = new Error(
-          `${params.commandName}: active gateway does not support command-scoped secret resolution (${formatErrorMessage(err)}). Update the gateway or run this command where the configured SecretRefs can be resolved locally.`,
-          { cause: err },
-        );
-      } else {
+      if (!forcedActiveCompatFailure || (recoveredLocally && !fallback.hadUnresolvedTargets)) {
         const fallbackMessage =
           recoveredLocally && !fallback.hadUnresolvedTargets
             ? "resolved command secrets locally."
             : "attempted local command-secret resolution.";
         return {
-          resolvedConfig: fallback.resolvedConfig,
+          ...fallback,
           diagnostics: normalizeUniqueStringEntries([
             ...fallback.diagnostics,
             `${params.commandName}: gateway secrets.resolve unavailable (${formatErrorMessage(err)}); ${fallbackMessage}`,
           ]),
-          targetStatesByPath: fallback.targetStatesByPath,
-          hadUnresolvedTargets: fallback.hadUnresolvedTargets,
         };
       }
     } catch {
       // Fall through to original gateway-specific error reporting.
     }
     if (forcedActiveCompatFailure) {
-      throw forcedActiveCompatFailure;
-    }
-    if (
-      hasForcedActivePaths(params.forcedActivePaths) &&
-      isAllowedPathsSecretsResolveCompatError(err)
-    ) {
       throw new Error(
         `${params.commandName}: active gateway does not support command-scoped secret resolution (${formatErrorMessage(err)}). Update the gateway or run this command where the configured SecretRefs can be resolved locally.`,
         { cause: err },

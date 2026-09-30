@@ -24,9 +24,62 @@ function literal(node) {
     : undefined;
 }
 
-function appendImportEdges(source, importerPath, imports) {
+function packageJsonsFor(params, files) {
+  return (
+    params.packageJsons ??
+    new Map(
+      files
+        .filter((file) => params.readText && path.posix.basename(file) === "package.json")
+        .map((file) => [file, params.readText(file)]),
+    )
+  );
+}
+
+function sourceTypeFor(importerPath, packageJsons) {
+  if (importerPath.endsWith(".cjs")) {
+    return "script";
+  }
+  if (importerPath.endsWith(".mjs")) {
+    return "module";
+  }
+  let directory = path.posix.dirname(importerPath);
+  while (true) {
+    const manifest = packageJsons.get(path.posix.join(directory, "package.json"));
+    if (manifest !== undefined) {
+      const type = JSON.parse(manifest).type;
+      return type === "module" ? "module" : type === "commonjs" ? "script" : undefined;
+    }
+    if (directory === "." || directory === "/") {
+      return undefined;
+    }
+    directory = path.posix.dirname(directory);
+  }
+}
+
+function resolvesCommonJs(importedPath, fileSet, packageJsons) {
+  const extensions = ["", ".js", ".json", ".node"];
+  const loadFile = (target) => extensions.some((extension) => fileSet.has(target + extension));
+  const loadIndex = (directory) =>
+    extensions
+      .slice(1)
+      .some((extension) => fileSet.has(path.posix.join(directory, "index" + extension)));
+  if (!importedPath.endsWith("/") && loadFile(importedPath)) {
+    return true;
+  }
+  const manifest = packageJsons.get(path.posix.join(importedPath, "package.json"));
+  const main = manifest === undefined ? undefined : JSON.parse(manifest).main;
+  if (typeof main === "string" && main) {
+    const target = path.posix.join(importedPath, main);
+    if (loadFile(target) || loadIndex(target)) {
+      return true;
+    }
+  }
+  return loadIndex(importedPath);
+}
+
+function appendImportEdges(source, importerPath, imports, sourceType) {
   function visit(node) {
-    let kind = "import";
+    let kind;
     let specifier;
     if (
       ["ImportDeclaration", "ExportNamedDeclaration", "ExportAllDeclaration"].includes(node.type)
@@ -78,12 +131,7 @@ function appendImportEdges(source, importerPath, imports) {
         importerPath === "dist/managed-handoff-runtime.mjs" &&
         importedPath === "dist/node_modules/koffi/indirect.cjs";
       if (!stagedNativeUrl && (kind !== "import-meta-url" || importedPath.startsWith("dist/"))) {
-        imports.push({
-          importerPath,
-          importedPath,
-          kind,
-          ...(kind === "require" ? { specifier } : {}),
-        });
+        imports.push({ importerPath, importedPath, ...(kind === "require" ? { kind } : {}) });
       }
     }
     for (const value of Object.values(node)) {
@@ -98,62 +146,31 @@ function appendImportEdges(source, importerPath, imports) {
       }
     }
   }
-  visitJavaScriptStatements(
-    source,
-    {
-      sourceType: importerPath.endsWith(".cjs") ? "script" : "module",
-      allowReturnOutsideFunction: true,
-    },
-    (statements) => {
-      for (const statement of statements) {
-        visit(statement);
-      }
-    },
-  );
-}
-
-function isPackagePath(value) {
-  return !path.posix.isAbsolute(value) && value !== ".." && !value.startsWith("../");
-}
-
-// Node's default LOAD_AS_FILE / LOAD_AS_DIRECTORY rules, but only over archive entries.
-// Host require.resolve() could accept omitted files or leave this package's inventory.
-function resolveCommonJsImport(edge, fileSet, readText) {
-  const target = edge.importedPath.replace(/\/$/u, "");
-  if (!isPackagePath(target)) {
-    return undefined;
+  const scan = (type) =>
+    visitJavaScriptStatements(
+      source,
+      { sourceType: type, allowReturnOutsideFunction: true },
+      (statements) => {
+        for (const statement of statements) {
+          visit(statement);
+        }
+      },
+    );
+  if (sourceType) {
+    scan(sourceType);
+    return;
   }
-  const extensions = [".js", ".json", ".node"];
-  const loadExtensions = (base) =>
-    extensions.map((ext) => base + ext).find((file) => fileSet.has(file));
-  const loadFile = (base) => (fileSet.has(base) ? base : loadExtensions(base));
-  // A trailing slash or dot segment forces directory loading even when X.js exists.
-  if (!/(?:\/|(?:^|\/)\.{1,2})$/u.test(edge.specifier)) {
-    const file = loadFile(target);
-    if (file) {
-      return file;
+  // Node detects ESM syntax in .js files without an explicit package type.
+  const start = imports.length;
+  try {
+    scan("script");
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) {
+      throw error;
     }
+    imports.length = start;
+    scan("module");
   }
-  const manifestPath = path.posix.join(target, "package.json");
-  if (fileSet.has(manifestPath)) {
-    if (!readText) {
-      throw new Error(`CommonJS import validation requires packaged metadata: ${manifestPath}`);
-    }
-    const manifest = JSON.parse(readText(manifestPath));
-    const main = manifest?.main;
-    if (typeof main === "string" && main) {
-      const entry = path.posix.join(target, main).replace(/\/$/u, "");
-      if (path.posix.isAbsolute(main) || !isPackagePath(entry)) {
-        return undefined;
-      }
-      const file = loadFile(entry) ?? loadExtensions(path.posix.join(entry, "index"));
-      if (file) {
-        return file;
-      }
-    }
-  }
-  // Node retains the directory index fallback even for an invalid/missing main target.
-  return loadExtensions(path.posix.join(target, "index"));
 }
 
 /** Collect missing-file errors for relative imports inside package files. */
@@ -161,15 +178,16 @@ export function collectPackageDistImportErrors(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);
   const errors = [];
-  const imports = params.imports ?? collectPackageDistImports({ files, readText: params.readText });
+  const packageJsons = packageJsonsFor(params, files);
+  const imports =
+    params.imports ?? collectPackageDistImports({ files, readText: params.readText, packageJsons });
 
-  for (const edge of imports) {
-    const { importerPath, importedPath } = edge;
-    const resolved =
-      edge.kind === "require"
-        ? resolveCommonJsImport(edge, fileSet, params.readText)
+  for (const { importerPath, importedPath, kind } of imports) {
+    const found =
+      kind === "require"
+        ? resolvesCommonJs(importedPath, fileSet, packageJsons)
         : fileSet.has(importedPath);
-    if (!resolved) {
+    if (!found) {
       errors.push(`${importerPath} imports missing ${importedPath}`);
     }
   }
@@ -186,13 +204,14 @@ export function collectPackageDistImports(params) {
           left.localeCompare(right),
         );
   const imports = [];
+  const packageJsons = packageJsonsFor(params, files);
 
   for (const importerPath of files) {
     if (!JS_FILE_RE.test(importerPath) || /(?:^|\/)node_modules\//u.test(importerPath)) {
       continue;
     }
     const source = params.readText(importerPath);
-    appendImportEdges(source, importerPath, imports);
+    appendImportEdges(source, importerPath, imports, sourceTypeFor(importerPath, packageJsons));
   }
 
   return imports;

@@ -103,7 +103,6 @@ export class MemoryIndexDatabase {
           busy_timeout: readPragma("busy_timeout"),
           synchronous: readPragma("synchronous"),
           foreign_keys: readPragma("foreign_keys"),
-          wal_autocheckpoint: readPragma("wal_autocheckpoint"),
           journal_size_limit: readPragma("journal_size_limit"),
           checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
         },
@@ -247,7 +246,6 @@ export class MemoryIndexDatabase {
         busy_timeout: readPragma("busy_timeout"),
         synchronous: readPragma("synchronous"),
         foreign_keys: readPragma("foreign_keys"),
-        wal_autocheckpoint: readPragma("wal_autocheckpoint"),
         journal_size_limit: readPragma("journal_size_limit"),
         checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
       };

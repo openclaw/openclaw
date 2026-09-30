@@ -208,7 +208,7 @@ export async function handleBashChatCommand(params: {
     return buildUsageReply();
   }
 
-  if (request.action === "poll") {
+  if (request.action === "poll" || request.action === "stop") {
     const sessionId =
       normalizeOptionalString(request.sessionId) ||
       (liveJob?.state === "running" ? liveJob.sessionId : "");
@@ -216,54 +216,41 @@ export async function handleBashChatCommand(params: {
       return { text: "⚙️ No active bash job." };
     }
     const { running, finished } = getScopedSession(sessionId);
-    if (running) {
-      const runtimeSec = Math.max(0, Math.floor((Date.now() - running.startedAt) / 1000));
-      const tail = running.tail || "(no output yet)";
-      return {
-        text: [
-          `⚙️ bash still running (session ${formatSessionSnippet(sessionId)}, ${runtimeSec}s).`,
-          formatOutputBlock(tail),
-          "Hint: !stop (or /bash stop)",
-        ].join("\n"),
-      };
-    }
-    if (finished) {
-      if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
-        activeJob = null;
-      }
-      const exitLabel = renderExecExitLabel(finished);
-      const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
-      return setReplyPayloadMetadata(
-        {
-          text: [
-            `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
-            `Exit: ${exitLabel}`,
-            formatOutputBlock(finished.aggregated || finished.tail),
-          ].join("\n"),
-        },
-        { onFinalDeliverySuccess: () => acknowledgeNotifyOnExit(finished) },
-      );
-    }
-    if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
+    if (!running && activeJob?.state === "running" && activeJob.sessionId === sessionId) {
       activeJob = null;
     }
-    return {
-      text: `⚙️ No bash session found for ${formatSessionSnippet(sessionId)}.`,
-    };
-  }
-
-  if (request.action === "stop") {
-    const sessionId =
-      normalizeOptionalString(request.sessionId) ||
-      (liveJob?.state === "running" ? liveJob.sessionId : "");
-    if (!sessionId) {
-      return { text: "⚙️ No active bash job." };
-    }
-    const { running } = getScopedSession(sessionId);
-    if (!running) {
-      if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
-        activeJob = null;
+    if (request.action === "poll") {
+      if (running) {
+        const runtimeSec = Math.max(0, Math.floor((Date.now() - running.startedAt) / 1000));
+        const tail = running.tail || "(no output yet)";
+        return {
+          text: [
+            `⚙️ bash still running (session ${formatSessionSnippet(sessionId)}, ${runtimeSec}s).`,
+            formatOutputBlock(tail),
+            "Hint: !stop (or /bash stop)",
+          ].join("\n"),
+        };
       }
+      if (finished) {
+        const exitLabel = renderExecExitLabel(finished);
+        const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
+        return setReplyPayloadMetadata(
+          {
+            text: [
+              `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
+              `Exit: ${exitLabel}`,
+              formatOutputBlock(finished.aggregated || finished.tail),
+            ].join("\n"),
+          },
+          { onFinalDeliverySuccess: () => acknowledgeNotifyOnExit(finished) },
+        );
+      }
+      return {
+        text: `⚙️ No bash session found for ${formatSessionSnippet(sessionId)}.`,
+      };
+    }
+
+    if (!running) {
       return {
         text: `⚙️ No running bash job found for ${formatSessionSnippet(sessionId)}.`,
       };
@@ -283,7 +270,6 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  // request.action === "run"
   if (liveJob) {
     const label =
       liveJob.state === "running" ? formatSessionSnippet(liveJob.sessionId) : "starting";
@@ -346,7 +332,6 @@ export async function handleBashChatCommand(params: {
       };
     }
 
-    // Completed in foreground.
     activeJob = null;
     const exitDetails =
       result.details?.status === "completed" || result.details?.status === "failed"

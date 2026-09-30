@@ -1,9 +1,4 @@
-/**
- * Embedded-mode Gateway method stub.
- *
- * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
- */
-import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsListParams,
   SessionsResolveParams,
@@ -154,19 +149,7 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   };
 }
 
-async function handleChatHistory(params: Record<string, unknown>): Promise<{
-  sessionKey: string;
-  sessionId: string | undefined;
-  messages: unknown[];
-  offset?: number;
-  nextOffset?: number;
-  hasMore?: boolean;
-  totalMessages?: number;
-  windowReset?: boolean;
-  thinkingLevel?: string;
-  fastMode?: FastMode;
-  verboseLevel?: string;
-}> {
+async function handleChatHistory(params: Record<string, unknown>) {
   const rt = await getRuntime();
 
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : "";

@@ -41,6 +41,9 @@ vi.mock("../shared/global-singleton.js", async (importOriginal) => {
 });
 
 vi.mock("./openclaw-state-db-cache.js", () => ({
+  openClawStateDatabaseCache: {
+    getKnownOpenClawStateDatabaseIdentity: () => physical.databaseAdmission?.identity,
+  },
   captureOpenClawStateDatabaseReadAdmission: () => {
     if (!physical.databaseAdmission) {
       throw new Error("Synthetic database admission is not initialized");
@@ -108,7 +111,7 @@ function createLeaseFixture() {
     nativeStopped: Promise.resolve(),
     markNativeStopped() {},
     id: 1,
-    key: "capture-lease-fixture",
+    key: "synthetic-state",
     databasePath: "/synthetic/state.sqlite",
     pathReferences: new Map([["/synthetic/state.sqlite", 1]]),
     moduleUrl: "file:///synthetic/shared-state-worker.js",

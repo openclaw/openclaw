@@ -29,11 +29,9 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
 export type CodexBootstrapFile = Awaited<
   ReturnType<typeof prepareAgentWorkspaceContext>
 >["bootstrapFiles"][number];
-type CodexBootstrapContext = {
+export type CodexWorkspaceBootstrapContext = {
   bootstrapFiles: CodexBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
-};
-export type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   inheritsAgentWorkspace: boolean;
   promptContextFiles?: EmbeddedContextFile[];
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
@@ -57,7 +55,7 @@ export async function prepareCodexWorkspaceDeveloperInstructions(params: {
   workspaceDir: string;
   cwd: string;
 }): Promise<string | undefined> {
-  if (isSameCodexWorkspacePath(params.workspaceDir, params.cwd)) {
+  if (path.resolve(params.workspaceDir) === path.resolve(params.cwd)) {
     return undefined;
   }
   const files = await resolveBootstrapFilesForPreparation(params);
@@ -257,10 +255,6 @@ function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string
     return undefined;
   }
   return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
-}
-
-function isSameCodexWorkspacePath(left: string, right: string): boolean {
-  return path.resolve(left) === path.resolve(right);
 }
 
 /**

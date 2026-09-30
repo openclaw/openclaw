@@ -1,8 +1,8 @@
-.content:has(openclaw-logs-page) {
+main.content:where(.content--logs-page) {
   overflow: hidden;
 }
 
-.content:has(openclaw-logs-page) > openclaw-router-outlet {
+main.content:where(.content--logs-page) > openclaw-router-outlet {
   display: flex;
   flex-direction: column;
   margin-top: 0;
@@ -15,7 +15,7 @@ openclaw-logs-page {
   display: contents;
 }
 
-.content:has(openclaw-logs-page) .content-header {
+main.content:where(.content--logs-page) .content-header {
   flex: 0 0 auto;
 }
 
@@ -60,7 +60,8 @@ openclaw-logs-page {
   border-bottom: none;
 }
 
-.log-time {
+.log-time,
+.log-subsystem {
   color: var(--muted);
   font-family: var(--mono);
 }
@@ -99,11 +100,6 @@ openclaw-logs-page {
 .log-chip.fatal {
   color: var(--danger);
   border-color: var(--danger-subtle);
-}
-
-.log-subsystem {
-  color: var(--muted);
-  font-family: var(--mono);
 }
 
 .log-message {

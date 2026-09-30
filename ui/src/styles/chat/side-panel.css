@@ -424,6 +424,8 @@ openclaw-chat-detail-panel,
   border: 0;
   border-radius: var(--menu-item-radius);
   background: color-mix(in srgb, var(--text) 3%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   text-align: left;

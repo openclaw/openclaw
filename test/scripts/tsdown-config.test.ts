@@ -721,15 +721,11 @@ console.log("relocated Bash parser works without native grammar package");
             configs.find(isWorkerServiceChildRelayConfig),
             configs.find(isWorkerServiceChildGroupAnchorConfig),
           ]
-        : [
+        : [relay, anchor].map((entry) =>
             configs.find((config) =>
-              hasWorkerEntry(
-                config,
-                relay,
-                path.resolve("src/process/supervisor/service-child-relay.ts"),
-              ),
+              hasWorkerEntry(config, entry, path.resolve(`src/${entry}.ts`)),
             ),
-          ];
+          );
       const files: string[] = [];
       for (const selected of selectedConfigs) {
         if (!selected) {
@@ -769,12 +765,16 @@ console.log("relocated Bash parser works without native grammar package");
       const sealedAnchorEdge = {
         importerPath: `dist/${relay}.${extension}`,
         importedPath: `dist/${anchor}.mjs`,
-        kind: "import-meta-url",
       };
       if (worker) {
         expect(imports).toContainEqual(sealedAnchorEdge);
       } else {
-        expect(imports).not.toContainEqual(sealedAnchorEdge);
+        // Each launch boots both helpers; shared chunks pull unrelated runtime
+        // exports into startup before the durable worker gate can open.
+        expect(files.toSorted()).toEqual(
+          [`dist/${relay}.${extension}`, `dist/${anchor}.${extension}`].toSorted(),
+        );
+        expect(imports).toEqual([]);
       }
     },
   );

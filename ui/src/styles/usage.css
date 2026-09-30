@@ -417,12 +417,7 @@
   font-size: 12px; /* was 11px */
 }
 
-.usage-separator {
-  font-size: 12px;
-}
-
 .usage-query-hint {
-  font-size: 12px; /* was 11px */
   letter-spacing: 0.01em;
 }
 
@@ -678,11 +673,7 @@
   border-style: solid;
 }
 
-.usage-overview-card {
-  display: grid;
-  gap: 14px;
-}
-
+.usage-overview-card,
 .usage-overview-layout {
   display: grid;
   gap: 14px;
@@ -717,7 +708,6 @@
   display: grid;
   align-content: start;
   grid-auto-rows: min-content;
-  min-height: 108px;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   border-radius: var(--radius-lg);
   background: var(--card);
@@ -1486,7 +1476,8 @@
   min-height: 18px;
 }
 
-.cost-breakdown-legend {
+.cost-breakdown-legend,
+.context-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
@@ -1624,7 +1615,7 @@
 .session-bar-row:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
-  box-shadow: 0 8px 18px color-mix(in srgb, black 12%, transparent);
+  box-shadow: var(--shadow-md);
 }
 
 .session-bar-row.selected {
@@ -1814,10 +1805,6 @@
   cursor: col-resize;
 }
 
-.timeseries-summary {
-  font-size: 12px;
-}
-
 .timeseries-summary__range {
   color: var(--accent);
   font-weight: 600;
@@ -1829,10 +1816,6 @@
   margin-top: 8px;
 }
 
-.context-weight-desc {
-  font-size: 12px;
-}
-
 .context-stacked-bar {
   display: flex;
   min-height: 18px;
@@ -1840,12 +1823,6 @@
   border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-muted) 82%, transparent);
-}
-
-.context-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
 }
 
 .context-breakdown-card {

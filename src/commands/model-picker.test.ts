@@ -8,13 +8,13 @@ import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-ca
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { stampConfigWriteMetadata } from "../config/io.meta.js";
-import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
   promptDefaultModel,
   promptModelAllowlist,
-} from "./model-picker.js";
+} from "../flows/model-picker.js";
+import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());
@@ -207,22 +207,15 @@ vi.mock("../plugins/providers.js", () => ({
 }));
 
 const providerModelPickerContributionRuntime = vi.hoisted(() => ({
-  enabled: false,
   resolve: vi.fn(() => []),
 }));
-const resolveProviderModelPickerEntries = vi.hoisted(() => vi.fn(() => []));
 const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 const runProviderPluginAuthMethod = vi.hoisted(() => vi.fn());
 vi.mock("../commands/model-picker.runtime.js", () => ({
   modelPickerRuntime: {
-    get resolveProviderModelPickerContributions() {
-      return providerModelPickerContributionRuntime.enabled
-        ? providerModelPickerContributionRuntime.resolve
-        : undefined;
-    },
-    resolveProviderModelPickerEntries,
+    resolveProviderModelPickerContributions: providerModelPickerContributionRuntime.resolve,
     resolveProviderPluginChoice,
     runProviderModelSelectedHook,
     resolvePluginProviders,
@@ -404,7 +397,7 @@ beforeEach(() => {
     source: "test",
   }));
   hasUsableCustomProviderApiKey.mockReturnValue(false);
-  providerModelPickerContributionRuntime.enabled = false;
+  providerModelPickerContributionRuntime.resolve.mockReturnValue([]);
   resolveOwningPluginIdsForProvider.mockImplementation(({ provider }: { provider: string }) => {
     if (provider === "byteplus" || provider === "byteplus-plan") {
       return ["byteplus"];
@@ -951,7 +944,6 @@ describe("promptDefaultModel", () => {
         catalogModel("ollama", "gemma4", "Gemma 4"),
       ]),
     );
-    providerModelPickerContributionRuntime.enabled = true;
     providerModelPickerContributionRuntime.resolve.mockReturnValue([
       {
         option: {
@@ -1185,8 +1177,13 @@ describe("promptDefaultModel", () => {
     loadModelCatalog.mockResolvedValue([
       catalogModel("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.5"),
     ]);
-    resolveProviderModelPickerEntries.mockReturnValue([
-      { value: "vllm", label: "vLLM (custom)", hint: "Enter vLLM URL + API key + model" },
+    providerModelPickerContributionRuntime.resolve.mockReturnValue([
+      {
+        id: "provider:model-picker:vllm",
+        kind: "provider",
+        surface: "model-picker",
+        option: { value: "vllm", label: "vLLM (custom)", hint: "Enter vLLM URL + API key + model" },
+      },
     ] as never);
     resolvePluginProviders.mockReturnValue([{ id: "vllm" }] as never);
     resolveProviderPluginChoice.mockReturnValue({
@@ -1247,9 +1244,8 @@ describe("promptDefaultModel", () => {
     });
   });
 
-  it("prefers provider model-picker contributions when the runtime exposes them", async () => {
+  it("surfaces provider model-picker contributions", async () => {
     loadModelCatalog.mockResolvedValue([catalogModel("openai", "gpt-5.5", "GPT-5.5")]);
-    providerModelPickerContributionRuntime.enabled = true;
     providerModelPickerContributionRuntime.resolve.mockReturnValue([
       {
         id: "provider:model-picker:ollama",
@@ -1260,13 +1256,6 @@ describe("promptDefaultModel", () => {
           label: "Ollama",
           hint: "Local/self-hosted setup",
         },
-      },
-    ] as never);
-    resolveProviderModelPickerEntries.mockReturnValue([
-      {
-        value: "legacy-entry",
-        label: "Legacy entry",
-        hint: "Should not be used when contributions exist",
       },
     ] as never);
 
@@ -1287,7 +1276,6 @@ describe("promptDefaultModel", () => {
     expect(providerModelPickerContributionRuntime.resolve).toHaveBeenCalledOnce();
     const options = pickerOptions(select as MockCallSource);
     expect(requireOption(options, "ollama").label).toBe("Ollama");
-    expect(optionValues(options)).not.toContain("legacy-entry");
   });
 
   it("keeps skip-auth model selection cold when catalog loading is disabled", async () => {
@@ -1310,7 +1298,6 @@ describe("promptDefaultModel", () => {
 
     expect(result).toStrictEqual({});
     expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(resolveProviderModelPickerEntries).not.toHaveBeenCalled();
     expect(providerModelPickerContributionRuntime.resolve).not.toHaveBeenCalled();
     expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
       "__keep__",
@@ -1321,7 +1308,6 @@ describe("promptDefaultModel", () => {
 
   it("surfaces NVIDIA provider model-picker contributions", async () => {
     loadModelCatalog.mockResolvedValue([catalogModel("openai", "gpt-5.4", "GPT-5.4")]);
-    providerModelPickerContributionRuntime.enabled = true;
     providerModelPickerContributionRuntime.resolve.mockReturnValue([
       {
         id: "provider:model-picker:provider-plugin:nvidia:api-key",

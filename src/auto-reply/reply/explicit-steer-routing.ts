@@ -31,7 +31,7 @@ function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
       targetSessionKey.replace(":slash:", ":dm:"),
     );
   }
-  return [...new Set(candidates)];
+  return candidates;
 }
 
 function resolveSteerSourceSessionKey(params: {

@@ -2,11 +2,12 @@
 // oxfmt-ignore
 import { cleanupPreparedModelRuntimeHarness, getPreparedModelRuntimeMocks, resetPreparedModelRuntimeHarness } from "../agents/prepared-model-runtime.test-harness.js";
 import fs from "node:fs/promises";
-import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
+import { runtimeAuthProfileRowsCache } from "../agents/auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import * as authProfileStore from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   prepareModelRuntimeSnapshot,
@@ -23,6 +24,7 @@ import {
   getRuntimeConfigWriteApplication,
   attachRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
+import * as configFileSource from "../config/source-file.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { activateSavedSetupCredential } from "../system-agent/setup-inference-credential-access.js";
@@ -31,6 +33,7 @@ import {
   commitSetupInferenceActivation,
   type SetupInferenceConfigTarget,
 } from "../system-agent/setup-inference-transition.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -39,6 +42,7 @@ import {
   startGatewayConfigReloader,
   type GatewayConfigReloadTransactionOwnership,
 } from "./config-reload.js";
+import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 let state: OpenClawTestState;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "activation-reloader" });
@@ -119,7 +123,24 @@ describe("setup activation reload ownership", () => {
       await refreshPreparedModelRuntimeSnapshots(previous);
       const initial = await readConfigFileSnapshot();
       const reloadError = vi.fn();
-      const watch = vi.spyOn(chokidar, "watch");
+      let emitConfigChange: (() => void) | undefined;
+      const configFileAdapter = vi
+        .spyOn(configFileSource, "createConfigFileAdapter")
+        .mockImplementation((options) => {
+          if (options.path === state.configPath) {
+            emitConfigChange = options.onChange;
+          }
+          const watcher = createWatcherMock();
+          const adapter = watcher.attach(options);
+          const start = adapter.start;
+          return {
+            ...adapter,
+            start() {
+              start();
+              watcher.emit("ready");
+            },
+          };
+        });
       const watcherReady = createDeferred();
       const captureEntered = createDeferred();
       const releaseCapture = createDeferred();
@@ -141,6 +162,7 @@ describe("setup activation reload ownership", () => {
         return "applied";
       };
       const reloader = startGatewayConfigReloader({
+        scheduler: createTestGatewayScheduler("fake-timers"),
         initialConfig: initial.config,
         initialCompareConfig: initial.sourceConfig,
         initialSnapshotRawHash: initial.hash ?? null,
@@ -199,16 +221,43 @@ describe("setup activation reload ownership", () => {
       let echoObserved = false;
       const completion = createDeferred<() => Promise<boolean>>();
       const applied = createDeferred<ReturnType<typeof createRuntimeConfigWriteApplication>>();
+      let recoveryApplication: ReturnType<typeof createRuntimeConfigWriteApplication> | undefined;
+      // Recovery can capture auth before the config write returns to its rollback caller.
+      const prepareRows = runtimeAuthProfileRowsCache.prepare.bind(runtimeAuthProfileRowsCache);
+      const rowRead = vi
+        .spyOn(runtimeAuthProfileRowsCache, "prepare")
+        .mockImplementation((...args) => {
+          const reader = prepareRows(...args);
+          if (outcome !== "runtime-failed" || !recoveryApplication?.claimed) {
+            return reader;
+          }
+          return {
+            ...reader,
+            async read() {
+              const rows = await reader.read();
+              captureEntered.resolve();
+              await releaseCapture.promise;
+              return rows;
+            },
+          };
+        });
+      const restoreAuth = authProfileStore.restoreAuthProfileStorePersistenceSnapshot;
+      const rollback = vi
+        .spyOn(authProfileStore, "restoreAuthProfileStorePersistenceSnapshot")
+        .mockImplementation((...args) => {
+          restoreAuth(...args);
+          releaseCapture.resolve();
+        });
       try {
         await reloader.ready;
         if (scenario === "superseded") {
-          const [watched] = watch.mock.results;
-          if (watched?.type !== "return") {
-            throw new Error("config watcher was not created");
+          const notifyConfigChange = emitConfigChange;
+          if (!notifyConfigChange) {
+            throw new Error("config file adapter was not created");
           }
-          // Deliver the writer's filesystem echo during model preparation.
+          // Deliver the writer's source notification during model preparation.
           getPreparedModelRuntimeMocks().discoverModels.mockImplementationOnce(() => {
-            watched.value.emit("change", state.configPath);
+            notifyConfigChange();
             echoObserved = true;
           });
         }
@@ -239,7 +288,15 @@ describe("setup activation reload ownership", () => {
               base: "source",
               writeOptions,
               transform: (_current, context) => {
-                captureUndo(captureSetupInferenceFileUndo(context.snapshot, candidate));
+                const undo = captureSetupInferenceFileUndo(context.snapshot, candidate);
+                captureUndo(async (options) => {
+                  recoveryApplication = getRuntimeConfigWriteApplication(options);
+                  const restored = await undo(options);
+                  if (outcome === "runtime-failed") {
+                    await captureEntered.promise;
+                  }
+                  return restored;
+                });
                 return { nextConfig: candidate };
               },
             });
@@ -279,6 +336,7 @@ describe("setup activation reload ownership", () => {
             expect(nextRaw).not.toBe(raw);
           }
           await fs.writeFile(state.configPath, nextRaw);
+          emitConfigChange?.();
           await observedDuringCapture.promise;
           expect(currentOwnership?.isCurrent()).toBe(false);
           expect(await fs.readFile(state.configPath, "utf8")).toBe(nextRaw);
@@ -316,9 +374,24 @@ describe("setup activation reload ownership", () => {
                 value instanceof Error ? { message: value.message, stack: value.stack } : value,
             ),
           ).toBe(true);
-          await expect((await completion.promise)()).rejects.toThrow(
-            "did not complete activation (failed)",
-          );
+          try {
+            await expect((await completion.promise)()).rejects.toThrow(
+              "did not complete activation (failed)",
+            );
+          } catch (error) {
+            const recoveryState = recoveryApplication?.claimed
+              ? await Promise.race([recoveryApplication.result, Promise.resolve("pending")])
+              : "unclaimed";
+            console.error("Activation recovery failed", {
+              claimed: recoveryApplication?.claimed,
+              status: recoveryState,
+              reloadErrors: reloadError.mock.calls.map(([message]) => String(message)),
+              warnings: getPreparedModelRuntimeMocks().warn.mock.calls.map(([message]) =>
+                String(message),
+              ),
+            });
+            throw error;
+          }
           const restored = (await readConfigFileSnapshot()).sourceConfig;
           for (const section of ["agents", "models", "gateway", "plugins"] as const) {
             expect(restored[section]).toEqual(previous[section]);
@@ -375,7 +448,13 @@ describe("setup activation reload ownership", () => {
         ).toBe("openai/fixture-newer");
       } finally {
         releaseCapture.resolve();
-        await reloader.stop();
+        try {
+          await reloader.stop();
+        } finally {
+          rowRead.mockRestore();
+          rollback.mockRestore();
+          configFileAdapter.mockRestore();
+        }
       }
     },
   );

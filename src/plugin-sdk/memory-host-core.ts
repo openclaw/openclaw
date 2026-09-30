@@ -26,6 +26,7 @@ import {
   memoryHostEventExportOwnerContent,
   publishMemoryHostEventArtifact,
   rewriteMemoryHostEventArtifactIfUnchanged,
+  type MemoryHostEventExportOwner,
 } from "./memory-host-event-export.js";
 
 const MEMORY_HOST_EVENTS_FILENAME = "memory-host-events.jsonl";
@@ -59,14 +60,9 @@ function isWorkspaceWriteUnavailable(error: unknown, seen = new Set<unknown>()):
   return isWorkspaceWriteUnavailable((error as { cause?: unknown }).cause, seen);
 }
 
-async function resolveMemoryHostEventExportOwner(workspaceDir: string): Promise<{
-  queueKey: string;
-  lockTarget: string;
-  relativePath: string;
-  ownerRelativePath: string;
-  stateHash: string;
-  workspaceHash: string;
-}> {
+async function resolveMemoryHostEventExportOwner(
+  workspaceDir: string,
+): Promise<MemoryHostEventExportOwner> {
   const requestedStateDir = path.resolve(resolveStateDir());
   await fs.mkdir(requestedStateDir, { recursive: true, mode: 0o700 });
   const stateDir = await fs.realpath(requestedStateDir);
@@ -85,7 +81,7 @@ async function resolveMemoryHostEventExportOwner(workspaceDir: string): Promise<
 
 async function readMemoryHostEventExportOwnership(
   workspaceRoot: Awaited<ReturnType<typeof createFsSafeRoot>>,
-  owner: Awaited<ReturnType<typeof resolveMemoryHostEventExportOwner>>,
+  owner: MemoryHostEventExportOwner,
 ): Promise<
   | {
       kind: "owned";

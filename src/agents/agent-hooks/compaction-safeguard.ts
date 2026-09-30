@@ -13,7 +13,6 @@ import {
 import {
   computeFileLists,
   formatFileOperations,
-  MAX_FILE_OPS_LIST_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
@@ -30,11 +29,7 @@ import { computeAdaptiveChunkRatioWithWorker } from "../compaction-planning-work
 import { buildHistoryPrunePlan } from "../compaction-planning.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import {
-  BASE_CHUNK_RATIO,
-  MIN_CHUNK_RATIO,
-  SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
-  computeAdaptiveChunkRatio,
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
@@ -166,9 +161,14 @@ function collectPreparationRangeMessages(
   if (firstKeptIndex < 0) {
     return [];
   }
-  return projectBranchEntries(entries.slice(0, firstKeptIndex)).filter(
-    (message) => message.role !== "compactionSummary",
-  );
+  // Keep replay boundaries even when their retained entries precede the physical marker.
+  // The core projector, not the preparation cut, owns which older entries remain visible.
+  return projectBranchEntries(
+    entries.filter(
+      (entry, index) =>
+        index < firstKeptIndex || entry.type === "compaction" || entry.type === "reset",
+    ),
+  ).filter((message) => message.role !== "compactionSummary");
 }
 
 function readSessionBranch(sessionManager: unknown): CoreSessionTreeEntry[] {
@@ -727,7 +727,6 @@ function formatBoundedContextSection(params: {
   maxChars: number;
   truncatedMarker: string;
   truncatedLoss: CompactionLoss;
-  onTruncated?: () => void;
 }): ContextSection {
   const segments = formatContextSegments(params.messages);
   if (segments.length === 0) {
@@ -749,7 +748,6 @@ function formatBoundedContextSection(params: {
       retained.unshift(segment);
       usedChars += segmentChars;
     }
-    params.onTruncated?.();
   }
   let offset = prefix.length;
   return {
@@ -773,17 +771,13 @@ function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
   });
 }
 
-function buildSplitTurnContextSection(
-  messages: AgentMessage[],
-  onTruncated?: () => void,
-): ContextSection {
+function buildSplitTurnContextSection(messages: AgentMessage[]): ContextSection {
   return formatBoundedContextSection({
     messages,
     heading: "**Turn Context (split turn):**\n",
     maxChars: MAX_SPLIT_TURN_CONTEXT_CHARS,
     truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
     truncatedLoss: "split-turn-head",
-    onTruncated,
   });
 }
 
@@ -931,6 +925,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         stripRuntimeContextCustomMessages(collectSessionContextMessages(ctx.sessionManager)),
       );
     setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
+    const cancelCompaction = (reason: string, error?: unknown) => {
+      setCompactionSafeguardCancellation(ctx.sessionManager, reason, error);
+      return { cancel: true as const };
+    };
     if (!hasRealConversation) {
       // When there are no summarizable messages AND no real turn-prefix content,
       // cancelling compaction leaves context unchanged but the SDK re-triggers
@@ -1063,19 +1061,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               messages: baseMessagesToSummarize,
               recentTurnsPreserve,
             });
-            const producerLosses = new Set<CompactionLoss>();
-            const finalized = await finalizeSummaryText(
-              providerResult,
-              {
-                splitTurnSection: preparation.isSplitTurn
-                  ? buildSplitTurnContextSection(turnPrefixMessages, () => {
-                      producerLosses.add("split-turn-head");
-                    })
-                  : undefined,
-                preservedTurnsSection: buildPreservedTurnsSection(preservedMessages),
-              },
-              producerLosses,
-            );
+            const finalized = await finalizeSummaryText(providerResult, {
+              splitTurnSection: preparation.isSplitTurn
+                ? buildSplitTurnContextSection(turnPrefixMessages)
+                : undefined,
+              preservedTurnsSection: buildPreservedTurnsSection(preservedMessages),
+            });
             return compactionResult(finalized.summary);
           }
           log.warn(
@@ -1100,7 +1091,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     const model = ctx.model ?? runtime?.model;
     if (!model) {
-      if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
+      if (!missedModelWarningSessions.has(ctx.sessionManager)) {
         missedModelWarningSessions.add(ctx.sessionManager);
         log.warn(
           "[compaction-safeguard] Both ctx.model and runtime.model are undefined. " +
@@ -1108,17 +1099,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "was not called and model was not passed through runtime registry.",
         );
       }
-      setCompactionSafeguardCancellation(
-        ctx.sessionManager,
-        "Compaction safeguard could not resolve a summarization model.",
-      );
-      return { cancel: true };
+      return cancelCompaction("Compaction safeguard could not resolve a summarization model.");
     }
 
     const authResult = await resolveModelAuth(ctx, model);
     if (!authResult.ok) {
-      setCompactionSafeguardCancellation(ctx.sessionManager, authResult.reason);
-      return { cancel: true };
+      return cancelCompaction(authResult.reason);
     }
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
@@ -1304,11 +1290,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               "Compaction safeguard: corrective generation failed; " +
                 `reasonCode=corrective_generation_failed attempt=${attempt + 1}`,
             );
-            setCompactionSafeguardCancellation(
-              ctx.sessionManager,
+            return cancelCompaction(
               "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
             );
-            return { cancel: true };
           }
           throw attemptError;
         }
@@ -1351,11 +1335,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
               `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
           );
-          setCompactionSafeguardCancellation(
-            ctx.sessionManager,
+          return cancelCompaction(
             "Compaction safeguard required facts exceed the finalized summary budget.",
           );
-          return { cancel: true };
         }
         const quality = auditSummaryQuality({
           summary: finalized.summary,
@@ -1378,11 +1360,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "Compaction safeguard: finalized summary failed quality checks; " +
               `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
           );
-          setCompactionSafeguardCancellation(
-            ctx.sessionManager,
-            "Compaction safeguard finalized summary failed quality checks.",
-          );
-          return { cancel: true };
+          return cancelCompaction("Compaction safeguard finalized summary failed quality checks.");
         }
         const reasons = quality.reasons.join(", ");
         const qualityFeedbackInstruction =
@@ -1410,12 +1388,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       log.warn(
         `Compaction summarization failed; cancelling compaction to preserve history: ${message}`,
       );
-      setCompactionSafeguardCancellation(
-        ctx.sessionManager,
+      return cancelCompaction(
         `Compaction safeguard could not summarize the session: ${message}`,
         error,
       );
-      return { cancel: true };
     }
   });
 }
@@ -1429,9 +1405,7 @@ const testing = {
   splitPreservedRecentTurns,
   buildPreservedTurnsSection,
   buildCompactionStructureInstructions,
-  buildStructuredFallbackSummary,
   prependPreviousSummaryForRedistill,
-  appendSummarySection,
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
@@ -1439,14 +1413,9 @@ const testing = {
   capCompactionSummary,
   budgetCompactionSummary,
   formatFileOperations,
-  computeAdaptiveChunkRatio,
-  readWorkspaceContextForSummary,
-  BASE_CHUNK_RATIO,
-  MIN_CHUNK_RATIO,
-  SAFETY_MARGIN,
-  MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
-  MAX_FILE_OPS_LIST_CHARS,
+  readWorkspaceContextForSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
   CONTEXT_TRUNCATED_MARKER,
   MAX_SPLIT_TURN_CONTEXT_CHARS,

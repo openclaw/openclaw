@@ -1,5 +1,4 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-// Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { captureDirectEmbeddedMessageInjectionTarget } from "../../agents/embedded-agent-runner/message-injection-target.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
@@ -160,6 +159,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
     return {
       [replyMessageInjectionTargetOwner]: {
+        acceptParticipant: (overlay) => operation.personalToolParticipants?.accept(overlay),
         projectToolAuthorityFingerprint: (overlay) =>
           operation.projectToolAuthorityFingerprint(overlay),
         resolve: (params) => resolveReplyMessageInjectionRejection({ ...params, operation }),

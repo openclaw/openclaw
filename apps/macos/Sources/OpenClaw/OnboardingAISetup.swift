@@ -26,7 +26,6 @@ final class OnboardingAISetupModel {
     private(set) var nativeSessionCatalogPreferenceRequired = false
     private(set) var detectedPrepareOptions: [PrepareOption]?
     private(set) var prepareAvailable = false
-    private(set) var candidatePresentation: [String: CandidatePresentation] = [:]
     private(set) var activeAuthOption: AuthOption?
     private(set) var providerWizardKind: ProviderWizardKind?
     private(set) var authStep: WizardStep?
@@ -539,7 +538,6 @@ final class OnboardingAISetupModel {
         self.nativeSessionCatalogPreferenceRequired = false
         self.detectedPrepareOptions = nil
         self.prepareAvailable = false
-        self.candidatePresentation = [:]
         self.clearProviderAuth()
         self.providerAuthReconciliationPending = nil
         self.providerCatalogLoaded = false
@@ -638,16 +636,6 @@ extension OnboardingAISetupModel {
             self.nativeSessionCatalogPreferenceRequired =
                 result.nativeSessionCatalogPreferenceRequired == true
             self.detectedPrepareOptions = result.prepareOptions
-            self.candidatePresentation = Dictionary(
-                result.candidates.map { candidate in
-                    (
-                        candidate.kind,
-                        CandidatePresentation(
-                            brandId: candidate.brandId,
-                            icon: candidate.icon,
-                            website: candidate.website))
-                },
-                uniquingKeysWith: { current, _ in current })
             let providerAuthReconciliationPending = self.providerAuthReconciliationPending
             self.providerAuthReconciliationPending = nil
             if Self.canAcceptProviderAuthReconciliation(
@@ -657,15 +645,7 @@ extension OnboardingAISetupModel {
                 finishConnected(kind: "provider-auth")
                 return
             }
-            self.candidates = result.candidates.map { detected in
-                Candidate(
-                    kind: detected.kind,
-                    label: detected.label,
-                    detail: detected.detail,
-                    modelRef: detected.modelRef,
-                    credentials: detected.credentials,
-                    modelTarget: detected.modelTarget)
-            }
+            self.candidates = result.candidates
             self.manualProviders = manualProviders
             self.providerCatalogLoaded = result.manualProviders != nil
             if result.manualProviders == nil {
@@ -703,7 +683,7 @@ extension OnboardingAISetupModel {
         } catch {
             guard self.isCurrentAttempt(context) else { return }
             if self.connectionModeProvider() == .remote, let authIssue = RemoteGatewayAuthIssue(error: error) {
-                self.enterGatewayAuthBlocker(authIssue)
+                self.enterConfiguredGatewayBlocker(.authentication(authIssue))
                 return
             }
             self.phase = .ready

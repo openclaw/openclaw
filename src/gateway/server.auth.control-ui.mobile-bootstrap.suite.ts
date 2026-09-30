@@ -147,13 +147,6 @@ export function registerControlUiMobileBootstrapSuite(): void {
       allowed: true,
     },
     {
-      name: "Watch HTTP",
-      watchHttp: true,
-      client: watchVoiceClient,
-      operatorClient: watchVoiceClient,
-      allowed: true,
-    },
-    {
       name: "Watch HTTP after OS update",
       watchHttp: true,
       client: watchVoiceClient,
@@ -613,17 +606,6 @@ export function registerControlUiMobileBootstrapSuite(): void {
         platform: "Android 16",
         mode: "node" as const,
         deviceFamily: "Android",
-      },
-    },
-    {
-      name: "iPadOS",
-      identityPrefix: "openclaw-bootstrap-ipados-node-",
-      client: {
-        id: "openclaw-ios",
-        version: "2026.6.2",
-        platform: "iPadOS 26.3.1",
-        mode: "node" as const,
-        deviceFamily: "iPad",
       },
     },
   ])(

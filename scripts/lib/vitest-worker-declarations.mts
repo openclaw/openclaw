@@ -55,6 +55,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/wizard/clack-prompter-process-runtime.test-support.ts",
   "extensions/qa-lab/bus-server-runtime.test-support":
     "extensions/qa-lab/src/bus-server-runtime.test-support.ts",
+  "extensions/qa-lab/agent-run-identity-runtime.test-support":
+    "extensions/qa-lab/src/agent-run-identity-runtime.test-support.ts",
   "extensions/memory-core/manager-search-knn-runtime.test-support":
     "extensions/memory-core/src/memory/manager-search-knn-runtime.test-support.ts",
   "test-support/qa-otel-smoke-entrypoint.test-support":
@@ -117,6 +119,8 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/workboard/src/sqlite-backend-entrypoint.test-support.ts",
   "infra/update-managed-service-handoff-runtime-assets":
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
+  "infra/package-update-activation-runtime-assets":
+    "src/infra/package-update-activation-runtime-assets.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "infra/sqlite-readonly-worker.compile-cache-runtime.test-support":
     "src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts",

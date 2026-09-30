@@ -34,6 +34,7 @@ import {
 } from "./agent-dir-registry.js";
 import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runtime.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
+import { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
@@ -465,6 +466,15 @@ async function runCatalogRequest(
         runtimeModels.set(provider, []);
       }
     }
+    const authLabelProviders = [
+      ...exactAgentFacts.providerIds,
+      ...Object.keys(catalogCredentials),
+      ...Object.keys(value.input.config.models?.providers ?? {}),
+      ...facts.modelCatalog.entries.map((entry) => entry.provider),
+      ...facts.modelCatalog.routeVariants.map((entry) => entry.provider),
+      ...(facts.modelCatalog.staticEntries ?? []).map((entry) => entry.provider),
+      ...Object.values(authStore.profiles).map((profile) => profile.provider),
+    ];
     const result: PreparedModelWorkerResult = {
       status: "ok",
       kind: "catalog",
@@ -475,24 +485,20 @@ async function runCatalogRequest(
       hookRows,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
-      providerAuthLabels: withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-        prepareModelCatalogAuthLabels({
-          config: value.input.config,
-          agentDir: value.input.agentDir,
-          workspaceDir: value.input.workspaceDir,
-          env: value.input.env,
-          store: authStore,
-          providers: [
-            ...exactAgentFacts.providerIds,
-            ...Object.keys(catalogCredentials),
-            ...Object.keys(value.input.config.models?.providers ?? {}),
-            ...facts.modelCatalog.entries.map((entry) => entry.provider),
-            ...facts.modelCatalog.routeVariants.map((entry) => entry.provider),
-            ...(facts.modelCatalog.staticEntries ?? []).map((entry) => entry.provider),
-            ...Object.values(authStore.profiles).map((profile) => profile.provider),
-          ],
-        }),
-      ),
+      providerAuthLabels:
+        authLabelProviders.length === 0
+          ? new Map()
+          : withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+              prepareModelCatalogAuthLabels({
+                config: value.input.config,
+                agentDir: value.input.agentDir,
+                authStorePath: resolveAuthStorePathForDisplay(value.input.agentDir),
+                workspaceDir: value.input.workspaceDir,
+                env: value.input.env,
+                store: authStore,
+                providers: authLabelProviders,
+              }),
+            ),
       authStore,
       authModes: resolveUsableAgentCredentialModes(catalogCredentials),
     };

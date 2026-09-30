@@ -1,6 +1,6 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { nothing } from "lit";
+import { html, nothing } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
@@ -13,13 +13,20 @@ import {
   resolveMessageSender,
 } from "../../../lib/chat/message-normalizer.ts";
 import {
+  localParticipantIdentityKey,
+  sessionParticipantIdentityKey,
+} from "../../../lib/chat/sender-label.ts";
+import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
+import {
   isUiGlobalScopeConfigured,
   isSubagentSessionKey,
   parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
 } from "../../../lib/sessions/session-key.ts";
+import { agentRunFrameGroups } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
+import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -36,7 +43,6 @@ import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
-import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import {
   getChatMediaRenderVersion,
@@ -54,7 +60,7 @@ import {
   getTranscriptState,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
@@ -107,6 +113,18 @@ export function projectChatTranscript(
         );
       },
     );
+  // The session row counts every person who spoke, including rows not loaded yet.
+  // Grouping adds the loaded senders with the same keys, so one person counts once.
+  const sessionPeople = new Set(
+    [
+      activeSession?.owner?.actor.identity,
+      ...(activeSession?.expandedParticipants ?? activeSession?.participants ?? []).map(
+        ({ identity }) => identity,
+      ),
+    ].flatMap((identity) =>
+      identity && identity.type !== "agent" ? [sessionParticipantIdentityKey(identity)] : [],
+    ),
+  );
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   // Global-alias routing ignores the capped session list, which may omit the
   // canonical row. The scope gate keeps per-sender main threads direct.
@@ -172,6 +190,8 @@ export function projectChatTranscript(
     runActive: Boolean(props.runActive),
     questionPrompts: props.questionPrompts,
     loading: props.loading,
+    replyPeople: [...sessionPeople].toSorted(),
+    replyLocalPerson: localParticipantIdentityKey(props.userId),
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     messageRecovery:
@@ -185,6 +205,22 @@ export function projectChatTranscript(
   } satisfies Parameters<typeof buildCachedChatItems>[0];
   const chatItems = buildCachedChatItems(chatItemsInput);
   const workingIndicator = chatItems.find((item) => item.kind === "reading-indicator");
+  const activityRunId = workingIndicator?.runId ?? props.runId;
+  const activityGroupKey =
+    props.runActive && activityRunId
+      ? chatItems.findLast(
+          (item) =>
+            item.kind === "group" &&
+            item.messages.some(
+              ({ message }) =>
+                transcriptRunId(message) === activityRunId &&
+                readPreparedActivity(message).some(
+                  (activity) =>
+                    !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
+                ),
+            ),
+        )?.key
+      : undefined;
   const runOutputTokens = workingIndicator?.runId
     ? (props.runUsageById?.get(workingIndicator.runId)?.outputTokens ?? null)
     : null;
@@ -202,7 +238,6 @@ export function projectChatTranscript(
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
     session: activeSession,
-    stream: props.stream ?? null,
   });
   const { collapsedItems, transcriptItems } = transcriptChain;
   const replyNavigationId = props.replyMessageAccess?.navigationId;
@@ -211,6 +246,12 @@ export function projectChatTranscript(
   }
   const { messageRowKeysById, transcriptMessageKeys, loadedReplySources, positionIndex, rows } =
     projectTranscriptIndex(transcriptChain, expandedToolCards, props);
+  const workPreviews = renderWorkGroupBrowserTabPreviews(
+    transcriptItems.flatMap((item) =>
+      item.kind === "work-group" && !expandedToolCards.get(item.key) ? [item] : [],
+    ),
+    { sessionKey: props.sessionKey, latestBrowserTabs },
+  );
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
@@ -220,7 +261,7 @@ export function projectChatTranscript(
       toolCardId,
       !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
     );
-    requestUpdate();
+    state.transcriptRenderContext.onRequestUpdate?.();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
     const key = recoveryKey(messageId);
@@ -337,6 +378,10 @@ export function projectChatTranscript(
     ...sharedMessageRenderOptions,
     branding: props.branding,
     assistant: assistantIdentity,
+    resolveReplyPreview,
+    onResolveReply: props.replyMessageAccess?.request,
+    onOpenReply: (replyToId: string) => state.transcriptRenderContext.onOpenReply?.(replyToId),
+    replyNavigationId: props.replyMessageAccess?.navigationId,
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
     runOutputTokens,
@@ -357,6 +402,8 @@ export function projectChatTranscript(
       latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
+      activityRunId,
+      activityGroupKey,
       autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
       onToggleToolMessageExpanded: toggleToolCardExpanded,
@@ -443,7 +490,27 @@ export function projectChatTranscript(
       item.key === latestAssistantItemKey ? "latest-assistant" : ""
     }|${searchFiltering ? "search-result" : ""}`;
   };
-  const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
+  const rowPresentationDependencies = (item: ChatRenderItem): readonly unknown[] => {
+    const dependencies: unknown[] = [liveStatusSignature(item)];
+    const groups =
+      item.kind === "group"
+        ? [item]
+        : item.kind === "agent-run-frame"
+          ? agentRunFrameGroups(item)
+          : item.kind === "work-group" || item.kind === "activity-run"
+            ? item.groups
+            : [];
+    for (const group of groups) {
+      for (const source of group.messages) {
+        if (source.replyTarget?.kind === "id") {
+          const loaded = loadedReplySources.get(source.replyTarget.id);
+          dependencies.push(source.replyTarget.id, loaded?.message, loaded?.senderLabel);
+        }
+      }
+    }
+    return dependencies;
+  };
+  const renderItem = guardChatRenderItems(state, rowPresentationDependencies, (item) => {
     if (item.kind === "divider") {
       return renderChatDivider(item);
     }
@@ -457,10 +524,7 @@ export function projectChatTranscript(
       const workExpanded = expandedToolCards.get(item.key) ?? false;
       return renderWorkGroupSummary(item, {
         expanded: workExpanded,
-        browserTabPreviews: renderBrowserTabPreviews(item.groups, {
-          sessionKey: props.sessionKey,
-          latestBrowserTabs,
-        }),
+        browserTabPreviews: workPreviews.get(item.key),
         onToggle: () => toggleToolCardExpanded(item.key, workExpanded),
       });
     }
@@ -537,7 +601,20 @@ export function projectChatTranscript(
     turnRecapByGroupKey.set(tailStatusOwner.key, turnRecap);
     turnRecapOwnerKey = tailStatusOwner.key;
   }
-  const transcriptRows: TranscriptRow<ChatRenderItem>[] = [...rows];
+  const transcriptRows: TranscriptRow<ChatRenderItem>[] = [];
+  for (const row of rows) {
+    transcriptRows.push(row);
+    const previews = workPreviews.get(row.key);
+    if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
+      transcriptRows.push({
+        kind: "content",
+        key: `work-previews:${row.key}`,
+        content: html`<div class="chat-group tool chat-group--turn-block">
+          <div class="chat-group-messages">${previews}</div>
+        </div>`,
+      });
+    }
+  }
   // Only ID-bearing voice captions need a history scan. Keep membership local
   // to this projection so history replacement and search cannot stale it.
   let persistedIds: Set<string | null> | undefined;
@@ -565,7 +642,11 @@ export function projectChatTranscript(
       content: renderTurnRecapRow(turnRecap),
     });
   }
-  const typingIndicator = renderChatTypingIndicator(props.typingActors, avatarPlacement);
+  const typingIndicator = renderChatTypingIndicator(
+    props.typingActors,
+    avatarPlacement,
+    props.typingOverflow,
+  );
   if (typingIndicator) {
     transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
@@ -603,6 +684,8 @@ export function projectChatTranscript(
     showReasoning,
     props.showToolCalls,
     Boolean(props.runActive),
+    activityRunId,
+    activityGroupKey,
     Boolean(props.runWorking),
     props.startupLabel,
     Boolean(props.waitingApproval),
@@ -647,22 +730,48 @@ export function projectChatTranscript(
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
+  // Rebind disclosures to the current pane without repainting unchanged rows.
+  state.transcriptRenderContext.onRequestUpdate = props.onRequestUpdate;
   state.transcriptRenderContext.turnVideoMessages = projectTurnVideoMessages(
     chatItems,
     searchFiltering ? chatItemsInput : undefined,
   );
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
-    const loaded = loadedReplySources.get(replyToId);
-    if (loaded && resolveMessageReplyText(loaded.message)) {
-      // Loaded targets also serve read-only views without reply-message access.
-      // Reveal waits for this expansion to commit before locating the bubble.
-      expandReplyTargetWork(transcriptItems, expandedToolCards, replyToId);
-      transcript.revealMessage(replyToId);
-      return;
+    // Search removes rows from the index, not from loaded history. Resolve the
+    // unfiltered projection only on navigation, using the same index/expansion
+    // owners as visible targets rather than requiring a history loader.
+    const targetChain = searchFiltering
+      ? projectTranscriptChain(
+          buildCachedChatItems({ ...chatItemsInput, searchOpen: false, searchQuery: "" }),
+          {
+            sessionKey: props.sessionKey,
+            runWorking: Boolean(props.runWorking),
+            searchActive: false,
+            session: activeSession,
+          },
+        )
+      : transcriptChain;
+    const targetSources =
+      targetChain === transcriptChain
+        ? loadedReplySources
+        : projectTranscriptIndex(targetChain, expandedToolCards, props).loadedReplySources;
+    const loaded = targetSources.has(replyToId);
+    if (loaded) {
+      expandReplyTargetWork(targetChain.transcriptItems, expandedToolCards, replyToId);
     }
     if (searchFiltering) {
       closeTranscriptSearch(state, requestUpdate);
+    }
+    if (loaded) {
+      // Closing search must commit the original's row before reveal can find it.
+      // Loaded originals also navigate in archived/read-only views.
+      if (searchFiltering) {
+        queueMicrotask(() => transcript.revealMessage(replyToId));
+      } else {
+        transcript.revealMessage(replyToId);
+      }
+      return;
     }
     props.replyMessageAccess?.open(replyToId);
   };
@@ -682,6 +791,7 @@ export function projectChatTranscript(
         props.announceTranscript !== false && !state.searchOpen && !props.loading,
         overlay,
         header,
+        Boolean(replyNavigationId),
       ),
   };
 }

@@ -29,14 +29,12 @@ type SessionTypingState = {
 };
 
 function clearSessionTypingStateValue(state: SessionTypingState): void {
-  for (const entry of state.broadcasts.values()) {
-    clearTimeout(entry.timer);
+  for (const entries of [state.broadcasts, state.connections]) {
+    for (const entry of entries.values()) {
+      clearTimeout(entry.timer);
+    }
+    entries.clear();
   }
-  state.broadcasts.clear();
-  for (const entry of state.connections.values()) {
-    clearTimeout(entry.timer);
-  }
-  state.connections.clear();
 }
 
 const sessionTypingState = resolveGlobalSingleton<SessionTypingState>(

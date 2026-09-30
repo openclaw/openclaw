@@ -220,7 +220,12 @@ test("sessions.create applies configured fixed-store ownership to bare keys", as
       "sessions.changed",
       expect.objectContaining({ sessionKey: "global", agentId: "ops", reason: "create" }),
       new Set(["conn-1"]),
-      { dropIfSlow: true, agentId: "ops", sessionKeys: ["global"] },
+      {
+        dropIfSlow: true,
+        agentId: "ops",
+        sessionKeys: ["global"],
+        prepareSessionProjection: expect.any(Function),
+      },
     );
 
     const conflict = await directSessionReq("sessions.create", {
@@ -276,7 +281,12 @@ test("sessions.create stores selected global sessions in the requested agent sto
     "sessions.changed",
     expect.objectContaining({ sessionKey: "global", agentId: "work", reason: "create" }),
     new Set(["conn-1"]),
-    { dropIfSlow: true, agentId: "work", sessionKeys: ["global"] },
+    {
+      dropIfSlow: true,
+      agentId: "work",
+      sessionKeys: ["global"],
+      prepareSessionProjection: expect.any(Function),
+    },
   );
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;

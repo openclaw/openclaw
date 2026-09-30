@@ -1,4 +1,3 @@
-// Implements debug command toggles used by maintainers during reply runs.
 import { parseSlashCommandWithSetUnset } from "./commands-setunset.js";
 
 type DebugCommand =
@@ -18,11 +17,8 @@ export function parseDebugCommand(raw: string): DebugCommand | null {
     onUnset: (path) => ({ action: "unset", path }),
     onError: (message) => ({ action: "error", message }),
     onKnownAction: (action) => {
-      if (action === "show") {
-        return { action: "show" };
-      }
-      if (action === "reset") {
-        return { action: "reset" };
+      if (action === "show" || action === "reset") {
+        return { action };
       }
       return undefined;
     },

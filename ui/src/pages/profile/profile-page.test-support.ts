@@ -1,5 +1,8 @@
 import { vi } from "vitest";
-import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
+import type {
+  UserProfile,
+  UsersSelfResult,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -44,6 +47,13 @@ export function createConnectedContext(
         return () => listeners.delete(listener);
       },
       subscribeEvents: subscribe,
+      async loadSelfProfile() {
+        if (!snapshot.selfUser || !snapshot.client || snapshot.phase !== "connected") {
+          return null;
+        }
+        const result = await snapshot.client.request<UsersSelfResult>("users.self", {});
+        return result.profile;
+      },
       updateSelfUser(patch: Partial<Omit<AuthenticatedUser, "id">>) {
         if (!snapshot.selfUser) {
           return;

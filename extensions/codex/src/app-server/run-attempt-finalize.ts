@@ -590,7 +590,6 @@ export async function finalizeCodexAttempt(
       }
     }
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
-      attempt: params,
       result,
       threadId: resourceState.thread.threadId,
       turnId: activeTurnId,

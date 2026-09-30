@@ -46,10 +46,9 @@ type CodexTranslator struct {
 type docsTranslator interface {
 	Translate(context.Context, string, string, string) (string, error)
 	TranslateRaw(context.Context, string, string, string) (string, error)
-	Close()
 }
 
-type docsTranslatorFactory func(string, string, []GlossaryEntry, string) (docsTranslator, error)
+type docsTranslatorFactory func(string, string, []GlossaryEntry, string) docsTranslator
 
 type codexPromptRunner func(context.Context, codexPromptRequest) (string, error)
 
@@ -60,13 +59,13 @@ type codexPromptRequest struct {
 	Thinking     string
 }
 
-func NewCodexTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*CodexTranslator, error) {
+func NewCodexTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) *CodexTranslator {
 	return &CodexTranslator{
 		systemPrompt:          translationPrompt(srcLang, tgtLang, glossary),
 		exactGlossaryMappings: exactGlossaryMappings(glossary),
 		thinking:              normalizeThinking(thinking),
 		runPrompt:             runCodexExecPrompt,
-	}, nil
+	}
 }
 
 func (t *CodexTranslator) Translate(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
@@ -133,13 +132,9 @@ func (t *CodexTranslator) translateMasked(ctx context.Context, core string) (str
 	placeholders := make([]string, 0, 8)
 	mapping := map[string]string{}
 	masked := maskMarkdown(core, state.Next, &placeholders, mapping)
-	resText, err := t.prompt(ctx, masked)
+	translated, err := t.translateRaw(ctx, masked)
 	if err != nil {
 		return "", err
-	}
-	translated := stripCodexI18nInputWrappers(strings.TrimSpace(resText))
-	if translated == "" {
-		return "", errEmptyTranslation
 	}
 	if err := validatePlaceholders(translated, placeholders); err != nil {
 		return "", err
@@ -202,10 +197,7 @@ func (t *CodexTranslator) prompt(ctx context.Context, message string) (string, e
 }
 
 func isRetryableTranslateError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if err == nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return false
 	}
 	if errors.Is(err, errEmptyTranslation) {
@@ -398,40 +390,28 @@ func sleepWithContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (t *CodexTranslator) Close() {}
-
 func normalizeThinking(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "low", "medium", "high", "xhigh":
-		return strings.ToLower(strings.TrimSpace(value))
-	case "max":
-		// Preserve an explicit maximum effort while leaving the default unchanged.
-		return "max"
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "low", "medium", "high", "xhigh", "max":
+		return value
 	default:
 		return "xhigh"
 	}
 }
 
 func docsI18nPromptTimeout() time.Duration {
-	value := strings.TrimSpace(os.Getenv(envDocsI18nPromptTimeout))
-	if value == "" {
-		return defaultPromptTimeout
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil || parsed <= 0 {
-		return defaultPromptTimeout
-	}
-	return parsed
+	return docsI18nDuration(envDocsI18nPromptTimeout, defaultPromptTimeout)
 }
 
 func docsI18nCommandWaitDelay() time.Duration {
-	value := strings.TrimSpace(os.Getenv(envDocsI18nCommandWaitDelay))
-	if value == "" {
-		return defaultCommandWaitDelay
-	}
-	parsed, err := time.ParseDuration(value)
+	return docsI18nDuration(envDocsI18nCommandWaitDelay, defaultCommandWaitDelay)
+}
+
+func docsI18nDuration(name string, fallback time.Duration) time.Duration {
+	parsed, err := time.ParseDuration(strings.TrimSpace(os.Getenv(name)))
 	if err != nil || parsed <= 0 {
-		return defaultCommandWaitDelay
+		return fallback
 	}
 	return parsed
 }

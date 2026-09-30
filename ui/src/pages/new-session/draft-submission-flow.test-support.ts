@@ -80,7 +80,16 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         },
       },
     },
-    sessions: { state: { result: null }, createResult: vi.fn() },
+    sessions: {
+      state: { result: null },
+      createResult: vi.fn(),
+      describe: ((params, describeOptions) => {
+        if (!describeOptions?.client) {
+          throw new Error("placement describe requires its captured client");
+        }
+        return describeOptions.client.request("sessions.describe", params);
+      }) satisfies ApplicationContext["sessions"]["describe"],
+    },
     placementStartup: {
       get: vi.fn(() => undefined),
       hasPendingTurn: vi.fn(() => false),

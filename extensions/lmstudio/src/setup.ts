@@ -63,15 +63,11 @@ import {
   resolveLmstudioProviderHeaders,
   resolveLmstudioRequestContext,
 } from "./runtime.js";
-
-type ProviderPromptText = (params: {
-  message: string;
-  initialValue?: string;
-  placeholder?: string;
-  validate?: (value: string | undefined) => string | undefined;
-}) => Promise<string | undefined>;
-
-type ProviderPromptNote = (message: string, title?: string) => Promise<void> | void;
+import {
+  type ProviderPromptNote,
+  type ProviderPromptText,
+  validateLmstudioSetupUrl,
+} from "./setup-prompts.js";
 type LmstudioDiscoveryResult = Awaited<ReturnType<typeof fetchLmstudioModels>>;
 const LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
 
@@ -162,25 +158,6 @@ function buildLmstudioSetupProviderConfig(params: {
   };
 }
 
-function resolveLmstudioModelAdvertisedContextLimit(entry: LmstudioModelWire): number | undefined {
-  const raw = entry.max_context_length;
-  if (raw === undefined || !Number.isFinite(raw) || raw <= 0) {
-    return undefined;
-  }
-  return Math.floor(raw);
-}
-
-function applyModelContextTokensOverride(
-  model: ModelDefinitionConfig,
-  contextTokens: number,
-): ModelDefinitionConfig {
-  return {
-    ...model,
-    contextTokens,
-    maxTokens: Math.min(model.maxTokens, contextTokens),
-  };
-}
-
 function applyRequestedContextWindowToAllModels(params: {
   models: ModelDefinitionConfig[];
   discoveryModels: LmstudioModelWire[];
@@ -191,25 +168,21 @@ function applyRequestedContextWindowToAllModels(params: {
     return params.models;
   }
   const contextLimitByModelId = new Map(
-    params.discoveryModels
-      .map((entry) => {
-        const modelId = entry.key?.trim();
-        if (!modelId) {
-          return null;
-        }
-        return [modelId, resolveLmstudioModelAdvertisedContextLimit(entry)] as const;
-      })
-      .filter((entry): entry is readonly [string, number | undefined] => Boolean(entry)),
+    params.discoveryModels.flatMap((entry) => {
+      const modelId = entry.key?.trim();
+      const raw = entry.max_context_length;
+      const limit =
+        raw !== undefined && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
+      return modelId ? [[modelId, limit] as const] : [];
+    }),
   );
-  return params.models.map((model) =>
-    applyModelContextTokensOverride(
-      model,
-      Math.min(
-        requestedContextWindow,
-        contextLimitByModelId.get(model.id) ?? requestedContextWindow,
-      ),
-    ),
-  );
+  return params.models.map((model) => {
+    const contextTokens = Math.min(
+      requestedContextWindow,
+      contextLimitByModelId.get(model.id) ?? requestedContextWindow,
+    );
+    return { ...model, contextTokens, maxTokens: Math.min(model.maxTokens, contextTokens) };
+  });
 }
 
 function collectLoadedLmstudioModelIds(discovery: LmstudioDiscoveryResult): Set<string> {
@@ -499,7 +472,7 @@ export async function promptAndConfigureLmstudioInteractive(params: {
         message: `${LMSTUDIO_PROVIDER_LABEL} base URL`,
         initialValue: defaultBaseUrl,
         placeholder: defaultBaseUrl,
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateLmstudioSetupUrl,
       });
   const baseUrl = resolveLmstudioInferenceBase(baseUrlRaw ?? defaultBaseUrl);
   let credentialInput: SecretInput | undefined = params.suppliedApiKey;
@@ -742,11 +715,9 @@ async function validateNonInteractiveLmstudioDiscovery(
       ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
       : undefined);
   if (!setupDiscoveryApiKey && !hasAuthorizationHeader) {
-    ctx.runtime.error(
+    throw new Error(
       `LM Studio API key is required. Set ${LMSTUDIO_DEFAULT_API_KEY_ENV_VAR} or pass --lmstudio-api-key.`,
     );
-    ctx.runtime.exit(1);
-    return null;
   }
   const setupDiscovery = await discoverLmstudioSetupModels({
     baseUrl,
@@ -757,9 +728,7 @@ async function validateNonInteractiveLmstudioDiscovery(
     timeoutMs: 5000,
   });
   if ("failure" in setupDiscovery) {
-    ctx.runtime.error(setupDiscovery.failure.noteLines.join("\n"));
-    ctx.runtime.exit(1);
-    return null;
+    throw new Error(setupDiscovery.failure.noteLines.join("\n"));
   }
   const discoveredModels = setupDiscovery.value.models;
   const selectedModelId = requestedModelId ?? setupDiscovery.value.defaultModelId;
@@ -770,7 +739,7 @@ async function validateNonInteractiveLmstudioDiscovery(
     selectedModelId !== undefined && setupDiscovery.value.loadedModelIds.has(selectedModelId);
   if (!selectedModelId || !selectedModel || !selectedModelLoaded) {
     const availableModels = discoveredModels.map((model) => model.id).join(", ");
-    ctx.runtime.error(
+    throw new Error(
       requestedModelId && selectedModel && !selectedModelLoaded
         ? [
             `LM Studio model ${requestedModelId} is installed but not loaded at ${baseUrl}.`,
@@ -786,8 +755,6 @@ async function validateNonInteractiveLmstudioDiscovery(
               `Available models: ${availableModels || "(none)"}`,
             ].join("\n"),
     );
-    ctx.runtime.exit(1);
-    return null;
   }
 
   return {
@@ -816,9 +783,6 @@ export async function configureLmstudioNonInteractive(
   ctx: ProviderAuthMethodNonInteractiveContext,
 ): Promise<OpenClawConfig | null> {
   const validated = await validateNonInteractiveLmstudioDiscovery(ctx);
-  if (!validated) {
-    return null;
-  }
   const {
     baseUrl,
     customBaseUrl,

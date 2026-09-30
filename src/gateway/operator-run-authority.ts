@@ -93,6 +93,18 @@ function retainOperatorSource(
   };
 }
 
+function prepareRunRolePolicy(
+  role: ReturnType<typeof sourceRolePolicy>,
+): AdmittedRunOperatorAuthority["rolePolicy"] {
+  return role
+    ? {
+        sessionAccessCap: role.sessions.others,
+        sandboxRequired: role.sandbox === "required",
+        agents: role.agents,
+      }
+    : undefined;
+}
+
 /** Bridge a prepared linked principal while retaining its exact channel admission capability. */
 export function captureChannelOperatorRunAuthority(input: {
   profileId: string;
@@ -119,6 +131,15 @@ export function captureChannelOperatorRunAuthority(input: {
   return createAdmittedRunOperatorAuthority({
     profileId: params.profileId,
     scopes: params.scopes,
+    rolePolicy: prepareRunRolePolicy(
+      sourceRolePolicy(
+        resolveOperatorRolePolicyForAssignment(
+          params.profileId,
+          params.assignedRole,
+          modelPolicyConfig,
+        ),
+      ),
+    ),
     gatewayAccessGrant: params.gatewayAccessGrant,
     assertCurrent: params.assertCurrent,
     readCurrentRoleAssignment: () => {
@@ -481,11 +502,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
       authority: createAdmittedRunOperatorAuthority({
         profileId,
         scopes,
+        rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
         readCurrentRoleAssignment: () => {
           assertCurrent();
           return assertProfileCurrent().assignedRole;
         },
-        gatewayAccessGrant: sourceAuthority === null ? null : sourceAuthority?.gatewayAccessGrant,
+        gatewayAccessGrant:
+          sourceAuthority === null || (sourceAuthority === undefined && authenticatedOwner)
+            ? null
+            : sourceAuthority?.gatewayAccessGrant,
         source: source.token,
         assertCurrent,
         signal: revocation.signal,

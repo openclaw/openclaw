@@ -250,11 +250,8 @@ export async function gatherDispatchRequest(
   };
 
   const recordAgentDispatchCompleted = (
-    outcome: "completed" | "skipped" | "error",
-    opts?: {
-      reason?: string;
-      error?: string;
-    },
+    outcome: DispatchProcessedOutcome,
+    opts?: DispatchProcessedOptions,
   ) => {
     if (!diagnosticsEnabled || agentDispatchStartedAt <= 0) {
       return;

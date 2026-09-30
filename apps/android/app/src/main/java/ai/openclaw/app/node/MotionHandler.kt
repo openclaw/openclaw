@@ -106,22 +106,22 @@ private object SystemMotionDataSource : MotionDataSource {
       sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         ?: throw IllegalStateException("MOTION_UNAVAILABLE: accelerometer not available")
 
-    val sample =
+    val averageDelta =
       readAccelerometerSample(sensorManager, accelerometer)
         ?: throw IllegalStateException("MOTION_UNAVAILABLE: no accelerometer sample")
     val end = Instant.now()
     val start = end.minusSeconds(2)
-    val classification = classifyActivity(sample.averageDelta)
+    val classification = classifyActivity(averageDelta)
     return MotionActivityRecord(
       startISO = start.toString(),
       endISO = end.toString(),
-      confidence = classifyConfidence(sample.samples, sample.averageDelta),
+      confidence = if (averageDelta > 0.4) "high" else "medium",
       isWalking = classification == "walking",
       isRunning = classification == "running",
       isCycling = false,
       isAutomotive = false,
       isStationary = classification == "stationary",
-      isUnknown = classification == "unknown",
+      isUnknown = false,
     )
   }
 
@@ -153,11 +153,6 @@ private object SystemMotionDataSource : MotionDataSource {
       floorsDescended = null,
     )
   }
-
-  private data class AccelerometerSample(
-    val samples: Int,
-    val averageDelta: Double,
-  )
 
   @OptIn(InternalCoroutinesApi::class)
   private suspend fun readStepCounter(
@@ -197,54 +192,46 @@ private object SystemMotionDataSource : MotionDataSource {
   private suspend fun readAccelerometerSample(
     sensorManager: SensorManager,
     sensor: Sensor,
-  ): AccelerometerSample? {
-    val sample =
-      withTimeoutOrNull(ACCELEROMETER_SAMPLE_TIMEOUT_MS) {
-        suspendCancellableCoroutine<AccelerometerSample?> { cont ->
-          var count = 0
-          var sumDelta = 0.0
-          val listener =
-            object : SensorEventListener {
-              override fun onSensorChanged(event: SensorEvent?) {
-                val values = event?.values ?: return
-                if (values.size < 3) return
-                val magnitude =
-                  sqrt(
-                    values[0] * values[0] +
-                      values[1] * values[1] +
-                      values[2] * values[2],
-                  ).toDouble()
-                sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
-                count += 1
-                if (count >= ACCELEROMETER_SAMPLE_TARGET) {
-                  // Average gravity-adjusted magnitude across a short window so
-                  // one noisy sensor event cannot decide the activity label.
-                  val result =
-                    AccelerometerSample(
-                      samples = count,
-                      averageDelta = sumDelta / count,
-                    )
-                  val token = cont.tryResume(result) ?: return
-                  cont.completeResume(token)
-                  sensorManager.unregisterListener(this)
-                }
+  ): Double? =
+    withTimeoutOrNull(ACCELEROMETER_SAMPLE_TIMEOUT_MS) {
+      suspendCancellableCoroutine<Double?> { cont ->
+        var count = 0
+        var sumDelta = 0.0
+        val listener =
+          object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+              val values = event?.values ?: return
+              if (values.size < 3) return
+              val magnitude =
+                sqrt(
+                  values[0] * values[0] +
+                    values[1] * values[1] +
+                    values[2] * values[2],
+                ).toDouble()
+              sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
+              count += 1
+              if (count >= ACCELEROMETER_SAMPLE_TARGET) {
+                // Average gravity-adjusted magnitude across a short window so
+                // one noisy sensor event cannot decide the activity label.
+                val token = cont.tryResume(sumDelta / count) ?: return
+                cont.completeResume(token)
+                sensorManager.unregisterListener(this)
               }
-
-              override fun onAccuracyChanged(
-                sensor: Sensor?,
-                accuracy: Int,
-              ) = Unit
             }
-          val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
-          if (!registered) {
-            cont.resume(null) { _, _, _ -> }
-            return@suspendCancellableCoroutine
+
+            override fun onAccuracyChanged(
+              sensor: Sensor?,
+              accuracy: Int,
+            ) = Unit
           }
-          cont.invokeOnCancellation { sensorManager.unregisterListener(listener) }
+        val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+        if (!registered) {
+          cont.resume(null) { _, _, _ -> }
+          return@suspendCancellableCoroutine
         }
+        cont.invokeOnCancellation { sensorManager.unregisterListener(listener) }
       }
-    return sample
-  }
+    }
 
   private fun classifyActivity(averageDelta: Double): String =
     when {
@@ -252,15 +239,6 @@ private object SystemMotionDataSource : MotionDataSource {
       averageDelta <= 1.80 -> "walking"
       else -> "running"
     }
-
-  private fun classifyConfidence(
-    samples: Int,
-    averageDelta: Double,
-  ): String {
-    if (samples < 6) return "low"
-    if (samples >= 14 && averageDelta > 0.4) return "high"
-    return "medium"
-  }
 }
 
 /** Handles Android motion-related node.invoke commands backed by live sensors. */
@@ -293,17 +271,11 @@ class MotionHandler internal constructor(
     query: (MotionRangeRequest) -> String,
   ): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "MOTION_PERMISSION_REQUIRED",
-        message = "MOTION_PERMISSION_REQUIRED: grant Motion permission",
-      )
+      return nodeInvokeError("MOTION_PERMISSION_REQUIRED", "grant Motion permission")
     }
     val request =
       parseRangeRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     return try {
       GatewaySession.InvokeResult.ok(query(request))
     } catch (err: IllegalArgumentException) {
@@ -311,10 +283,7 @@ class MotionHandler internal constructor(
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "MOTION_UNAVAILABLE",
-        message = "MOTION_UNAVAILABLE: ${err.message ?: fallbackMessage}",
-      )
+      nodeInvokeError("MOTION_UNAVAILABLE", err.message ?: fallbackMessage)
     }
   }
 

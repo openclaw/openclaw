@@ -13,7 +13,7 @@ type LoadedSession = ReturnType<typeof loadGatewaySessionEntryReadOnly>;
 type Operation = WorkspaceInspectionInput["operation"];
 
 /** Repository identity never resolves through the Gateway's local workspace defaults. */
-export function resolveRepositoryWorkspaceAccess(
+export async function resolveRepositoryWorkspaceAccess(
   loaded: LoadedSession,
   context?: GatewayRequestContext,
 ) {
@@ -23,7 +23,8 @@ export function resolveRepositoryWorkspaceAccess(
     return undefined;
   }
   const store = getSessionRepositoryWorkspaceStore();
-  const repository = store.get(workspaceId);
+  const prepared = await store.prepare(workspaceId);
+  const repository = prepared.current();
   if (
     !repository ||
     repository.agentId !== loaded.agentId ||
@@ -39,7 +40,7 @@ export function resolveRepositoryWorkspaceAccess(
     const current = loadGatewaySessionEntryReadOnly(loaded.canonicalKey, {
       agentId: repository.agentId,
     });
-    const source = store.get(workspaceId);
+    const source = prepared.current();
     if (
       current.entry?.sessionId !== sessionId ||
       current.entry?.repositoryWorkspaceId !== workspaceId ||
@@ -52,6 +53,7 @@ export function resolveRepositoryWorkspaceAccess(
       throw new Error("The cloud repository workspace owner changed; refresh this session.");
     }
   };
+  assertSession(repository.revision);
   const placements = context?.workerSessionPlacementService;
   const environments = context?.workerEnvironmentService;
   const placement = placements?.getMany([sessionId]).get(sessionId);

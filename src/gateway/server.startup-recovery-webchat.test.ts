@@ -383,19 +383,6 @@ it(
       ]);
       expect(resetResult).toMatchObject({ started: 1, failed: 0 });
       const resetPrompt = readRecoveryPrompt(providerPayload);
-      console.log(
-        JSON.stringify({
-          proof: "restart-parent-provider-boundary",
-          originalChildDelivered: readRecoveryPrompt(targetRequests[0] ?? "").includes(
-            originalChildMarker,
-          ),
-          resetPreservedSessionId: afterReset?.sessionId === beforeReset?.sessionId,
-          resetChangedLifecycle: afterReset?.lifecycleRevision !== beforeReset?.lifecycleRevision,
-          currentChildDelivered: resetPrompt.includes(currentChildMarker),
-          oldChildDeliveredAfterReset: resetPrompt.includes(originalChildMarker),
-          historicalMetadataRetained: providerPayload.includes(originalChildMarker),
-        }),
-      );
       expect(resetPrompt.includes(currentChildMarker)).toBe(true);
       expect(resetPrompt.includes(originalChildMarker)).toBe(false);
 
@@ -407,6 +394,12 @@ it(
       if (!gatewayContext) {
         throw new Error("Saved-batch proof needs the active Gateway owner");
       }
+      // Startup activation schedules a registry sweep that also resumes pending settle
+      // wakes. Retire it so the manual replays below are the only claimants.
+      const registry = Reflect.get(globalThis, Symbol.for("openclaw.subagentRegistryTestApi")) as {
+        resetSubagentRegistryForTests(options: { persist: false }): Promise<void>;
+      };
+      await registry.resetSubagentRegistryForTests({ persist: false });
       const resolver = () => gatewayContext;
       const reloadSavedBatch = (entry: SubagentRunRecord) => {
         subagentRuns.set(entry.runId, entry);
@@ -422,6 +415,7 @@ it(
       };
       const wakeSavedBatch = (entry: SubagentRunRecord) =>
         maybeWakeRequesterAfterAllChildrenSettled({
+          isSourceCurrent: () => true,
           requesterSessionKey: sessionKey,
           settledEntry: entry,
           transitionBatch: (batch, next) => {
@@ -479,6 +473,7 @@ it(
       const revokedTransition = vi.fn();
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled({
+          isSourceCurrent: () => true,
           requesterSessionKey: sessionKey,
           settledEntry: batchChild,
           transitionBatch: revokedTransition,
@@ -502,19 +497,6 @@ it(
       expect(staleBatchPrompt).not.toContain("Unfinished child sessions to reconcile:");
       expect(staleBatchPrompt).not.toContain(`"sessionKey": "${batchChild.childSessionKey}"`);
       expect(staleBatchPrompt).not.toContain("parent recovery required");
-      console.log(
-        JSON.stringify({
-          proof: "saved-batch-provider-boundary",
-          currentChildActionable: ownedBatchPrompt.includes(batchChild.childSessionKey),
-          liveWakeRevokedByReset: true,
-          olderFixtureHistoryRestored: true,
-          staleChildActionable: staleBatchPrompt.includes(
-            "Unfinished child sessions to reconcile:",
-          ),
-          ordinaryResultRetained: staleBatchPrompt.includes("saved interrupted batch result"),
-          diagnosticHistoryRetained: batchRequests[1]?.includes(batchChildMarker) === true,
-        }),
-      );
     } finally {
       recoveryGate.resolve();
       replacementOwner?.release();

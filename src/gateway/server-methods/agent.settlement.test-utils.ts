@@ -15,6 +15,7 @@ import {
   resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
@@ -28,7 +29,10 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { observeCronContinuationLifetime } from "./agent.cron-continuation-lifetime.test-support.js";
-import { withPluginSubagentTestState } from "./agent.spawned-child.test-support.js";
+import {
+  observeAgentSubagentCleanup,
+  withPluginSubagentTestState,
+} from "./agent.spawned-child.test-support.js";
 import {
   backendGatewayClient,
   cronContinuationGatewayClient,
@@ -285,7 +289,9 @@ export function registerCompactionSessionSettlementCase() {
 export function registerYieldedRequesterSettlementCase(
   mockSpawnedChildSessionEntry: (sessionKey: string, root: string) => void,
 ) {
-  it("keeps one native run when a completed child wakes its requester before the yielded lifecycle ends", async () => {
+  it("keeps one native run when a completed child wakes its requester before the yielded lifecycle ends", async ({
+    signal,
+  }) => {
     await withPluginSubagentTestState(
       "openclaw-gateway-yield-settlement-race-",
       async ({ stateDir: root }) => {
@@ -295,6 +301,7 @@ export function registerYieldedRequesterSettlementCase(
         const workerSessionKey = "agent:main:subagent:settlement-worker";
         const previousRunId = "orchestrator-yielding";
         const nextRunId = "orchestrator-settle-continuation";
+        using cleanup = observeAgentSubagentCleanup({ runId: nextRunId, childSessionKey });
         const workerRunId = "settled-worker";
         const result = "The completed worker result has been checked.";
         const completion = createDeferred<AgentWaitResult>();
@@ -400,14 +407,14 @@ export function registerYieldedRequesterSettlementCase(
           endedAt: undefined,
         });
         expect(
-          markRequesterTurnYielded({
+          await markRequesterTurnYielded({
             requesterSessionKey: childSessionKey,
             requesterAgentId: "main",
             requesterTurnRunId: previousRunId,
           }),
         ).toBe(1);
         expect(
-          settleRequesterAfterSessionSpawns({
+          await settleRequesterAfterSessionSpawns({
             requesterSessionKey: childSessionKey,
             requesterAgentId: "main",
             requesterTurnRunId: previousRunId,
@@ -433,11 +440,10 @@ export function registerYieldedRequesterSettlementCase(
           requesterSessionKey,
           pauseReason: undefined,
         });
-        await waitForAssertion(() => {
-          expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey), {
-            runId: nextRunId,
-            cleanupCompletedAt: expect.any(Number),
-          });
+        await racePromiseWithAbortSignal(cleanup.cleanupCompleted, signal);
+        expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey), {
+          runId: nextRunId,
+          cleanupCompletedAt: expect.any(Number),
         });
         const { emitAgentEvent } = await vi.importActual<
           typeof import("../../infra/agent-events.js")

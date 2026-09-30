@@ -1,6 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import {
+  clearToolActivityRun,
+  getLastToolActivityMs,
+  notifyToolActivity,
+  onToolActivity,
+} from "../../../shared/tool-activity-heartbeat.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import {
   getBeforeToolCallSourceTool,
@@ -16,13 +22,7 @@ import {
   getToolTerminalPresentation,
   setToolTerminalPresentation,
 } from "../../tool-terminal-presentation.js";
-import {
-  clearToolActivityRun,
-  getLastToolActivityMs,
-  notifyToolActivity,
-  onToolActivity,
-  wrapEmbeddedAttemptToolWithActivity,
-} from "./tool-activity-heartbeat.js";
+import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 
 const RUN = "test-run";
 

@@ -59,24 +59,14 @@ function createCoreConfig(workspace: string): OpenClawConfig {
 
 function createConfig(overrides?: Partial<VoiceCallConfig["realtime"]>): VoiceCallConfig {
   const config = createVoiceCallBaseConfig();
-  config.agentId = "voice";
-  config.realtime.enabled = true;
-  config.realtime.instructions = "Base voice instructions.";
   config.realtime = {
     ...config.realtime,
     ...overrides,
-    fastContext: {
-      ...config.realtime.fastContext,
-      ...overrides?.fastContext,
-      sources: overrides?.fastContext?.sources ?? config.realtime.fastContext.sources,
-    },
     agentContext: {
       ...config.realtime.agentContext,
       ...overrides?.agentContext,
       files: overrides?.agentContext?.files ?? config.realtime.agentContext.files,
     },
-    tools: overrides?.tools ?? config.realtime.tools,
-    providers: overrides?.providers ?? config.realtime.providers,
   };
   return config;
 }

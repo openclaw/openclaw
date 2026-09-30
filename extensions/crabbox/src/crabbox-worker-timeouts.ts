@@ -71,8 +71,12 @@ const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS =
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.
 // Setup may install an exact candidate CLI and official plugins on a minimal cloud image.
 export const CRABBOX_SETUP_TIMEOUT_MS = 15 * 60_000;
-export const CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS = 15 * 60_000;
+const CRABBOX_NODE_ENROLLMENT_TIMEOUT_FLOOR_MS = 15 * 60_000;
 export const CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS = 60_000;
+
+export function resolveCrabboxNodeEnrollmentTimeoutMs(bootstrapTimeoutMs?: number): number {
+  return Math.max(CRABBOX_NODE_ENROLLMENT_TIMEOUT_FLOOR_MS, bootstrapTimeoutMs ?? 0);
+}
 
 // Leave one minute inside the lifecycle cap for process startup and cleanup handoff.
 export const CRABBOX_MACHINE0_READY_WAIT_TIMEOUT = "4m";
@@ -105,11 +109,12 @@ export function countCrabboxProvisionSetupPhases(profile: CrabboxProvisionTimeou
 
 export function resolveCrabboxProvisionCallTimeoutMs(
   profile: CrabboxProvisionTimeoutProfile,
+  nodeBootstrapTimeoutMs?: number,
 ): number {
   return (
     resolveCrabboxProvisionBaseTimeoutMs(profile) +
     countCrabboxProvisionSetupPhases(profile) * CRABBOX_SETUP_TIMEOUT_MS +
-    CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS +
+    resolveCrabboxNodeEnrollmentTimeoutMs(nodeBootstrapTimeoutMs) +
     CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS +
     CRABBOX_STOP_TIMEOUT_MS +
     // Diagnostics, heartbeat cancellation, and stop retain child/tree settlement.

@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI view renders logs screen content.
 import { html, nothing } from "lit";
 import { renderLoadingState } from "../../components/loading-state.ts";
 import {
@@ -14,10 +13,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { createMsFormatter } from "../../lib/format.ts";
-import type { LogEntry, LogLevel } from "./log-lines.ts";
-
-const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
-type ExportFileLabel = "filtered" | "visible";
+import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
 
 type LogsProps = {
   loading: boolean;
@@ -48,27 +44,23 @@ function formatLogTime(value: string | null | undefined, formatTime: (ms: number
   return formatTime(date.getTime());
 }
 
-function matchesFilter(entry: LogEntry, needle: string) {
-  if (!needle) {
-    return true;
-  }
-  const haystack = normalizeLowercaseStringOrEmpty(
-    [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
-  );
-  return haystack.includes(needle);
-}
-
 export function renderLogs(props: LogsProps) {
   const formatTime = createMsFormatter({ timeStyle: "short" });
   const needle = normalizeLowercaseStringOrEmpty(props.filterText);
-  const levelFiltered = LEVELS.some((level) => !props.levelFilters[level]);
+  const levelFiltered = LOG_LEVELS.some((level) => !props.levelFilters[level]);
   const filtered = props.entries.filter((entry) => {
     if (entry.level && !props.levelFilters[entry.level]) {
       return false;
     }
-    return matchesFilter(entry, needle);
+    if (!needle) {
+      return true;
+    }
+    const haystack = normalizeLowercaseStringOrEmpty(
+      [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
+    );
+    return haystack.includes(needle);
   });
-  const exportFileLabel: ExportFileLabel = needle || levelFiltered ? "filtered" : "visible";
+  const exportFileLabel = needle || levelFiltered ? "filtered" : "visible";
   const exportDisplayLabel = t(`gatewayLogs.exportLabels.${exportFileLabel}`);
   const streamContent = !props.status.hasLoaded
     ? props.loading
@@ -131,7 +123,7 @@ export function renderLogs(props: LogsProps) {
       })}
       <div class="settings-row">
         <div class="chip-row">
-          ${LEVELS.map(
+          ${LOG_LEVELS.map(
             (level) => html`
               <label class="chip log-chip ${level}">
                 <input
@@ -149,7 +141,7 @@ export function renderLogs(props: LogsProps) {
           ${renderSettingsToggle({
             checked: props.autoFollow,
             ariaLabel: t("gatewayLogs.autoFollow"),
-            onChange: (checked) => props.onToggleAutoFollow(checked),
+            onChange: props.onToggleAutoFollow,
           })}
           <span class="settings-row__value">${t("gatewayLogs.autoFollow")}</span>
         </div>

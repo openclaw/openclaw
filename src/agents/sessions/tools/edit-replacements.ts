@@ -17,13 +17,9 @@ interface ReplacementGroup {
   replacements: TextReplacement[];
 }
 
-function splitLinesWithEndings(content: string): string[] {
-  return content.match(/[^\n]*\n|[^\n]+/g) ?? [];
-}
-
 function getLineSpans(content: string): LineSpan[] {
   let offset = 0;
-  return splitLinesWithEndings(content).map((line) => {
+  return (content.match(/[^\n]*\n|[^\n]+/g) ?? []).map((line) => {
     const span = { start: offset, end: offset + line.length };
     offset = span.end;
     return span;

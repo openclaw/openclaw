@@ -157,6 +157,7 @@ type BootstrapImportScope = {
   prefix: string;
   files: string[];
   imports: PackageDistImport[];
+  packageJsons: Map<string, string>;
   patchedMcp?: { manifest: NodePackageManifest; hashes: Map<string, string> };
 };
 
@@ -260,6 +261,7 @@ async function prepareNodeBootstrapArtifact(
     prefix: "",
     files: [],
     imports: [],
+    packageJsons: new Map(),
   };
   const scopes: BootstrapImportScope[] = [];
   const entries = new Map<string, BootstrapEntry>();
@@ -428,6 +430,7 @@ async function prepareNodeBootstrapArtifact(
       prefix: `node_modules/${name}/`,
       files: [],
       imports: [],
+      packageJsons: new Map(),
       ...(name === PATCHED_MCP_NAME
         ? { patchedMcp: { manifest: bundled, hashes: new Map<string, string>() } }
         : {}),
@@ -458,7 +461,13 @@ async function prepareNodeBootstrapArtifact(
   const inventory = [...entries.keys()].filter((entry) => entry.startsWith("dist/")).toSorted();
   addGeneratedFile(PACKAGE_DIST_INVENTORY_RELATIVE_PATH, `${JSON.stringify(inventory)}\n`);
   addGeneratedFile(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH, "pending\n");
-  const ordered = [...entries].toSorted(([left], [right]) => compareWorkerBundlePaths(left, right));
+  // Inspect package metadata before JavaScript, independent of each package's file layout.
+  const ordered = [...entries].toSorted(
+    ([left], [right]) =>
+      Number(path.posix.basename(right) === "package.json") -
+        Number(path.posix.basename(left) === "package.json") ||
+      compareWorkerBundlePaths(left, right),
+  );
   // Root imports may legitimately reach bundled node_modules files; their own
   // dist imports still receive a separate package-relative closure check.
   mainScope.files = ordered.map(([relative]) => relative);
@@ -490,7 +499,6 @@ async function prepareNodeBootstrapArtifact(
   // Observe output errors immediately, but join the pipeline after in-flight reads drain.
   void archiveDone.catch(() => undefined);
   const manifest: WorkerBundleHashEntry[] = [];
-  const packageManifests = new Map<string, string>();
   try {
     // One batch holds at most 16 source buffers under the existing expanded-byte budget.
     // Pack's jobs limit does not bound ReadEntry input, so consume each output entry below.
@@ -512,10 +520,10 @@ async function prepareNodeBootstrapArtifact(
         const [relative, entry] = batch[index]!;
         const { contents, mode } = read.results[index]!;
         const importerPath = relative.slice(entry.scope.prefix.length);
-        // Resolve directory imports from the exact bounded bytes sent to this archive, not
-        // a later filesystem read. JavaScript buffers still drain with each batch.
         if (path.posix.basename(relative) === "package.json") {
-          packageManifests.set(relative, contents.toString("utf8"));
+          const text = contents.toString("utf8");
+          mainScope.packageJsons.set(relative, text);
+          entry.scope.packageJsons.set(importerPath, text);
         }
         const identity = {
           path: `package/${relative}`,
@@ -534,6 +542,7 @@ async function prepareNodeBootstrapArtifact(
             ...(inspected?.imports ??
               collectPackageDistImports({
                 files: [importerPath],
+                packageJsons: entry.scope.packageJsons,
                 readText: () => contents.toString("utf8"),
               })),
           );
@@ -563,16 +572,7 @@ async function prepareNodeBootstrapArtifact(
             files: new Set(scope.files),
             sha256: (file) => scope.patchedMcp?.hashes.get(file),
           })
-        : collectPackageDistImportErrors({
-            ...scope,
-            readText: (relative) => {
-              const text = packageManifests.get(`${scope.prefix}${relative}`);
-              if (text === undefined) {
-                throw new Error(`Missing packaged import metadata: ${scope.prefix}${relative}`);
-              }
-              return text;
-            },
-          });
+        : collectPackageDistImportErrors(scope);
       if (errors.length > 0) {
         throw new Error(
           `Node distribution ${scope.label} ${scope.patchedMcp ? "has an invalid patched dependency" : "has an incomplete built import closure"}; rebuild and restart the Gateway: ${errors.slice(0, 5).join("; ")}`,
@@ -608,6 +608,7 @@ async function prepareNodeBootstrapArtifact(
   const archiveManifest =
     prebuiltManifest ??
     (await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS));
+  manifest.sort((left, right) => compareWorkerBundlePaths(left.path, right.path));
   if (hashWorkerBundleManifest(manifest) !== hashWorkerBundleManifest(archiveManifest)) {
     if (prebuiltManifest) {
       // Different builds or execution modes can select different plugin bytes. Re-enter the

@@ -5,6 +5,7 @@ import {
 } from "../../test/vitest/vitest.agents-paths.mjs";
 import { getCliVitestProjectOwner } from "../../test/vitest/vitest.cli-paths.mjs";
 import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
+import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import {
   databaseWorkerCoreTestFiles,
   isDatabaseWorkerCoreTestFile,
@@ -29,15 +30,18 @@ import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
   autoReplyTopLevelReplyTestInclude,
+  tuiPtyTestFiles,
 } from "../../test/vitest/vitest.test-shards.mjs";
 import {
   getUnitFastTestFiles,
   getUnitFastIsolatedTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import {
+  boundaryTestFiles,
   bundledPluginDependentUnitTestFiles,
   filterUnitConfigTestFiles,
 } from "../../test/vitest/vitest.unit-paths.mjs";
+import { getCommandFilesByOwner } from "./ci-command-test-plan.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 
 export const COMPACT_EMBEDDED_BASE_GROUP_NAME = "agentic-agents-embedded-base";
@@ -76,12 +80,6 @@ const runtimeSharedProjectOwners = [
     root: "src/shared",
     include: ["src/shared/**/*.test.ts"],
     exclude: [],
-  },
-  {
-    config: "test/vitest/vitest.tasks.config.ts",
-    root: "src/tasks",
-    include: ["src/tasks/**/*.test.ts"],
-    exclude: databaseWorkerCoreTestFiles,
   },
   {
     config: "test/vitest/vitest.utils.config.ts",
@@ -145,6 +143,11 @@ const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTest
   ],
 ]);
 const EXACT_CONFIG_FILES = new Map<string, string[]>([
+  ["test/vitest/vitest.boundary.config.ts", boundaryTestFiles],
+  [
+    "test/vitest/vitest.tui-pty.config.ts",
+    ["src/tui/tui-pty-harness-assertion-test-support.test.ts", ...tuiPtyTestFiles],
+  ],
   ["test/vitest/vitest.gateway-server-isolated.config.ts", gatewayServerIsolatedTestFiles],
   ["test/vitest/vitest.gateway-database-workers.config.ts", gatewayDatabaseWorkerTestFiles],
 ]);
@@ -152,6 +155,9 @@ const configFileCache = new Map<string, string[]>();
 
 /** Disjoint project inventories retain exact ownership within shared process groups. */
 export function listNodeTestConfigFiles(config: string): string[] | undefined {
+  if (config === "test/vitest/vitest.commands.config.ts") {
+    return [...getCommandFilesByOwner().values()].flat().toSorted();
+  }
   const exact = EXACT_CONFIG_FILES.get(config);
   if (exact) {
     return exact;
@@ -173,6 +179,53 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
   string,
   { listFiles: () => string[]; splitByFile?: false }
 >([
+  [
+    "agentic-agents-tools",
+    {
+      listFiles: () => listScopedOwnerTestFiles(agentVitestProjectOwners.tools),
+      splitByFile: false,
+    },
+  ],
+  [
+    "auto-reply-core-top-level",
+    {
+      listFiles: () => [
+        ...listNodeTestConfigFiles("test/vitest/vitest.auto-reply-core.config.ts")!,
+        ...listNodeTestConfigFiles("test/vitest/vitest.auto-reply-top-level.config.ts")!,
+      ],
+      splitByFile: false,
+    },
+  ],
+  [
+    "agentic-command-support",
+    {
+      listFiles: () => [
+        ...listScopedOwnerTestFiles({
+          root: "src/commands",
+          include: commandsLightTestFiles,
+          exclude: databaseWorkerCoreTestFiles,
+        }),
+        ...listScopedOwnerTestFiles({
+          root: "src",
+          include: ["src/daemon/**/*.test.ts"],
+          exclude: [],
+        }),
+      ],
+      splitByFile: false,
+    },
+  ],
+  [
+    "core-runtime-hooks",
+    {
+      listFiles: () =>
+        listScopedOwnerTestFiles({
+          root: "src/hooks",
+          include: ["src/hooks/**/*.test.ts"],
+          exclude: databaseWorkerCoreTestFiles,
+        }),
+      splitByFile: false,
+    },
+  ],
   [
     "core-runtime-shared",
     {

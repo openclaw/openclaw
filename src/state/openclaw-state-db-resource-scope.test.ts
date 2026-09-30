@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -28,7 +29,12 @@ it("keeps resource custody unprivileged and preserves inherited owner validity",
   current = false;
   expect(() => nested.assertAdmission()).toThrow(lost);
   current = true;
-  await maintenance.close();
+  const disposal = createDeferredCore();
+  maintenance.run(() => maintenance.own({}, "shared-handles", () => disposal.promise));
+  const closing = maintenance.close();
+  expect(() => maintenance.run(() => {})).toThrow("resource admission is closed");
+  disposal.resolve();
+  await closing;
   expect(() => nested.assertAdmission()).toThrow("Database maintenance resource scope is closed");
   await nested.close();
 });
@@ -37,10 +43,12 @@ it("keeps nested authority reads in their resource scope without admitting effec
   let revoked = false;
   let childRevoked = false;
   let nestedEffect = false;
+  const resource = {};
   const parent = createOpenClawDatabaseMaintenanceScope({
     assertOwnerCurrent: () => {
       const current = getOpenClawDatabaseMaintenanceScope();
       current?.assertReadAdmission();
+      observeOpenClawDatabaseMaintenanceResource(resource);
       if (nestedEffect) {
         current?.assertAdmission();
       }
@@ -58,7 +66,6 @@ it("keeps nested authority reads in their resource scope without admitting effec
       },
     }),
   );
-  const resource = {};
   const close = vi.fn();
   try {
     child.run(() => {

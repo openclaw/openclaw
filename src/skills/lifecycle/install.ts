@@ -89,21 +89,23 @@ const SAFE_GO_MODULE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*@[a-z0-9v._-]+$/;
 const SAFE_UV_PACKAGE =
   /^[a-z0-9][a-z0-9._-]*(\[[a-z0-9,._-]+\])?(([><=!~]=?|===?)[a-z0-9.*_-]+)?$/i;
 
+type InstallCommand = { argv: string[] } | { error: string };
+
 function buildValidatedInstallCommand(
   value: string | undefined,
   kind: string,
   pattern: RegExp,
   command: readonly string[],
-): { argv: string[] | null; error?: string } {
+): InstallCommand {
   if (!value) {
-    return { argv: null, error: `missing ${kind}` };
+    return { error: `missing ${kind}` };
   }
   const trimmed = value.trim();
   if (!trimmed || trimmed.startsWith("-")) {
-    return { argv: null, error: `${kind} value is empty or starts with a dash` };
+    return { error: `${kind} value is empty or starts with a dash` };
   }
   if (!pattern.test(trimmed)) {
-    return { argv: null, error: `${kind} value contains invalid characters: ${trimmed}` };
+    return { error: `${kind} value contains invalid characters: ${trimmed}` };
   }
   return { argv: [...command, trimmed] };
 }
@@ -111,10 +113,7 @@ function buildValidatedInstallCommand(
 function buildInstallCommand(
   spec: SkillInstallSpec,
   prefs: SkillsInstallPreferences,
-): {
-  argv: string[] | null;
-  error?: string;
-} {
+): InstallCommand {
   switch (spec.kind) {
     case "brew":
       return buildValidatedInstallCommand(spec.formula, "brew formula", SAFE_BREW_FORMULA, [
@@ -139,11 +138,8 @@ function buildInstallCommand(
         "tool",
         "install",
       ]);
-    case "download": {
-      return { argv: null, error: "download install handled separately" };
-    }
     default:
-      return { argv: null, error: "unsupported installer" };
+      return { error: "unsupported installer" };
   }
 }
 
@@ -163,13 +159,8 @@ async function resolveBrewPrefixBinDir(
   return undefined;
 }
 
-async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
-  const exe = brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
-  if (!exe) {
-    return undefined;
-  }
-
-  const prefixBin = await resolveBrewPrefixBinDir(timeoutMs, exe);
+async function resolveBrewBinDir(timeoutMs: number, brewExe: string): Promise<string | undefined> {
+  const prefixBin = await resolveBrewPrefixBinDir(timeoutMs, brewExe);
   if (prefixBin) {
     return prefixBin;
   }
@@ -198,16 +189,6 @@ function createInstallFailure(params: {
     stderr: params.stderr?.trim() ?? "",
     code: params.code ?? null,
     ...(params.skipReason ? { skipReason: params.skipReason } : {}),
-  };
-}
-
-function createInstallSuccess(result: CommandResult): SkillInstallResult {
-  return {
-    ok: true,
-    message: "Installed",
-    stdout: result.stdout.trim(),
-    stderr: result.stderr.trim(),
-    code: result.code,
   };
 }
 
@@ -571,20 +552,22 @@ export async function resolveInstallerKindReadiness(kind: string): Promise<Skill
 }
 
 async function executeInstallCommand(params: {
-  argv: string[] | null;
+  argv: string[];
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<SkillInstallResult> {
-  if (!params.argv || params.argv.length === 0) {
-    return createInstallFailure({ message: "invalid install command" });
-  }
-
   const result = await runCommandSafely(params.argv, {
     timeoutMs: params.timeoutMs,
     env: params.env,
   });
   if (result.code === 0) {
-    return createInstallSuccess(result);
+    return {
+      ok: true,
+      message: "Installed",
+      stdout: result.stdout.trim(),
+      stderr: result.stderr.trim(),
+      code: result.code,
+    };
   }
 
   return createInstallFailure({
@@ -682,7 +665,7 @@ export async function installSkillDependencies(
   }
 
   const command = buildInstallCommand(spec, prefs);
-  if (command.error) {
+  if ("error" in command) {
     return createInstallFailure({ message: command.error });
   }
 
@@ -702,8 +685,8 @@ export async function installSkillDependencies(
     return goInstallFailure;
   }
 
-  const argv = command.argv ? [...command.argv] : null;
-  if (spec.kind === "brew" && brewExe && argv?.[0] === "brew") {
+  const { argv } = command;
+  if (spec.kind === "brew" && brewExe && argv[0] === "brew") {
     argv[0] = brewExe;
   }
 

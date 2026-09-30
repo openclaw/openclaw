@@ -147,13 +147,10 @@ async function executeCameraSnap({
   imageSanitization,
 }: ResolvedNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const nodeId = resolvedNode.nodeId;
-  const facingRaw = normalizeLowercaseStringOrEmpty(params.facing) || "front";
-  const facing =
-    facingRaw === "both" || facingRaw === "front" || facingRaw === "back"
-      ? facingRaw
-      : (() => {
-          throw new Error("invalid facing (front|back|both)");
-        })();
+  const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
+  if (facing !== "both" && facing !== "front" && facing !== "back") {
+    throw new Error("invalid facing (front|back|both)");
+  }
   const maxWidth = readPositiveIntegerParam(params, "maxWidth") ?? 1600;
   const quality =
     readFiniteNumberParam(params, "quality", {

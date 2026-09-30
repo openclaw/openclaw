@@ -60,7 +60,7 @@ function parseMemoryCliOrder(value: unknown): {
   };
 }
 
-export function parseMemoryCliFilter(rawValue: unknown): MemoryQueryFilter | undefined {
+function parseMemoryCliFilter(rawValue: unknown): MemoryQueryFilter | undefined {
   if (rawValue === undefined) {
     return undefined;
   }

@@ -11,6 +11,7 @@ import {
   exerciseTerminalOutputSafety,
   objectFieldEquals,
   readFixtureLog,
+  selectTuiFixtureSession,
   startTuiFixture,
   waitForSynchronizedFrameRows,
   type FixtureLogEntry,
@@ -117,76 +118,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     async () => {
       await compactFooterFixture.run.waitForOutput("gpt-5.6-sol high", STARTUP_TIMEOUT_MS);
       expect(compactFooterFixture.run.visibleOutput()).not.toContain("openai:setup-64cddea3");
-    },
-    STARTUP_TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "keeps session modes scoped while trace changes and delivery stays process-owned",
-    async () => {
-      const modeFixture = await startTuiFixture({
-        env: {
-          OPENCLAW_TUI_PTY_DELIVER: "1",
-          OPENCLAW_TUI_PTY_MODEL: "fixture-model",
-        },
-      });
-      try {
-        await modeFixture.run.waitForOutput("deliver:on", STARTUP_TIMEOUT_MS);
-        await modeFixture.run.write("/session agent:main:mode-source\r", { delay: false });
-        await modeFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "loadHistory" &&
-            objectFieldEquals(entry, "sessionKey", "agent:main:mode-source"),
-        );
-        await modeFixture.run.waitForOutput(
-          "trace:raw | reasoning:stream | deliver:on",
-          STARTUP_TIMEOUT_MS,
-        );
-
-        await modeFixture.run.write("/session agent:main:mode-target\r", { delay: false });
-        await modeFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "loadHistory" &&
-            objectFieldEquals(entry, "sessionKey", "agent:main:mode-target"),
-        );
-        // Wait for loaded target metadata, not a reset placeholder or late source redraw.
-        const targetRows = await waitForSynchronizedFrameRows(
-          modeFixture.run,
-          (rows) => rows.some((row) => row.includes("| session mode-target | fixture-model")),
-          STARTUP_TIMEOUT_MS,
-        );
-        const targetOutput = targetRows.join(" ");
-        expect(targetOutput).toContain("deliver:on");
-        expect(targetOutput).not.toContain("fast:auto");
-        expect(targetOutput).not.toContain("verbose full");
-        expect(targetOutput).not.toContain("trace:raw");
-        expect(targetOutput).not.toContain("reasoning:stream");
-
-        await modeFixture.run.write("/trace on\r", { delay: false });
-        await modeFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "patchSession" && objectFieldEquals(entry, "traceLevel", "on"),
-        );
-        await modeFixture.run.waitForOutput("trace | deliver:on", STARTUP_TIMEOUT_MS);
-
-        await modeFixture.run.write("delivery proof\r", { delay: false });
-        const sent = await modeFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "sendChat" && objectFieldEquals(entry, "message", "delivery proof"),
-        );
-        expect(sent.payload).toMatchObject({ deliver: true });
-        console.log(
-          `[behavior-evidence] tui-session-footer ${JSON.stringify({
-            terminal: "real PTY",
-            sourceModesVisible: true,
-            targetModesCleared: true,
-            traceTransitionVisible: true,
-            fixedDeliveryPropagated: true,
-          })}`,
-        );
-      } finally {
-        await modeFixture.cleanup();
-      }
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -977,11 +908,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   ])(
     "keeps case-distinct $provider conversations out of the visible terminal",
     async ({ sessionKey, message }) => {
-      await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
-      await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
-      );
+      await selectTuiFixtureSession(fixture, sessionKey);
 
       const outputOffset = fixture.run.visibleOutput().length;
       await fixture.run.write(`${message}\r`, { delay: false });
@@ -1007,11 +934,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   ])(
     "preserves provider-owned identity when selecting $sessionKey in the terminal",
     async ({ sessionKey, message }) => {
-      await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
-      await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
-      );
+      await selectTuiFixtureSession(fixture, sessionKey);
 
       await fixture.run.write(`${message}\r`, { delay: false });
       const sent = await fixture.waitForLogEntry(

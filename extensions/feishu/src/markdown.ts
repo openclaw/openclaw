@@ -35,6 +35,26 @@ export function parseFeishuMarkdown(text: string): FeishuMarkdownNode {
   }) as FeishuMarkdownNode;
 }
 
+export function visitFeishuMarkdown(
+  root: FeishuMarkdownNode,
+  visitor: (node: FeishuMarkdownNode) => void,
+) {
+  const pending = [root];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (!node) {
+      continue;
+    }
+    visitor(node);
+    for (let index = (node.children?.length ?? 0) - 1; index >= 0; index -= 1) {
+      const child = node.children?.[index];
+      if (child) {
+        pending.push(child);
+      }
+    }
+  }
+}
+
 function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostMessageElement[] {
   if (!mentions?.length) {
     return [];
@@ -83,24 +103,15 @@ export function assertFeishuPostWithinEnvelope(content: string, label: string): 
 function collectSoftBreakOffsets(text: string): number[] {
   const root = parseFeishuMarkdown(text);
   const offsets: number[] = [];
-  const pending = [root];
-
-  while (pending.length > 0) {
-    const node = pending.pop();
-    if (!node) {
-      continue;
-    }
-    if (node.children) {
-      pending.push(...node.children);
-    }
+  visitFeishuMarkdown(root, (node) => {
     if (node.type !== "text") {
-      continue;
+      return;
     }
 
     const start = node.position?.start.offset;
     const end = node.position?.end.offset;
     if (start === undefined || end === undefined) {
-      continue;
+      return;
     }
     for (let offset = start; offset < end; offset += 1) {
       const char = text[offset];
@@ -117,7 +128,7 @@ function collectSoftBreakOffsets(text: string): number[] {
         }
       }
     }
-  }
+  });
 
   return offsets.toSorted((left, right) => left - right);
 }

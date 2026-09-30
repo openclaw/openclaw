@@ -9,6 +9,10 @@ import {
 import { persistDevicePairingStoreState } from "../../../infra/device-pairing-store.js";
 import type { PairedDevice } from "../../../infra/device-pairing.types.js";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../../shared/device-bootstrap-profile.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createPresencePublisher } from "../presence-events.js";
 
@@ -145,16 +149,18 @@ describe("sendGatewayHello setup completion ordering", () => {
               throw new Error("test presence publication failure");
             }
           });
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          const clock = createGatewaySchedulerClock();
+          const scheduler = createTestGatewayScheduler(clock.clock);
           const presence = createPresencePublisher({
+            scheduler,
             broadcast,
             incrementPresenceVersion: () => 2,
             getHealthVersion: () => 1,
             prepare: () => undefined,
           });
-          onTestFinished(() => {
+          onTestFinished(async () => {
             presence.stop();
-            vi.useRealTimers();
+            await scheduler.stop();
           });
           const context = {
             handler: {
@@ -205,7 +211,7 @@ describe("sendGatewayHello setup completion ordering", () => {
           releaseHandoff.resolve();
           await hello;
           expect(broadcast.mock.calls.some(([event]) => event === "presence")).toBe(false);
-          expect(() => vi.advanceTimersByTime(50)).not.toThrow();
+          await clock.advanceBy(200);
           const completionAfterHandoff = await readDevicePairSetupCompletion({
             setupId: issued.setupId,
           });

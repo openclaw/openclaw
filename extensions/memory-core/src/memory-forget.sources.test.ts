@@ -47,7 +47,7 @@ describe("memory forget source removal", () => {
         observedAt: 1,
       };
       const survivor = { ...selected, entryKey: "survivor-entry", sessionId: "survivor" };
-      recordMemoryEntryOrigins({ agentId: "main", origins: [selected, survivor] });
+      await recordMemoryEntryOrigins({ agentId: "main", origins: [selected, survivor] });
       const memoryPath = path.join(fixture.workspaceDir, "MEMORY.md");
       const retained =
         "<!-- openclaw-memory-promotion:survivor-entry -->\n- Retained amber detail.\n";
@@ -93,7 +93,7 @@ describe("memory forget source removal", () => {
               listMemoryEntryOrigins({ agentId: "main", entryKeys: [selected.entryKey] }),
             ).toEqual([]);
           } else {
-            recordMemoryEntryOrigins({
+            await recordMemoryEntryOrigins({
               agentId: "main",
               origins: [{ ...selected, sessionId: "survivor" }],
             });
@@ -137,7 +137,7 @@ describe("memory forget source removal", () => {
       originClass: "owner" as const,
       observedAt: 1,
     };
-    recordMemoryEntryOrigins({ agentId: "main", origins: [origin] });
+    await recordMemoryEntryOrigins({ agentId: "main", origins: [origin] });
     const memoryPath = path.join(fixture.workspaceDir, "MEMORY.md");
     const content =
       "<!-- openclaw-memory-promotion:selected-entry -->\n- Selected violet detail.\n";

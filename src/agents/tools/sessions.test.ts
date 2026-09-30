@@ -4,11 +4,11 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 // Sessions tool tests cover list/send helpers and announce-target resolution.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
@@ -1221,7 +1221,7 @@ describe("sessions_send gating", () => {
       return { id, threadId, baseConversationId: id };
     });
     setRuntimeConfigSnapshot({ plugins: { entries: { telegram: { enabled: true } } } });
-    expect(parseSessionThreadInfo(topicSessionKey).threadId).toBe("77");
+    expect(resolveSessionThreadInfo(topicSessionKey).threadId).toBe("77");
     const tool = createMainSessionsSendTool();
 
     const result = await tool.execute("call-telegram-topic-target", {

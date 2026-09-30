@@ -87,14 +87,8 @@ function isRecoverableLsofError(err: unknown): boolean {
 }
 
 function parseFuserPidList(output: string): number[] {
-  if (!output) {
-    return [];
-  }
   const values = new Set<number>();
   for (const token of output.split(/\s+/)) {
-    if (!token) {
-      continue;
-    }
     const pid = parseStrictPositiveInteger(token);
     if (pid !== undefined) {
       values.add(pid);
@@ -172,11 +166,11 @@ async function isPortBusy(port: number): Promise<boolean> {
 function parseLsofOutput(output: string): PortProcess[] {
   const lines = output.split(/\r?\n/).filter(Boolean);
   const results: PortProcess[] = [];
-  let current: Partial<PortProcess> = {};
+  let current: PortProcess | undefined;
   for (const line of lines) {
     if (line.startsWith("p")) {
-      if (current.pid) {
-        results.push(current as PortProcess);
+      if (current) {
+        results.push(current);
       }
       const rawPidToken = line.slice(1);
       const rawPid = parseStrictPositiveInteger(rawPidToken);
@@ -188,12 +182,12 @@ function parseLsofOutput(output: string): PortProcess[] {
         );
       }
       current = { pid: rawPid };
-    } else if (line.startsWith("c")) {
+    } else if (current && line.startsWith("c")) {
       current.command = line.slice(1);
     }
   }
-  if (current.pid) {
-    results.push(current as PortProcess);
+  if (current) {
+    results.push(current);
   }
   return results;
 }
@@ -379,19 +373,8 @@ export async function forceFreePortAndWait(
   );
 }
 
-/**
- * Attempt a real TCP bind to verify the port is available at the OS level.
- * Catches TIME_WAIT / kernel-level holds that lsof won't show.
- *
- * Resolves false only for EADDRINUSE — a genuinely transient condition
- * (port still in TIME_WAIT after a --force kill) that the caller should retry.
- *
- * All other errors are non-retryable and are rejected immediately:
- * - EADDRNOTAVAIL: the host address doesn't exist on any local interface
- *   (hard misconfiguration, not a transient kernel hold).
- * - EACCES: bind to a privileged port as non-root.
- * - EINVAL, etc.: other unrecoverable OS errors.
- */
+// A bind catches kernel-level holds that lsof misses. Only EADDRINUSE is retryable;
+// invalid addresses, permissions, and other errors must surface immediately.
 function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const srv = createServer();
@@ -399,11 +382,8 @@ function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> {
     srv.once("error", (err: NodeJS.ErrnoException) => {
       srv.close();
       if (err.code === "EADDRINUSE") {
-        // Genuinely transient — port still in use or TIME_WAIT after a --force kill.
         resolve(false);
       } else {
-        // Non-retryable: EADDRNOTAVAIL (bad host address), EACCES (privileged port),
-        // EINVAL, and any other OS errors. Surface immediately; no retry loop.
         reject(err);
       }
     });
@@ -433,7 +413,6 @@ export async function waitForPortBindable(
     await sleep(sleepMs);
     waited += sleepMs;
   }
-  // Final attempt
   if (await probePortFree(port, host)) {
     return waited;
   }

@@ -15,7 +15,7 @@ import {
   createGitWorkspace,
 } from "./server.sessions.create.projects.test-support.js";
 import {
-  setupSessionCreateTestHarness,
+  setupSessionCreateHandlerTestHarness,
   dashboardTitleGenerationMocks,
   chatSendOwner,
   removeSessionWorktree,
@@ -29,7 +29,7 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 let gitWorkspaceTemplate: string;
-const { createSessionStoreDir, withSessionTestState } = setupSessionCreateTestHarness(
+const { createSessionStoreDir, withSessionTestState } = setupSessionCreateHandlerTestHarness(
   async (makeTempDir) => {
     gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
   },

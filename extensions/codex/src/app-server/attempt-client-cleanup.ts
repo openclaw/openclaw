@@ -41,12 +41,6 @@ export class CodexAppServerUnsafeSubscriptionError extends Error {
   }
 }
 
-export function isCodexAppServerUnsafeSubscriptionError(
-  error: unknown,
-): error is CodexAppServerUnsafeSubscriptionError {
-  return error instanceof CodexAppServerUnsafeSubscriptionError;
-}
-
 export function assertCodexThreadResumeSubscription(
   requestedThreadId: string,
   returnedThreadId: string,

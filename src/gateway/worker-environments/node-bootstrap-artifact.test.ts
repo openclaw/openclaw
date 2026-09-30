@@ -23,23 +23,52 @@ import {
 const { fixture, tempDirs } = useNodeBootstrapArtifactFixtures();
 
 describe("node bootstrap distribution", () => {
+  it("packs and runs an installed CommonJS bundle with extensionless relative requires", async () => {
+    const { root, packageRoot, provider, sourcePackage } = await fixture();
+    const bundledName = "@fixture/undici";
+    await write(packageRoot, "package.json", {
+      ...sourcePackage,
+      dependencies: { ...sourcePackage.dependencies, [bundledName]: "8.10.2" },
+      bundleDependencies: [bundledName],
+    });
+    const bundledRoot = path.join(packageRoot, "node_modules", bundledName);
+    const bundledFiles = {
+      "package.json": { name: bundledName, version: "8.10.2", main: "./index-fetch.js" },
+      "index-fetch.js": [
+        'const global = require("./lib/global");',
+        'const proxy = require("./lib/dispatcher/env-http-proxy-agent");',
+        'const options = require("./lib/options");',
+        "module.exports = `${global}:${proxy}:${options.mode}`;",
+      ].join("\n"),
+      "lib/global.js": 'module.exports = require("./state");',
+      "lib/state/index.js": 'module.exports = "commonjs";',
+      "lib/dispatcher/env-http-proxy-agent.js": 'module.exports = require("../proxy");',
+      "lib/proxy/package.json": { main: "./runtime" },
+      "lib/proxy/runtime/index.js": 'module.exports = "proxy";',
+      "lib/options.json": { mode: "ready" },
+    };
+    for (const [relative, contents] of Object.entries(bundledFiles)) {
+      await write(bundledRoot, relative, contents);
+    }
+    await write(
+      packageRoot,
+      "dist/entry.js",
+      `import result from "${bundledName}"; console.log(result);`,
+    );
+
+    const artifact = await provider.prepare();
+    const installed = path.join(root, "node");
+    await fs.mkdir(installed);
+    await tar.extract({ file: artifact.tarballPath, cwd: installed });
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      path.join(installed, "package/openclaw.mjs"),
+    ]);
+    expect(stdout.trim()).toBe("commonjs:proxy:ready");
+  });
+
   it("preserves an installed bundled dependency's runtime layout and assets", async () => {
     const { root, packageRoot, provider } = await fixture();
     const browserRoot = await writeBundledBrowser(packageRoot);
-    await write(
-      browserRoot,
-      "build/src/index.js",
-      'import notice from "./common/index.cjs"; export { notice };',
-    );
-    await write(browserRoot, "build/src/common/package.json", { type: "commonjs" });
-    await write(
-      browserRoot,
-      "build/src/common/index.cjs",
-      'module.exports = require("./notice") + require("./suffix");',
-    );
-    await write(browserRoot, "build/src/common/notice.js", 'module.exports = "bundled-";');
-    await write(browserRoot, "build/src/common/suffix/package.json", { main: "lib" });
-    await write(browserRoot, "build/src/common/suffix/lib/index.js", 'module.exports = "notice";');
     await write(browserRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
     await write(root, "nested-native/host-native", "do-not-transfer-native");
     await fs.symlink(
@@ -479,19 +508,15 @@ describe("node bootstrap distribution", () => {
     }
   });
 
-  it.each(["plugin", "private runtime", "bundled runtime", "bundled CommonJS"])(
+  it.each(["plugin", "private runtime", "bundled runtime"])(
     "rejects an incomplete %s import closure before publishing the artifact",
     async (owner) => {
       const { packageRoot, provider } = await fixture();
       if (owner === "plugin") {
         await fs.rm(path.join(packageRoot, "dist/shared.js"));
-      } else if (owner === "bundled runtime" || owner === "bundled CommonJS") {
+      } else if (owner === "bundled runtime") {
         const browserRoot = await writeBundledBrowser(packageRoot);
-        await write(
-          browserRoot,
-          "build/src/transport.js",
-          owner === "bundled CommonJS" ? 'require("./missing");' : 'import "./missing.js";',
-        );
+        await write(browserRoot, "build/src/transport.js", 'import "./missing.js";');
         await fs.appendFile(
           path.join(browserRoot, "build/src/index.js"),
           'import "./transport.js";',
