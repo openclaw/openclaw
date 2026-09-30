@@ -430,12 +430,16 @@ export async function prepareSessionWorktree(params: {
     try {
       return withSource ? await withSource((current) => accept(current.assertCurrent)) : accept();
     } catch (error) {
+      const failures = [error];
       try {
         await rollback?.();
       } catch (cleanupError) {
+        failures.push(cleanupError);
+      }
+      if (failures.length > 1) {
         throw new AggregateError(
-          [error, cleanupError],
-          `${formatErrorMessage(error)}; worktree cleanup failed: ${formatErrorMessage(cleanupError)}`,
+          failures,
+          `${formatErrorMessage(error)}; worktree cleanup failed: ${formatErrorMessage(failures[1])}`,
           { cause: error },
         );
       }

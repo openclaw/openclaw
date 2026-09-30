@@ -474,11 +474,15 @@ function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
         if (capabilities?.transports) {
           entry.transports = [...capabilities.transports];
         }
-        for (const key of ["inputAudioFormats", "outputAudioFormats"] as const) {
-          const formats = capabilities?.[key];
-          if (formats) {
-            entry[key] = formats.map((format) => ({ ...format }));
-          }
+        if (capabilities?.inputAudioFormats) {
+          entry.inputAudioFormats = capabilities.inputAudioFormats.map((format) => ({
+            ...format,
+          }));
+        }
+        if (capabilities?.outputAudioFormats) {
+          entry.outputAudioFormats = capabilities.outputAudioFormats.map((format) => ({
+            ...format,
+          }));
         }
         for (const key of [
           "supportsBargeIn",
