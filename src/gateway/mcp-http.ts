@@ -315,6 +315,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           agentId: requestContext.agentId,
           sessionId: requestContext.sessionId,
           runId: requestContext.runId,
+          admittedRunContext: activeBoundGrant?.admittedRunContext,
           workspaceDir: requestContext.workspaceDir,
           cwd: requestContext.cwd,
           modelProvider: requestContext.modelProvider,
