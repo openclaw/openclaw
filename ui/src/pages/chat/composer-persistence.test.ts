@@ -312,8 +312,18 @@ describe("chat composer persistence", () => {
       expect(listener).toHaveBeenCalledTimes(1);
       expect(persistChatComposerState({ ...state, chatMessage: "" })).toBe(true);
       expect(listener).toHaveBeenCalledTimes(2);
-      expect(admitItem(state, original)).toBe(true);
+      // Goal-only input badges the sidebar without text, so it is a presence transition too.
+      const goalOnly = {
+        ...state,
+        chatMessage: "",
+        chatGoalDraftMode: { action: "start" as const },
+      };
+      expect(persistChatComposerState(goalOnly)).toBe(true);
       expect(listener).toHaveBeenCalledTimes(3);
+      expect(persistChatComposerState({ ...goalOnly, chatGoalDraftMode: null })).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(4);
+      expect(admitItem(state, original)).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(5);
       expect(
         updateStoredChatComposerQueueItem(
           state,
@@ -323,7 +333,7 @@ describe("chat composer persistence", () => {
           original.agentId,
         ),
       ).toBe(true);
-      expect(listener).toHaveBeenCalledTimes(4);
+      expect(listener).toHaveBeenCalledTimes(6);
     } finally {
       unsubscribe();
     }
@@ -337,7 +347,7 @@ describe("chat composer persistence", () => {
         updated.agentId,
       ),
     ).toBe(true);
-    expect(listener).toHaveBeenCalledTimes(4);
+    expect(listener).toHaveBeenCalledTimes(6);
   });
 
   it("flushes a debounced draft before its owner releases state", () => {

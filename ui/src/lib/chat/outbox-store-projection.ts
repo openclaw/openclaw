@@ -11,6 +11,7 @@ import {
 import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import type { StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
+  hasStoredComposerDraftInput,
   readProjectedOutboxStore,
   parseStoredChatOutboxScope,
   resolvePendingComposerSessions,
@@ -222,7 +223,7 @@ function summarizeStoredChatOutboxes(
     if (!isIncognitoSessionKey(scope.sessionKey)) {
       drafts.set(scopeKey, {
         revision: session.draftRevision ?? 0,
-        active: Boolean(session.draft || session.goalMode || session.replyTarget),
+        active: hasStoredComposerDraftInput(session),
       });
     }
     const ids = idsByScope.get(scopeKey) ?? {

@@ -13,6 +13,7 @@ import {
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   captureChatOutboxAdmission,
+  hasStoredComposerDraftInput,
   notifyStoredChatOutboxChanges,
   readStoredOutboxStore as readStore,
   resolvePendingComposerSessions,
@@ -235,7 +236,13 @@ function persistCapturedChatComposerStateResult(
       // Notify only on presence transitions: sidebar draft indicators consume
       // presence, and content-only notifies would let projection subscribers
       // re-persist a stale pane over a newer draft (route-fallback invariant).
-      if (Boolean(storedDraft || session?.replyTarget) !== Boolean(draft || replyTarget)) {
+      if (
+        hasStoredComposerDraftInput({
+          draft: storedDraft,
+          goalMode: session?.goalMode,
+          replyTarget: session?.replyTarget,
+        }) !== hasStoredComposerDraftInput({ draft, goalMode, replyTarget })
+      ) {
         notifyStoredChatOutboxChanges();
       }
       // Subscribers can reveal private-session metadata while the controller's

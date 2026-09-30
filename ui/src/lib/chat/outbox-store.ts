@@ -65,6 +65,15 @@ export type StoredComposerRecovery = {
   session: StoredComposerSession;
 };
 
+/** Sidebar draft presence for a tab row; attachments exist only in durable drafts. */
+export function hasStoredComposerDraftInput(session: {
+  draft?: string;
+  goalMode?: unknown;
+  replyTarget?: unknown;
+}): boolean {
+  return Boolean(session.draft || session.goalMode || session.replyTarget);
+}
+
 export function clearStoredComposerDraftInput(session: {
   draft?: unknown;
   draftMentions?: unknown;
