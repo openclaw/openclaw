@@ -143,6 +143,38 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 - Media uploads use the same proxy environment, with `NO_PROXY` evaluated for each actual upload host independently of the WebSocket destination.
 - Media proxy URLs must use HTTP or HTTPS. Invalid media proxy settings fail uploads without blocking login or text messaging.
 
+### Reconnect settings
+
+The reconnect loop uses exponential backoff: it starts at 2 seconds, multiplies
+delays by 1.8 with jitter, and caps them at `reconnect.maxMs` (default: 30000,
+or 30 seconds). `reconnect.maxAttempts` limits failed attempts per cycle
+(default: 12). To keep a longer outage within one slower recovery cycle:
+
+```json
+{
+  "channels": {
+    "whatsapp": {
+      "reconnect": {
+        "maxAttempts": 60,
+        "maxMs": 120000
+      }
+    }
+  }
+}
+```
+
+Both settings must be integers. `maxAttempts` must be positive; `maxMs` must be
+between 2000 and 2147000000 milliseconds. Zero does not enable unlimited retries.
+Overrides under `channels.whatsapp.accounts.<id>.reconnect` inherit omitted values
+from the channel and shared default-account settings. Changes take effect when
+the account monitor restarts.
+
+The health monitor respects a scheduled reconnect delay and allows connection
+setup after it expires. If the attempt stalls beyond that grace, health recovery
+can intervene. Exhausting the configured cycle still hands recovery to the
+Gateway supervisor; increasing the limit does not turn logout or session
+conflict into retryable errors.
+
 ## Call the current requester with MeowCaller (experimental)
 
 The plugin can expose `whatsapp_call` in WhatsApp-originated agent turns. It uses [MeowCaller](https://github.com/purpshell/meowcaller) to place a WhatsApp voice call to the current authorized requester and play an OpenClaw TTS message after they answer. The tool has no destination-number parameter, so a prompt cannot redirect the call. Disabled by default.

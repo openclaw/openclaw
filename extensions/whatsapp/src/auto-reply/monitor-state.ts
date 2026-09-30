@@ -32,6 +32,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
     running: true,
     connected: false,
     reconnectAttempts: 0,
+    nextReconnectAt: null,
     lastConnectedAt: null,
     lastDisconnect: null,
     lastInboundAt: null,
@@ -52,6 +53,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
     emit,
     snapshot: () => status,
     noteConnected(at = Date.now()) {
+      status.nextReconnectAt = null;
       Object.assign(status, channelReadyPatch({ lastConnectedAt: at, lastEventAt: at }));
       Object.assign(status, createTransportActivityStatusPatch(at));
       if (lastDisconnectWasWatchdogRecovery) {
@@ -111,6 +113,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       error?: string;
       reconnectAttempts: number;
       healthState: WebChannelHealthState;
+      retryDelayMs?: number;
       watchdogRecovery?: boolean;
     }) {
       const at = params.at ?? Date.now();
@@ -125,11 +128,16 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       };
       status.lastError = params.error ?? null;
       status.reconnectAttempts = params.reconnectAttempts;
+      status.nextReconnectAt =
+        params.healthState === "reconnecting" && params.retryDelayMs !== undefined
+          ? at + params.retryDelayMs
+          : null;
       status.healthState = params.healthState;
       status.lifecycle = LIFECYCLE_BY_HEALTH_STATE[params.healthState];
       emit();
     },
     markStopped(at = Date.now()) {
+      status.nextReconnectAt = null;
       const terminalDisconnect = status.lifecycle === "blocked";
       if (!isTerminalHealthState(status.healthState)) {
         Object.assign(status, channelStoppedPatch({ lastEventAt: at, terminalDisconnect }));

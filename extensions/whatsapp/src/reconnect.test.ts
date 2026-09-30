@@ -1,10 +1,36 @@
 // Whatsapp tests cover reconnect plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { resolveHeartbeatSeconds, resolveReconnectPolicy } from "./reconnect.js";
+import {
+  computeBackoff,
+  DEFAULT_RECONNECT_POLICY,
+  resolveHeartbeatSeconds,
+  resolveReconnectPolicy,
+} from "./reconnect.js";
 
 describe("web reconnect helpers", () => {
   const cfg: OpenClawConfig = {};
+
+  it("uses the configured retry budget and backoff cap", () => {
+    const policy = resolveReconnectPolicy({
+      channels: { whatsapp: { reconnect: { maxAttempts: 60, maxMs: 120_000 } } },
+    });
+    expect(policy).toEqual({ ...DEFAULT_RECONNECT_POLICY, maxAttempts: 60, maxMs: 120_000 });
+    const delays = [1, 2, 3, 20].map((attempt) =>
+      computeBackoff({ ...policy, jitter: 0 }, attempt),
+    );
+    expect(delays).toEqual([2_000, 3_600, 6_480, 120_000]);
+  });
+
+  it("preserves defaults and explicit internal tuning precedence", () => {
+    expect(resolveReconnectPolicy(cfg)).toEqual(DEFAULT_RECONNECT_POLICY);
+    expect(
+      resolveReconnectPolicy(
+        { channels: { whatsapp: { reconnect: { maxAttempts: 60, maxMs: 120_000 } } } },
+        { maxAttempts: 3, maxMs: 5_000 },
+      ),
+    ).toMatchObject({ maxAttempts: 3, maxMs: 5_000 });
+  });
 
   it("resolves sane reconnect defaults with clamps", () => {
     const policy = resolveReconnectPolicy(cfg, {

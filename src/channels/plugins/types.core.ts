@@ -155,6 +155,8 @@ export type ChannelAccountSnapshot = {
   connected?: boolean;
   restartPending?: boolean;
   reconnectAttempts?: number;
+  /** Planned transport retry time; recovering plugins clear it when connected or stopped. */
+  nextReconnectAt?: number | null;
   lastConnectedAt?: number | null;
   lastDisconnect?:
     | string

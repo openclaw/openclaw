@@ -19,6 +19,18 @@ successor to `healthState`. Existing plugins may keep publishing `healthState`
 during adoption, and core-derived policy writes remain supported. There is no
 removal date; removal waits for external channel-plugin adoption.
 
+For an intentional transport backoff, publish `nextReconnectAt` as an absolute
+Unix timestamp in milliseconds alongside `lifecycle: "recovering"`,
+`connected: false`, and a typed `lastDisconnect.at` from the current account
+lifecycle. The health monitor respects that bounded retry time and grants
+connection-setup grace afterward. It still recovers an account whose retry
+deadline and grace expire.
+
+The deadline must be a safe integer no earlier than the disconnect and no more
+than 2147000000 milliseconds after it. Clear it when the connection becomes ready
+or recovery stops. Do not update transport-activity timestamps to represent a
+backoff wait: those timestamps describe observed transport activity.
+
 ## Typing indicators
 
 If your channel supports typing indicators outside inbound replies, expose

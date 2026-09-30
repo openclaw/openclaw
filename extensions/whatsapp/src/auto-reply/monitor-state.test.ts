@@ -3,6 +3,34 @@ import { describe, expect, it } from "vitest";
 import { createWebChannelStatusController } from "./monitor-state.js";
 
 describe("createWebChannelStatusController", () => {
+  it("publishes a bounded retry deadline without inventing transport activity", () => {
+    const controller = createWebChannelStatusController();
+    controller.noteConnected(0);
+    controller.noteClose({
+      at: 1_000,
+      statusCode: 408,
+      reconnectAttempts: 1,
+      healthState: "reconnecting",
+      retryDelayMs: 300_000,
+    });
+    expect(controller.snapshot()).toMatchObject({
+      nextReconnectAt: 301_000,
+      lastDisconnect: { at: 1_000 },
+      lastTransportActivityAt: 0,
+      lifecycle: "recovering",
+    });
+    controller.noteConnected(301_000);
+    expect(controller.snapshot().nextReconnectAt).toBeNull();
+    controller.noteClose({
+      at: 302_000,
+      reconnectAttempts: 1,
+      healthState: "reconnecting",
+      retryDelayMs: 300_000,
+    });
+    controller.markStopped(303_000);
+    expect(controller.snapshot()).toMatchObject({ nextReconnectAt: null, lifecycle: "stopped" });
+  });
+
   it("publishes the initial starting lifecycle", () => {
     const patches: Record<string, unknown>[] = [];
     const controller = createWebChannelStatusController((s) => patches.push({ ...s }));

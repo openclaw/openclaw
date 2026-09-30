@@ -166,6 +166,77 @@ describe("evaluateChannelHealth", () => {
   });
 
   it.each([
+    { name: "waits for a scheduled retry", now: 300_000, nextReconnectAt: 600_000, healthy: true },
+    {
+      name: "allows connection setup after the retry is due",
+      now: 650_000,
+      nextReconnectAt: 600_000,
+      healthy: true,
+    },
+    {
+      name: "recovers after the retry deadline and grace expire",
+      now: 720_001,
+      nextReconnectAt: 600_000,
+      healthy: false,
+    },
+    {
+      name: "rejects an unbounded deadline",
+      now: 300_000,
+      nextReconnectAt: Number.POSITIVE_INFINITY,
+      healthy: false,
+    },
+    {
+      name: "rejects a deadline beyond the timer limit",
+      now: 300_000,
+      nextReconnectAt: 2_147_010_001,
+      healthy: false,
+    },
+  ])("$name", ({ now, nextReconnectAt, healthy }) => {
+    expect(
+      evaluateHealth(
+        runningAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: 0,
+          lastDisconnect: { at: 10_000, status: 408 },
+          nextReconnectAt,
+        }),
+        { now },
+      ),
+    ).toEqual({ healthy, reason: healthy ? "reconnect-grace" : "disconnected" });
+  });
+
+  it("does not inherit retry deadlines from a previous lifecycle", () => {
+    expect(
+      evaluateHealth(
+        runningAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: 200_000,
+          lastDisconnect: { at: 10_000, status: 408 },
+          nextReconnectAt: 600_000,
+        }),
+        { now: 300_000 },
+      ),
+    ).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
+  it("does not let a retry deadline hide stale connected transport", () => {
+    expect(
+      evaluateHealth(
+        connectedAccount({
+          lifecycle: "recovering",
+          lastStartAt: 0,
+          lastDisconnect: { at: 10_000, status: 408 },
+          nextReconnectAt: 600_000,
+          lastTransportActivityAt: 10_000,
+        }),
+        { now: 300_000 },
+      ),
+    ).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it.each([
     {
       name: "uses reconnect grace for a fresh typed disconnect",
       lastStartAt: 0,

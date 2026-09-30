@@ -22,6 +22,7 @@ export type WebChannelStatus = {
   running: boolean;
   connected: boolean;
   reconnectAttempts: number;
+  nextReconnectAt?: ChannelAccountSnapshot["nextReconnectAt"];
   lastConnectedAt?: number | null;
   lastDisconnect?: {
     at: number;

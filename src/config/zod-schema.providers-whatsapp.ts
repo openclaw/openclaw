@@ -1,4 +1,5 @@
 // Defines WhatsApp provider schema fragments for config parsing.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import { buildGroupEntrySchema } from "../channels/plugins/config-schema.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
@@ -35,6 +36,14 @@ const WhatsAppPluginHooksSchema = z
   .strict()
   .optional();
 
+const WhatsAppReconnectSchema = z
+  .object({
+    maxAttempts: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+    maxMs: z.number().int().min(2_000).max(MAX_TIMER_TIMEOUT_MS).optional(),
+  })
+  .strict()
+  .optional();
+
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
   omit: ["name"],
   allowFrom: z.array(z.string()).optional(),
@@ -53,6 +62,7 @@ const WhatsAppCommonShape = {
     reactionLevels: ["off", "ack", "minimal", "extensive"],
   }),
   pluginHooks: WhatsAppPluginHooksSchema,
+  reconnect: WhatsAppReconnectSchema,
 };
 
 const WhatsAppAccountSchema = z

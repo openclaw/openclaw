@@ -33,10 +33,10 @@ export function resolveReconnectPolicy(
   cfg: OpenClawConfig,
   overrides?: Partial<ReconnectPolicy>,
 ): ReconnectPolicy {
-  void cfg;
   const overrideConfig = overrides ?? {};
   const merged = {
     ...DEFAULT_RECONNECT_POLICY,
+    ...cfg.channels?.whatsapp?.reconnect,
     ...overrideConfig,
   } as ReconnectPolicy;
 

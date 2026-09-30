@@ -2,6 +2,33 @@ import { describe, expect, it } from "vitest";
 import { WhatsAppConfigSchema } from "../config-api.js";
 
 describe("whatsapp config schema", () => {
+  it("accepts reconnect budgets at channel and account scope", () => {
+    expect(
+      WhatsAppConfigSchema.parse({
+        reconnect: { maxAttempts: 60, maxMs: 120_000 },
+        accounts: { work: { reconnect: { maxAttempts: 30 } } },
+      }),
+    ).toMatchObject({
+      reconnect: { maxAttempts: 60, maxMs: 120_000 },
+      accounts: { work: { reconnect: { maxAttempts: 30 } } },
+    });
+  });
+
+  it.each([
+    { maxAttempts: 0 },
+    { maxAttempts: -1 },
+    { maxAttempts: 1.5 },
+    { maxAttempts: Number.MAX_SAFE_INTEGER + 1 },
+    { maxMs: 1_999 },
+    { maxMs: 2_147_000_001 },
+    { maxMs: Number.POSITIVE_INFINITY },
+  ])("rejects invalid reconnect settings %j", (reconnect) => {
+    expect(WhatsAppConfigSchema.safeParse({ reconnect }).success).toBe(false);
+    expect(WhatsAppConfigSchema.safeParse({ accounts: { work: { reconnect } } }).success).toBe(
+      false,
+    );
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const res = WhatsAppConfigSchema.safeParse({
       dmPolicy: "open",

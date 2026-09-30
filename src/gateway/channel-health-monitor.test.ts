@@ -531,12 +531,13 @@ describe("channel-health-monitor", () => {
     await expectRestartedChannel(manager, "discord");
   });
 
-  it("does not restart a long-running channel during fresh reconnect grace", async () => {
+  it.each([5_000, 300_000])("respects reconnect recovery (%i ms since disconnect)", async (age) => {
     const now = Date.now();
     const manager = createSlackSnapshotManager(
-      disconnectedAccount(now - 300_000, {
+      disconnectedAccount(now - 600_000, {
         lifecycle: "recovering",
-        lastDisconnect: { at: now - 5_000, error: "socket closed" },
+        lastDisconnect: { at: now - age, error: "socket closed" },
+        ...(age === 300_000 ? { nextReconnectAt: now + 300_000 } : {}),
       }),
     );
     await expectNoRestart(manager);

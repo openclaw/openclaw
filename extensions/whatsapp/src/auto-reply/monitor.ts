@@ -93,6 +93,7 @@ function resolveWebMonitorConfigSnapshot(params: {
         streaming: account.streaming,
         mediaMaxMb: account.mediaMaxMb,
         groups: account.groups,
+        reconnect: account.reconnect,
       },
     },
   } satisfies WhatsAppRuntimeConfig;
@@ -358,6 +359,7 @@ export async function monitorWebChannel(
             error: formatError(error),
             reconnectAttempts: setupDecision.reconnectAttempts,
             healthState: setupDecision.healthState,
+            retryDelayMs: setupDecision.delayMs,
           });
           if (setupDecision.action === "stop") {
             reconnectLogger.warn(
@@ -413,6 +415,7 @@ export async function monitorWebChannel(
           error: error.message,
           reconnectAttempts: retryDecision.reconnectAttempts,
           healthState: retryDecision.healthState,
+          retryDelayMs: retryDecision.delayMs,
         });
         if (retryDecision.action === "stop") {
           reconnectLogger.warn(
@@ -618,6 +621,7 @@ export async function monitorWebChannel(
         error: decision.normalized.errorText,
         reconnectAttempts: decision.reconnectAttempts,
         healthState: decision.healthState,
+        retryDelayMs: decision.delayMs,
         watchdogRecovery: isWatchdogRecoveryReconnect,
       });
       reconnectLogger.info(

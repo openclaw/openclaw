@@ -2207,6 +2207,7 @@ describe("server-channels auto restart", () => {
       if (handoffStates.length === 1) {
         ctx.setStatus({
           accountId: ctx.accountId,
+          nextReconnectAt: Date.now() + 600_000,
           terminalDisconnect: true,
           lifecycle: "blocked",
           lastError: "relink required",
@@ -2253,6 +2254,8 @@ describe("server-channels auto restart", () => {
     ]);
     expect(handoffStates[1]?.terminalDisconnect).toBeUndefined();
     expect(handoffStates[2]?.terminalDisconnect).toBeUndefined();
+    expect(handoffStates[1]?.nextReconnectAt).toBeNull();
+    expect(handoffStates[2]?.nextReconnectAt).toBeNull();
     expect(handoffSignals[0]?.aborted).toBe(true);
     expect(handoffSignals[1]?.aborted).toBe(true);
     expect(handoffSignals[2]?.aborted).toBe(false);

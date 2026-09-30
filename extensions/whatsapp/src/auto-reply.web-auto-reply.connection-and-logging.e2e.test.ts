@@ -134,6 +134,53 @@ describe("web auto-reply connection", () => {
     expect(statuses.some((status) => status.running === true)).toBe(false);
   });
 
+  it("uses account-configured exponential retry delays and stops its bounded cycle", async () => {
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          reconnect: { maxAttempts: 2, maxMs: 30_000 },
+          accounts: { work: { reconnect: { maxAttempts: 14, maxMs: 120_000 } } },
+        },
+      },
+    });
+    const listenerFactory = vi.fn(async () => {
+      throw toErrorObject({ output: { statusCode: 408 } }, "Connection timed out");
+    });
+    const sleep = vi.fn(async () => {});
+    const statuses: WebChannelStatus[] = [];
+    const run = monitorWebChannel(
+      false,
+      listenerFactory,
+      true,
+      async () => ({ text: "ok" }),
+      createRuntimeSpies(),
+      undefined,
+      { accountId: "work", sleep, statusSink: (next) => statuses.push({ ...next }) },
+    );
+    await run;
+    expect(listenerFactory).toHaveBeenCalledTimes(14);
+    expect(sleep).toHaveBeenCalledTimes(13);
+    expect(mockCallArg(sleep, 0, 0)).toBeGreaterThanOrEqual(2_000);
+    expect(mockCallArg(sleep, 6, 0)).toBeGreaterThan(30_000);
+    expect(mockCallArg(sleep, 12, 0)).toBe(120_000);
+    expect(
+      statuses.some(
+        (status) =>
+          typeof status.nextReconnectAt === "number" &&
+          status.lastDisconnect != null &&
+          status.nextReconnectAt - status.lastDisconnect.at >= 120_000,
+      ),
+    ).toBe(true);
+    expect(statuses.at(-1)).toMatchObject({
+      running: false,
+      connected: false,
+      lifecycle: "stopped",
+      terminalDisconnect: false,
+      reconnectAttempts: 14,
+      nextReconnectAt: null,
+    });
+  });
+
   it("handles reconnect progress and max-attempt stop behavior", async () => {
     for (const scenario of [
       {

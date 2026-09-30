@@ -29,16 +29,30 @@ export function resolveMergedWhatsAppAccountConfig(params: {
 }): WhatsAppAccountConfig & { accountId: string } {
   const rootCfg = params.cfg.channels?.whatsapp;
   const accountId = params.accountId?.trim() || rootCfg?.defaultAccount || DEFAULT_ACCOUNT_ID;
+  const sharedDefaults =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? undefined
+      : resolveWhatsAppDefaultAccountSharedConfig(params.cfg);
   const merged = resolveMergedAccountConfig<WhatsAppAccountConfig>({
     channelConfig: {
       ...rootCfg,
-      ...(accountId === DEFAULT_ACCOUNT_ID
-        ? undefined
-        : resolveWhatsAppDefaultAccountSharedConfig(params.cfg)),
+      ...sharedDefaults,
     },
     accounts: rootCfg?.accounts as Record<string, Partial<WhatsAppAccountConfig>> | undefined,
     accountId,
     omitKeys: ["defaultAccount"],
   });
-  return { accountId, ...merged };
+  return {
+    accountId,
+    ...merged,
+    ...(rootCfg?.reconnect || sharedDefaults?.reconnect || merged.reconnect
+      ? {
+          reconnect: {
+            ...rootCfg?.reconnect,
+            ...sharedDefaults?.reconnect,
+            ...merged.reconnect,
+          },
+        }
+      : {}),
+  };
 }

@@ -448,6 +448,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       lifecycle: patch.restartPending === true ? "recovering" : "stopped",
       ...(typeof current.connected === "boolean" ? { connected: false } : {}),
       ...patch,
+      nextReconnectAt: null,
     });
   };
 
@@ -878,6 +879,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             lifecycle: "starting",
             restartPending: false,
             lastStartAt: Date.now(),
+            nextReconnectAt: null,
             lastError: null,
             // Runtime rows are patch-merged; prior ingress or terminal verdicts
             // must not poison a new lifecycle before its plugin reports status.
