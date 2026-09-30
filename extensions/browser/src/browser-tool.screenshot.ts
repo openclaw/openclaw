@@ -40,10 +40,6 @@ export type BrowserScreenshotOptions = {
   };
 };
 
-function formatScreenshotShareHint(filePath: string): string {
-  return `[Screenshot saved to ${JSON.stringify(filePath)}. A sanitized outbound copy is ready at this path for explicit sharing.]`;
-}
-
 const SCREENSHOT_SHARE_UNAVAILABLE =
   "[Screenshot sharing is unavailable because an outbound copy could not be prepared.]";
 
@@ -63,7 +59,7 @@ export async function executeScreenshotAction({
   requestedTimeoutMs?: number;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity: (targetId: string | undefined) => void;
+  onTabActivity: (targetId: string | undefined) => void | Promise<void>;
   opts?: BrowserScreenshotOptions;
 }): Promise<AgentToolResult<unknown>> {
   const targetId = readStringParam(params, "targetId");
@@ -79,7 +75,7 @@ export async function executeScreenshotAction({
     profile,
     signal,
   });
-  onTabActivity(readStringValue(result.targetId) ?? targetId);
+  await onTabActivity(readStringValue(result.targetId) ?? targetId);
   if (opts?.screenshotResultMode === "path") {
     const artifactPath = opts.persistScreenshot
       ? await opts.persistScreenshot({
@@ -113,7 +109,7 @@ export async function executeScreenshotAction({
       screenshotPath,
       imageSanitization?.maxDimensionPx,
     );
-    shareHint = formatScreenshotShareHint(sharePath);
+    shareHint = `[Screenshot saved to ${JSON.stringify(sharePath)}. A sanitized outbound copy is ready at this path for explicit sharing.]`;
   } catch {
     // Screenshot viewing remains useful when optional outbound staging fails.
   }

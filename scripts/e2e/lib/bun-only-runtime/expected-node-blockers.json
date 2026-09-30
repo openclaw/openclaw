@@ -1,0 +1,40 @@
+{
+  "blockers": [
+    {
+      "id": "package-preinstall-node-engine",
+      "origin": "found-by-lane",
+      "feature": "Package lifecycle",
+      "owner": "Unowned: needs an owner (scripts/preinstall-package-manager-warning.mjs)",
+      "callSite": "scripts/preinstall-package-manager-warning.mjs enforceSupportedNodeRuntime -> probePackageCliNodeRuntime",
+      "step": "install",
+      "evidence": [
+        "spawn",
+        "failure"
+      ],
+      "failure": "detected Node missing",
+      "match": {
+        "stack": [
+          "probePackageCliNodeRuntime"
+        ]
+      }
+    },
+    {
+      "id": "terminal-pty",
+      "origin": "known-blocker",
+      "feature": "Terminals",
+      "owner": "Terminals on Bun task (src/process/terminal-pty.ts)",
+      "callSite": "src/process/terminal-pty-node.ts spawnNodeTerminalPty",
+      "step": "terminals",
+      "evidence": [
+        "spawn",
+        "failure"
+      ],
+      "failure": "A Node executable is required for terminals on Bun",
+      "match": {
+        "stack": [
+          "spawnNodeTerminalPty"
+        ]
+      }
+    }
+  ]
+}

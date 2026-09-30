@@ -19,6 +19,7 @@ import { sessionRetryDelayMs } from "./session-retry.ts";
 import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
 import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
+import { sanitizeSessionRow } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { createSessionThinkingClaims } from "./session-thinking-claims.ts";
@@ -122,6 +123,7 @@ export function createSessionCapability(
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
   const thinkingClaims = createSessionThinkingClaims(gateway, () => roster.requestRevision);
+  let publicationRevision = 0;
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
   let hydratedSelfUserId: string | null = null;
@@ -130,6 +132,7 @@ export function createSessionCapability(
   let publishedErrorSource: "session-observer" | "operation" | null = null;
 
   const notifySubscribers = () => {
+    publicationRevision += 1;
     for (const listener of listeners) {
       listener(state);
     }
@@ -199,6 +202,7 @@ export function createSessionCapability(
       sessionEventSubscriptionError = error;
       if (error !== null) {
         roster.retireWarmLists();
+        roster.observations.descriptions.clear();
       }
       const observerOwnsVisibleError = publishedErrorSource === "session-observer";
       if (error !== null && (state.error === null || observerOwnsVisibleError)) {
@@ -236,7 +240,11 @@ export function createSessionCapability(
     observerError: () => sessionEventSubscriptionError,
     decorate: decorateRows,
     reconcileList: (result, revision, agentId) => {
-      const admitted = deletions.reconcileList(result, revision, agentId);
+      const admitted = deletions.reconcileList(
+        result ? { ...result, sessions: result.sessions.map(sanitizeSessionRow) } : result,
+        revision,
+        agentId,
+      );
       const sources = roster.observations.observeReadRows(
         admitted?.sessions ?? [],
         revision,
@@ -291,6 +299,7 @@ export function createSessionCapability(
     // A local mutation can complete without an event or successful refresh.
     // Retire inactive windows before exposing its publication to selection.
     roster.retireWarmLists();
+    roster.observations.descriptions.clear();
     publish(next, errorSource);
   };
 
@@ -520,6 +529,9 @@ export function createSessionCapability(
   });
 
   const stopEvents = gateway.subscribeEvents((event) => {
+    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
+      roster.observations.descriptions.clear();
+    }
     if (event.event === "config.changed") {
       // Config can change configured-agent membership even with no chat pane mounted.
       roster.scheduleEvent();
@@ -528,6 +540,7 @@ export function createSessionCapability(
     if (event.event !== "sessions.changed" && event.event !== "session.message") {
       return;
     }
+    roster.observations.descriptions.invalidateEvent(event.payload);
     const payload = event.payload as {
       agentId?: unknown;
       reason?: unknown;
@@ -598,6 +611,9 @@ export function createSessionCapability(
   });
 
   return {
+    get revision() {
+      return publicationRevision;
+    },
     get state() {
       return state;
     },
@@ -613,6 +629,7 @@ export function createSessionCapability(
     whenCachedRosterSettled: () => cacheLifecycle.settled,
     captureConnectionScope: connection.capture,
     isConnectionScopeCurrent: connection.isCurrent,
+    describe: roster.observations.descriptions.describe,
     list: roster.list,
     observeList: roster.observeList,
     listSnapshot: roster.listSnapshot,

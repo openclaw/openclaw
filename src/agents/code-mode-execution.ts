@@ -15,6 +15,7 @@ import {
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
 import {
+  CODE_MODE_RESUME_MARGIN_MS,
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
   codeModeFailureMessage,
@@ -45,6 +46,7 @@ import {
   type CodeModeBridgeDispatchState,
   type CodeModeRunOwner,
 } from "./code-mode-state.js";
+import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -178,7 +180,10 @@ function usableResumeBudgetMs(deadlineMs: number, config: CodeModeConfig): numbe
   // VM restore costs tens of ms and counts against the guest interrupt budget;
   // resuming with less than this floor converts an otherwise successful run
   // into an immediate interrupt timeout, so callers park the snapshot instead.
-  const minimum = Math.min(250, Math.max(1, Math.floor(config.timeoutMs / 2)));
+  const minimum = Math.min(
+    CODE_MODE_RESUME_MARGIN_MS,
+    Math.max(1, Math.floor(config.timeoutMs / 2)),
+  );
   const remaining = deadlineMs - performance.now();
   return remaining >= minimum ? remaining : undefined;
 }
@@ -566,7 +571,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
       ? {
           status: result.status,
           code: result.code,
-          failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : result.failurePhase,
+          failurePhase: result.failurePhase,
           bridgeDispatchStarted: params.bridgeDispatch.started,
         }
       : { status: result.status }),
@@ -574,11 +579,16 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
     telemetry: telemetry(params.runtime),
   };
   const networkContent = params.runtime.hasNetworkContent();
-  return output.takeResult(metadata, channels, networkContent, (source) =>
+  const delivered = output.takeResult(metadata, channels, networkContent, (source) =>
     params.replaySafe
       ? { reason: "Not retained in restart-safe mode. Return less data." }
       : params.owner.results.retain(source, networkContent),
   );
+  // Automatic retention changes the receipt, not the value the guest returned.
+  return recordCodeModeToolOutcome(delivered, {
+    ...delivered,
+    ...(result.status === "completed" ? { value: result.value } : {}),
+  });
 }
 
 export async function runWait(params: {

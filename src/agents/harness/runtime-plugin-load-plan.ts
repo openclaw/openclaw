@@ -10,10 +10,7 @@ import {
   resolveSelectedContextEnginePluginId,
 } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
-import {
-  addConfiguredSlotPluginIds,
-  normalizePluginsConfigForInstalledIndex,
-} from "../../plugins/gateway-startup-plugin-config.js";
+import { addConfiguredSlotPluginIds } from "../../plugins/gateway-startup-plugin-config.js";
 import { hashJson } from "../../plugins/installed-plugin-index-hash.js";
 import { createInstalledPluginIndexScopeLookup } from "../../plugins/installed-plugin-index-scope-lookup.js";
 import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
@@ -109,7 +106,10 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
   index: InstalledPluginIndex;
 }): string[] | undefined {
   const lookup = createInstalledPluginIndexScopeLookup(params.index);
-  const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config?.plugins, lookup);
+  const pluginsConfig = normalizePluginsConfigWithResolverCore(
+    params.config?.plugins,
+    lookup.normalizePluginId,
+  );
   if (!pluginsConfig.enabled) {
     return [];
   }
@@ -312,6 +312,51 @@ export function requiresAgentHarnessPluginSelection(
   );
 }
 
+/** Resolves model provider and harness owners independently of configured shared capabilities. */
+export function resolveAgentRuntimePluginSelectionOwners(params: {
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  selections: readonly AgentHarnessPluginSelection[];
+  metadataSnapshot: PluginMetadataSnapshot;
+}): { pluginIds: string[]; forceActivatedPluginIds: string[] } {
+  const config = params.config;
+  const pluginIds: string[] = [];
+  const forceActivatedPluginIds: string[] = [];
+  for (const selection of params.selections) {
+    const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
+    const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({
+      provider: selection.provider,
+      config,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
+    });
+    pluginIds.push(...providerOwnerPluginIds);
+    forceActivatedPluginIds.push(...providerOwnerPluginIds);
+    if (!requiresAgentHarnessPluginSelection(selection, config)) {
+      continue;
+    }
+    const harnessPluginIds = resolveAgentHarnessOwnerPluginIds({
+      runtime,
+      provider: selection.provider,
+      config,
+      workspaceDir: params.workspaceDir,
+      providerOwnerPluginIds,
+      metadataSnapshot: params.metadataSnapshot,
+    });
+    pluginIds.push(...harnessPluginIds);
+    const allowedHarnessPluginIds =
+      runtime === "codex"
+        ? restrictiveAllowlistOmitsPlugin(params.config, "codex")
+          ? []
+          : harnessPluginIds
+        : harnessPluginIds.filter(
+            (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
+          );
+    forceActivatedPluginIds.push(...allowedHarnessPluginIds);
+  }
+  return { pluginIds, forceActivatedPluginIds };
+}
+
 /** Folds selected harness, memory, and context-engine owners into one deterministic load plan. */
 export function resolveAgentRuntimePluginLoadPlan(params: {
   config?: OpenClawConfig;
@@ -352,38 +397,10 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
         forceActivatedPluginIds.push(...owners);
       }
     }
-  }
-  for (const selection of includeAgentOwners ? params.selections : []) {
-    const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
-    const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({
-      provider: selection.provider,
-      config,
-      workspaceDir: params.workspaceDir,
-      metadataSnapshot: params.metadataSnapshot,
-    });
-    pluginIds.push(...providerOwnerPluginIds);
-    forceActivatedPluginIds.push(...providerOwnerPluginIds);
-    if (!requiresAgentHarnessPluginSelection(selection, config)) {
-      continue;
-    }
-    const harnessPluginIds = resolveAgentHarnessOwnerPluginIds({
-      runtime,
-      provider: selection.provider,
-      config,
-      workspaceDir: params.workspaceDir,
-      providerOwnerPluginIds,
-      metadataSnapshot: params.metadataSnapshot,
-    });
-    pluginIds.push(...harnessPluginIds);
-    const allowedHarnessPluginIds =
-      runtime === "codex"
-        ? restrictiveAllowlistOmitsPlugin(params.config, "codex")
-          ? []
-          : harnessPluginIds
-        : harnessPluginIds.filter(
-            (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
-          );
-    forceActivatedPluginIds.push(...allowedHarnessPluginIds);
+  } else {
+    const selection = resolveAgentRuntimePluginSelectionOwners(params);
+    pluginIds.push(...selection.pluginIds);
+    forceActivatedPluginIds.push(...selection.forceActivatedPluginIds);
   }
   const scopedPluginIds = normalizeUniqueStringEntries(pluginIds).toSorted((left, right) =>
     left.localeCompare(right),

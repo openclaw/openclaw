@@ -1,7 +1,10 @@
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { mergeModelCost } from "../../config/model-cost.js";
 import { findConfiguredProviderModel } from "../../config/model-provider-config.js";
 import { materializeConfiguredProviderModelRows } from "../../config/model-provider-rows.js";
@@ -46,14 +49,9 @@ import {
   sanitizeModelHeaders,
 } from "./model.inline-provider.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
-import {
-  normalizeTransportBaseUrl,
-  resolveProviderRequestTimeoutMs,
-  resolveProviderTransport,
-} from "./model.provider-hooks.js";
+import { resolveProviderRequestTimeoutMs } from "./model.provider-hooks.js";
+import { resolveProviderTransport } from "./model.provider-transport.js";
 import type { ManifestModelCatalogProviderAliasMetadata } from "./model.static-catalog.js";
-
-export type StaticCatalogFallbackModel = ProviderRuntimeModel;
 
 /** A native transport change needs support from its model or provider route owner. */
 export function hasConfiguredModelRouteSupport(params: {
@@ -61,7 +59,7 @@ export function hasConfiguredModelRouteSupport(params: {
   modelId: string;
   cfg?: OpenClawConfig;
   configuredModel?: { id: string };
-  catalogModel?: StaticCatalogFallbackModel;
+  catalogModel?: ProviderRuntimeModel;
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   route: { api?: string | null; baseUrl?: string };
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
@@ -70,7 +68,13 @@ export function hasConfiguredModelRouteSupport(params: {
     return true;
   }
   const endpoint = resolveProviderEndpoint(params.route.baseUrl, params.providerMetadataOwners);
-  if (endpoint.endpointClass === "custom" || endpoint.endpointClass === "local") {
+  // Vercel AI Gateway is classified only for app attribution; routing catalog models through it
+  // remains an operator-owned proxy route like any custom baseUrl.
+  if (
+    endpoint.endpointClass === "custom" ||
+    endpoint.endpointClass === "local" ||
+    endpoint.endpointClass === "vercel-ai-gateway"
+  ) {
     return true;
   }
   if (!params.catalogModel) {
@@ -147,7 +151,7 @@ export function resolveConfiguredProviderDefaultApi(params: {
   if (explicit) {
     return explicit;
   }
-  const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig?.baseUrl);
+  const providerConfiguredBaseUrl = normalizeOptionalString(providerConfig?.baseUrl);
   if (!providerConfiguredBaseUrl) {
     return undefined;
   }
@@ -203,19 +207,8 @@ export function resolveConfiguredProviderConfig(
   provider: string,
 ): InlineProviderConfig | undefined {
   const configuredProviders = cfg?.models?.providers;
-  if (!configuredProviders) {
-    return undefined;
-  }
   return (
-    configuredProviders[provider] ?? findNormalizedProviderValue(configuredProviders, provider)
-  );
-}
-
-function isModelsAddMetadataModel(params: {
-  model: NonNullable<InlineProviderConfig["models"]>[number] | undefined;
-}) {
-  return (
-    (params.model as { metadataSource?: unknown } | undefined)?.metadataSource === "models-add"
+    configuredProviders?.[provider] ?? findNormalizedProviderValue(configuredProviders, provider)
   );
 }
 
@@ -251,7 +244,7 @@ export function mergeConfiguredModelCost(params: {
 }
 
 export function mergeStaticCatalogInlineModel(
-  staticCatalogModel: StaticCatalogFallbackModel | undefined,
+  staticCatalogModel: ProviderRuntimeModel | undefined,
   inlineModel: Model,
 ): Model {
   if (!staticCatalogModel) {
@@ -273,8 +266,8 @@ export function mergeStaticCatalogInlineModel(
     ...inlineModel,
     api: inlineModel.api ?? staticCatalogModel.api,
     baseUrl:
-      normalizeTransportBaseUrl(inlineModel.baseUrl) ??
-      normalizeTransportBaseUrl(staticCatalogModel.baseUrl),
+      normalizeOptionalString(inlineModel.baseUrl) ??
+      normalizeOptionalString(staticCatalogModel.baseUrl),
     headers: inlineModel.headers ?? staticCatalogModel.headers,
     compat,
     ...(mediaInput ? { mediaInput } : {}),
@@ -285,7 +278,7 @@ export function mergeStaticCatalogInlineModel(
 function mergeModelParams(
   ...entries: Array<Record<string, unknown> | undefined>
 ): Record<string, unknown> | undefined {
-  const merged = Object.assign({}, ...entries.filter(Boolean));
+  const merged = Object.assign({}, ...entries);
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
@@ -382,7 +375,7 @@ export function applyConfiguredProviderOverrides(params: {
   preferDiscoveredModelMetadata?: boolean;
   preferDiscoveredTransport?: boolean;
   /** Original catalog donor before an inline model overlays its transport. */
-  staticCatalogModel?: StaticCatalogFallbackModel;
+  staticCatalogModel?: ProviderRuntimeModel;
   getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
   workspaceDir?: string;
 }): ProviderRuntimeModel | undefined {
@@ -398,36 +391,39 @@ export function applyConfiguredProviderOverrides(params: {
     provider: params.provider,
     modelId,
   });
+  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const requestParams = {
+    provider: params.provider,
+    ...(params.providerMetadataOwners
+      ? { providerMetadataOwners: params.providerMetadataOwners }
+      : {}),
+    discoveredHeaders,
+    capability: "llm" as const,
+    transport: "stream" as const,
+  };
   if (!providerConfig) {
     const resolvedParams = mergeModelParams(
       readModelParams(discoveredModel.params),
       defaultModelParams,
     );
-    const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
-      stripSecretRefMarkers: true,
-    });
     const aliasTransport = manifestAliasTransport
       ? resolveProviderTransport({
           provider: params.provider,
           modelId,
           api: manifestAliasTransport.api ?? discoveredModel.api,
           baseUrl:
-            normalizeTransportBaseUrl(manifestAliasTransport.baseUrl) ?? discoveredModel.baseUrl,
+            normalizeOptionalString(manifestAliasTransport.baseUrl) ?? discoveredModel.baseUrl,
           cfg: params.cfg,
           workspaceDir: params.workspaceDir,
           runtimeHooks: params.runtimeHooks,
         })
       : undefined;
     const requestConfig = resolveProviderRequestConfig({
-      provider: params.provider,
+      ...requestParams,
       api: aliasTransport?.api ?? discoveredModel.api,
       baseUrl: aliasTransport?.baseUrl ?? discoveredModel.baseUrl,
-      ...(params.providerMetadataOwners
-        ? { providerMetadataOwners: params.providerMetadataOwners }
-        : {}),
-      discoveredHeaders,
-      capability: "llm",
-      transport: "stream",
     });
     if (
       !hasConfiguredModelRouteSupport({
@@ -466,12 +462,9 @@ export function applyConfiguredProviderOverrides(params: {
   const configuredStaticCatalogModel =
     configuredModel && (params.staticCatalogModel ?? params.getStaticCatalogModel?.());
   const metadataOverrideModel =
-    params.preferDiscoveredModelMetadata && isModelsAddMetadataModel({ model: configuredModel })
+    params.preferDiscoveredModelMetadata && configuredModel?.metadataSource === "models-add"
       ? undefined
       : configuredModel;
-  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
-    stripSecretRefMarkers: true,
-  });
   const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
     stripSecretRefMarkers: true,
   });
@@ -480,20 +473,17 @@ export function applyConfiguredProviderOverrides(params: {
     stripSecretRefMarkers: true,
   });
   const providerParams = readModelParams(providerConfig.params);
-  const passthroughRequestConfig = resolveProviderRequestConfig({
-    provider: params.provider,
-    api: discoveredModel.api,
-    baseUrl: discoveredModel.baseUrl,
-    ...(params.providerMetadataOwners
-      ? { providerMetadataOwners: params.providerMetadataOwners }
-      : {}),
-    discoveredHeaders,
+  const configuredRequestParams = {
+    ...requestParams,
     providerHeaders,
     modelHeaders: configuredHeaders,
     authHeader: providerConfig.authHeader,
     request: providerRequest,
-    capability: "llm",
-    transport: "stream",
+  };
+  const passthroughRequestConfig = resolveProviderRequestConfig({
+    ...configuredRequestParams,
+    api: discoveredModel.api,
+    baseUrl: discoveredModel.baseUrl,
   });
   if (
     !configuredModel &&
@@ -539,13 +529,13 @@ export function applyConfiguredProviderOverrides(params: {
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
   });
-  const metadataOverrideBaseUrl = normalizeTransportBaseUrl(metadataOverrideModel?.baseUrl);
-  const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig.baseUrl);
-  const discoveredBaseUrl = normalizeTransportBaseUrl(discoveredModel.baseUrl);
-  const configuredStaticCatalogBaseUrl = normalizeTransportBaseUrl(
+  const metadataOverrideBaseUrl = normalizeOptionalString(metadataOverrideModel?.baseUrl);
+  const providerConfiguredBaseUrl = normalizeOptionalString(providerConfig.baseUrl);
+  const discoveredBaseUrl = normalizeOptionalString(discoveredModel.baseUrl);
+  const configuredStaticCatalogBaseUrl = normalizeOptionalString(
     configuredStaticCatalogModel?.baseUrl,
   );
-  const manifestAliasBaseUrl = normalizeTransportBaseUrl(manifestAliasTransport?.baseUrl);
+  const manifestAliasBaseUrl = normalizeOptionalString(manifestAliasTransport?.baseUrl);
   // A retained alias owns transport identity and always takes the second branch
   // below. Discovery-first ordering is therefore alias-free by construction.
   const preferDiscoveredTransport = params.preferDiscoveredTransport && !manifestAliasTransport;
@@ -637,13 +627,12 @@ export function applyConfiguredProviderOverrides(params: {
   });
   const resolvedReasoning = resolveMergedConfiguredModelReasoning({
     provider: params.provider,
-    configuredCompat: resolvedCompat,
-    resolvedCompat,
+    compat: resolvedCompat,
     configuredReasoning: metadataOverrideModel?.reasoning,
     discoveredReasoning: discoveredModel.reasoning,
   });
   const requestConfig = resolveProviderRequestConfig({
-    provider: params.provider,
+    ...configuredRequestParams,
     api:
       resolvedTransport.api ??
       normalizeResolvedTransportApi(configuredStaticCatalogModel?.api) ??
@@ -652,16 +641,6 @@ export function applyConfiguredProviderOverrides(params: {
       "openai-responses",
     baseUrl:
       resolvedTransport.baseUrl ?? configuredStaticCatalogModel?.baseUrl ?? discoveredModel.baseUrl,
-    ...(params.providerMetadataOwners
-      ? { providerMetadataOwners: params.providerMetadataOwners }
-      : {}),
-    discoveredHeaders,
-    providerHeaders,
-    modelHeaders: configuredHeaders,
-    authHeader: providerConfig.authHeader,
-    request: providerRequest,
-    capability: "llm",
-    transport: "stream",
   });
   return attachModelProviderRequestRouteFacts(
     attachModelProviderLocalService(

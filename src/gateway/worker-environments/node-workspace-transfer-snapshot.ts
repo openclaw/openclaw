@@ -3,7 +3,6 @@ import path from "node:path";
 import { isPathInside } from "../../infra/fs-safe.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
-import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { probeWorkspaceGitMode } from "./workspace-sync-helpers.js";
 import {
   createWorkspaceGitTransferList,
@@ -12,10 +11,7 @@ import {
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 
-export type NodeWorkspaceTransferSnapshot = {
-  manifest: WorkerWorkspaceManifest;
-  manifestRef: string;
-  rawManifest: string;
+export type NodeWorkspaceTransferSnapshot = Awaited<ReturnType<typeof captureWorkspaceSnapshot>> & {
   root: string;
   /** Sparse checkpoint payloads contain only these paths from the complete manifest. */
   blobPaths?: ReadonlySet<string>;

@@ -1,4 +1,4 @@
-import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
 import { assertNativeModelInputCompatible } from "./native-subagent-model-input.js";

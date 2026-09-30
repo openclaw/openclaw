@@ -5,7 +5,6 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
-import { createVoiceCaptureState } from "./capture-state.js";
 import {
   createDefaultVoiceStates,
   createDiscordVoiceTestHelpers,
@@ -35,7 +34,7 @@ const {
   createAudioResourceMock,
   resolveAgentRouteMock,
   agentCommandMock,
-  resolveRealtimeBootstrapContextInstructionsMock,
+  resolveRealtimeVoiceAgentContextInstructionsMock,
   resolveVoiceIngressWithParticipantsMock,
   syntheticVoiceAdmissions,
   transcribeAudioFileMock,
@@ -89,8 +88,10 @@ function buildVoiceTestHarness() {
     resolveAgentRouteMock.mockReturnValue({ agentId: "agent-1", sessionKey: "discord:g1:c1" });
     agentCommandMock.mockReset();
     agentCommandMock.mockResolvedValue({ payloads: [] });
-    resolveRealtimeBootstrapContextInstructionsMock.mockReset();
-    resolveRealtimeBootstrapContextInstructionsMock.mockResolvedValue(undefined);
+    resolveRealtimeVoiceAgentContextInstructionsMock.mockReset();
+    resolveRealtimeVoiceAgentContextInstructionsMock.mockResolvedValue(
+      "Agent context: shared voice agent context.",
+    );
     resolveVoiceIngressWithParticipantsMock.mockReset();
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
@@ -635,7 +636,6 @@ function buildVoiceTestHarness() {
     it,
     vi,
     ChannelType,
-    createVoiceCaptureState,
     createVoiceReceiveRecoveryState,
     DECRYPT_FAILURE_WINDOW_MS,
     requireRecord,
@@ -650,7 +650,7 @@ function buildVoiceTestHarness() {
     createAudioResourceMock,
     resolveAgentRouteMock,
     agentCommandMock,
-    resolveRealtimeBootstrapContextInstructionsMock,
+    resolveRealtimeVoiceAgentContextInstructionsMock,
     resolveVoiceIngressWithParticipantsMock,
     transcribeAudioFileMock,
     resolveAudioInputBudgetMock,

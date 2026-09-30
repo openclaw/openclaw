@@ -25,8 +25,14 @@ import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-s
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
-function placementStoreDefaults() {
+function placementStoreDefaults(
+  readPlacements: () => ReadonlyArray<{ sessionId: string }> = () => [],
+) {
   return {
+    readChangeSnapshot: async () => readPlacements(),
+    readProjection: async () => ({
+      placements: new Map(readPlacements().map((placement) => [placement.sessionId, placement])),
+    }),
     workspaceResultInstanceId: () => "gateway-test",
     retireSessionPlacement: vi.fn(),
     pruneOrphanedWorkspaceReconciliations: () => [],
@@ -194,7 +200,9 @@ describe("worker placement startup health lifetime", () => {
       });
 
       try {
-        await vi.waitFor(() => expect(reconcile).toHaveBeenCalledWith("startup"));
+        await vi.waitFor(() =>
+          expect(reconcile).toHaveBeenCalledWith("startup", expect.any(Function)),
+        );
         expect(environments.start).not.toHaveBeenCalled();
 
         let ready = false;
@@ -405,7 +413,7 @@ describe("worker placement startup health lifetime", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
-        ...placementStoreDefaults(),
+        ...placementStoreDefaults(() => placementRows),
         get: () => undefined,
         list: () => placementRows,
       } as never,
@@ -534,7 +542,7 @@ describe("worker placement startup health lifetime", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
-        ...placementStoreDefaults(),
+        ...placementStoreDefaults(() => [placement]),
         get: () => placement,
         list: () => [placement],
       } as never,
@@ -721,12 +729,19 @@ describe("worker placement startup recovery authority", () => {
       }),
     ).rejects.toThrow("placement changed");
 
-    moveDestinationMocks.resolveCanonicalSession.mockReturnValueOnce({
-      sessionId: "session-replaced",
-      worktree: { id: "worktree-recovery" },
-    });
-    await expect(
-      dispatchOptions.runRecoveryBarrier({ ...request, run: async () => {} }),
-    ).rejects.toThrow("changed before cloud worker recovery");
+    const recoverReplacedSession = vi.fn(async () => {});
+    // Keep the replacement installed through preparation and the final authority check.
+    await moveDestinationMocks.resolveCanonicalSession.withImplementation(
+      () => ({
+        sessionId: "session-replaced",
+        worktree: { id: "worktree-recovery" },
+      }),
+      async () => {
+        await expect(
+          dispatchOptions.runRecoveryBarrier({ ...request, run: recoverReplacedSession }),
+        ).rejects.toThrow("changed before cloud worker recovery");
+      },
+    );
+    expect(recoverReplacedSession).not.toHaveBeenCalled();
   });
 });

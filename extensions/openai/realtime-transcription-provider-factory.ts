@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
-  createOpenAIRealtimeTranscriptionClientSecret,
+  createOpenAIRealtimeClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
 } from "./realtime-provider-shared.js";
@@ -147,7 +147,7 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
     profileTypes: ["api_key"],
   });
   if (authToken) {
-    const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret(
+    const clientSecret = await createOpenAIRealtimeClientSecret(
       {
         authToken,
         auditContext: "openai-realtime-transcription-session",
@@ -155,6 +155,7 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
         authRejectedMessage: OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED,
       },
       runtime,
+      "OpenAI Realtime transcription",
     );
     return clientSecret.value;
   }

@@ -5,13 +5,13 @@ import * as ts from "typescript/unstable/ast";
 import {
   SymbolFlags,
   type Checker,
-  type Emitter,
+  type Printer,
   type Program,
   type Symbol as CompilerSymbol,
 } from "typescript/unstable/sync";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
-import { emitNativeDeclarations } from "../../scripts/lib/native-declaration-emitter.mts";
 import { createDeclarationFileSystem } from "../../scripts/lib/native-declaration-filesystem.mts";
+import { emitNativeDeclarationsInSubprocess } from "../../scripts/lib/native-declaration-subprocess.mts";
 import {
   createNativeTypeScriptProject,
   resolveInstalledNativeTypeScriptCompiler,
@@ -125,6 +125,8 @@ async function createCompilerContext(
     noEmit: false,
     // Declaration diagnostics are checked explicitly; unrelated untyped external JS stays valid.
     noEmitOnError: false,
+    // Parallel emit can copy readonly flags from unrelated inferred union properties.
+    singleThreaded: true,
     removeComments: true,
     sourceMap: false,
   };
@@ -146,7 +148,7 @@ async function createCompilerContext(
       fs: view.filesystem,
     });
     view.assertValid();
-    const emitted = await emitNativeDeclarations({
+    const emitted = await emitNativeDeclarationsInSubprocess({
       cwd: repoRoot,
       configFile: configPath,
       roots: fileNames,
@@ -180,11 +182,12 @@ async function createCompilerContext(
       assertValid: view.assertValid,
       declarationClosure: createDeclarationClosureRenderer({
         project: declarations.project,
+        printer: declarations.api.printer,
         sourceProgram: source.project.program,
         emittedSources: new Set(emitted.declarations.keys()),
         repoRoot,
       }),
-      printer: source.project.emitter,
+      printer: source.api.printer,
       program: source.project.program,
       close() {
         declarations?.close();
@@ -299,7 +302,7 @@ function compareDeclarations(
 function buildExportSurface(params: {
   checker: Checker;
   declarationClosure: DeclarationClosureRenderer;
-  printer: Emitter;
+  printer: Printer;
   repoRoot: string;
   symbol: CompilerSymbol;
 }): RenderedPluginSdkApiExport {
@@ -359,7 +362,7 @@ function sortExports(left: RenderedPluginSdkApiExport, right: RenderedPluginSdkA
 function buildModuleSurface(params: {
   checker: Checker;
   declarationClosure: DeclarationClosureRenderer;
-  printer: Emitter;
+  printer: Printer;
   program: Program;
   repoRoot: string;
   entrypoint: string;

@@ -140,6 +140,8 @@ export class LegacyMigrationSourceClaim<
         root.defaults.denyMutations ||
         root.defaults.mutationSymlinks ||
         (error.cause !== undefined &&
+          // fs-safe reports loader failures before native admission or dispatch.
+          error.message !== "native fs-safe helper is unavailable" &&
           !["EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].some((code) =>
             hasErrnoCode(error.cause, code),
           ))

@@ -33,6 +33,8 @@ openclaw plugins uninstall <ids...> --force
 
 Matching load-path references are removed before package files so symlink aliases cannot leave invalid config. With a running Gateway, runtime drain also precedes removal of the install record, including with `--keep-files` or a linked install. If runtime drain or file removal fails, the plugin stays disabled and tracked so you can retry uninstall.
 
+If a matching load-path reference is added again while the runtime drains, uninstall keeps the files and asks you to remove that reference before retrying. Config writes through OpenClaw wait until file cleanup settles, including writes to shared config includes. Cleanup rechecks its authority before each deletion and stops if the operation is revoked.
+
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
 When several IDs are supplied, uninstall resolves the whole selection before
@@ -71,6 +73,20 @@ conflicting selections fail before updates start, including with `--dry-run`.
 The existing bulk updater processes plugin packages and then hook packs, retains
 successful updates when another package fails, and applies saved changes to the
 running Gateway with one final refresh.
+
+Before activating a replacement, plugin updates apply its Doctor config repairs
+through the normal backed-up config writer. This preserves settings such as a
+previously configured webhook endpoint. Retrying an already-current package also
+finishes pending config-only repairs. Replacement installs (`plugins install
+--force`) use the same repair owner. If a required Doctor artifact cannot load or
+a recorded data migration still needs maintenance, the command fails before
+activation and names the repair to complete. Follow the reported repair guidance
+before retrying; data migrations require `openclaw doctor --fix`. Disabled plugins
+keep their pending inputs without running state migrations; unrelated pending
+migrations remain preserved.
+
+Recovery keeps the published package generation when config rollback is not
+confirmed. The command reports the failure without claiming runtime activation.
 
 If update finalization fails, the error reports the original cause first and retains any rollback failures as additional diagnostic context. A failed rollback remains retryable; a successfully committed or rolled-back install is not applied again during cleanup.
 

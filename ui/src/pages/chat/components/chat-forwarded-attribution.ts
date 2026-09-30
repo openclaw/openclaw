@@ -47,7 +47,7 @@ export function renderForwardedAttribution(
   const sourceLabel =
     group.senderSession?.label ??
     (sourceIsCronRun
-      ? t("tasksPage.runtime.cron")
+      ? t("chat.messages.forwardedAutomation")
       : sourceIsMainSession
         ? sourceAgentDisplayName
         : undefined);

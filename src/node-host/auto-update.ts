@@ -12,6 +12,7 @@ import {
   compareSemverStrings,
   resolveNpmChannelTag,
   resolveUpdateInstallKind,
+  resolveUpdateRegistryTarget,
 } from "../infra/update-check.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -149,10 +150,16 @@ export function startNodeHostAutoUpdate(params: {
       }
       return await tryActivate();
     }
+    // Bun-only installs have no npm to spawn; read the registry in-process there,
+    // as `openclaw update` does for installs npm does not manage.
     const available = await resolveNpmChannelTag({
       channel: policy.channel,
       env,
-      runCommand: (argv, options) => runCommandWithTimeout(argv, { ...options, signal }),
+      signal,
+      ...(process.versions.bun ? resolveUpdateRegistryTarget({ env }) : {}),
+      runCommand: process.versions.bun
+        ? undefined
+        : (argv, options) => runCommandWithTimeout(argv, { ...options, signal }),
     });
     signal.throwIfAborted();
     if (available.error) {

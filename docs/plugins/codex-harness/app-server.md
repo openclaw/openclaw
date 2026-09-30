@@ -65,6 +65,13 @@ operator action is required. Ping and pong frames are transport-level health
 checks: they do not start a Codex turn or invoke a model. Local stdio and Unix
 transports do not perform these remote connection checks.
 
+When a caller needs a connection during remote replacement, acquisition makes up
+to three connection attempts within the caller's timeout and
+cancellation scope. This applies only when the WebSocket never opened, so no
+buffered initialization frame reached the server. Authentication and certificate
+errors fail immediately. Requests on an opened connection, including model turns
+and tool execution, are not replayed by this recovery.
+
 WebSocket and Unix socket shutdown settles when the connection closes, including
 when the server disconnected first. If the peer cannot complete the closing
 handshake, OpenClaw terminates its socket at the shutdown deadline. A closed

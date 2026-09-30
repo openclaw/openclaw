@@ -18,14 +18,14 @@ import type { PendingChatAbort } from "./chat-abort-request.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
+import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatProps } from "./chat-view.ts";
-import type { BackgroundTasksHost } from "./components/chat-background-tasks.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
 import type { SidebarSelection } from "./components/chat-sidebar.ts";
 import type { ChatExportResult } from "./export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
+import type { handleAbortChat } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
 import type {
@@ -40,8 +40,7 @@ export type ChatPageHost = ChatHost &
   ChatState &
   ChatRealtimeState &
   PullRequestRefreshHost &
-  SessionWorkspaceHost &
-  BackgroundTasksHost & {
+  SessionWorkspaceHost & {
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
@@ -124,10 +123,10 @@ export type ChatPageHost = ChatHost &
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     handleSendChat: (
       messageOverride?: string,
-      options?: unknown,
+      options?: ChatSendSubmitOptions,
       submissionAction?: Event,
     ) => Promise<boolean | void>;
-    handleAbortChat: (options?: unknown) => Promise<void>;
+    handleAbortChat: (options?: Parameters<typeof handleAbortChat>[1]) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     retryQueuedChatMessage: (id: string) => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;

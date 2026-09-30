@@ -19,6 +19,7 @@ import { registerSharedClientConnectionArtifactTests } from "./shared-client-con
 import { registerSharedClientInferenceTests } from "./shared-client-inference.test-support.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./shared-client-lifecycle.js";
 import { registerSharedClientLifetimeTests } from "./shared-client-lifetime.test-support.js";
+import { registerSharedClientWebSocketStartupTests } from "./shared-client-websocket-startup.test-support.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -333,29 +334,11 @@ describe("shared Codex app-server client", () => {
     mocks.resolveDefaultAgentDir.mockClear();
   });
 
-  it.each(["shared", "isolated"] as const)(
-    "uses the configured remote endpoint for a %s client without explicit start options",
-    async (kind) => {
-      const harness = createInitializingClientHarness();
-      const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-      const acquire =
-        kind === "shared" ? getSharedCodexAppServerClient : createIsolatedCodexAppServerClient;
-
-      const client = await acquire({
-        pluginConfig: {
-          appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
-        },
-        timeoutMs: 1_000,
-      });
-
-      expect(client).toBe(harness.client);
-      expect(startSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ transport: "websocket", url: "ws://127.0.0.1:39175" }),
-        expect.anything(),
-      );
-      await client.closeAndWait();
-    },
-  );
+  registerSharedClientWebSocketStartupTests({
+    createStartOptions,
+    createInitializingClientHarness,
+    authHandoff: mocks.applyCodexAppServerAuthProfile,
+  });
 
   registerSharedClientInferenceTests((generation, command) => {
     mocks.desktopGeneration = generation;
@@ -365,6 +348,7 @@ describe("shared Codex app-server client", () => {
         : options,
     );
   }, sendInitializeResult);
+
   it("preserves explicit start options over the plugin endpoint", async () => {
     const harness = createInitializingClientHarness();
     const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
@@ -1440,15 +1424,11 @@ describe("shared Codex app-server client", () => {
       const acquired = getLeasedSharedCodexAppServerClient(options);
       await sendInitializeResult(first, "openclaw/0.149.0 (Linux; test)");
       await acquired;
-      if (failure === "failure") {
-        mocks.refreshCodexAppServerAuthTokens.mockRejectedValueOnce(new Error("refresh failed"));
-      } else {
-        mocks.refreshCodexAppServerAuthTokens.mockResolvedValueOnce({
-          accessToken: "other-token",
-          chatgptAccountId: "other-account",
-          chatgptPlanType: null,
-        });
-      }
+      const failureMessage =
+        failure === "failure"
+          ? "refresh failed"
+          : "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.";
+      mocks.refreshCodexAppServerAuthTokens.mockRejectedValueOnce(new Error(failureMessage));
       const responseIndex = first.writes.length;
       first.send({
         id: "failed-refresh",
@@ -1459,10 +1439,7 @@ describe("shared Codex app-server client", () => {
         id: "failed-refresh",
         error: {
           code: -32603,
-          message:
-            failure === "failure"
-              ? "refresh failed"
-              : "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
+          message: failureMessage,
         },
       });
       expect(first.stdinDestroyed).toBe(false);

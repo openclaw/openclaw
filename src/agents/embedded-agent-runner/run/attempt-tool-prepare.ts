@@ -45,7 +45,6 @@ import type {
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
-import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
@@ -54,6 +53,7 @@ import {
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "./attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
@@ -63,7 +63,7 @@ type SkillUsagePaths = OpenClawCodingToolsOptions["skillUsagePaths"];
 
 export async function prepareEmbeddedAttemptToolBase(params: {
   agentDir: string;
-  attempt: EmbeddedRunAttemptParams;
+  attempt: EmbeddedRunAttemptInternalParams;
   setup: EmbeddedAttemptSetup;
   markCoreToolStage: (name: string) => void;
   onYield: NonNullable<OpenClawCodingToolsOptions["onYield"]>;
@@ -77,6 +77,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  const completionCheck = attempt.completionCheck;
   const requireExplicitMessageTarget =
     attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey);
   const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
@@ -192,7 +193,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     sessionId: attempt.sessionId,
     runId: attempt.runId,
     agentDir: params.agentDir,
-    messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
+    messageProvider: attempt.messageProvider ?? attempt.messageChannel,
     messageChannel: attempt.messageChannel,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
@@ -341,6 +342,11 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
             skillUsagePaths: params.skillUsagePaths,
             conversationCapabilityProfile: runtimeCapabilityProfile,
+            onProgressCardPlanSaved: completionCheck
+              ? (unfinished) => {
+                  completionCheck.unfinishedPlan = unfinished;
+                }
+              : undefined,
             onYield: params.onYield,
           };
           const allTools = createOpenClawCodingToolsInternal(

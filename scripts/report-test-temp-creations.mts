@@ -14,11 +14,6 @@ import {
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
-type AddedLine = {
-  line: number;
-  source: string;
-};
-
 type TempCreationFinding = {
   file: string;
   line: number;
@@ -218,27 +213,6 @@ function readDiff(args: ReturnType<typeof parseArgs>, cwd = process.cwd()): stri
   return paths.size > 0 ? readGitDiff("--unified=0", "--", ...paths) : "";
 }
 
-function readWorktreeSource(filePath: string, cwd: string): string {
-  try {
-    return fs.readFileSync(path.join(cwd, filePath), "utf8");
-  } catch {
-    return "";
-  }
-}
-
-function readStagedSource(filePath: string, cwd: string): string {
-  try {
-    return execFileSync("git", ["show", `:${filePath}`], {
-      cwd,
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch {
-    return "";
-  }
-}
-
 function readSourceForDiff(
   filePath: string,
   args: ReturnType<typeof parseArgs>,
@@ -246,7 +220,18 @@ function readSourceForDiff(
 ): string {
   // Staged checks must parse the index blob. Reading the worktree mixes in
   // unstaged edits and can warn on code that will not be committed.
-  return args.staged ? readStagedSource(filePath, cwd) : readWorktreeSource(filePath, cwd);
+  try {
+    return args.staged
+      ? execFileSync("git", ["show", `:${filePath}`], {
+          cwd,
+          encoding: "utf8",
+          maxBuffer: 64 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+        })
+      : fs.readFileSync(path.join(cwd, filePath), "utf8");
+  } catch {
+    return "";
+  }
 }
 
 function stripKnownExtension(filePath: string): string {
@@ -285,32 +270,6 @@ function nodeOverlapsAddedLine(
     }
   }
   return false;
-}
-
-function normalizeFileTextMap(
-  fileTextByPath: Map<string, string> | Record<string, string> | undefined,
-) {
-  if (!fileTextByPath) {
-    return null;
-  }
-  if (fileTextByPath instanceof Map) {
-    return fileTextByPath;
-  }
-  return new Map(Object.entries(fileTextByPath));
-}
-
-function readCurrentSource(
-  filePath: string,
-  options: { readFile?: (filePath: string) => string | null | undefined },
-  fileTextByPath: Map<string, string> | null,
-): string {
-  if (fileTextByPath?.has(filePath)) {
-    return fileTextByPath.get(filePath) ?? "";
-  }
-  if (options.readFile) {
-    return options.readFile(filePath) ?? "";
-  }
-  return "";
 }
 
 function collectManualTempDirHelperImports(
@@ -357,9 +316,8 @@ function collectManualTempDirHelperImports(
 function findManualHelperUsageFindings(
   filePath: string,
   sourceFile: ts.SourceFile,
-  addedLines: AddedLine[],
+  addedLineNumbers: Set<number>,
 ): TempCreationFinding[] {
-  const addedLineNumbers = new Set(addedLines.map((line) => line.line));
   const { imports, localNames } = collectManualTempDirHelperImports(
     sourceFile,
     filePath,
@@ -394,50 +352,6 @@ function findManualHelperUsageFindings(
   return findings;
 }
 
-function collectAddedLinesByFile(diffText: string): Map<string, AddedLine[]> {
-  const addedLinesByFile = new Map<string, AddedLine[]>();
-  let currentFile: string | null = null;
-  let currentLine = 0;
-
-  for (const line of diffText.split(/\r?\n/u)) {
-    const fileMatch = line.match(/^\+\+\+ b\/(.+)$/u);
-    if (fileMatch) {
-      const filePath = fileMatch[1];
-      if (!filePath) {
-        continue;
-      }
-      currentFile = normalizePath(filePath);
-      continue;
-    }
-    if (line === "+++ /dev/null") {
-      currentFile = null;
-      continue;
-    }
-
-    const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/u);
-    if (hunkMatch) {
-      currentLine = Number.parseInt(hunkMatch[1] ?? "0", 10);
-      continue;
-    }
-
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      if (currentFile && shouldInspectFile(currentFile)) {
-        const lines = addedLinesByFile.get(currentFile) ?? [];
-        lines.push({ line: currentLine, source: line.slice(1) });
-        addedLinesByFile.set(currentFile, lines);
-      }
-      currentLine += 1;
-      continue;
-    }
-
-    if (line.startsWith(" ") || line === "") {
-      currentLine += 1;
-    }
-  }
-
-  return addedLinesByFile;
-}
-
 export function collectTempCreationFindingsFromDiff(
   diffText: string,
   options: {
@@ -445,15 +359,17 @@ export function collectTempCreationFindingsFromDiff(
     readFile?: (filePath: string) => string | null | undefined;
   } = {},
 ): TempCreationFinding[] {
-  const diff = diffText;
   const findings: TempCreationFinding[] = [];
-  const addedLinesByFile = collectAddedLinesByFile(diff);
-  const fileTextByPath = normalizeFileTextMap(options.fileTextByPath);
+  const addedLinesByFile = new Map<string, Set<number>>();
+  const fileTextByPath =
+    options.fileTextByPath instanceof Map
+      ? options.fileTextByPath
+      : new Map(Object.entries(options.fileTextByPath ?? {}));
   let currentFile: string | null = null;
   let currentLine = 0;
   let allowNextLine: AllowNextLine | null = null;
 
-  for (const line of diff.split(/\r?\n/u)) {
+  for (const line of diffText.split(/\r?\n/u)) {
     const fileMatch = line.match(/^\+\+\+ b\/(.+)$/u);
     if (fileMatch) {
       const filePath = fileMatch[1];
@@ -480,6 +396,9 @@ export function collectTempCreationFindingsFromDiff(
     if (line.startsWith("+") && !line.startsWith("+++")) {
       if (currentFile && shouldInspectFile(currentFile)) {
         const source = line.slice(1);
+        const lines = addedLinesByFile.get(currentFile) ?? new Set<number>();
+        lines.add(currentLine);
+        addedLinesByFile.set(currentFile, lines);
         const allowed =
           hasTempDirAllowMarker(source) ||
           (allowNextLine?.file === currentFile && allowNextLine.line === currentLine);
@@ -516,7 +435,8 @@ export function collectTempCreationFindingsFromDiff(
       if (!shouldInspectManualHelperUsage(file)) {
         continue;
       }
-      const sourceText = readCurrentSource(file, options, fileTextByPath);
+      const sourceText =
+        (fileTextByPath.has(file) ? fileTextByPath.get(file) : options.readFile?.(file)) ?? "";
       if (!sourceText) {
         continue;
       }

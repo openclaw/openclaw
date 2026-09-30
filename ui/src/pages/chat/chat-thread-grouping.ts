@@ -8,7 +8,10 @@ import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
-import { resolveAssistantReplyPhase } from "./chat-assistant-reply.ts";
+import {
+  assistantMessageIsInterrupted,
+  resolveAssistantReplyPhase,
+} from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
@@ -80,7 +83,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     const { item, normalized } = prepared;
     const role = normalizeRoleForGrouping(normalized.role);
     // Classify after content projection and keep the fact with its group; later
-    // presentation passes reuse it, while a rebuild sees in-place message changes.
+    // presentation passes reuse it; replacing a message refreshes its facts.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
     const source = {
       message: item.message,
@@ -208,6 +211,8 @@ export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
   groups: MessageGroup[];
+  /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
+  previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
 };
 
@@ -390,6 +395,8 @@ export function collapseCompletedTurnWork(
     }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
+    const previewAfterGroup = new Map<string, string>();
+    let precedingAnswerKey: string | undefined;
     for (let index = segmentStart; index <= segmentEnd; index += 1) {
       const item = turn[index]!;
       // Only a later answer can put a failed result inside completed work.
@@ -404,12 +411,15 @@ export function collapseCompletedTurnWork(
           ))
       ) {
         groups.push(item);
+        if (precedingAnswerKey) {
+          previewAfterGroup.set(item.key, precedingAnswerKey);
+        }
       } else {
         answers.push(item);
+        precedingAnswerKey = item.key;
       }
     }
-    const firstGroup = groups[0];
-    if (!firstGroup) {
+    if (groups.length === 0) {
       result.push(...turn);
       continue;
     }
@@ -440,6 +450,7 @@ export function collapseCompletedTurnWork(
         finalReplyIndex >= 0 || !continuationBoundary ? terminalReply.key : continuationBoundary.key
       }`,
       groups,
+      ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });
     result.push(...answers, ...turn.slice(segmentEnd + 1));
@@ -449,9 +460,8 @@ export function collapseCompletedTurnWork(
 
 export type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
 
-// Runs whose transcript shows any reply/stream content keep their activity
-// separate per run (one run, one response); only fully reply-less runs — e.g.
-// heartbeat wakes that just call their response tool — may pool across runs.
+// Completed work may include activity after an answer only when that activity
+// belongs to a run with a visible reply, not an independent background wake.
 function runIdsWithVisibleReplies(items: CompletedTurnRenderItem[]): Set<string> {
   const replyRunIds = new Set<string>();
   for (const item of items) {
@@ -482,20 +492,35 @@ export function coalesceActivityRuns(
   if (opts.searchActive) {
     return items;
   }
-  const replyRunIds = runIdsWithVisibleReplies(items);
-  // A group is its run's entire visible outcome when the run never produced a
-  // reply. Consecutive such runs (heartbeats, cron wakes) collapse into one
-  // activity rollup instead of stacking identical rows down the transcript.
-  const isReplyLessRunActivity = (group: MessageGroup): boolean => {
+  // Adjacent activity is one disclosure even when automatic continuations use
+  // new run IDs. Visible content, not other output elsewhere in those runs,
+  // bounds the log. Reuse prepared visibility and cached cards in this pass.
+  const isActivity = (group: MessageGroup): boolean => {
+    if (group.isStreaming || group.visibleContent === "non-text" || hasForwardedSource(group)) {
+      return false;
+    }
+    // Tool-call content is normalized to the tool role. Its original assistant
+    // envelope still owns narration and terminal outcomes; do not hide those.
+    if (
+      group.messages.some(({ message, hasVisibleContent }) => {
+        const record = asRecord(message);
+        return (
+          record?.role === "assistant" &&
+          (hasVisibleContent ||
+            resolveAssistantReplyPhase(message) === "final_answer" ||
+            assistantMessageIsInterrupted(message) ||
+            record.stopReason === "error")
+        );
+      })
+    ) {
+      return false;
+    }
     const role = group.role.toLowerCase();
     return (
-      !group.isStreaming &&
-      group.runId !== undefined &&
-      !replyRunIds.has(group.runId) &&
-      (role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(group))) &&
-      // includeText=false: any assistant text already marked the run as replied
-      // above; here only non-tool blocks (media/attachments) block pooling.
-      !groupHasVisibleReplyContent(group, false)
+      role === "tool" ||
+      (role === "assistant" &&
+        group.visibleContent === "none" &&
+        group.messages.some(({ message }) => extractToolCardsCached(message).length > 0))
     );
   };
   const result: Array<CompletedTurnRenderItem | ActivityRunRenderItem> = [];
@@ -511,16 +536,7 @@ export function coalesceActivityRuns(
     groups = [];
   };
   for (const item of items) {
-    const replyLessRunActivity = item.kind === "group" && isReplyLessRunActivity(item);
-    if (item.kind === "group" && (item.role.toLowerCase() === "tool" || replyLessRunActivity)) {
-      const tail = groups[groups.length - 1];
-      if (
-        tail &&
-        tail.runId !== item.runId &&
-        !(replyLessRunActivity && isReplyLessRunActivity(tail))
-      ) {
-        flush();
-      }
+    if (item.kind === "group" && isActivity(item)) {
       groups.push(item);
       continue;
     }

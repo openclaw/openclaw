@@ -113,7 +113,7 @@ beforeEach(() => {
   setBrowserStateRuntime({
     dashboardOperations: new Map(),
     sessionTabs: {} as never,
-    sessionTabDiscovery: {} as never,
+    sessionTabOperations: new Map(),
   });
 });
 afterEach(async () => {

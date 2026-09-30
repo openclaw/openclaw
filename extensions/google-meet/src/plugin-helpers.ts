@@ -1,6 +1,5 @@
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/channel-actions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildGoogleMeetCalendarDayWindow,
@@ -8,35 +7,10 @@ import {
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
 import type { GoogleMeetConfig } from "./config.js";
-import {
-  fetchGoogleMeetArtifacts,
-  fetchGoogleMeetAttendance,
-  fetchGoogleMeetSpace,
-} from "./meet.js";
+import { fetchGoogleMeetSpace } from "./meet-api.js";
+import { fetchGoogleMeetArtifacts, fetchGoogleMeetAttendance } from "./meet.js";
 import { resolveMeetingInput } from "./plugin-registration.js";
-import type { GoogleMeetRuntime } from "./runtime.js";
-
-const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./create.js"));
 const loadGoogleMeetExportModule = createLazyRuntimeModule(() => import("./cli-export.js"));
-
-export async function createMeetFromParams(params: {
-  config: GoogleMeetConfig;
-  runtime: OpenClawPluginApi["runtime"];
-  raw: Record<string, unknown>;
-}) {
-  const create = await loadGoogleMeetCreateModule();
-  return create.createMeetFromParams(params);
-}
-
-export async function createAndJoinMeetFromParams(params: {
-  config: GoogleMeetConfig;
-  runtime: OpenClawPluginApi["runtime"];
-  raw: Record<string, unknown>;
-  ensureRuntime: () => Promise<GoogleMeetRuntime>;
-}) {
-  const create = await loadGoogleMeetCreateModule();
-  return create.createAndJoinMeetFromParams(params);
-}
 
 export async function resolveGoogleMeetTokenFromParams(
   config: GoogleMeetConfig,
@@ -201,7 +175,7 @@ export async function exportGoogleMeetBundleFromParams(
 
 export { buildGoogleMeetCalendarDayWindow, listGoogleMeetCalendarEvents } from "./calendar.js";
 export {
-  buildGoogleMeetPreflightReport,
   endGoogleMeetActiveConference,
   fetchLatestGoogleMeetConferenceRecord,
-} from "./meet.js";
+} from "./meet-api.js";
+export { buildGoogleMeetPreflightReport } from "./meet.js";

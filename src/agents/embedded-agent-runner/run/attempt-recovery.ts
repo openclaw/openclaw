@@ -7,8 +7,13 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
-import { findCliTerminalStopError, resolveFailoverReasonFromError } from "../../failover-error.js";
+import {
+  findCliTerminalStopError,
+  resolveFailoverClassificationFromError,
+} from "../../failover-error.js";
+import { failoverReasonFromClassification } from "../../failover/classification-rules.js";
 import { classifyFailoverSignal } from "../../failover/classify.js";
+import { getFailoverErrorCode } from "../../failover/error.js";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
@@ -297,8 +302,11 @@ export async function recoverEmbeddedRunAttempt(input: {
             providerPlugin: runtime.providerRuntimeHandle?.plugin,
           })
         : null;
+  const retryFailure = promptError
+    ? resolveFailoverClassificationFromError(promptError, preparedRuntime.provider)
+    : assistantFailure;
   const failureReason = promptError
-    ? resolveFailoverReasonFromError(promptError, preparedRuntime.provider)
+    ? failoverReasonFromClassification(retryFailure)
     : assistantFailure?.kind === "reason"
       ? assistantFailure.reason
       : idleTimedOut ||
@@ -383,9 +391,11 @@ export async function recoverEmbeddedRunAttempt(input: {
     (!promptError || promptErrorSource === "prompt") &&
     !isTerminalAssistantError(attemptAssistant) &&
     (!outputLimitFailure || canContinueOutputLimit) &&
+    (retryFailure?.kind !== "reason" || retryFailure.sameModelRetry !== false) &&
     recoveryReason &&
     (await failoverRetryController.maybeRetryTransient({
       reason: recoveryReason,
+      code: promptError ? getFailoverErrorCode(promptError) : assistantSignal?.code,
       message: promptError ? formatErrorMessage(promptError) : assistantSignal?.message,
       retryAfterMs: promptError
         ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)

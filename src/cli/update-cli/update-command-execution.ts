@@ -1,16 +1,11 @@
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
-import {
-  createUpdateDoctorConfigWarningStep,
-  type UpdateDoctorConfigChange,
-} from "../../infra/update-doctor-config.js";
+import type { UpdateDoctorConfigChange } from "../../infra/update-doctor-config.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
-import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -19,7 +14,6 @@ import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../../state/openclaw-schema-versions.js";
-import { formatCliCommand } from "../command-format.js";
 import { isCandidateAdmissionContextCovered } from "./schema-preflight.js";
 import {
   normalizeTag,
@@ -27,7 +21,12 @@ import {
   resolveGitInstallDir,
   UpdatePreMutationError,
 } from "./shared.js";
-import { validateUpdateCandidateWithProgress } from "./update-command-candidate-validation.js";
+import {
+  assertUpdateCandidateExecutor,
+  assertUpdateCandidateSteps,
+  createUpdateCandidateConfigRefresh,
+  validateUpdateCandidateWithProgress,
+} from "./update-command-candidate-validation.js";
 import {
   captureUpdateDatabases,
   restoreFailedUpdateDatabases,
@@ -40,7 +39,6 @@ import { createUpdateCommandExecutionGuards } from "./update-command-execution-g
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
   admitSourceUpdateArtifacts,
-  assertGitCandidateSteps,
   assertReadableGitTarget,
   recordInspectedGitTarget,
 } from "./update-command-git-admission.js";
@@ -56,6 +54,7 @@ import {
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
+import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
 import {
   runPackageInstallUpdate,
   preparePackageDoctorContext,
@@ -71,9 +70,8 @@ import {
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
 import { captureUpdateActivationSchemas } from "./update-command-schema.js";
-import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
-import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import { assertManagedGatewayArtifactPublication } from "./update-command-service-revalidation.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -92,16 +90,13 @@ export async function executeMutableUpdate(
   const configValidation = candidateAdmissionChecks?.includes("config")
     ? ("candidate" as const)
     : undefined;
-  const inspectContexts = (roots: string[]) =>
-    inspectUpdateDatabaseContexts({
-      ...params,
-      roots,
-      expectedForeground: opts.run?.completionOwner === "gateway-restart" || undefined,
-      updateInstallKind: params.updateInstallKind === "git" ? "git" : "package",
-      jsonMode: Boolean(opts.json),
-      timeoutMs: updateStepTimeoutMs,
-      candidateAdmissionChecks,
-    });
+  const databaseContextOptions = {
+    ...params,
+    updateInstallKind: params.updateInstallKind === "git" ? "git" : "package",
+    jsonMode: Boolean(opts.json),
+    timeoutMs: updateStepTimeoutMs,
+    candidateAdmissionChecks,
+  } satisfies Omit<Parameters<typeof inspectUpdateDatabaseContexts>[0], "roots">;
   const originalRun = opts.run;
   const requesterAuthority = originalRun?.requesterAuthority;
   const {
@@ -109,6 +104,7 @@ export async function executeMutableUpdate(
     assertBoundChildCurrent,
     onStateHandoff,
     admitExecutor,
+    captureWriteOptions,
   } = createUpdateCommandExecutionGuards(opts, params.root);
   let retentionInstallTarget = params.packageInstallTarget;
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => {
@@ -141,17 +137,7 @@ export async function executeMutableUpdate(
   let gitContextPrepared = false;
   let admittedTargetSchemaVersions = params.packageTargetSchemaVersions;
   const recheckSchemas = async (versions: OpenClawSchemaVersions | undefined) => {
-    admission = await revalidateUpdateDatabaseContexts(
-      {
-        ...params,
-        updateInstallKind: params.updateInstallKind === "git" ? "git" : "package",
-        jsonMode: Boolean(opts.json),
-        timeoutMs: updateStepTimeoutMs,
-        candidateAdmissionChecks,
-      },
-      admission,
-      versions,
-    );
+    admission = await revalidateUpdateDatabaseContexts(databaseContextOptions, admission, versions);
     admittedTargetSchemaVersions = versions;
   };
   const preflightPlugins = async (targetVersion: string | null) => {
@@ -182,9 +168,9 @@ export async function executeMutableUpdate(
   let databaseCapture: Awaited<ReturnType<typeof captureUpdateDatabases>> | undefined;
   const onTransaction = async (transaction: PackageUpdateTransaction) => {
     packageTransaction = transaction;
-    if (params.updateInstallKind === "package" && originalRun) {
+    if (originalRun) {
       databaseCapture = await captureUpdateDatabases({
-        backupRoot: transaction.backupRoot,
+        transaction,
         execution: params,
         context: ownedManagedUpdateContext,
         assertCurrent: assertExecutionCurrent,
@@ -205,8 +191,9 @@ export async function executeMutableUpdate(
   let candidateFailureReason: string | undefined;
   let doctorConfigWrites = false;
   let doctorEntered = false;
-  const doctorConfigChanges: UpdateDoctorConfigChange[] = [];
-  let validatedConfigSnapshot: { config: OpenClawConfig; hash?: string | null } | undefined;
+  let doctorConfigChanges: UpdateDoctorConfigChange[] = [];
+  let validatedConfigSnapshot: Awaited<ReturnType<typeof readUpdateCandidateSource>> | undefined;
+  let validatedCandidateRoot: string | undefined;
   const getDoctorContext: PackageInstallUpdateParams["getDoctorContext"] = () => {
     doctorEntered = true;
     return preparePackageDoctorContext({
@@ -217,6 +204,7 @@ export async function executeMutableUpdate(
       inputHash: validatedConfigSnapshot?.hash,
       changes: doctorConfigChanges,
       databaseBackup: databaseCapture?.backup,
+      originalRecoveryCapture: originalRun?.originalRecoveryCapture,
       assertCurrent: assertExecutionCurrent,
       assertBoundChildCurrent,
       onStateHandoff,
@@ -389,93 +377,71 @@ export async function executeMutableUpdate(
     if (opts.run) {
       recordUpdateRunPhase(opts.run.runId, "validating", undefined, { env: opts.run.env });
     }
-    const validate = async () => {
-      try {
-        if (params.updateInstallKind === "package") {
-          // The staged manifest owns schema support, including artifacts without registry metadata.
-          await recheckSchemas(
-            parsePackageOpenClawSchemaVersions(
-              await tryReadJson<unknown>(path.join(root, "package.json")),
-            ) ?? admittedTargetSchemaVersions,
-          );
-        } else {
-          // Git builds can outlive admission; reject drift before copying state and
-          // rehearsing migrations against a configuration activation cannot accept.
-          await recheckSchemas(admittedTargetSchemaVersions);
-        }
-        if (stagedPluginAdmission) {
-          // Explicit artifacts acquire their version before rehearsal or activation.
-          await preflightPlugins(await readPackageVersion(root));
-          await prepareMutableUpdate(ownedManagedUpdateContext?.env ?? admission?.managedEnv);
-        }
-      } catch (error) {
-        if (error instanceof UpdatePreMutationError) {
-          candidateFailureReason = error.reason;
-        }
-        throw error;
+    try {
+      if (params.updateInstallKind === "package") {
+        // The staged manifest owns schema support, including artifacts without registry metadata.
+        await recheckSchemas(
+          parsePackageOpenClawSchemaVersions(
+            await tryReadJson<unknown>(path.join(root, "package.json")),
+          ) ?? admittedTargetSchemaVersions,
+        );
+      } else {
+        // Git builds can outlive admission; refresh before rehearsing migrations.
+        await recheckSchemas(admittedTargetSchemaVersions);
       }
-      if (
-        params.shouldRestart &&
-        opts.run &&
-        preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned"
-      ) {
-        const executor = opts.run.executorFence;
-        if (!executor) {
-          throw new UpdatePreMutationError(
-            "target-native-unsupported",
-            "Starting the update requires its original update process.",
-          );
-        }
-        const supported = await isUpdatedInstallGatewayExecutorSupported({
-          root,
-          env: resolveUpdatedInstallCommandEnv({
-            processEnv: env,
-            invocationCwd: params.invocationCwd,
-          }),
-          executor,
-          timeoutMs: updateStepTimeoutMs,
-          nodeRunner: params.packageUpdateNodeRunner,
-        });
-        assertExecutionCurrent();
-        if (!supported) {
-          candidateFailureReason = "target-native-unsupported";
-          throw new UpdatePreMutationError(
-            candidateFailureReason,
-            "Target runtime cannot fence update-owned native commands; refusing before Gateway stop or package activation.",
-          );
-        }
+      if (stagedPluginAdmission) {
+        // Explicit artifacts acquire their version before rehearsal or activation.
+        await preflightPlugins(await readPackageVersion(root));
+        await prepareMutableUpdate(ownedManagedUpdateContext?.env ?? admission?.managedEnv);
       }
-      const snapshot =
-        validatedConfigSnapshot ??
-        (await readUpdateCandidateSource(env, params.legacyConfigPlan, { configValidation }));
-      const validation = await validateUpdateCandidateWithProgress(
-        { root, config: snapshot.config, env, assertCurrent: assertExecutionCurrent },
-        params,
-        originalRun,
-      );
-      assertExecutionCurrent();
-      doctorConfigChanges.push(...(validation.doctorConfigChanges ?? []));
-      if (validation.status === "ok") {
-        validatedConfigSnapshot = snapshot;
-        candidateSchemaVersions = validation.candidateSchemaVersions;
-        gatewayRestartCompletion = validation.gatewayRestartCompletion === true;
-        doctorConfigWrites = validation.doctorConfigWrites === true;
-        observedGatewayStartupMs = validation.steps.find(
-          (step) => step.name === "candidate-gateway-startup" && step.exitCode === 0,
-        )?.durationMs;
+      await assertUpdateCandidateExecutor({
+        root,
+        env,
+        opts,
+        shouldRestart: params.shouldRestart,
+        serviceOwned: preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned",
+        invocationCwd: params.invocationCwd,
+        timeoutMs: updateStepTimeoutMs,
+        nodeRunner: params.packageUpdateNodeRunner,
+        assertCurrent: assertExecutionCurrent,
+      });
+    } catch (error) {
+      if (error instanceof UpdatePreMutationError) {
+        candidateFailureReason = error.reason;
       }
-      return validation;
-    };
-    // Inference repair belongs to triage after the update's terminal failure.
-    const validation = await validate();
-    candidateFailureReason = validation.status === "error" ? validation.reason : undefined;
-    if (validation.status === "ok" && !doctorConfigWrites && doctorConfigChanges.length) {
-      const warning = createUpdateDoctorConfigWarningStep(root, doctorConfigChanges);
-      validation.steps.push(warning);
-      params.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+      throw error;
     }
+    const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan, {
+      configValidation,
+    });
+    const validation = await validateUpdateCandidateWithProgress(
+      {
+        root,
+        config: snapshot.config,
+        env,
+        assertCurrent: assertExecutionCurrent,
+        writeOptions: captureWriteOptions(),
+      },
+      params,
+      originalRun,
+    );
+    assertExecutionCurrent();
+    doctorConfigChanges = [...(validation.doctorConfigChanges ?? [])];
+    if (validation.status === "ok") {
+      validatedConfigSnapshot = snapshot;
+      validatedCandidateRoot = root;
+      candidateSchemaVersions = validation.candidateSchemaVersions;
+      gatewayRestartCompletion = validation.gatewayRestartCompletion === true;
+      doctorConfigWrites = validation.doctorConfigWrites === true;
+      observedGatewayStartupMs = validation.steps.find(
+        (step) => step.name === "candidate-gateway-startup" && step.exitCode === 0,
+      )?.durationMs;
+    }
+    candidateFailureReason = validation.status === "error" ? validation.reason : undefined;
     return validation.steps;
   };
+  let servicePrepared = false;
+  let refreshCandidate: ReturnType<typeof createUpdateCandidateConfigRefresh> | undefined;
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     assertExecutionCurrent();
     if (params.switchToGit && !opts.run?.sourceArtifactLock) {
@@ -483,101 +449,144 @@ export async function executeMutableUpdate(
       assertExecutionCurrent();
     }
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
-    const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan, {
-      configValidation,
+    refreshCandidate ??= createUpdateCandidateConfigRefresh({
+      read: () =>
+        readUpdateCandidateSource(
+          ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env,
+          params.legacyConfigPlan,
+          { configValidation },
+        ),
+      getValidated: () => validatedConfigSnapshot,
+      validate: () => validateCandidate(validatedCandidateRoot!),
+      assertCurrent: assertExecutionCurrent,
+      timeoutMs: updateStepTimeoutMs,
     });
-    if (
-      validatedConfigSnapshot?.hash !== undefined &&
-      snapshot.hash !== validatedConfigSnapshot.hash
-    ) {
-      throw new UpdatePreMutationError(
-        "invalid-config",
-        "Config changed during update checks; rerun the update before activating.",
-      );
-    }
-    const config = snapshot.config;
-    await recheckSchemas(admittedTargetSchemaVersions);
-    const originalServiceVerdict = preManagedServiceStop?.serviceUpdateVerdict;
-    const previousRoot =
-      originalServiceVerdict?.kind === "owned" && originalServiceVerdict.requiresInstallRootRefresh
-        ? originalServiceVerdict.root
-        : params.root;
-    ({ previousSchemaVersions, schemaVersions } = await captureUpdateActivationSchemas({
-      root: previousRoot,
-      env,
-      config,
-      run: opts.run,
-      candidateSchemaVersions,
-      gatewayRestartCompletion,
-      timeoutMs: params.updateStepTimeoutMs,
-    }));
-    if (
-      preManagedServiceStop?.running &&
-      preManagedServiceStop.serviceUpdateVerdict?.kind === "owned"
-    ) {
-      await verifyPreviousManagedGatewayForUpdate({
+    for (;;) {
+      const snapshot = await refreshCandidate();
+      if (!snapshot) {
+        continue;
+      }
+      const config = snapshot.config;
+      await recheckSchemas(admittedTargetSchemaVersions);
+      const originalServiceVerdict = preManagedServiceStop?.serviceUpdateVerdict;
+      const previousRoot =
+        originalServiceVerdict?.kind === "owned" &&
+        originalServiceVerdict.requiresInstallRootRefresh
+          ? originalServiceVerdict.root
+          : params.root;
+      ({ previousSchemaVersions, schemaVersions } = await captureUpdateActivationSchemas({
         root: previousRoot,
-        config,
         env,
-        opts,
-        timeoutMs: params.timeoutMs,
-        observedStartupMs: observedGatewayStartupMs,
+        config,
+        run: opts.run,
+        candidateSchemaVersions,
+        gatewayRestartCompletion,
+        timeoutMs: params.updateStepTimeoutMs,
+      }));
+      if (
+        preManagedServiceStop?.running &&
+        !servicePrepared &&
+        preManagedServiceStop.serviceUpdateVerdict?.kind === "owned"
+      ) {
+        await verifyPreviousManagedGatewayForUpdate({
+          root: previousRoot,
+          config,
+          env,
+          opts,
+          timeoutMs: params.timeoutMs,
+          observedStartupMs: observedGatewayStartupMs,
+          assertCurrent: assertExecutionCurrent,
+          service: preManagedServiceStop,
+          onVerification: (verified) => {
+            previousVerified = verified;
+          },
+        });
+      }
+      // A separate serving runtime needs complete compensation evidence before
+      // its stop. --no-restart neither needs nor acquires restart authority.
+      if (params.shouldRestart && !servicePrepared) {
+        originalManagedServiceRuntime = await observeOriginalManagedServiceRuntime(
+          params,
+          preManagedServiceStop,
+        );
+      }
+      // Health and candidate work can outlive the inspected service/config generation.
+      await recheckSchemas(admittedTargetSchemaVersions);
+      assertExecutionCurrent();
+      const activationTimeoutMs =
+        params.timeoutMs === undefined
+          ? undefined
+          : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
+              env,
+              databases: schemaVersions,
+              observedStartupMs: observedGatewayStartupMs,
+              pluginCount: Object.keys(config.plugins?.entries ?? {}).length,
+              nodeRunner: params.packageUpdateNodeRunner,
+            });
+      await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
+      await prepareMutableUpdate(env, activationTimeoutMs);
+      assertExecutionCurrent();
+      if (opts.run) {
+        recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
+      }
+      const publication = {
+        roots,
+        env,
+        timeoutMs: updateStepTimeoutMs,
         assertCurrent: assertExecutionCurrent,
-        service: preManagedServiceStop,
-        onVerification: (verified) => {
-          previousVerified = verified;
-        },
+        updateInstallKind: params.updateInstallKind,
+        shouldRestart: params.shouldRestart,
+      };
+      await assertManagedGatewayArtifactPublication({
+        ...publication,
+        selected: preManagedServiceStop,
+        phase: "before-stop",
       });
+      if (!(await refreshCandidate())) {
+        continue;
+      }
+      if (!servicePrepared) {
+        await stopManagedServiceBeforeMutableUpdate(roots);
+        // Preparation can hold Windows recovery custody without stopping a process.
+        servicePrepared = true;
+      }
+      await recheckSchemas(admittedTargetSchemaVersions);
+      assertExecutionCurrent();
+      await assertManagedGatewayArtifactPublication({
+        ...publication,
+        selected: preManagedServiceStop,
+      });
+      // Post-stop awaits can observe another save. Rebuild the activation facts before mutation.
+      if (!(await refreshCandidate())) {
+        continue;
+      }
+      // Both install paths enter mutation only after the post-stop schema/authority fence.
+      if (!mutationStarted) {
+        preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
+        mutationStarted = true;
+        params.onActivation?.();
+      }
+      return;
     }
-    // A separate serving runtime needs complete compensation evidence before
-    // its stop. --no-restart neither needs nor acquires restart authority.
-    originalManagedServiceRuntime = params.shouldRestart
-      ? await observeOriginalManagedServiceRuntime(params, preManagedServiceStop)
-      : undefined;
-    // Health and candidate work can outlive the inspected service/config generation.
-    await recheckSchemas(admittedTargetSchemaVersions);
-    assertExecutionCurrent();
-    const activationTimeoutMs =
-      params.timeoutMs === undefined
-        ? undefined
-        : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
-            env,
-            databases: schemaVersions,
-            observedStartupMs: observedGatewayStartupMs,
-            pluginCount: Object.keys(config.plugins?.entries ?? {}).length,
-            nodeRunner: params.packageUpdateNodeRunner,
-          });
-    await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
-    await prepareMutableUpdate(env, activationTimeoutMs);
-    assertExecutionCurrent();
-    if (opts.run) {
-      recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
-    }
-    await stopManagedServiceBeforeMutableUpdate(roots);
-    await recheckSchemas(admittedTargetSchemaVersions);
-    assertExecutionCurrent();
-    const serving = preManagedServiceStop;
-    const servingVerdict = serving?.serviceUpdateVerdict;
-    if (
-      params.updateInstallKind === "git" &&
-      serving?.running &&
-      !serving.stopped &&
-      servingVerdict?.kind === "owned" &&
-      roots.some((root) => updateInstallRootsMatch(root, servingVerdict.root))
-    ) {
-      throw new UpdatePreMutationError(
-        "runtime-artifact-publication",
-        `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
-      );
-    }
-    // Both install paths enter mutation only after the post-stop schema/authority fence.
-    preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
-    mutationStarted = true;
-    params.onActivation?.();
+  };
+  const installOptions = {
+    root: params.root,
+    installKind: params.installKind,
+    startedAt: params.startedAt,
+    progress: params.progress,
+    invocationCwd: params.invocationCwd,
+    nodeRunner: params.packageUpdateNodeRunner,
+    assertCurrent: assertExecutionCurrent,
+    onConfigSnapshot,
+    getDoctorContext,
   };
   try {
     if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
-      admission = await inspectContexts(gitMutationRoots ?? [params.root]);
+      admission = await inspectUpdateDatabaseContexts({
+        ...databaseContextOptions,
+        roots: gitMutationRoots ?? [params.root],
+        expectedForeground: opts.run?.completionOwner === "gateway-restart" || undefined,
+      });
     }
     if (params.updateInstallKind === "package") {
       if (!stagedPluginAdmission) {
@@ -588,32 +597,29 @@ export async function executeMutableUpdate(
         await prepareMutableUpdate(admission?.managedEnv);
       }
       const packageUpdate: PackageInstallUpdateParams = {
+        ...installOptions,
         // A separate serving root still needs the preparation/activation hooks.
         requirePackageReplacement: params.managedServiceRoot !== undefined,
         reapplyLocalOverrides: opts.reapplyLocalOverrides,
-        root: params.root,
-        installKind: params.installKind,
         tag: params.tag,
         installSpec: params.packageInstallSpec ?? undefined,
         timeoutMs: updateStepTimeoutMs,
         workTimeoutMs: params.timeoutMs ?? null,
-        startedAt: params.startedAt,
-        progress: params.progress,
-        invocationCwd: params.invocationCwd,
         honorPackageRoot:
           params.managedServiceRootRedirect !== null ||
           params.managedServiceRoot !== undefined ||
           params.managedServiceNodeRunner !== undefined,
-        nodeRunner: params.packageUpdateNodeRunner,
         installEnv: params.packageInstallEnv,
         installTarget: params.packageInstallTarget,
         validateCandidate,
         beforeActivate,
-        assertCurrent: assertExecutionCurrent,
+        ...createPackageUpdateActivationOptions({
+          run: opts.run,
+          nodeRunner: params.packageUpdateNodeRunner,
+          assertCurrent: assertExecutionCurrent,
+        }),
         managedServiceEnv: preManagedServiceStop?.serviceEnv,
         onTransaction,
-        onConfigSnapshot,
-        getDoctorContext,
       };
       await recheckSchemas(params.packageTargetSchemaVersions);
       result = params.stagedPackage
@@ -624,16 +630,12 @@ export async function executeMutableUpdate(
       const sourceRuntimePrepared = await admitSourceUpdateArtifacts(sourceRoot, opts.run);
       assertExecutionCurrent();
       result = await updateGitInstall({
-        root: params.root,
+        ...installOptions,
         sourceRuntimePrepared,
         switchToGit: params.switchToGit,
-        installKind: params.installKind,
         timeoutMs: params.timeoutMs,
-        startedAt: params.startedAt,
-        progress: params.progress,
         channel: params.channel,
         devTarget: params.devTarget,
-        assertCurrent: assertExecutionCurrent,
         inspectGitTarget: async (target, installTarget) => {
           retentionInstallTarget = installTarget;
           recordInspectedGitTarget(opts.run, target, assertExecutionCurrent);
@@ -644,12 +646,11 @@ export async function executeMutableUpdate(
             // Revalidation retains activation's stop and recovery state.
             gitContextPrepared = true;
           }
+          if (mutationStarted) {
+            await beforeActivate(gitMutationRoots ?? [params.root]);
+          }
         },
-        onTransaction: (transaction) => {
-          packageTransaction = transaction;
-        },
-        onConfigSnapshot,
-        getDoctorContext,
+        onTransaction,
         // Foreign inspection metadata cannot authorize backup or Doctor writes.
         getManagedServiceEnv: () => ownedManagedUpdateContext?.env,
         getSnapshotSource: async () => {
@@ -659,10 +660,8 @@ export async function executeMutableUpdate(
           return { config: source.config, env };
         },
         jsonMode: Boolean(opts.json),
-        invocationCwd: params.invocationCwd,
-        nodeRunner: params.packageUpdateNodeRunner,
         validateCandidate: async (candidateRoot) => {
-          assertGitCandidateSteps(await validateCandidate(candidateRoot));
+          assertUpdateCandidateSteps(await validateCandidate(candidateRoot));
         },
         beforeGitMutation: async (target) => {
           assertReadableGitTarget(target);
@@ -700,6 +699,7 @@ export async function executeMutableUpdate(
       runId: originalRun.runId,
       env: ownedManagedUpdateContext?.env ?? originalRun.env,
       assertCurrent: () => assertExecutionCurrent("restore"),
+      assertRollbackSafe: packageTransaction?.assertRollbackSafe,
       progress: params.progress,
     });
   }

@@ -120,7 +120,7 @@ export function reclaimSessionMaintenanceInTransaction(
           callbacks.onCommit?.(current);
         },
         plan.databaseOptions,
-        { busyTimeoutMs: 0 },
+        { busyTimeoutMs: 0, operationLabel: "session.maintenance.statistics" },
       ),
     );
     return { kind: plan.kind, value: true };
@@ -161,25 +161,29 @@ export function reclaimSessionMaintenanceInTransaction(
     }
   }
 
-  return runSqliteSessionDeletionTransaction((database) => {
-    callbacks.beforeMutation?.();
-    const partition = partitionUnchangedPlannedLifecycleArtifactEntries(database, plan.entries);
-    const archivedTranscripts = deleteMaterializedSessionStatePlans(
-      database,
-      plan.materializedPlans,
-      undefined,
-      new Set(partition.unchanged.map((entry) => entry.sessionKey)),
-    );
-    deletePlannedLifecycleArtifactEntries(database, partition.unchanged);
-    const result: Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }> = {
-      kind: plan.kind,
-      value: {
-        archivedTranscripts,
-        changedEntries: partition.changed,
-        committedEntries: partition.unchanged,
-      },
-    };
-    callbacks.onCommit?.(database, result);
-    return result;
-  }, plan.databaseOptions);
+  return runSqliteSessionDeletionTransaction(
+    (database) => {
+      callbacks.beforeMutation?.();
+      const partition = partitionUnchangedPlannedLifecycleArtifactEntries(database, plan.entries);
+      const archivedTranscripts = deleteMaterializedSessionStatePlans(
+        database,
+        plan.materializedPlans,
+        undefined,
+        new Set(partition.unchanged.map((entry) => entry.sessionKey)),
+      );
+      deletePlannedLifecycleArtifactEntries(database, partition.unchanged);
+      const result: Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }> = {
+        kind: plan.kind,
+        value: {
+          archivedTranscripts,
+          changedEntries: partition.changed,
+          committedEntries: partition.unchanged,
+        },
+      };
+      callbacks.onCommit?.(database, result);
+      return result;
+    },
+    plan.databaseOptions,
+    { operationLabel: "session.maintenance.finalize" },
+  );
 }

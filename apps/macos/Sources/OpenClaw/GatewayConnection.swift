@@ -12,6 +12,12 @@ private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category:
 /// Owns one Gateway websocket shared by its callers. The primary app runtime
 /// uses `.shared`; saved-profile windows use independent connections.
 actor GatewayConnection: Observable {
+    nonisolated let chatSendOwnership = OpenClawChatSendOwnership()
+    var nativeChatSubscriptionOwners: [UUID: OpenClawChatSessionTarget] = [:]
+    var nativeChatSubscribedScopes: Set<OpenClawChatSendOwnership.Scope> = []
+    var nativeChatSubscriptionLease: ServerLease?
+    var nativeChatSubscriptionTail: Task<Void, Error>?
+
     static let shared: GatewayConnection = {
         #if DEBUG
         // Rendered test views can request previews through the shared connection.
@@ -73,7 +79,7 @@ actor GatewayConnection: Observable {
 
     struct Route: Equatable, Sendable {
         fileprivate let generation: UInt64
-        fileprivate let authority: UInt64?
+        let authority: UInt64?
         let url: URL
         fileprivate let token: String?
         fileprivate let password: String?
@@ -81,6 +87,27 @@ actor GatewayConnection: Observable {
         let deviceAuthGatewayID: String?
         let browserSession: GatewayBrowserSession?
         let activationOwnershipFingerprint: String?
+
+        fileprivate init(
+            endpoint: EndpointSnapshot,
+            generation: UInt64,
+            activationBindingKey: SymmetricKey?,
+            authBinding: GatewayAuthBinding? = nil)
+        {
+            self.generation = generation
+            self.authority = endpoint.routeAuthority
+            self.url = endpoint.config.url
+            self.token = endpoint.config.token
+            self.password = endpoint.config.password
+            self.tls = endpoint.tls
+            self.deviceAuthGatewayID = endpoint.deviceAuthGatewayID
+            self.browserSession = endpoint.browserSession
+            self.activationOwnershipFingerprint = GatewayConnection.activationOwnershipFingerprint(
+                config: endpoint.config,
+                browserSession: endpoint.browserSession,
+                authBinding: authBinding,
+                key: activationBindingKey)
+        }
 
         func matches(config: Config) -> Bool {
             self.url == config.url && self.token == config.token && self.password == config.password
@@ -131,6 +158,7 @@ actor GatewayConnection: Observable {
         let mainSessionKey: String?
         fileprivate let currentOwner: @Sendable () -> Bool
 
+        /// Terminal chat outcomes retain route ownership; RPCs still validate the exact server lease.
         var isCurrent: Bool {
             self.currentOwner()
         }
@@ -182,7 +210,7 @@ actor GatewayConnection: Observable {
     private nonisolated let endpointObservation = ObservationRegistrar()
     private let supportsSharedEndpointRecovery: Bool
     private let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
-    private let includeDeviceIdentity: Bool
+    let includeDeviceIdentity: Bool
     private let sessionProvider: SessionProvider
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
@@ -239,6 +267,11 @@ actor GatewayConnection: Observable {
         return connection.lease.endpointRevision
     }
 
+    nonisolated var hasConnectedServer: Bool {
+        guard case let .connected(connection) = self.connectionPublication.value else { return false }
+        return self.serverLeaseMatchesCurrentState(connection.lease)
+    }
+
     private func publishConnectedServerLease() {
         // Retirement clears authority before changing any other actor state.
         // Only a fully admitted handshake may replace that terminal publication.
@@ -248,18 +281,9 @@ actor GatewayConnection: Observable {
         let endpoint = connection.endpoint
         let lease = ServerLease(
             route: Route(
+                endpoint: endpoint,
                 generation: self.routeGeneration,
-                authority: endpoint.routeAuthority,
-                url: endpoint.config.url,
-                token: endpoint.config.token,
-                password: endpoint.config.password,
-                tls: endpoint.tls,
-                deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-                browserSession: endpoint.browserSession,
-                activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
-                    config: endpoint.config,
-                    browserSession: endpoint.browserSession,
-                    key: connection.activationBindingKey)),
+                activationBindingKey: connection.activationBindingKey),
             socketGeneration: socketGeneration,
             endpointRevision: endpoint.revision,
             client: connection.client)
@@ -664,6 +688,17 @@ extension GatewayConnection {
             distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
     }
 
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        ifCurrentServerLease lease: ServerLease) async throws -> Data
+    {
+        try await self.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            ifCurrentServerLease: lease)
+    }
+
     func requestDecoded<T: Decodable>(
         method: Method,
         params: [String: AnyCodable]? = nil,
@@ -723,23 +758,13 @@ extension GatewayConnection {
     func captureRequiredRoute() async throws -> Route {
         let shutdownGeneration = shutdownGeneration
         let endpoint = try await currentEndpoint()
-        let cfg = endpoint.config
         _ = try await self.configure(
             endpoint: endpoint,
             shutdownGeneration: shutdownGeneration)
         return Route(
+            endpoint: endpoint,
             generation: self.routeGeneration,
-            authority: endpoint.routeAuthority,
-            url: cfg.url,
-            token: cfg.token,
-            password: cfg.password,
-            tls: endpoint.tls,
-            deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-            browserSession: endpoint.browserSession,
-            activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
-                config: cfg,
-                browserSession: endpoint.browserSession,
-                key: self.configuredConnection?.activationBindingKey))
+            activationBindingKey: self.configuredConnection?.activationBindingKey)
     }
 
     /// Connect and bind subsequent work to the hello snapshot's physical
@@ -778,7 +803,6 @@ extension GatewayConnection {
             retryTransportFailures: retryTransportFailures)
         try self.requireCurrentShutdownGeneration(shutdownGeneration)
         let endpoint = try await currentEndpoint()
-        let cfg = endpoint.config
         guard let client = configuredClient(
             endpoint: endpoint,
             shutdownGeneration: shutdownGeneration)
@@ -795,19 +819,10 @@ extension GatewayConnection {
         }
         let lease = ServerLease(
             route: Route(
+                endpoint: endpoint,
                 generation: routeGeneration,
-                authority: endpoint.routeAuthority,
-                url: cfg.url,
-                token: cfg.token,
-                password: cfg.password,
-                tls: endpoint.tls,
-                deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-                browserSession: endpoint.browserSession,
-                activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
-                    config: cfg,
-                    browserSession: endpoint.browserSession,
-                    authBinding: authBinding,
-                    key: self.configuredConnection?.activationBindingKey)),
+                activationBindingKey: self.configuredConnection?.activationBindingKey,
+                authBinding: authBinding),
             socketGeneration: socketGeneration,
             endpointRevision: endpoint.revision,
             client: client)
@@ -1241,6 +1256,14 @@ extension GatewayConnection {
 // MARK: - Snapshot cache and subscriptions
 
 extension GatewayConnection {
+    func controlUiAuthBinding(ifCurrentServerLease lease: ServerLease) async throws -> GatewayAuthBinding {
+        guard await self.isCurrentServerLease(lease),
+              let binding = await lease.client.authBinding(ifCurrentConnectionGeneration: lease.socketGeneration),
+              await self.isCurrentServerLease(lease)
+        else { throw CancellationError() }
+        return binding
+    }
+
     func sourceResourceBearer(ifCurrentServerLease lease: ServerLease) async throws -> String? {
         guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
         let bearer = await lease.client.httpResourceBearer(ifCurrentConnectionGeneration: lease.socketGeneration)
@@ -1332,6 +1355,14 @@ extension GatewayConnection {
         return (true, self.cachedGatewayVersion())
     }
 
+    func currentAttachmentLimits() -> GatewayAttachmentLimits? {
+        // Staging reads the admitted hello; endpoint recovery must not delay local file preparation.
+        guard case let .connected(connection) = self.connectionPublication.value,
+              self.serverLeaseMatchesCurrentState(connection.lease)
+        else { return nil }
+        return self.lastSnapshot?.advertisedAttachmentLimits()
+    }
+
     func cachedGatewayVersion(ifCurrentServerLease lease: ServerLease) async -> String? {
         guard await self.isCurrentServerLease(lease) else { return nil }
         return self.cachedGatewayVersion()
@@ -1359,12 +1390,17 @@ extension GatewayConnection {
     func makePushDelivery(_ push: GatewayPush) -> PushDelivery? {
         guard case let .connected(connection) = self.connectionPublication.value else { return nil }
         let lease = connection.lease
+        let terminal = push.isTerminalChatEvent
         return PushDelivery(
             event: .push(push),
             serverLease: lease,
             mainSessionKey: connection.mainSessionKey,
             currentOwner: { [weak self] in
-                self?.serverLeaseMatchesCurrentState(lease) == true
+                // Accepted outcomes outlive socket recovery, but never their configured route.
+                if terminal {
+                    return self?.serverLeaseMatchesCurrentRoute(lease) == true
+                }
+                return self?.serverLeaseMatchesCurrentState(lease) == true
             })
     }
 
@@ -1594,21 +1630,19 @@ extension GatewayConnection {
         if let maxChars {
             params["maxChars"] = AnyCodable(maxChars)
         }
-        let timeout = timeoutMs.map { Double($0) }
         return try await self.requestDecoded(
             method: .sessionsPreview,
             params: params,
-            timeoutMs: timeout)
+            timeoutMs: timeoutMs.map { Double($0) })
     }
 
     // MARK: - Chat
 
     func agentIdentity(sessionKey: String, timeoutMs: Double = 10000) async throws -> AgentIdentityResult {
         // Identity and chat.send must resolve aliases to the same canonical session target.
-        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        return try await self.requestDecoded(
+        try await self.requestDecoded(
             method: .agentIdentityGet,
-            params: ["sessionKey": AnyCodable(resolvedKey)],
+            params: ["sessionKey": AnyCodable(self.canonicalizeSessionKey(sessionKey))],
             timeoutMs: timeoutMs)
     }
 
@@ -1620,21 +1654,28 @@ extension GatewayConnection {
         timeoutMs: Int? = nil,
         ifCurrentRoute route: Route? = nil) async throws -> OpenClawChatHistoryPayload
     {
-        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         let request = OpenClawChatGatewayRequests.history(
-            sessionKey: resolvedKey,
+            sessionKey: self.canonicalizeSessionKey(sessionKey),
             agentID: agentID,
             limit: limit,
             maxChars: maxChars,
             timeoutMs: timeoutMs)
-        if let route {
-            let data = try await self.request(
-                request,
-                ifCurrentRoute: route)
-            return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
+        let data = if let route {
+            try await self.request(request, ifCurrentRoute: route)
+        } else {
+            try await self.request(request)
         }
-        let data = try await self.request(request)
         return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
+    }
+
+    func conversationOwnershipScope(sessionKey: String, agentID: String?) -> OpenClawChatSendOwnership.Scope {
+        let defaults = self.lastSnapshot?.snapshot.sessiondefaults
+        return OpenClawChatSendOwnership.Scope(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            scope: defaults?["scope"]?.value as? String,
+            mainKey: defaults?["mainKey"]?.value as? String,
+            defaultAgentID: defaults?["defaultAgentId"]?.value as? String)
     }
 
     func chatSend(
@@ -1661,9 +1702,8 @@ extension GatewayConnection {
         guard expectedSessionSettings == nil || supportsSettingsCAS else {
             throw OpenClawChatTransportSendError.notDispatched
         }
-        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         let request = OpenClawChatGatewayRequests.sendMessage(
-            sessionKey: resolvedKey,
+            sessionKey: self.canonicalizeSessionKey(sessionKey),
             agentID: agentID,
             expectedSessionRoutingContract: expectedSessionRoutingContract,
             expectedSessionSettings: expectedSessionSettings,
@@ -1675,14 +1715,14 @@ extension GatewayConnection {
             runTimeoutMs: runTimeoutMs,
             requestTimeoutMs: requestTimeoutMs)
 
-        if let route {
-            let data = try await self.request(
+        let data = if let route {
+            try await self.request(
                 request,
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
-            return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
+        } else {
+            try await self.request(request)
         }
-        let data = try await self.request(request)
         return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
     }
 }

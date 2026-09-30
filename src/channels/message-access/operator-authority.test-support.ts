@@ -1,8 +1,18 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { formatAllowFromLowercase } from "../../plugin-sdk/allow-from.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { publishCanonicalUserChannelPolicy } from "../../state/user-channel-identity-operations.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -19,20 +29,48 @@ export function createCommandOwnerTestGateway(cfg: OpenClawConfig) {
 export async function withAdminIngress(
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
   authority: "role" | "identity-grant" = "role",
+  channelId: "discord" | "slack" = "discord",
 ) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const fixture = await createFixture(state, authority);
-    try {
-      await run(fixture);
-    } finally {
-      fixture.unregister();
+  const registry = channelId === "slack" ? captureActivePluginRegistrySnapshot() : undefined;
+  if (registry) {
+    stageActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: createChannelTestPluginBase({
+            id: "slack",
+            config: { formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }) },
+          }),
+          source: "test",
+        },
+      ]),
+      null,
+      "default",
+    );
+  }
+  try {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const fixture = await createFixture(state, authority, channelId);
+      try {
+        await run(fixture);
+      } finally {
+        fixture.unregister();
+      }
+    });
+  } finally {
+    if (registry) {
+      rollbackStagedPluginRegistry(registry);
     }
-  });
+  }
 }
 
-async function createFixture(state: OpenClawTestState, authority: "role" | "identity-grant") {
+async function createFixture(
+  state: OpenClawTestState,
+  authority: "role" | "identity-grant",
+  channelId: "discord" | "slack",
+) {
   const cfg: OpenClawConfig = {
-    channels: { discord: { accounts: { team: { allowFrom: ["*"] } } } },
+    channels: { [channelId]: { accounts: { team: { allowFrom: ["*"] } } } },
     commands: { ownerAllowFrom: ["whatsapp:15550000000"] },
     gateway: {
       roles: {
@@ -61,7 +99,11 @@ async function createFixture(state: OpenClawTestState, authority: "role" | "iden
   const admins = ["ada", "grace"].map((name, index) => {
     const profile = ensureProfileForEmail(`${name}@example.test`);
     setUserProfileRole(profile.id, "admin");
-    const identity = { channelId: "discord", accountId: "team", senderId: String(index + 100) };
+    const identity = {
+      channelId,
+      accountId: "team",
+      senderId: channelId === "slack" ? `U00000${index + 100}` : String(index + 100),
+    };
     linkUserChannelIdentity(profile.id, identity);
     return { profile, identity };
   });
@@ -72,9 +114,9 @@ async function createFixture(state: OpenClawTestState, authority: "role" | "iden
   };
   await activatePolicy({});
   let live = true;
-  const gateway = createCommandOwnerTestGateway(cfg);
+  let gateway = createCommandOwnerTestGateway(cfg);
   const owner = {
-    channelId: "discord",
+    channelId,
     isLive: () => live,
     resolveGatewayContext: () => gateway,
   };
@@ -82,10 +124,10 @@ async function createFixture(state: OpenClawTestState, authority: "role" | "iden
     live = false;
   };
   const ingressRuntime = createHostChannelIngressRuntime(owner);
-  const key = "agent:main:discord:channel:maintainers";
+  const key = `agent:main:${channelId}:channel:maintainers`;
   const context = async (senderId: string, verified = true, accountId = "team") => {
     const ingress = await ingressRuntime.resolveStable({
-      channelId: "discord",
+      channelId,
       accountId,
       identity: { authentication: "verified" },
       subject: {
@@ -108,14 +150,14 @@ async function createFixture(state: OpenClawTestState, authority: "role" | "iden
       buildChannelInboundEventContext,
       owner,
     )({
-      channel: "discord",
+      channel: channelId,
       accountId,
       messageId: senderId,
-      from: `discord:${senderId}`,
+      from: `${channelId}:${senderId}`,
       sender: { id: senderId },
       conversation: { kind: "direct", id: "conversation" },
       route: { agentId: "main", routeSessionKey: key },
-      reply: { to: `discord:${senderId}` },
+      reply: { to: `${channelId}:${senderId}` },
       message: { rawBody: "Assign this session to the requester" },
       channelIngress: ingress,
     });
@@ -125,7 +167,11 @@ async function createFixture(state: OpenClawTestState, authority: "role" | "iden
     activatePolicy,
     state,
     admins,
+    gateway,
     context,
+    replaceGatewayContext: (replacement?: GatewayRequestContext) => {
+      gateway = replacement ?? createCommandOwnerTestGateway(cfg);
+    },
     unregister,
     retire: () => {
       live = false;

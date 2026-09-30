@@ -1,11 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
-/**
- * Browser permission routes.
- *
- * Grants required and optional browser permissions for an origin, preferring
- * Playwright context APIs when available and falling back to raw CDP.
- */
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
@@ -19,24 +13,16 @@ import {
 } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
+import { readBody, resolveProfileContext } from "./agent.shared.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
-  getProfileContext,
   jsonBrowserError,
   jsonError,
   readHttpOrigin,
   runProfileRouteOperation,
   toStringOrEmpty,
 } from "./utils.js";
-
-type GrantPermissionsBody = {
-  origin?: unknown;
-  permissions?: unknown;
-  optionalPermissions?: unknown;
-  timeoutMs?: unknown;
-  targetId?: unknown;
-};
 
 function readPermissions(raw: unknown): string[] | null {
   if (!Array.isArray(raw)) {
@@ -154,13 +140,12 @@ function toPlaywrightPermission(permission: string): string | undefined {
   }
 }
 
-/** Register permission grant endpoints on the browser control server. */
 export function registerBrowserPermissionRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
 ) {
   app.post("/permissions/grant", async (req, res) => {
-    const body = (req.body ?? {}) as GrantPermissionsBody;
+    const body = readBody(req);
     const origin = readHttpOrigin(body.origin);
     if (!origin) {
       return jsonError(res, 400, "origin must be an http(s) origin");
@@ -178,9 +163,9 @@ export function registerBrowserPermissionRoutes(
       return jsonError(res, 400, formatErrorMessage(err));
     }
 
-    const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx) {
-      return jsonError(res, profileCtx.status, profileCtx.error);
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
     }
     const requestAssertCurrent = req.assertCurrent;
     const assertCurrent = requestAssertCurrent

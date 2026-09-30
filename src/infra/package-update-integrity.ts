@@ -56,6 +56,14 @@ export class PackageIntegrityLimitError extends Error {
   }
 }
 
+export function isPackageIntegrityResourceError(
+  error: unknown,
+): error is PackageIntegrityTimeoutError | PackageIntegrityLimitError {
+  return (
+    error instanceof PackageIntegrityTimeoutError || error instanceof PackageIntegrityLimitError
+  );
+}
+
 export type PackageRootIntegrityFingerprint =
   | { kind: "directory"; tree: PackageIntegrityFingerprint }
   | { kind: "link"; metadata: string[]; target: string };

@@ -6,7 +6,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import {
-  SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptWriteContext,
 } from "../../config/sessions/transcript-write-context.js";
@@ -41,6 +40,7 @@ import {
 } from "./compaction-safety-timeout.js";
 import {
   acceptCompactionSuccessor,
+  requireCompactionWriterEntry,
   type AcceptedCompactionSuccessor,
 } from "./compaction-successor.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
@@ -153,18 +153,10 @@ export async function runPrimaryNativeCompactionInLanes<T>(
 ): Promise<T> {
   return await enqueueCompactionInLanes(params, async () => {
     host.assertActive?.();
-    const currentEntry = loadSessionEntryReadOnly({
-      ...params.sessionTarget,
-      readConsistency: "latest",
-    });
-    if (
-      !currentEntry ||
-      currentEntry.sessionId !== expectedEntry.sessionId ||
-      currentEntry.lifecycleRevision !== expectedEntry.lifecycleRevision ||
-      currentEntry.activeWriterRunId !== expectedEntry.activeWriterRunId
-    ) {
-      throw new SessionTranscriptWriterClaimReboundError();
-    }
+    requireCompactionWriterEntry(
+      loadSessionEntryReadOnly({ ...params.sessionTarget, readConsistency: "latest" }),
+      expectedEntry,
+    );
     return run();
   });
 }
@@ -217,15 +209,10 @@ export async function executeQueuedContextEngineCompaction(input: {
     };
     const assertActive = (target = runtimeTarget, owner = expected) => {
       assertCallerActive();
-      const current = loadSessionEntry({ ...target, readConsistency: "latest" });
-      if (
-        !current ||
-        current.sessionId !== owner.sessionId ||
-        current.lifecycleRevision !== owner.lifecycleRevision ||
-        current.activeWriterRunId !== owner.activeWriterRunId
-      ) {
-        throw new SessionTranscriptWriterClaimReboundError();
-      }
+      requireCompactionWriterEntry(
+        loadSessionEntry({ ...target, readConsistency: "latest" }),
+        owner,
+      );
     };
     const createTranscriptWriteContext = (
       target: SessionTranscriptRuntimeTarget,

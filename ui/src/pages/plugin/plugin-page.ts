@@ -12,6 +12,7 @@ import {
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -45,7 +46,7 @@ type BundledPluginTabView = {
 
 type BundledPluginTabViewState =
   | { status: "idle" }
-  | { status: "loading"; id: string; token: object }
+  | { status: "loading"; id: string }
   | { status: "error"; id: string; error: unknown }
   | { status: "ready"; id: string; view: BundledPluginTabView };
 
@@ -174,14 +175,10 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   }
 
   private startBundledViewLoad(key: string) {
-    const loading = { status: "loading", id: key, token: {} } as const;
+    const loading = { status: "loading", id: key } as const;
     this.bundledViewState = loading;
     const settle = (nextState: BundledPluginTabViewState) => {
-      if (
-        this.bundledViewState.status !== "loading" ||
-        this.bundledViewState.token !== loading.token ||
-        !this.hasCurrentBundledDescriptor(key)
-      ) {
+      if (this.bundledViewState !== loading || !this.hasCurrentBundledDescriptor(key)) {
         return;
       }
       this.bundledViewState = nextState;
@@ -692,7 +689,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       return html`
-        <section class="plugin-tab-embed">
+        <section class="plugin-tab-embed" ${shellLayoutTraits({ pluginEmbed: true })}>
           ${keyed(
             this.pluginFrameGeneration,
             html`<iframe

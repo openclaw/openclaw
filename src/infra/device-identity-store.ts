@@ -10,7 +10,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  resolveOpenClawStateDirForDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "../state/openclaw-state-db.paths.js";
 import {
   deriveCanonicalEd25519PrivateKeyRaw,
   deriveCanonicalEd25519PublicKeyRaw,
@@ -21,8 +24,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { pathMayExistSync } from "./path-existence.js";
+import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
-export const PRIMARY_DEVICE_IDENTITY_KEY = "primary";
+const PRIMARY_DEVICE_IDENTITY_KEY = "primary";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -279,6 +284,29 @@ export function resolveDeviceIdentityStore(options: DeviceIdentityStoreOptions =
   };
 }
 
+export function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): void {
+  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
+  if (identityKey !== PRIMARY_DEVICE_IDENTITY_KEY) {
+    return;
+  }
+  const legacyPath = path.join(
+    resolveOpenClawStateDirForDatabasePath(databasePath),
+    "identity",
+    "device.json",
+  );
+  if (
+    // Claims first, source last: both migration owners restore claim -> source atomically.
+    pathMayExistSync(`${legacyPath}.doctor-importing`) ||
+    pathMayExistSync(`${legacyPath}.native-importing`) ||
+    pathMayExistSync(legacyPath)
+  ) {
+    throw new StartupMaintenanceRequiredError(
+      "state-migrations",
+      `Legacy device identity exists at ${legacyPath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
+    );
+  }
+}
+
 /** Read through the writable shared-state lifecycle, validating any existing row. */
 export function readStoredDeviceIdentity(
   options: DeviceIdentityStoreOptions = {},
@@ -337,6 +365,12 @@ export function insertStoredDeviceIdentityIfAbsent(
       if (existing) {
         validateStoredDeviceIdentity(existing, resolved.identityKey);
       } else {
+        // A native importer can claim retired key material while generation runs.
+        assertNoPendingLegacyIdentity({
+          ...options,
+          path: resolved.databasePath,
+          identityKey: resolved.identityKey,
+        });
         const kysely = getNodeSqliteKysely<DeviceIdentityDatabase>(db);
         executeSqliteQuerySync(
           db,
@@ -369,8 +403,6 @@ export function repairInvalidStoredDeviceIdentity(
   validateStoredDeviceIdentity(candidate, resolved.identityKey);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      let repaired = false;
-      let rotated = false;
       let existingRow: DeviceIdentityRow | null = null;
       try {
         existingRow = readStoredIdentityRowFromDatabase({ db }, resolved.identityKey);
@@ -379,7 +411,7 @@ export function repairInvalidStoredDeviceIdentity(
           : null;
         if (existing) {
           validateStoredDeviceIdentity(existing, resolved.identityKey);
-          return { identity: existing, repaired, rotated };
+          return { identity: existing, repaired: false, rotated: false };
         }
       } catch (error) {
         if (!(error instanceof DeviceIdentityStorageError)) {
@@ -413,7 +445,7 @@ export function repairInvalidStoredDeviceIdentity(
             );
           }
           validateStoredDeviceIdentity(authoritative, resolved.identityKey);
-          return { identity: authoritative, repaired: true, rotated };
+          return { identity: authoritative, repaired: true, rotated: false };
         }
         executeSqliteQuerySync(
           db,
@@ -425,9 +457,6 @@ export function repairInvalidStoredDeviceIdentity(
 
       // An absent row after an invalid-row detection still means identity continuity was lost.
       // Report the generated winner so Doctor always surfaces the required re-approval.
-      repaired = true;
-      rotated = true;
-
       executeSqliteQuerySync(
         db,
         getNodeSqliteKysely<DeviceIdentityDatabase>(db)
@@ -442,7 +471,7 @@ export function repairInvalidStoredDeviceIdentity(
         );
       }
       validateStoredDeviceIdentity(authoritative, resolved.identityKey);
-      return { identity: authoritative, repaired, rotated };
+      return { identity: authoritative, repaired: true, rotated: true };
     },
     { env: options.env, path: resolved.databasePath },
     { operationLabel: "device-identity.doctor-repair" },

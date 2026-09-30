@@ -1,11 +1,12 @@
 import { expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
 } from "./openclaw-state-db-async-lifecycle.js";
 
-it("distinguishes runtime custody and preserves inherited schema maintenance", async () => {
+it("keeps resource custody unprivileged and preserves inherited owner validity", async () => {
   const runtime = createOpenClawDatabaseMaintenanceScope();
   const nestedRuntime = runtime.run(() => createOpenClawDatabaseMaintenanceScope());
   expect(runtime.ownsSchemaMaintenance).toBe(false);
@@ -13,18 +14,28 @@ it("distinguishes runtime custody and preserves inherited schema maintenance", a
   await nestedRuntime.close();
   await runtime.close();
 
-  const delegate = vi.fn(() => undefined);
-  const maintenance = createOpenClawDatabaseMaintenanceScope(delegate);
+  let current = true;
+  const lost = new Error("Maintenance owner is no longer current");
+  const assertOwnerCurrent = vi.fn(() => {
+    if (!current) {
+      throw lost;
+    }
+  });
+  const maintenance = createOpenClawDatabaseMaintenanceScope({ assertOwnerCurrent });
   const nested = maintenance.run(() => createOpenClawDatabaseMaintenanceScope());
-  const request = { databasePath: "/synthetic/state.sqlite", actorId: "synthetic" };
-  expect(nested.ownsSchemaMaintenance).toBe(true);
-  nested.createSchemaFenceDelegate(request);
-  expect(delegate).toHaveBeenCalledExactlyOnceWith(request);
-  await maintenance.close();
-  expect(() => nested.createSchemaFenceDelegate(request)).toThrow(
-    "Database maintenance resource scope is closed",
-  );
-  expect(delegate).toHaveBeenCalledOnce();
+  expect(nested.ownsSchemaMaintenance).toBe(false);
+  nested.assertAdmission();
+  expect(assertOwnerCurrent).toHaveBeenCalled();
+  current = false;
+  expect(() => nested.assertAdmission()).toThrow(lost);
+  current = true;
+  const disposal = createDeferredCore();
+  maintenance.run(() => maintenance.own({}, "shared-handles", () => disposal.promise));
+  const closing = maintenance.close();
+  expect(() => maintenance.run(() => {})).toThrow("resource admission is closed");
+  disposal.resolve();
+  await closing;
+  expect(() => nested.assertAdmission()).toThrow("Database maintenance resource scope is closed");
   await nested.close();
 });
 
@@ -32,24 +43,29 @@ it("keeps nested authority reads in their resource scope without admitting effec
   let revoked = false;
   let childRevoked = false;
   let nestedEffect = false;
-  const parent = createOpenClawDatabaseMaintenanceScope(undefined, () => {
-    const current = getOpenClawDatabaseMaintenanceScope();
-    current?.assertReadAdmission();
-    if (nestedEffect) {
-      current?.assertAdmission();
-    }
-    if (revoked) {
-      throw new Error("requester revoked");
-    }
+  const resource = {};
+  const parent = createOpenClawDatabaseMaintenanceScope({
+    assertOwnerCurrent: () => {
+      const current = getOpenClawDatabaseMaintenanceScope();
+      current?.assertReadAdmission();
+      observeOpenClawDatabaseMaintenanceResource(resource);
+      if (nestedEffect) {
+        current?.assertAdmission();
+      }
+      if (revoked) {
+        throw new Error("requester revoked");
+      }
+    },
   });
   const child = parent.run(() =>
-    createOpenClawDatabaseMaintenanceScope(undefined, () => {
-      if (childRevoked) {
-        throw new Error("child revoked");
-      }
+    createOpenClawDatabaseMaintenanceScope({
+      assertOwnerCurrent: () => {
+        if (childRevoked) {
+          throw new Error("child revoked");
+        }
+      },
     }),
   );
-  const resource = {};
   const close = vi.fn();
   try {
     child.run(() => {

@@ -4,6 +4,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
+import { prepareModelRequestBody } from "../transports/model-request-body.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
@@ -33,13 +34,14 @@ import {
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
 import { resolveCacheRetention } from "./cache-retention.js";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { buildCopilotDynamicHeaders } from "./github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "./openai-completions-tool-calls.js";
 import { createOpenAIProviderClient } from "./openai-provider-client.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -80,12 +82,14 @@ export const streamOpenAICompletions: StreamFunction<
         compat,
         cacheRetention,
       });
+      const encodeBody = prepareModelRequestBody(options);
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
       firstEventAbort = createFirstStreamEventAbortController(options?.signal);
       const requestOptions = {
+        ...(await encodeBody(params)),
         signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
         maxRetries: 0,
@@ -221,10 +225,7 @@ export const streamSimpleOpenAICompletions: StreamFunction<
   "openai-completions",
   SimpleStreamOptions
 > = (model: Model<"openai-completions">, context: Context, options?: SimpleStreamOptions) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
   const clampedReasoning = options?.reasoning
@@ -253,12 +254,7 @@ function createClient(
 
   const headers = { ...model.headers };
   if (model.provider === "github-copilot") {
-    const hasImages = hasCopilotVisionInput(context.messages);
-    const copilotHeaders = buildCopilotDynamicHeaders({
-      messages: context.messages,
-      hasImages,
-    });
-    Object.assign(headers, copilotHeaders);
+    Object.assign(headers, buildCopilotDynamicHeaders(context.messages));
   }
 
   if (sessionId && compat.sessionAffinity !== "none") {

@@ -57,8 +57,7 @@ across many turns:
 - A maintenance task: inspect current state, make bounded changes, run the
   right checks, and report what changed.
 
-A goal is not a task queue. Use [Task Flow](/automation/taskflow),
-[tasks](/automation/tasks), [cron jobs](/automation/cron-jobs), or
+A goal is not a task queue. Use [subagents](/tools/subagents), [cron jobs](/automation/cron-jobs), or
 [standing orders](/automation/standing-orders) when work should run detached,
 repeat on a schedule, fan out into managed sub-work, or persist as a policy.
 
@@ -246,8 +245,9 @@ request expires and its literal payload is removed; **Review current goal** refr
 state before another decision. Forgetting this browser or switching authenticated
 accounts removes that Gateway's previous account recovery payloads.
 
-The action buttons are unavailable without a connection. The expand chevron
-keeps working. Concurrent Goal actions are rejected while an operation is
+The action buttons are unavailable without a connection or while the initial
+chat history loads and confirms the session identity. The expand chevron keeps
+working. Concurrent Goal actions are rejected while an operation is
 pending. These controls require
 a Gateway advertising the structured Goal capability. Text `/goal` commands
 remain available for CLI and other command-capable surfaces.
@@ -326,5 +326,4 @@ and transcript-derived totals.
 - [TUI](/web/tui)
 - [Session tool](/concepts/session-tool)
 - [Compaction](/concepts/compaction)
-- [Task Flow](/automation/taskflow)
 - [Standing orders](/automation/standing-orders)

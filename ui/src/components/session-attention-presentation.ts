@@ -7,7 +7,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { formatWebUiIconErrorText } from "./error-presentation.ts";
 import { icons } from "./icons.ts";
-import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
+import { SESSION_ATTENTION_ICONS } from "./session-attention-icon-registry.ts";
 import { renderSessionGlyph } from "./session-glyph.ts";
 
 function keepAttentionFocusOnTooltip(event: FocusEvent) {
@@ -34,7 +34,7 @@ export function renderSessionAttentionIcon(
       : attention.kind === "approval"
         ? icons.shieldQuestion
         : attention.kind === "agent"
-          ? resolveSessionAttentionIcon(attention.icon)
+          ? SESSION_ATTENTION_ICONS[attention.icon]
           : icons.alertTriangle;
   const content = html`<span
     class="sidebar-session-attention__icon sidebar-session-attention__icon--${attention.kind}"
@@ -144,9 +144,11 @@ export function renderSessionIdleState(session: SidebarRecentSession) {
         ? { icon: icons.stop, label: t("sessionsView.statusKilled") }
         : status === "timeout"
           ? { icon: icons.alertTriangle, label: t("sessionsView.statusTimeout") }
-          : status === "failed"
-            ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
-            : null;
+          : status === "interrupted"
+            ? { icon: icons.pause, label: t("sessionsView.statusInterrupted") }
+            : status === "failed"
+              ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
+              : null;
   return statusBadge
     ? html`<span
         class="sidebar-child-session__status sidebar-child-session__status--${status}"

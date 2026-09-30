@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { registerOpenClawAgentDatabaseReadCandidateResource } from "../../state/openclaw-agent-db-resources.js";
@@ -15,11 +15,7 @@ import {
   type OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import {
-  resolveAccessStorePath,
-  loadSessionEntry,
-  patchSessionEntryCore,
-} from "./session-accessor.entry.js";
+import { loadSessionEntry, patchSessionEntryCore } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import {
   assertSessionCreationLabelAvailable,
@@ -57,6 +53,7 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -86,16 +83,18 @@ function captureSessionEntryDatabasePreparation(
   const target = {
     ...captured,
     agentId: captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey),
-    storePath: resolveAccessStorePath(captured),
+    storePath: resolveSessionStorePathForScope(captured),
   };
   const shared = captureOpenClawStateWorkerContext({ env: target.env });
   const candidates = [target, ...relatedScopes.map(captureScope)].flatMap((related) =>
-    captureSessionStoreReadCandidates(resolveAccessStorePath(related)).map((candidate) => ({
-      path: candidate.path,
-      physicalPath: candidate.physicalPath,
-      scope: candidate.scope,
-      identity: readDatabasePathIdentitySync(candidate.path),
-    })),
+    captureSessionStoreReadCandidates(resolveSessionStorePathForScope(related)).map(
+      (candidate) => ({
+        path: candidate.path,
+        physicalPath: candidate.physicalPath,
+        scope: candidate.scope,
+        identity: readDatabasePathIdentitySync(candidate.path),
+      }),
+    ),
   );
   const releases: Array<() => void> = [];
   let active = true;
@@ -393,7 +392,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     ...scope,
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const storePath = resolveAccessStorePath(captured);
+  const storePath = resolveSessionStorePathForScope(captured);
   const agentId = captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey);
   const target = { ...captured, agentId, storePath };
   const resolved = captureLifecycleDatabaseScope(
@@ -443,11 +442,15 @@ export async function createSessionEntryWithTranscript<TError = string>(
           await runExclusiveSqliteSessionWrite(
             transcriptScope,
             async () => {
-              runOpenClawAgentWriteTransaction((database) => {
-                commitGuard?.();
-                assertSourceCurrent?.();
-                ensureTranscriptHeader(database, transcriptScope, cwd);
-              }, toDatabaseOptions(transcriptScope));
+              runOpenClawAgentWriteTransaction(
+                (database) => {
+                  commitGuard?.();
+                  assertSourceCurrent?.();
+                  ensureTranscriptHeader(database, transcriptScope, cwd);
+                },
+                toDatabaseOptions(transcriptScope),
+                { operationLabel: "session.entry.create-transcript" },
+              );
             },
             "session.entry.create-with-transcript",
           );

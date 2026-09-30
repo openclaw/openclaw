@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { icons } from "../../components/icons.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
@@ -143,11 +144,11 @@ export function renderSessionDetailPanel(
         </div>
         <openclaw-tooltip .content=${t("usage.details.close")}>
           <button
-            class="btn btn--sm btn--ghost"
+            class="btn btn--sm btn--ghost session-detail-close"
             @click=${onClose}
             aria-label=${t("usage.details.close")}
           >
-            ×
+            ${icons.x}
           </button>
         </openclaw-tooltip>
       </div>
@@ -406,33 +407,22 @@ function renderSessionLogsCompact(
   cursorStart?: number | null,
   cursorEnd?: number | null,
 ) {
-  if ((loading || status.awaitingGateway) && !status.hasLoaded) {
-    return html`
-      <div class="session-logs-compact">
-        <div class="session-logs-header">${t("usage.details.conversation")}</div>
-        <div class="usage-empty-block">${t("usage.loading.badge")}</div>
-      </div>
-    `;
-  }
-  const refreshStatus = renderUsageRefreshStatus(
-    status,
-    "usage.details.conversation",
-    "conversation",
-  );
-  if (status.error && !status.hasLoaded) {
+  const initialLoading = (loading || status.awaitingGateway) && !status.hasLoaded;
+  const initialError = status.error && !status.hasLoaded;
+  const refreshStatus = initialLoading
+    ? nothing
+    : renderUsageRefreshStatus(status, "usage.details.conversation", "conversation");
+  if (initialLoading || initialError || !logs?.length) {
+    const message = initialLoading ? "usage.loading.badge" : "usage.details.noMessages";
     return html`
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
         ${refreshStatus}
-      </div>
-    `;
-  }
-  if (!logs || logs.length === 0) {
-    return html`
-      <div class="session-logs-compact">
-        <div class="session-logs-header">${t("usage.details.conversation")}</div>
-        ${refreshStatus}
-        <div class="usage-empty-block">${t("usage.details.noMessages")}</div>
+        ${
+          initialLoading || !initialError
+            ? html`<div class="usage-empty-block">${t(message)}</div>`
+            : nothing
+        }
       </div>
     `;
   }

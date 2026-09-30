@@ -21,8 +21,6 @@ import type {
 
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 
-type DiscordComponentSeparatorSpacing = "small" | "large" | 1 | 2;
-
 const BLOCK_ALIASES = new Map<string, DiscordComponentBlock["type"]>([
   ["row", "actions"],
   ["action-row", "actions"],
@@ -82,7 +80,7 @@ function readOptionalInteger(
   if (value == null) {
     return undefined;
   }
-  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
     throw new Error(`${label} must be an integer`);
   }
   if (bounds?.min !== undefined && value < bounds.min) {
@@ -114,30 +112,20 @@ export function normalizeModalFieldName(value: string | undefined, index: number
   return `field_${index + 1}`;
 }
 
-function normalizeAttachmentRef(value: string, label: string): `attachment://${string}` {
+function readAttachmentName(value: string, label: string, filenameLabel = "a filename"): string {
   const trimmed = value.trim();
   if (!trimmed.startsWith(DISCORD_COMPONENT_ATTACHMENT_PREFIX)) {
     throw new Error(`${label} must start with "${DISCORD_COMPONENT_ATTACHMENT_PREFIX}"`);
   }
   const attachmentName = trimmed.slice(DISCORD_COMPONENT_ATTACHMENT_PREFIX.length).trim();
   if (!attachmentName) {
-    throw new Error(`${label} must include an attachment filename`);
+    throw new Error(`${label} must include ${filenameLabel}`);
   }
-  return `${DISCORD_COMPONENT_ATTACHMENT_PREFIX}${attachmentName}`;
+  return attachmentName;
 }
 
 export function resolveDiscordComponentAttachmentName(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith(DISCORD_COMPONENT_ATTACHMENT_PREFIX)) {
-    throw new Error(
-      `Attachment reference must start with "${DISCORD_COMPONENT_ATTACHMENT_PREFIX}"`,
-    );
-  }
-  const attachmentName = trimmed.slice(DISCORD_COMPONENT_ATTACHMENT_PREFIX.length).trim();
-  if (!attachmentName) {
-    throw new Error("Attachment reference must include a filename");
-  }
-  return attachmentName;
+  return readAttachmentName(value, "Attachment reference");
 }
 
 export function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
@@ -157,11 +145,6 @@ export function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle
 
 export function mapTextInputStyle(style?: DiscordModalFieldSpec["style"]) {
   return style === "paragraph" ? TextInputStyle.Paragraph : TextInputStyle.Short;
-}
-
-function normalizeBlockType(raw: string) {
-  const lowered = normalizeLowercaseStringOrEmpty(raw);
-  return BLOCK_ALIASES.get(lowered) ?? (lowered as DiscordComponentBlock["type"]);
 }
 
 function parseSelectOptions(
@@ -287,7 +270,7 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
 function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock {
   const obj = requireObject(raw, label);
   const typeRaw = normalizeLowercaseStringOrEmpty(readRequiredString(obj.type, `${label}.type`));
-  const type = normalizeBlockType(typeRaw);
+  const type = BLOCK_ALIASES.get(typeRaw) ?? typeRaw;
   switch (type) {
     case "text":
       return {
@@ -332,18 +315,19 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
     }
     case "separator": {
       const spacingRaw = obj.spacing;
-      let spacing: DiscordComponentSeparatorSpacing | undefined;
-      if (spacingRaw === "small" || spacingRaw === "large") {
-        spacing = spacingRaw;
-      } else if (spacingRaw === 1 || spacingRaw === 2) {
-        spacing = spacingRaw;
-      } else if (spacingRaw !== undefined) {
+      if (
+        spacingRaw !== undefined &&
+        spacingRaw !== "small" &&
+        spacingRaw !== "large" &&
+        spacingRaw !== 1 &&
+        spacingRaw !== 2
+      ) {
         throw new Error(`${label}.spacing must be "small", "large", 1, or 2`);
       }
       const divider = typeof obj.divider === "boolean" ? obj.divider : undefined;
       return {
         type: "separator",
-        spacing,
+        spacing: spacingRaw,
         divider,
       };
     }
@@ -387,7 +371,7 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       const file = readRequiredString(obj.file, `${label}.file`);
       return {
         type: "file",
-        file: normalizeAttachmentRef(file, `${label}.file`),
+        file: `${DISCORD_COMPONENT_ATTACHMENT_PREFIX}${readAttachmentName(file, `${label}.file`, "an attachment filename")}`,
         spoiler: typeof obj.spoiler === "boolean" ? obj.spoiler : undefined,
       };
     }

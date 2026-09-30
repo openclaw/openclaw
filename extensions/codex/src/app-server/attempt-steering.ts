@@ -29,6 +29,7 @@ export type CodexSteeringQueueOptions = Pick<
   | "media"
   | "isInboundUserMessage"
   | "onQueueAccepted"
+  | "onQueueSettled"
   | "userTurnTranscriptRecorder"
 >;
 
@@ -118,6 +119,7 @@ export function createCodexSteeringQueue(params: {
     acceptItem(item);
     item.settled = true;
     pendingMessages.delete(item);
+    item.onQueueSettled?.();
     item.resolve();
   };
 
@@ -128,6 +130,7 @@ export function createCodexSteeringQueue(params: {
     item.settled = true;
     pendingMessages.delete(item);
     reportItemAcceptance(item, false);
+    item.onQueueSettled?.();
     item.reject(
       item.acceptance === "accepted"
         ? new CodexSteeringAcceptedUnconfirmedError(
@@ -358,6 +361,7 @@ export function createCodexSteeringQueue(params: {
         assertCurrent();
       } catch (error) {
         options?.onQueueAccepted?.(false);
+        options?.onQueueSettled?.();
         throw error;
       }
       const { item, delivery } = createPendingMessage(text, options, assertCurrent);

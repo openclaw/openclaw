@@ -27,7 +27,7 @@ import {
 import { readLogTextWindow } from "./logs.ts";
 import { runCommand } from "./process.ts";
 import { logPhase } from "./reporting.ts";
-import { resolveCommandPath, shellEscapeForSh } from "./shared.ts";
+import { resolveCommandPath, shellEscapeForSh, sleep } from "./shared.ts";
 
 export async function prepareCandidate(params: {
   outputDir: string;
@@ -419,6 +419,7 @@ export async function installPackageSpec(params: {
   logPath: string;
   timeoutMs?: number;
   ignoreScripts?: boolean;
+  retryWindowsRemoval?: boolean;
 }) {
   const installEnv = {
     ...params.env,
@@ -426,7 +427,40 @@ export async function installPackageSpec(params: {
     npm_config_location: "global",
     npm_config_prefix: params.lane.prefixDir,
   };
-  rmSync(installedPackageRoot(params.lane.prefixDir), { force: true, recursive: true });
+  const retryRemoval = params.retryWindowsRemoval && process.platform === "win32";
+  // Antivirus and delayed DLL handle release can outlast taskkill. Retry only
+  // removal, never npm, for at most 15.5 seconds of backoff after tree exit.
+  const removalRetryDelaysMs = retryRemoval ? [500, 1_000, 2_000, 4_000, 8_000] : [];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(installedPackageRoot(params.lane.prefixDir), { force: true, recursive: true });
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error && typeof error.code === "string"
+          ? error.code
+          : "unknown";
+      const retryDelayMs =
+        code === "EPERM" || code === "EBUSY" ? removalRetryDelaysMs[attempt] : undefined;
+      if (retryRemoval) {
+        appendFileSync(
+          params.logPath,
+          `[release-checks] package-removal attempt=${attempt + 1} code=${code} ${retryDelayMs === undefined ? "failed" : `retryDelayMs=${retryDelayMs}`}\n`,
+        );
+      }
+      if (retryDelayMs === undefined) {
+        throw error;
+      }
+      await sleep(retryDelayMs);
+      continue;
+    }
+    if (retryRemoval) {
+      appendFileSync(
+        params.logPath,
+        `[release-checks] package-removal attempt=${attempt + 1} success\n`,
+      );
+    }
+    break;
+  }
   await withNpmDiagnostics(params.lane.homeDir, params.logPath, installEnv, async () => {
     await runCommand(
       npmCommand(),
@@ -785,11 +819,6 @@ export function ensureLocalNpmShim(lane: LaneState) {
   chmodSync(shimPath, 0o755);
 }
 
-function readInstalledPackageManifest(prefixDir: string) {
-  const packageRoot = installedPackageRoot(prefixDir);
-  return readInstalledPackageManifestFromPackageRoot(packageRoot);
-}
-
 function readInstalledPackageManifestFromPackageRoot(packageRoot: string) {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
@@ -800,7 +829,9 @@ function readInstalledPackageManifestFromPackageRoot(packageRoot: string) {
 }
 
 export function readInstalledVersion(prefixDir: string) {
-  const { packageJson } = readInstalledPackageManifest(prefixDir);
+  const { packageJson } = readInstalledPackageManifestFromPackageRoot(
+    installedPackageRoot(prefixDir),
+  );
   return typeof packageJson.version === "string" ? packageJson.version.trim() : "";
 }
 
@@ -811,16 +842,11 @@ export function readInstalledMetadataFromCliPath(cliPath: string, platform = pro
 }
 
 export function readInstalledMetadata(prefixDir: string) {
-  const { packageJson, packageRoot } = readInstalledPackageManifest(prefixDir);
-  return readInstalledMetadataFromManifest(packageJson, packageRoot);
+  return readInstalledMetadataFromPackageRoot(installedPackageRoot(prefixDir));
 }
 
 function readInstalledMetadataFromPackageRoot(packageRoot: string) {
   const { packageJson } = readInstalledPackageManifestFromPackageRoot(packageRoot);
-  return readInstalledMetadataFromManifest(packageJson, packageRoot);
-}
-
-function readInstalledMetadataFromManifest(packageJson: PackageJson, packageRoot: string) {
   const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   if (!existsSync(buildInfoPath)) {
     throw new Error(`Installed build info missing: ${buildInfoPath}`);

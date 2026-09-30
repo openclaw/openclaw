@@ -225,17 +225,15 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   const log = opts.runtime?.log ?? (() => {});
   const error = opts.runtime?.error ?? (() => {});
   let exited = false;
-  let settledExit = false;
   let stopPromise: Promise<void> | undefined;
   let resolveExit!: (value: SignalDaemonExitEvent) => void;
   const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
     resolveExit = resolve;
   });
   const settleExit = (value: SignalDaemonExitEvent) => {
-    if (settledExit) {
+    if (exited) {
       return;
     }
-    settledExit = true;
     exited = true;
     resolveExit(value);
   };

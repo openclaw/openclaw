@@ -24,6 +24,7 @@ import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
+  matchesServiceFilePublication,
   publishServiceFile,
   readServiceFileState,
   type GatewayServiceDefinitionBackupReceipt,
@@ -55,17 +56,6 @@ const taskBytes = (xml: string) =>
 const taskPolicy = (xml: string) => sha256Hex(setScheduledTaskXmlEnabled(xml, false));
 const receiptPath = (receipt: GatewayServiceDefinitionBackupReceipt) =>
   `${receipt.files[0]!.sourcePath}.reconcile-${receipt.id}.receipt.bak`;
-type FileState = GatewayServiceDefinitionBackupReceipt["files"][number]["after"];
-
-function matchesPreparedPublication(current: FileState, prepared: FileState): boolean {
-  // Rename may change ctime; the staged inode and payload still identify our write.
-  return current === null
-    ? prepared === null
-    : prepared !== null &&
-        (["dev", "ino", "sha256", "mode", "size", "mtimeMs"] as const).every(
-          (key) => current[key] === prepared[key],
-        );
-}
 
 async function checkpointReceipt(params: Context, receipt: GatewayServiceDefinitionBackupReceipt) {
   await publishServiceFile({
@@ -176,7 +166,11 @@ function mutationHooks(
     for (const file of receipt.files) {
       if (settlePrepared && file.prepared !== undefined) {
         const current = await readServiceFileState(file.sourcePath);
-        if (matchesPreparedPublication(current, file.prepared)) {
+        if (
+          file.prepared === null
+            ? current === null
+            : matchesServiceFilePublication(current, file.prepared)
+        ) {
           file.after = current;
           delete file.prepared;
         } else if (isDeepStrictEqual(current, file.after)) {
@@ -236,7 +230,9 @@ function mutationHooks(
       if (
         !file ||
         file.prepared === undefined ||
-        !matchesPreparedPublication(after, file.prepared) ||
+        !(file.prepared === null
+          ? after === null
+          : matchesServiceFilePublication(after, file.prepared)) ||
         (contents === null ? after !== null : after?.sha256 !== sha256Hex(contents))
       ) {
         throw new Error(

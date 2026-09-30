@@ -45,7 +45,6 @@ type MantisDesktopBrowserSmokeSummary = MantisCrabboxReportSummary & {
 };
 
 const DEFAULT_BROWSER_URL = "https://openclaw.ai";
-const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const BROWSER_PROFILE_ARCHIVE_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64";
 const BROWSER_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_DIR";
 const DEFAULT_VIDEO_DURATION_SECONDS = 10;
@@ -93,9 +92,11 @@ function renderRemoteScript(params: {
   const shellOutputDir = shellQuote(params.remoteOutputDir);
   const videoDurationSeconds = Math.max(1, Math.floor(params.videoDurationSeconds));
   const profileArchiveEnv = params.browserProfileArchiveEnv;
-  const profileDir = shellQuote(
-    params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`,
-  );
+  const profilePath = params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`;
+  const homePrefix = /^(?:~|\$HOME)\//u.exec(profilePath)?.[0];
+  const profileDir = homePrefix
+    ? `"$HOME"/${shellQuote(profilePath.slice(homePrefix.length))}`
+    : shellQuote(profilePath);
   const temporaryProfile = params.browserProfileDir ? "false" : "true";
   const inputModeJson = shellQuote(JSON.stringify(params.htmlBase64 ? "html-file" : "url"));
   const openedUrlJson = shellQuote(
@@ -212,7 +213,6 @@ export async function runMantisDesktopBrowserSmoke(
   const reportPath = path.join(outputDir, "mantis-desktop-browser-smoke-report.md");
   const crabboxBin = await resolveCrabboxBin({
     env,
-    envName: CRABBOX_BIN_ENV,
     explicit: opts.crabboxBin,
     repoRoot,
   });

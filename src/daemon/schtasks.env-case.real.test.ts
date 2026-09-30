@@ -8,6 +8,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
+import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
 import {
@@ -84,7 +85,7 @@ const report = process.argv[2];
 const stop = process.argv[3];
 const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
 const server = net.createServer(socket => socket.end("ready"));
-const deadline = setTimeout(() => process.exit(1), 30_000);
+const deadline = setTimeout(() => process.exit(1), ${WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS + 30_000});
 const poll = setInterval(() => {
   if (fs.existsSync(stop)) {
     clearInterval(poll);
@@ -164,8 +165,20 @@ server.listen(port, "127.0.0.1", () => {
         port,
       });
       expect(observed.pid).not.toBe(child.pid);
-      expect(readWindowsProcessArgsSync(observed.pid)).toEqual(observed.argv);
-      const installed = await readScheduledTaskCommand(env, { requireEffective: true });
+      expect(
+        readWindowsProcessArgsSync(
+          observed.pid,
+          WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+          process.env,
+          performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+        ),
+      ).toEqual(observed.argv);
+      if (!normalized) {
+        await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+          "Effective Scheduled Task service command could not be inspected.",
+        );
+      }
+      const installed = await readScheduledTaskCommand(env, { requireEffective: normalized });
       expect(installed?.workingDirectory).toBe(dir);
       expect(installed?.environment?.OPENCLAW_TEST_LAUNCHER_VALUE).toBe("retained");
       if (normalized) {
@@ -244,7 +257,7 @@ server.listen(port, "127.0.0.1", () => {
       expect(await fs.readFile(outputPath, "utf8")).toContain("launcher-stdout");
       expect(await fs.readFile(outputPath, "utf8")).toContain("launcher-stderr");
     },
-    30_000,
+    WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS + 30_000,
   );
 });
 

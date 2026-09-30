@@ -1,4 +1,3 @@
-/** Doctor repair for broken session transcript branches and legacy OpenAI Codex metadata. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";

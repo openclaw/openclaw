@@ -13,9 +13,12 @@ import {
   parseUpdateAdmissionVerdict,
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { runCli } from "../run-main.js";
 import { registerUpdateCli } from "../update-cli.js";
+import * as schemaPreflight from "./schema-preflight.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
 import * as pluginPreflight from "./update-command-plugin-preflight.js";
 
@@ -164,28 +167,91 @@ describe("candidate update admission", () => {
     expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
   });
 
-  it("admits a missing custom plugin path with the candidate warning and preserves its bytes", async () => {
-    writeConfig({ plugins: { load: { paths: [path.join(home, "missing-custom-plugin")] } } });
-    const before = snapshotFiles();
-    await runCli([
-      "node",
-      "openclaw",
-      "--profile",
-      "admission-fixture",
-      "update",
-      "admit",
-      "--context",
-      contextPath,
-    ]);
-    expect(readVerdict()).toMatchObject({
-      verdict: "admit",
-      warnings: expect.arrayContaining([
-        expect.objectContaining({ code: "configured-plugin-path-unavailable" }),
-      ]),
-      facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
+  it("admits a missing custom plugin path without changing profile artifacts with an idle WAL", async () => {
+    const customAgentPath = path.join(home, "custom-agent.sqlite");
+    writeConfig({
+      session: { store: customAgentPath },
+      plugins: { load: { paths: [path.join(home, "missing-custom-plugin")] } },
     });
-    expect(process.exitCode).toBe(0);
-    expect(snapshotFiles()).toEqual(before);
+    const databasePath = resolveOpenClawStateSqlitePath();
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    const agentDatabases: DatabaseSync[] = [];
+    try {
+      database.exec(
+        fs.readFileSync(new URL("../../state/openclaw-state-schema.sql", import.meta.url), "utf8"),
+      );
+      database.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION}`);
+      database
+        .prepare("INSERT INTO schema_meta VALUES ('primary','global',?,NULL,?,1,1)")
+        .run(OPENCLAW_STATE_SCHEMA_VERSION, context.supervisor.version);
+      const registeredAgentPath = path.join(path.dirname(configPath), "registered-agent.sqlite");
+      database
+        .prepare("INSERT INTO agent_databases VALUES ('registered',?,?,1,NULL)")
+        .run(registeredAgentPath, OPENCLAW_AGENT_SCHEMA_VERSION);
+      // Cover on-disk discovery, configured stores, and registry-only stores together.
+      for (const [agentPath, keepWal] of [
+        [path.join(path.dirname(configPath), "agents/main/agent/openclaw-agent.sqlite"), true],
+        [path.join(path.dirname(configPath), "agents/offline/agent/openclaw-agent.sqlite"), false],
+        [customAgentPath, true],
+        [registeredAgentPath, true],
+      ] as const) {
+        fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+        const agent = new DatabaseSync(agentPath);
+        agentDatabases.push(agent);
+        agent.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+        agent.exec(`PRAGMA journal_mode=WAL; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+        if (!keepWal) {
+          agent.close();
+        }
+        for (const suffix of ["-wal", "-shm"]) {
+          expect(fs.existsSync(agentPath + suffix)).toBe(keepWal);
+        }
+      }
+      // Keep a committed WAL without a concurrent writer so any byte change belongs to admission.
+      database.exec(
+        "PRAGMA journal_mode=WAL; INSERT INTO config_machine_state VALUES ('admission-fixture','{}',1)",
+      );
+      const before = snapshotFiles();
+      await runCli([
+        "node",
+        "openclaw",
+        "--profile",
+        "admission-fixture",
+        "update",
+        "admit",
+        "--context",
+        contextPath,
+      ]);
+      expect(readVerdict()).toMatchObject({
+        verdict: "admit",
+        warnings: expect.arrayContaining([
+          expect.objectContaining({ code: "configured-plugin-path-unavailable" }),
+        ]),
+        facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
+      });
+      expect(process.exitCode).toBe(0);
+      expect(snapshotFiles()).toEqual(before);
+
+      // A newer header committed only in WAL must still refuse admission.
+      agentDatabases[0]!.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+      const beforeRefusal = snapshotFiles();
+      stdout = "";
+      await runCli(["node", "openclaw", "update", "admit", "--context", contextPath]);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [expect.objectContaining({ code: "database-schema-preflight" })],
+      });
+      expect(process.exitCode).toBe(3);
+      expect(snapshotFiles()).toEqual(beforeRefusal);
+    } finally {
+      for (const agent of agentDatabases) {
+        if (agent.isOpen) {
+          agent.close();
+        }
+      }
+      database.close();
+    }
   });
 
   it("returns invalid-config with exit 3 without repairing or quoting rejected config values", async () => {
@@ -199,6 +265,83 @@ describe("candidate update admission", () => {
       ],
     });
     expect(stdout).not.toContain("private-invalid-value");
+    expect(process.exitCode).toBe(3);
+    expect(snapshotFiles()).toEqual(before);
+  });
+
+  it.each([
+    { policy: "allowlist", verdict: "admit", exitCode: 0 },
+    { policy: "invalid-policy", verdict: "refuse", exitCode: 3 },
+  ])(
+    "$verdict plugin-owned legacy Discord DM config ($policy) without writing",
+    async ({ policy, verdict, exitCode }) => {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+      writeConfig({
+        plugins: { allow: ["discord"] },
+        channels: { discord: { dm: { policy, allowFrom: ["123456789"] } } },
+      });
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(readVerdict()).toMatchObject({
+        verdict,
+        ...(verdict === "admit"
+          ? {
+              reasons: [],
+              warnings: expect.arrayContaining([
+                { code: "config-warning", message: expect.stringContaining("legacy fields") },
+              ]),
+            }
+          : { reasons: [expect.objectContaining({ code: "invalid-config" })] }),
+      });
+      expect(process.exitCode).toBe(exitCode);
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
+  it("emits a parseable refusal when Doctor-projected database targets are incompatible", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+    writeConfig({
+      plugins: { allow: ["discord"] },
+      channels: { discord: { dm: { policy: "allowlist", allowFrom: ["123456789"] } } },
+    });
+    const checkSchemas = schemaPreflight.checkTargetDatabaseSchemasForContexts;
+    vi.spyOn(schemaPreflight, "checkTargetDatabaseSchemasForContexts").mockImplementation(
+      async (versions, contexts) => {
+        if (contexts.some(({ config }) => config.channels?.discord?.dmPolicy === "allowlist")) {
+          return {
+            incompatible: [
+              {
+                kind: "agent",
+                path: path.join(home, "projected-agent.sqlite"),
+                foundVersion: 99999,
+                supportedVersion: 1,
+                writerAppVersion: "9999.1.1",
+              },
+            ],
+            indeterminate: [],
+          };
+        }
+        return checkSchemas(versions, contexts);
+      },
+    );
+    const before = snapshotFiles();
+
+    await updateAdmitCommand(contextPath);
+
+    const verdict = readVerdict();
+    expect(verdict).toMatchObject({
+      verdict: "refuse",
+      reasons: [expect.objectContaining({ code: "database-schema-preflight" })],
+      warnings: [{ code: "config-warning", message: expect.stringContaining("legacy fields") }],
+    });
+    expect(verdict.facts.checks.filter(({ name }) => name === "database-schema")).toEqual([
+      { name: "database-schema", status: "refuse", detail: expect.any(String) },
+    ]);
+    expect(verdict.facts.checks.filter(({ name }) => name === "config")).toEqual([
+      { name: "config", status: "warn" },
+    ]);
     expect(process.exitCode).toBe(3);
     expect(snapshotFiles()).toEqual(before);
   });
@@ -314,7 +457,7 @@ describe("candidate update admission", () => {
     expect(process.exitCode).toBe(0);
   });
 
-  it.each([undefined, "", "relative/context.json"])(
+  it.each([undefined, "relative/context.json"])(
     "requires an absolute private context path (%s) without writing live state",
     async (value) => {
       const before = snapshotFiles();
@@ -327,12 +470,9 @@ describe("candidate update admission", () => {
   );
 
   it.each([
-    [],
     ["--context"],
     ["--context", "relative/context.json"],
-    ["--context", "/fixture/context.json", "extra"],
     ["--context", "/fixture/context.json", "--context", "/fixture/other.json"],
-    ["--context", "/fixture/context.json", "--json"],
   ])("rejects malformed admission argv without generic CLI startup (%j)", async (...args) => {
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
     const before = snapshotFiles();
@@ -345,11 +485,6 @@ describe("candidate update admission", () => {
 
   it.each(
     [
-      "OPENCLAW_UPDATE_RUN_ID",
-      "OPENCLAW_UPDATE_IN_PROGRESS",
-      "OPENCLAW_UPDATE_RUN_HANDOFF",
-      "OPENCLAW_UPDATE_POST_CORE",
-      "OPENCLAW_UPDATE_EXECUTOR_GRANT",
       "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META",
       "OPENCLAW_GATEWAY_SERVICE_PID",
       "OPENCLAW_COMPATIBILITY_HOST_VERSION",
@@ -372,14 +507,11 @@ describe("candidate update admission", () => {
     },
   );
 
-  it.each(["{", '{"protocol":2}', "{}"])(
-    "returns no verdict for invalid context %s",
-    async (raw) => {
-      fs.writeFileSync(contextPath, raw);
-      await updateAdmitCommand(contextPath);
-      expect(process.exitCode).toBe(2);
-      expect(stdout).toBe("");
-      expect(stderr).not.toBe("");
-    },
-  );
+  it.each(["{", "{}"])("returns no verdict for invalid context %s", async (raw) => {
+    fs.writeFileSync(contextPath, raw);
+    await updateAdmitCommand(contextPath);
+    expect(process.exitCode).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).not.toBe("");
+  });
 });

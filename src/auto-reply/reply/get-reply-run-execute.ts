@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig, resolveAgentRunCwd } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
@@ -23,6 +24,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
+import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { isSessionPersonalBootstrapTurn } from "../../sessions/session-participant-input.js";
@@ -43,11 +45,11 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
 import {
   buildPersistedMediaImageLayout,
-  normalizeMessageTimestampMs,
   suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
+import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -399,6 +401,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
     currentInboundAudio: hasInboundAudio(sessionCtx),
+    gatewayLocalUserIngress: getGatewayLocalUserIngress(ctx),
     channelAdmissionEvidence:
       readChannelContextAdmissionEvidence(ctx) ?? readChannelContextAdmissionEvidence(sessionCtx),
     currentInboundContext,
@@ -466,11 +469,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         normalizeOptionalString(sessionCtx.GroupChannel) ??
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
-      memberRoleIds: Array.isArray(sessionCtx.MemberRoleIds)
-        ? sessionCtx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
-            (roleId): roleId is string => Boolean(roleId),
-          )
-        : undefined,
+      memberRoleIds: normalizeArrayBackedTrimmedStringList(sessionCtx.MemberRoleIds),
       // Parent lineage authenticates inherited group policy for queued CLI/MCP runs.
       spawnedBy: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
@@ -489,7 +488,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       cwd:
-        normalizeOptionalString(state.sessionEntry?.spawnedCwd) ?? resolveAgentRunCwd(cfg, agentId),
+        normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??
+        resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings
         ? admittedSessionSettings.permissionMode
         : preparedSessionState.sessionEntry?.permissionMode,

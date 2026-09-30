@@ -3,7 +3,6 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-// Models gateway methods expose prepared, cached, and explicitly refreshed catalog views.
 import {
   ErrorCodes,
   errorShape,
@@ -27,7 +26,6 @@ import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
-export { buildModelsListResult };
 
 // Ordinary reads return saved rows while expired provider inventory refreshes in the background.
 export const modelsHandlers: GatewayRequestHandlers = {

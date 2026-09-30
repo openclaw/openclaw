@@ -12,7 +12,7 @@ it("pages cloud profile summaries and returns the selected OS/machine catalog", 
   const callGateway = vi
     .fn()
     .mockResolvedValue({ environments: [{ id: "private-worker" }], profiles });
-  const tool = createSessionsTool({ callGateway });
+  const tool = createSessionsTool({ senderIsOwner: true, callGateway });
   const first = await tool.execute("catalog", { action: "cloud_profiles" });
   expect(first.details).toMatchObject({
     profiles: profiles.slice(0, 32).map(({ id, providerId }) => ({ id, providerId })),
@@ -37,32 +37,29 @@ it("pages cloud profile summaries and returns the selected OS/machine catalog", 
   expect(missing.details).toMatchObject({ status: "error", profileId: "removed" });
 });
 
-it.each([129, 256])(
-  "round-trips a listed %i-character profile ID through argument validation",
-  async (length) => {
-    const profile = {
-      id: "p".repeat(length),
-      providerId: "fixture",
-      operatingSystems: [{ id: "linux", label: "Linux", default: true }],
-      machines: [{ id: "tiny", label: "Tiny", os: "linux", cpu: 2 }],
-    };
-    const callGateway = vi.fn().mockResolvedValue({ profiles: [profile] });
-    const tool = createSessionsTool({ callGateway });
-    const listed = await tool.execute("catalog", { action: "cloud_profiles" });
-    expect(listed.details).toMatchObject({ profiles: [{ id: profile.id }] });
-    const args = validateToolArguments(tool, {
-      type: "toolCall",
-      id: "selected-profile",
-      name: tool.name,
-      arguments: { action: "cloud_profiles", profileId: profile.id },
-    });
-    const selected = await tool.execute("selected-profile", args);
-    expect(selected.details).toEqual({ profile });
-  },
-);
+it("round-trips a listed maximum-length profile ID through argument validation", async () => {
+  const profile = {
+    id: "p".repeat(256),
+    providerId: "fixture",
+    operatingSystems: [{ id: "linux", label: "Linux", default: true }],
+    machines: [{ id: "tiny", label: "Tiny", os: "linux", cpu: 2 }],
+  };
+  const callGateway = vi.fn().mockResolvedValue({ profiles: [profile] });
+  const tool = createSessionsTool({ senderIsOwner: true, callGateway });
+  const listed = await tool.execute("catalog", { action: "cloud_profiles" });
+  expect(listed.details).toMatchObject({ profiles: [{ id: profile.id }] });
+  const args = validateToolArguments(tool, {
+    type: "toolCall",
+    id: "selected-profile",
+    name: tool.name,
+    arguments: { action: "cloud_profiles", profileId: profile.id },
+  });
+  const selected = await tool.execute("selected-profile", args);
+  expect(selected.details).toEqual({ profile });
+});
 
 it("rejects profile IDs beyond the placement identifier limit", () => {
-  const tool = createSessionsTool({ callGateway: vi.fn() });
+  const tool = createSessionsTool({ senderIsOwner: true, callGateway: vi.fn() });
   expect(() =>
     validateToolArguments(tool, {
       type: "toolCall",

@@ -7,7 +7,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import type { Message } from "../internal/discord.js";
-import { resolveDiscordMentionPolicy } from "./allow-list.js";
 import type { DiscordChannelInfo } from "./message-channel-info.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 
@@ -70,21 +69,19 @@ export function resolveInjectedBoundThreadLookupRecord(params: {
     : undefined;
 }
 
-export function resolveDiscordMentionState(
-  params: Parameters<typeof resolveDiscordMentionPolicy>[0] & {
-    authorIsBot: boolean;
-    botId?: string;
-    hasAnyMention: boolean;
-    isDirectMessage: boolean;
-    isExplicitlyMentioned: boolean;
-    mentionRegexes: RegExp[];
-    mentionText: string;
-    mentionedEveryone: boolean;
-    referencedAuthorId?: string;
-    senderIsPluralKit: boolean;
-    transcript?: string;
-  },
-) {
+export function resolveDiscordMentionState(params: {
+  authorIsBot: boolean;
+  botId?: string;
+  hasAnyMention: boolean;
+  isDirectMessage: boolean;
+  isExplicitlyMentioned: boolean;
+  mentionRegexes: RegExp[];
+  mentionText: string;
+  mentionedEveryone: boolean;
+  referencedAuthorId?: string;
+  senderIsPluralKit: boolean;
+  transcript?: string;
+}) {
   if (params.isDirectMessage) {
     return {
       implicitMentionKinds: [],
@@ -114,8 +111,7 @@ export function resolveDiscordMentionState(
   );
 
   return {
-    implicitMentionKinds: resolveDiscordMentionPolicy({ ...params, implicitMentionKinds })
-      .implicitMentionKinds,
+    implicitMentionKinds,
     wasMentioned,
   };
 }
@@ -172,16 +168,6 @@ export function matchesActiveDiscordMentionPatterns(
   return false;
 }
 
-export function resolvePreflightMentionRequirement(params: {
-  shouldRequireMention: boolean;
-  bypassMentionRequirement: boolean;
-}): boolean {
-  if (!params.shouldRequireMention) {
-    return false;
-  }
-  return !params.bypassMentionRequirement;
-}
-
 export function shouldIgnoreBoundThreadWebhookMessage(params: {
   threadId?: string;
   webhookId?: string | null;
@@ -199,11 +185,5 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
     return true;
   }
   const threadId = normalizeOptionalString(params.threadId) ?? "";
-  if (!threadId) {
-    return false;
-  }
-  if (params.threadBinding) {
-    return true;
-  }
-  return false;
+  return Boolean(threadId && params.threadBinding);
 }

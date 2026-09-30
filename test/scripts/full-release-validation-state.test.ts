@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import {
   buildFullReleaseCandidateBinding,
@@ -19,6 +20,7 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   composeReleaseAttemptJobs,
+  buildReleaseValidationManifest,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
   releaseExecutionPlanSha256,
@@ -1154,41 +1156,6 @@ describe("full release execution plan", () => {
     });
   });
 
-  it.each([
-    { targetVersion: "2026.8.1", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.1-1", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.1-beta.1", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.33", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.1-alpha.1", evidenceReuse: false, rerunGroup: "all", required: true },
-    { targetVersion: "2026.8.1-alpha.1", evidenceReuse: true, rerunGroup: "all", required: false },
-    {
-      targetVersion: "2026.8.1-alpha.1",
-      evidenceReuse: false,
-      rerunGroup: "package",
-      required: false,
-    },
-  ])(
-    "enforces standalone Docker assets for $targetVersion (reuse=$evidenceReuse, group=$rerunGroup)",
-    ({ required, ...input }) => {
-      for (const dockerPreflightResult of ["success", "failure", "skipped", "cancelled"]) {
-        const { gates } = plan({ ...input, dockerPreflightResult });
-        expect(gates.find((gate) => gate.name === "Verify Docker runtime image assets")).toEqual({
-          name: "Verify Docker runtime image assets",
-          required,
-          result: dockerPreflightResult,
-        });
-        expect(
-          classifyReleaseSnapshot({
-            children: [],
-            localFailures: releasePlanGateFailures(gates),
-            releaseProfile: "stable",
-            workflowRef: "main",
-          }).state,
-        ).toBe(required && dockerPreflightResult !== "success" ? "blocked_complete" : "passed");
-      }
-    },
-  );
-
   it.each(["install-smoke", "qa-parity", "qa-live"])(
     "does not require candidate preparation for focused %s",
     (rerunGroup) => {
@@ -1409,77 +1376,140 @@ describe("release child attempt composition", () => {
 });
 
 describe("release decision policy", () => {
-  const nativeCiJobs = [
-    "checks-windows-node-test-1",
-    "checks-windows-node-test-2",
-    "macos-swift (tests)",
-    "macos-swift (packages)",
-  ].map((name) => ({ name, conclusion: "failure", status: "completed" }));
+  const windowsJob = {
+    name: "checks-windows-node-test-2",
+    conclusion: "failure",
+    status: "completed",
+    url: "https://example.invalid/windows",
+  };
+  const ciGate = { name: "openclaw/ci-gate", conclusion: "success", status: "completed" };
 
   it.each(["beta", "stable", "full"])(
-    "blocks %s publication on Windows Node and macOS Swift failures despite a green CI aggregate",
+    "reports Windows Node failures as policy advisory for %s publication",
     (releaseProfile) => {
       const snapshot = child("normalCi", {
-        conclusion: "success",
-        jobs: [
-          ...nativeCiJobs,
-          { name: "macos-node", conclusion: "success", status: "completed" },
-          { name: "openclaw/ci-gate", conclusion: "success", status: "completed" },
-        ],
+        conclusion: "failure",
+        jobs: [windowsJob, ciGate],
         status: "completed",
       });
-      const result = classifyReleaseSnapshot({
-        children: [snapshot],
-        releaseProfile,
-        workflowRef: "main",
-      });
+      const result = classifyReleaseSnapshot({ children: [snapshot], releaseProfile });
       expect(result).toMatchObject({
-        blockers: nativeCiJobs.map(({ name }) => ({ job: name })),
-        blockerCount: nativeCiJobs.length,
+        blockers: [],
+        blockerCount: 0,
         errors: [],
-        state: "blocked_complete",
+        state: "passed",
+        advisoryJobs: [
+          {
+            class: "windows-node-ci",
+            child: "normalCi",
+            job: windowsJob.name,
+            conclusion: "failure",
+            runId: snapshot.runId,
+            url: windowsJob.url,
+          },
+        ],
       });
-      expect(terminalPolicyPass(snapshot)).toBe(false);
-      expect(
-        formatReleaseStateOutcome(
-          buildReleaseStateArtifact({
-            children: [snapshot],
-            decision: result,
-            executionPlan: { parentRunAttempt: 1, sha256: "x" },
-            expected: { parentRunAttempt: 1, parentRunId: "77", targetSha: TARGET_SHA },
-            mode: "decision",
-            releaseProfile,
-            rerunGroup: "all",
-          }),
-        ),
-      ).toContain("- Blocker: checks-windows-node-test-1 (failure)");
+      expect(terminalPolicyPass(snapshot)).toBe(true);
+      const artifact = buildReleaseStateArtifact({
+        children: [snapshot],
+        decision: result,
+        executionPlan: { parentRunAttempt: 1, sha256: "a".repeat(64) },
+        expected: { parentRunAttempt: 1, parentRunId: "77", targetSha: TARGET_SHA },
+        mode: "decision",
+        releaseProfile,
+        rerunGroup: "all",
+      });
+      expect(validateReleaseStateArtifact(artifact).advisoryJobs).toEqual(result.advisoryJobs);
+      expect(formatReleaseStateOutcome(artifact)).toContain(
+        "- Advisory [windows-node-ci]: checks-windows-node-test-2 (failure) https://example.invalid/windows",
+      );
+      expect(() => validateReleaseStateArtifact({ ...artifact, advisoryJobs: [] })).toThrow(
+        /advisory jobs differ/u,
+      );
+      const manifest = buildReleaseValidationManifest({
+        plan: executionPlan(),
+        drain: artifact,
+        context: { releaseProfile, rerunGroup: "all", validationInputs: {} },
+      });
+      expect(manifest.version).toBe(4);
+      expect(manifest.advisoryJobs).toEqual(result.advisoryJobs);
     },
   );
 
-  it.each(["checks-node-core-test-nondist-shard", "checks-fast-core"])(
-    "reports CI %s alongside every native failure",
-    (name) => {
-      const result = classifyReleaseSnapshot({
-        children: [
-          child("normalCi", {
-            conclusion: "failure",
-            jobs: [
-              ...nativeCiJobs,
-              { name, conclusion: "failure", status: "completed" },
-              { name: "openclaw/ci-gate", conclusion: "failure", status: "completed" },
-            ],
-            status: "completed",
-          }),
+  it.each([
+    ["normalCi", "macos-node"],
+    ["normalCi", "macos-swift (tests)"],
+    ["normalCi", "checks-node-core-test-nondist-shard"],
+    ["normalCi", "checks-fast-core"],
+    ["normalCi", "openclaw/ci-gate"],
+    ["normalCi", "checks-windows-packaged-install"],
+    ["releaseChecksCandidate", "checks-windows-node-test-2"],
+    ["releaseChecksCandidate", "install-smoke (linux)"],
+    ["releaseChecksCandidate", "upgrade-survivor"],
+    ["releaseChecksCandidate", "update-first-hop-compat / published driver"],
+    ["releaseChecksCandidate", "npm-pack"],
+    ["releaseChecksCandidate", "Run package acceptance / Package integrity"],
+    ["releaseChecksCandidate", "cross_os_release_checks / Linux / packaged upgrade"],
+    ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged fresh"],
+    ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged upgrade"],
+  ])("keeps %s / %s blocking alongside a Windows Node advisory", (key, name) => {
+    const failure = { name, conclusion: "failure", status: "completed" };
+    const snapshots = [
+      child("normalCi", {
+        status: "completed",
+        conclusion: "failure",
+        jobs:
+          key === "normalCi"
+            ? [windowsJob, failure, ...(name === ciGate.name ? [] : [ciGate])]
+            : [windowsJob, ciGate],
+      }),
+    ];
+    if (key !== "normalCi") {
+      snapshots.push(child(key, { status: "completed", conclusion: "failure", jobs: [failure] }));
+    }
+    const result = classifyReleaseSnapshot({ children: snapshots });
+    expect(result).toMatchObject({
+      state: "blocked_complete",
+      blockers: [{ child: key, job: name }],
+      advisoryJobs: [{ job: windowsJob.name }],
+    });
+  });
+
+  it("keeps parent npm qualification blocking alongside Windows Node advisory", () => {
+    const result = classifyReleaseSnapshot({
+      children: [
+        child("normalCi", {
+          status: "completed",
+          conclusion: "failure",
+          jobs: [windowsJob, ciGate],
+        }),
+      ],
+      localFailures: releasePlanGateFailures([
+        { name: "Qualify release npm artifacts", required: true, result: "failure" },
+      ]),
+    });
+    expect(result).toMatchObject({
+      state: "blocked_complete",
+      blockers: [{ child: "<parent>", job: "Qualify release npm artifacts" }],
+      advisoryJobs: [{ job: windowsJob.name }],
+    });
+  });
+
+  it.each(["cancelled", "missing gate", "skipped gate", "cancelled shard"])(
+    "refuses advisory-only success with %s",
+    (scenario) => {
+      const snapshot = child("normalCi", {
+        status: "completed",
+        conclusion: scenario === "cancelled" ? "cancelled" : "failure",
+        jobs: [
+          { ...windowsJob, conclusion: scenario === "cancelled shard" ? "cancelled" : "failure" },
+          ...(scenario === "missing gate"
+            ? []
+            : [{ ...ciGate, conclusion: scenario === "skipped gate" ? "skipped" : "success" }]),
         ],
-        releaseProfile: "stable",
-        workflowRef: "main",
       });
-      expect(result.blockers.map((blocker) => blocker.job)).toEqual([
-        ...nativeCiJobs.map((job) => job.name),
-        name,
-        "openclaw/ci-gate",
-      ]);
-      expect(result.state).toBe("blocked_complete");
+      expect(terminalPolicyPass(snapshot)).toBe(false);
+      expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
     },
   );
 
@@ -3281,6 +3311,84 @@ describe("release state artifacts", () => {
 });
 
 describe("collector subprocess", () => {
+  it("releases polling sleep listeners before the next GitHub observation", () => {
+    const root = tempDirs.make("frv-state-sleep-listeners-");
+    const executionPlanPath = join(root, "plan.json");
+    const output = join(root, "decision.json");
+    writeFileSync(
+      executionPlanPath,
+      JSON.stringify(
+        executionPlan({
+          children: { normalCi: { result: "success", runAttempt: 1, runId: "101" } },
+          dockerPreflightResult: "skipped",
+          candidateBindingResult: "skipped",
+          rerunGroup: "ci",
+          resolveTargetResult: "success",
+        }),
+      ),
+    );
+    const controller = join(root, "controller.mjs");
+    writeFileSync(
+      controller,
+      `import assert from "node:assert/strict";
+import cp from "node:child_process";
+import { getEventListeners } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import { mock } from "node:test";
+import { promisify } from "node:util";
+let observations = 0;
+let retainedListeners = 0;
+cp.execFile = Object.assign(() => { throw new Error("unexpected callback execution"); }, {
+  [promisify.custom]: async (command, args, options) => {
+    assert.equal(command, "gh");
+    retainedListeners = Math.max(retainedListeners, getEventListeners(options.signal, "abort").length);
+    if (args.includes("--paginate")) {
+      setImmediate(() => mock.timers.tick(60_000));
+      return { stdout: "" };
+    }
+    if (++observations === 12) {
+      throw Object.assign(new Error("HTTP 403: Resource not accessible by integration"), {
+        stderr: "HTTP 403: Resource not accessible by integration",
+      });
+    }
+    return { stdout: JSON.stringify({
+      id: 101, event: "workflow_dispatch", path: ".github/workflows/ci.yml@refs/heads/release-ci/tooling",
+      display_title: "CI full-release-validation-77-1-ci", head_branch: "release-ci/tooling",
+      head_sha: ${JSON.stringify(SHA)}, run_attempt: 1, status: "in_progress", conclusion: null,
+      created_at: "2026-08-21T00:00:00Z", updated_at: "2026-08-21T00:01:00Z",
+      html_url: "https://example.invalid/runs/101", actor: { login: "github-actions[bot]" },
+      triggering_actor: { login: "github-actions[bot]" }, repository: { full_name: "openclaw/openclaw" },
+    }) };
+  },
+});
+syncBuiltinESMExports();
+mock.timers.enable({ apis: ["setTimeout"] });
+process.argv[1] = ${JSON.stringify(SCRIPT)};
+process.argv[2] = "decision";
+try {
+  await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});
+  assert.equal(observations, 12);
+  assert.equal(retainedListeners, 0, "completed polling sleeps retained abort listeners");
+  assert.equal(process.exitCode, 2);
+  process.exitCode = 0;
+} finally {
+  mock.timers.reset();
+}
+`,
+    );
+    const result = spawnSync(process.execPath, [controller], {
+      encoding: "utf8",
+      env: collectorEnv({
+        FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
+        FULL_RELEASE_STATE_PATH: output,
+        FAIL_FAST: "false",
+      }),
+      timeout: 10_000,
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(JSON.parse(readFileSync(output, "utf8")).state).toBe("orchestration_error");
+  });
+
   it("seals the canonical published candidate request without reconstruction", () => {
     const candidateRequest = canonicalCandidateRequest({ packagePublished: true });
     const { output, result } = runPlanSubprocess({ candidateRequestInput: candidateRequest });
@@ -3916,12 +4024,11 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       }
       // Earlier producers required this gate for regular releases too. A collector
       // retry must preserve that recorded policy, including a failed gate.
-      const legacyDockerGate = sealed.gates.find(
-        (gate) => gate.name === "Verify Docker runtime image assets",
-      );
-      assert(legacyDockerGate);
-      legacyDockerGate.required = true;
-      legacyDockerGate.result = dockerPreflightResult;
+      sealed.gates.push({
+        name: "Verify Docker runtime image assets",
+        required: true,
+        result: dockerPreflightResult,
+      });
       sealed.sha256 = releaseExecutionPlanSha256(sealed);
       writeFileSync(output, JSON.stringify(sealed));
       const result = runCollector("plan", {

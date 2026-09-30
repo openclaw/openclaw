@@ -2,28 +2,27 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  sendDeliveredZalouserMock,
-  sendMessageZalouserMock,
-  sendSeenZalouserMock,
-  sendTypingZalouserMock,
-} from "./monitor.send.test-mocks.js";
+import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
   listZaloFriendsMock,
   listZaloGroupsMock,
   startZaloListenerMock,
+  sendZaloDeliveredEventMock as sendDeliveredZalouserMock,
+  sendZaloSeenEventMock as sendSeenZalouserMock,
+  sendZaloTypingEventMock as sendTypingZalouserMock,
 } from "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import {
   createRawZalouserMessageFromNormalized,
-  waitForZalouserIngressVerdict,
-  withZalouserIngressTestQueue,
+  observeZalouserIngressVerdict,
+  useZalouserMonitorTestQueue,
 } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
 import { setZalouserRuntime } from "./runtime.js";
@@ -35,6 +34,8 @@ import {
   createZalouserRuntimeEnv,
 } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+
+const withMonitorIngressQueue = useZalouserMonitorTestQueue();
 
 function createAccount(): ResolvedZalouserAccount {
   return {
@@ -328,21 +329,19 @@ async function processMessageThroughMonitor(params: {
         config: { ...params.account.config, historyLimit: params.historyState.historyLimit },
       }
     : params.account;
-  await withZalouserIngressTestQueue(async (ingressQueue) => {
+  await withMonitorIngressQueue(async (ingressQueue) => {
     const abortController = new AbortController();
-    let resolveProcessed: (() => void) | undefined;
-    const processed = new Promise<void>((resolve) => {
-      resolveProcessed = resolve;
-    });
+    const { promise: processed, resolve: resolveProcessed } = Promise.withResolvers<void>();
     startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
       for (const message of messages) {
-        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
         if (!message.msgId) {
           throw new Error("Zalouser monitor test message requires msgId");
         }
-        await waitForZalouserIngressVerdict(ingressQueue, message.msgId, "completed");
+        const terminal = observeZalouserIngressVerdict(ingressQueue, message.msgId, "completed");
+        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
+        await terminal;
       }
-      resolveProcessed?.();
+      resolveProcessed();
       return { stop: vi.fn() };
     });
     const run = monitorZalouserProvider({
@@ -353,9 +352,17 @@ async function processMessageThroughMonitor(params: {
       statusSink: params.statusSink,
       ingressQueue,
     });
-    await processed;
-    abortController.abort();
-    await run;
+    try {
+      await Promise.race([
+        processed,
+        run.then(() => {
+          throw new Error("Zalouser monitor exited before fixture messages were processed");
+        }),
+      ]);
+    } finally {
+      abortController.abort();
+      await run;
+    }
   });
 }
 
@@ -428,7 +435,7 @@ describe("zalouser monitor group mention gating", () => {
     installRuntime({ commandAuthorized: false });
     const abortController = new AbortController();
     abortController.abort();
-    await withZalouserIngressTestQueue(async (ingressQueue) => {
+    await withMonitorIngressQueue(async (ingressQueue) => {
       await monitorZalouserProvider({
         account: {
           ...createAccount(),

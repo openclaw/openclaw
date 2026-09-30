@@ -25,7 +25,12 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { createLoggerBackedRuntime } from "../../runtime-api.js";
 import { getTlonRuntime } from "../runtime.js";
-import { createSettingsManager, putTlonSetting, type TlonSettingsStore } from "../settings.js";
+import {
+  createSettingsManager,
+  putTlonSetting,
+  type PendingApproval,
+  type TlonSettingsStore,
+} from "../settings.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
 import { resolveTlonAccount } from "../types.js";
 import { authenticate } from "../urbit/auth.js";
@@ -34,12 +39,7 @@ import type { DmInvite, Foreigns } from "../urbit/foreigns.js";
 import { sendDm, sendGroupMessage } from "../urbit/send.js";
 import { UrbitSSEClient } from "../urbit/sse-client.js";
 import { createTlonApprovalRuntime } from "./approval-runtime.js";
-import {
-  createPendingApproval,
-  isAdminCommand,
-  isApprovalResponse,
-  type PendingApproval,
-} from "./approval.js";
+import { createPendingApproval } from "./approval.js";
 import { resolveChannelAuthorization } from "./authorization.js";
 import { createTlonCitationResolver } from "./cites.js";
 import { fetchAllChannels, fetchInitData } from "./discovery.js";
@@ -107,7 +107,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const accountUrl = account.url;
   const accountCode = account.code;
 
-  // Helper to authenticate with retry logic
   async function authenticateWithRetry(maxAttempts = 10): Promise<string> {
     let authAttempt = 0;
     return await retryAsync(
@@ -159,7 +158,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   let groupChannels: string[] = [];
   let botNickname: string | null = null;
 
-  // Settings store manager for hot-reloading config
   const settingsManager = createSettingsManager(api, {
     log: (msg) => runtime.log?.(msg),
     error: (msg) => runtime.error?.(msg),
@@ -186,7 +184,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const dmSendersBySession = new Map<string, Set<string>>();
   let sharedSessionWarningSent = false;
 
-  // Fetch bot's nickname from contacts
   try {
     const selfProfile = await api.scry("/contacts/v1/self.json");
     if (selfProfile && typeof selfProfile === "object") {
@@ -203,7 +200,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   // Store init foreigns for processing after settings are loaded
   let initForeigns: Foreigns | null = null;
 
-  // Migrate file config to settings store (seed on first run)
   async function migrateConfigToSettings() {
     const migrations = buildTlonSettingsMigrations(account, currentSettings);
 
@@ -219,11 +215,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     }
   }
 
-  // Load settings from settings store (hot-reloadable config)
   try {
     currentSettings = await settingsManager.load();
 
-    // Migrate file config to settings store if not already present
     await migrateConfigToSettings();
     ({
       effectiveDmAllowlist,
@@ -257,7 +251,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     }
   }
 
-  // Merge manual config with auto-discovered channels
   if (account.groupChannels.length > 0) {
     groupChannels = mergeUniqueStrings(groupChannels, account.groupChannels);
     runtime.log?.(
@@ -276,7 +269,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     runtime.log?.("[tlon] No group channels to monitor (DMs only)");
   }
 
-  // Check if a ship is the owner (always allowed to DM)
   function isOwner(ship: string): boolean {
     if (!effectiveOwnerShip) {
       return false;
@@ -284,11 +276,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     return normalizeShip(ship) === effectiveOwnerShip;
   }
 
-  /**
-   * Extract the DM partner ship from the 'whom' field.
-   * This is the canonical source for DM routing (more reliable than essay.author).
-   * Returns empty string if whom doesn't contain a valid patp-like value.
-   */
   const processMessage = async (params: {
     messageId: string;
     senderShip: string;
@@ -320,7 +307,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     } = params;
     let messageText = params.messageText;
 
-    // Download any images from the message content
     let attachments: Array<{ path: string; contentType: string }> = [];
     let unavailableMediaCount = 0;
     if (messageContent) {
@@ -347,8 +333,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             .map((msg) => `${msg.author}: ${msg.content}`)
             .join("\n");
 
-          // Prepend thread context to the message
-          // Include note about ongoing conversation for agent judgment
           const contextNote = `[Thread conversation - ${threadHistory.length} previous replies. You are participating in this thread. Only respond if relevant or helpful - you don't need to reply to every message.]`;
           messageText = `${contextNote}\n\n[Previous messages]\n${threadContext}\n\n[Current message]\n${messageText}`;
           runtime?.log?.(
@@ -357,7 +341,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         }
       } catch (error: unknown) {
         runtime?.log?.(`[tlon] Could not fetch thread context: ${formatErrorMessage(error)}`);
-        // Continue without thread context - not critical
       }
     }
 
@@ -661,7 +644,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     });
   };
 
-  // Track which channels we're interested in for filtering firehose events
   const watchedChannels = new Set<string>(groupChannels);
 
   const refreshWatchedChannels = async (): Promise<number> => {
@@ -736,7 +718,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       refreshWatchedChannels,
     });
 
-  // Firehose handler for all channel messages (/v2)
   const handleChannelsFirehose = async (
     event: unknown,
     turnAdoptionLifecycle?: TlonIngressLifecycle,
@@ -748,7 +729,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      // Only process channels we're watching
       if (!watchedChannels.has(nest)) {
         return;
       }
@@ -758,7 +738,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      // Handle post responses (new posts and replies)
       const post = asRecord(response.post);
       const rPost = asRecord(post?.["r-post"]);
       const set = asRecord(rPost?.set);
@@ -767,10 +746,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       const replySet = asRecord(replyPayload?.set);
       const essay = asRecord(set?.essay);
       const memo = asRecord(replySet?.memo);
-      if (!essay && !memo) {
-        return;
-      }
-
       const content = memo ?? essay;
       if (!content) {
         return;
@@ -860,7 +835,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         messageId,
         senderShip,
         messageText,
-        messageContent: contentBody, // Pass raw content for media extraction
+        messageContent: contentBody,
         isGroup: true,
         channelNest: nest,
         timestamp: sentAt,
@@ -902,7 +877,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     turnAdoptionLifecycle?: TlonIngressLifecycle,
   ) => {
     try {
-      // Handle DM invite lists (arrays)
       if (Array.isArray(event)) {
         // UrbitSSEClient awaits each handler before reading and acking the next fact,
         // so snapshot replacement and invite side effects cannot overlap.
@@ -943,15 +917,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             continue;
           }
 
-          // If owner is configured and ship is not on allowlist, queue approval
           if (effectiveOwnerShip && !allowed) {
             const approval = createPendingApproval({
               type: "dm",
               requestingShip: ship,
               messagePreview: "(DM invite - no message yet)",
             });
-            await queueApprovalRequest(approval);
-            processedDmInvites.add(ship);
+            processedDmInvites.addIfAccepted(ship, await queueApprovalRequest(approval));
           }
         }
         return;
@@ -968,7 +940,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      // Handle add events (new messages)
       const essay = asRecord(asRecord(response.add)?.essay);
       if (!essay) {
         return;
@@ -986,7 +957,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      // Log mismatch between author and partner for debugging
       if (authorShip && partnerShip && authorShip !== partnerShip) {
         runtime.log?.(
           `[tlon] DM ship mismatch (author=${authorShip}, partner=${partnerShip}) - routing to partner`,
@@ -998,27 +968,18 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      // Check if this is the owner sending an approval response
       const messageText = rawText;
-      if (isOwner(senderShip) && isApprovalResponse(messageText)) {
-        const handled = await handleApprovalResponse(messageText);
-        if (handled) {
-          runtime.log?.(`[tlon] Processed approval response from owner: ${messageText}`);
-          return;
-        }
+      if (isOwner(senderShip) && (await handleApprovalResponse(messageText))) {
+        runtime.log?.(`[tlon] Processed approval response from owner: ${messageText}`);
+        return;
       }
 
-      // Check if this is the owner sending an admin command
-      if (isOwner(senderShip) && isAdminCommand(messageText)) {
-        const handled = await handleAdminCommand(messageText);
-        if (handled) {
-          runtime.log?.(`[tlon] Processed admin command from owner: ${messageText}`);
-          return;
-        }
+      if (isOwner(senderShip) && (await handleAdminCommand(messageText))) {
+        runtime.log?.(`[tlon] Processed admin command from owner: ${messageText}`);
+        return;
       }
 
       const ownerDm = isOwner(senderShip);
-      // For DMs from others, check allowlist
       const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
         await resolveTlonMessageIngress({
           senderShip,
@@ -1029,7 +990,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           contextBinding,
         });
       if (!ownerDm && !(await resolveChannelIngress()).senderAccess.allowed) {
-        // If owner is configured, queue approval request
         if (effectiveOwnerShip) {
           const approval = createPendingApproval({
             type: "dm",
@@ -1062,7 +1022,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         messageText: resolvedMessageText,
         messageId,
         senderShip,
-        messageContent: essay.content, // Pass raw content for media extraction
+        messageContent: essay.content,
         isGroup: false,
         timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
         turnAdoptionLifecycle,
@@ -1090,43 +1050,28 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   try {
     runtime.log?.("[tlon] Subscribing to firehose updates...");
 
-    // Subscribe to channels firehose (/v2)
-    await api.subscribe({
-      app: "channels",
-      path: "/v2",
-      event: async (event) => {
-        const result = await ingress.receive({ source: "channels", event });
-        if (result.kind === "ignored") {
-          await handleChannelsFirehose(event);
-        }
-      },
-      err: (error) => {
-        runtime.error?.(`[tlon] Channels firehose error: ${String(error)}`);
-      },
-      quit: () => {
-        runtime.log?.("[tlon] Channels firehose subscription ended");
-      },
-    });
-    runtime.log?.("[tlon] Subscribed to channels firehose (/v2)");
-
-    // Subscribe to chat/DM firehose (/v3)
-    await api.subscribe({
-      app: "chat",
-      path: "/v3",
-      event: async (event) => {
-        const result = await ingress.receive({ source: "chat", event });
-        if (result.kind === "ignored") {
-          await handleChatFirehose(event);
-        }
-      },
-      err: (error) => {
-        runtime.error?.(`[tlon] Chat firehose error: ${String(error)}`);
-      },
-      quit: () => {
-        runtime.log?.("[tlon] Chat firehose subscription ended");
-      },
-    });
-    runtime.log?.("[tlon] Subscribed to chat firehose (/v3)");
+    for (const [source, path, label, handleEvent] of [
+      ["channels", "/v2", "Channels", handleChannelsFirehose],
+      ["chat", "/v3", "Chat", handleChatFirehose],
+    ] as const) {
+      await api.subscribe({
+        app: source,
+        path,
+        event: async (event) => {
+          const result = await ingress.receive({ source, event });
+          if (result.kind === "ignored") {
+            await handleEvent(event);
+          }
+        },
+        err: (error) => {
+          runtime.error?.(`[tlon] ${label} firehose error: ${String(error)}`);
+        },
+        quit: () => {
+          runtime.log?.(`[tlon] ${label} firehose subscription ended`);
+        },
+      });
+      runtime.log?.(`[tlon] Subscribed to ${source} firehose (${path})`);
+    }
 
     // Subscribe to contacts updates to track nickname changes
     await api.subscribe({
@@ -1135,7 +1080,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       event: (event: unknown) => {
         try {
           const eventRecord = asRecord(event);
-          // Look for self profile updates
           if (eventRecord?.self) {
             const selfUpdate = asRecord(eventRecord.self);
             const contact = asRecord(selfUpdate?.contact);
@@ -1165,7 +1109,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     settingsManager.onChange((newSettings) => {
       currentSettings = newSettings;
 
-      // Update watched channels if settings changed
       if (newSettings.groupChannels?.length) {
         const newChannels = newSettings.groupChannels;
         for (const ch of newChannels) {
@@ -1266,9 +1209,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     // Subscribe to foreigns for auto-accepting group invites
     // Always subscribe so we can hot-reload the setting via settings store
     {
-      const processedGroupInvites = new Set<string>();
+      const processedGroupInvites = createActiveSnapshotTracker();
 
-      // Helper to process pending invites
       const processPendingInvites = async (foreigns: Foreigns, propagateWriteFailures = false) => {
         if (!foreigns || typeof foreigns !== "object") {
           return;
@@ -1329,8 +1271,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               requestingShip: inviterShip,
               groupFlag,
             });
-            await queueApprovalRequest(approval);
-            processedGroupInvites.add(groupFlag);
+            processedGroupInvites.addIfAccepted(groupFlag, await queueApprovalRequest(approval));
             continue;
           }
 
@@ -1347,7 +1288,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         }
       };
 
-      // Process existing pending invites from init data
       if (initForeigns) {
         try {
           await processPendingInvites(initForeigns);
@@ -1384,7 +1324,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
     }
 
-    // Discover channels to watch
     if (effectiveAutoDiscoverChannels) {
       const discoveredChannels = await fetchAllChannels(api, runtime);
       for (const channelNest of discoveredChannels) {
@@ -1393,7 +1332,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       runtime.log?.(`[tlon] Watching ${watchedChannels.size} channel(s)`);
     }
 
-    // Log watched channels
     for (const channelNest of watchedChannels) {
       runtime.log?.(`[tlon] Watching channel: ${channelNest}`);
     }
@@ -1403,7 +1341,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     ingress.start();
     runtime.log?.("[tlon] Connected! Firehose subscriptions active");
 
-    // Periodically refresh channel discovery
     const pollInterval = setInterval(
       () => {
         void (async () => {

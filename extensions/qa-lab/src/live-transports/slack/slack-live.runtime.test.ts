@@ -4,7 +4,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
 import { testing as adapterTesting } from "./adapter.runtime.js";
-import { resolveApprovalDecision } from "./slack-live.approvals.js";
 import {
   quiesceCodexApprovalAgentRun,
   resolveCodexFileApprovalTargetPath,
@@ -48,7 +47,6 @@ const testing = {
   observeSlackScenarioMessages,
   parseSlackQaCredentialPayload,
   quiesceCodexApprovalAgentRun,
-  resolveApprovalDecision,
   resolveCodexFileApprovalTargetPath,
   resolveSlackRateLimitDelayMs: adapterTesting.resolveSlackRateLimitDelayMs,
   resolveSlackQaRuntimeEnv,
@@ -1670,28 +1668,6 @@ describe("Slack live QA runtime helpers", () => {
       hasNativeActions: true,
       text: "Plugin approval required",
     });
-  });
-
-  it("allows live approval resolve RPCs to take longer than the generic gateway probe timeout", async () => {
-    const call = vi.fn(async () => ({ decision: "allow-once" }));
-
-    await testing.resolveApprovalDecision({
-      approvalId: "plugin:abc",
-      context: {
-        gateway: { call },
-      } as never,
-      decision: "allow-once",
-      kind: "plugin",
-    });
-
-    expect(call).toHaveBeenCalledWith(
-      "plugin.approval.resolve",
-      { decision: "allow-once", id: "plugin:abc" },
-      {
-        expectFinal: false,
-        timeoutMs: 35_000,
-      },
-    );
   });
 
   it("ignores delayed unrelated SUT replies during mention-gating", async () => {

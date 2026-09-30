@@ -64,35 +64,29 @@ function resolveClaude5Cost(
     : undefined;
 }
 
+function buildRegionalClaude5Models(
+  region: string,
+  id: string,
+  name: string,
+  costs: typeof OPUS_5_COST | typeof SONNET_5_COST,
+) {
+  const cost = resolveClaude5Cost(region, costs);
+  return cost
+    ? [
+        buildAnthropicVertexModel({
+          id,
+          name,
+          cost,
+          mediaInput: {
+            image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+          },
+          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        }),
+      ]
+    : [];
+}
+
 function buildAnthropicVertexCatalog(region: string) {
-  const opus5Cost = resolveClaude5Cost(region, OPUS_5_COST);
-  const opus5 = opus5Cost
-    ? [
-        buildAnthropicVertexModel({
-          id: "claude-opus-5",
-          name: "Claude Opus 5",
-          cost: opus5Cost,
-          mediaInput: {
-            image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-          },
-          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-        }),
-      ]
-    : [];
-  const sonnet5Cost = resolveClaude5Cost(region, SONNET_5_COST);
-  const sonnet5 = sonnet5Cost
-    ? [
-        buildAnthropicVertexModel({
-          id: "claude-sonnet-5",
-          name: "Claude Sonnet 5",
-          cost: sonnet5Cost,
-          mediaInput: {
-            image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-          },
-          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-        }),
-      ]
-    : [];
   return [
     buildAnthropicVertexModel({
       id: "claude-fable-5",
@@ -100,14 +94,14 @@ function buildAnthropicVertexCatalog(region: string) {
       cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
       thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
     }),
-    ...opus5,
+    ...buildRegionalClaude5Models(region, "claude-opus-5", "Claude Opus 5", OPUS_5_COST),
     buildAnthropicVertexModel({
       id: "claude-mythos-5",
       name: "Claude Mythos 5",
       cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
       thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
     }),
-    ...sonnet5,
+    ...buildRegionalClaude5Models(region, "claude-sonnet-5", "Claude Sonnet 5", SONNET_5_COST),
     buildAnthropicVertexModel({
       id: "claude-opus-4-8",
       name: "Claude Opus 4.8",

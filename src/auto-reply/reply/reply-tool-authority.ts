@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -116,11 +117,7 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     groupChannel:
       normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
     groupSpace: normalizeOptionalString(ctx.GroupSpace),
-    memberRoleIds: Array.isArray(ctx.MemberRoleIds)
-      ? ctx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
-          (roleId): roleId is string => Boolean(roleId),
-        )
-      : undefined,
+    memberRoleIds: normalizeArrayBackedTrimmedStringList(ctx.MemberRoleIds),
     spawnedBy: normalizeOptionalString(params.sessionEntry?.spawnedBy),
     senderId: normalizeOptionalString(ctx.SenderId),
     senderName: normalizeOptionalString(ctx.SenderName),
@@ -143,6 +140,7 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
 }
 
 function snapshotFollowupRunToolAuthority(run: ReplyToolAuthorityInput): ReplyToolAuthorityInput {
+  const handoff = run.run.trustedInternalHandoff;
   const toolsAllow = run.toolsAllow ? [...run.toolsAllow] : undefined;
   const intersection = run.toolsAllow
     ? readToolAllowlistIntersection(run.toolsAllow)?.map((restriction) => restriction.slice())
@@ -162,7 +160,20 @@ function snapshotFollowupRunToolAuthority(run: ReplyToolAuthorityInput): ReplyTo
       inputProvenance: structuredClone(run.run.inputProvenance),
       scheduledToolPolicy: structuredClone(run.run.scheduledToolPolicy),
       runtimePluginToolGrant: structuredClone(run.run.runtimePluginToolGrant),
-      trustedInternalHandoff: structuredClone(run.run.trustedInternalHandoff),
+      // Copy policy facts while retaining the settle owner's live revocation check.
+      trustedInternalHandoff: handoff
+        ? {
+            ...handoff,
+            ...(handoff.settleBatch
+              ? {
+                  settleBatch: {
+                    ...handoff.settleBatch,
+                    sourceSessionKeys: [...handoff.settleBatch.sourceSessionKeys],
+                  },
+                }
+              : {}),
+          }
+        : undefined,
       toolOverrides: structuredClone(run.run.toolOverrides),
       execOverrides: structuredClone(run.run.execOverrides),
       bashElevated: structuredClone(run.run.bashElevated),
@@ -348,6 +359,7 @@ function resolveReplyToolAuthorityInputFingerprint(
   const authority = snapshot.operatorAuthority;
   assertCurrentOperatorAuthority(authority);
   const screenTarget = resolveReplyScreenToolTarget(snapshot, capabilityProfile);
+  const themeProfileId = resolveReplyThemeProfileId(snapshot, capabilityProfile);
   return createHash("sha256")
     .update(
       stableStringify({
@@ -356,8 +368,8 @@ function resolveReplyToolAuthorityInputFingerprint(
         policy: capabilityProfile.policy,
         operatorAuthority: authority
           ? {
-              profileId: authority.profileId,
               scopes: [...new Set(authority.scopes)].toSorted(),
+              rolePolicy: authority.rolePolicy,
               gatewayAccessGrant:
                 authority.gatewayAccessGrant === undefined
                   ? resolveReplyOperatorAuthorityKey(authority)
@@ -388,11 +400,15 @@ function resolveReplyToolAuthorityInputFingerprint(
             ? { source: "auto" }
             : { id: execution.authProfileId },
         clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
+        // Own-profile targets retain the running turn's original bindings.
         gatewayUiCommandTarget:
           authority && screenTarget?.profileId === authority.profileId
-            ? { profileId: screenTarget.profileId }
+            ? { ownProfile: true }
             : screenTarget,
-        themeProfileId: resolveReplyThemeProfileId(snapshot, capabilityProfile),
+        themeProfileId:
+          authority && themeProfileId === authority.profileId
+            ? { ownProfile: true }
+            : themeProfileId,
         toolBindings: execution.toolBindings,
       }),
     )
@@ -414,6 +430,12 @@ export function prepareReplyToolAuthority(
 ): ReplyToolAuthoritySnapshot {
   const snapshot = snapshotFollowupRunToolAuthority(run);
   return {
+    personalToolOwner: {
+      operatorAuthority: snapshot.operatorAuthority,
+      senderId: snapshot.run.senderId,
+      senderName: snapshot.run.senderName,
+      gatewayUiCommandTarget: snapshot.run.gatewayUiCommandTarget,
+    },
     requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route) => resolveReplyToolAuthorityInputFingerprint(snapshot, route),
     project: (overlay, route) => {

@@ -5,8 +5,12 @@ import {
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import {
+  getSqliteWorkerStateContext,
+  withSqliteWorkerExistingDatabase,
+} from "../infra/sqlite-worker-state-context.js";
 import {
   isPluginStateWorkerCommand,
   pluginStateWorkerOperations,
@@ -71,14 +75,25 @@ export function createSqliteWorkerBackend(
 
 export function openExistingSqliteWorkerBackend(
   _input: undefined,
-  context: { databasePath: string },
+  context: { databasePath: string; existingIdentity: string },
 ): OpenClawStateWorkerBackend {
-  return createSharedStateWorkerBackend(context);
+  const identity = context.existingIdentity;
+  assertExistingDatabaseIdentity(context.databasePath, identity);
+  const backend = createSharedStateWorkerBackend(context, undefined, identity);
+  return {
+    ...backend,
+    execute(command) {
+      return withSqliteWorkerExistingDatabase(context.databasePath, identity, () =>
+        backend.execute(command),
+      );
+    },
+  };
 }
 
 function createSharedStateWorkerBackend(
   context: { databasePath: string },
   initialDatabase?: OpenClawStateDatabase,
+  existingIdentity?: string,
 ): OpenClawStateWorkerBackend {
   let nativeDatabase = initialDatabase;
   let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
@@ -212,6 +227,10 @@ function createSharedStateWorkerBackend(
         );
       }
       if (command.type === "stateLease.acquire") {
+        if (command.input.schemaPolicy === "existing" && existingIdentity) {
+          // Existing-schema leases open a separate native connection outside open().
+          assertExistingDatabaseIdentity(context.databasePath, existingIdentity);
+        }
         return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);
       }
       if (

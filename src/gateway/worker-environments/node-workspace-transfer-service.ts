@@ -29,26 +29,25 @@ import {
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
-type DownloadCapability = {
-  direction: "download";
-  token: string;
+type TransferBinding = {
   environmentId: string;
   ownerEpoch: number;
   sessionId: string;
   generation: number;
+};
+
+type DownloadCapability = TransferBinding & {
+  direction: "download";
+  token: string;
   manifestRef: string;
   expiresAtMs: number;
   isAuthorized?: () => boolean;
   signal?: AbortSignal;
 };
 
-type UploadOperation = {
+type UploadOperation = TransferBinding & {
   direction: "upload";
   token: string;
-  environmentId: string;
-  ownerEpoch: number;
-  sessionId: string;
-  generation: number;
   baseManifestRef: string;
   expiresAtMs: number;
   state: "ready" | "receiving" | "completed";
@@ -59,11 +58,7 @@ type UploadOperation = {
   disposal?: Promise<void>;
 };
 
-type TransferContext = {
-  environmentId: string;
-  ownerEpoch: number;
-  sessionId: string;
-  generation: number;
+type TransferContext = TransferBinding & {
   localPath?: string;
   temporaryRoot: string;
   currentManifestRef: string;
@@ -82,6 +77,13 @@ type TransferAuthorization = {
   capability: DownloadCapability | UploadOperation;
   route: NodeWorkspaceTransferHttpRoute;
 };
+
+type TransferPreparation = Pick<
+  TransferContext,
+  "environmentId" | "ownerEpoch" | "sessionId" | "generation" | "isAuthorized"
+> & { signal?: AbortSignal; authorize?: () => void };
+type RepositoryPreparation = TransferPreparation & { baseCommit: string; baseManifestRef: string };
+type SyncPreparation = TransferPreparation & { localPath: string };
 
 function capabilityMatchesContext(
   capability: DownloadCapability | UploadOperation,
@@ -273,6 +275,69 @@ export function createNodeWorkspaceTransferService(options: {
       : route.manifestRef === capability.manifestRef;
   };
 
+  function replaceContext(params: RepositoryPreparation & { kind: "repository" }): Promise<void>;
+  function replaceContext(
+    params: SyncPreparation & { kind: "sync" },
+  ): Promise<{ snapshot: NodeWorkspaceTransferSnapshot; token: string }>;
+  async function replaceContext(
+    params: (RepositoryPreparation & { kind: "repository" }) | (SyncPreparation & { kind: "sync" }),
+  ): Promise<void | { snapshot: NodeWorkspaceTransferSnapshot; token: string }> {
+    const { authorize, ...owner } = params;
+    const { assertCurrent, isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
+      owner,
+      authorize,
+      options.getOwner,
+    );
+    return await contextOperations.enqueue(params.environmentId, async () => {
+      assertCurrent();
+      const previous = contexts.get(params.environmentId);
+      if (previous) {
+        await closeContext(previous);
+        assertCurrent();
+      }
+      await ensureTemporaryRoot();
+      assertCurrent();
+      const context: TransferContext = {
+        ...owner,
+        localPath: params.kind === "sync" ? await fsp.realpath(params.localPath) : undefined,
+        temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
+        currentManifestRef: params.kind === "repository" ? params.baseManifestRef : "",
+        baseCommit: params.kind === "repository" ? params.baseCommit : null,
+        snapshots: new Map(),
+        downloads: new Map(),
+        abortController: new AbortController(),
+      };
+      watchTransferOwnerSignal(context, params.signal);
+      try {
+        assertCurrent();
+        let snapshot: NodeWorkspaceTransferSnapshot | undefined;
+        if (params.kind === "sync") {
+          snapshot = await prepareNodeWorkspaceTransferSnapshot({
+            localPath: params.localPath,
+            temporaryRoot: context.temporaryRoot,
+            signal: AbortSignal.any([
+              context.abortController.signal,
+              AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+            ]),
+          });
+          assertCurrent();
+          context.snapshots.set(snapshot.manifestRef, snapshot);
+          context.baseCommit = snapshot.manifest.baseCommit;
+          context.currentManifestRef = snapshot.manifestRef;
+        }
+        contexts.set(context.environmentId, context);
+        // Only this download retains initiating-turn authority; future workspace
+        // operations keep their independent placement owner.
+        return snapshot
+          ? { snapshot, token: mintDownload(context, snapshot.manifestRef, isOperationAuthorized) }
+          : undefined;
+      } catch (error) {
+        await closeContext(context);
+        throw error;
+      }
+    });
+  }
+
   return {
     initialize: ensureTemporaryRoot,
 
@@ -310,116 +375,10 @@ export function createNodeWorkspaceTransferService(options: {
       };
     },
 
-    async prepareRepository(params: {
-      environmentId: string;
-      ownerEpoch: number;
-      sessionId: string;
-      generation: number;
-      baseCommit: string;
-      baseManifestRef: string;
-      isAuthorized: () => boolean;
-      signal?: AbortSignal;
-      authorize?: () => void;
-    }): Promise<void> {
-      const { authorize, ...owner } = params;
-      const { assertCurrent } = createNodeWorkspaceSyncAuthorization(
-        owner,
-        authorize,
-        options.getOwner,
-      );
-      await contextOperations.enqueue(params.environmentId, async () => {
-        assertCurrent();
-        const previous = contexts.get(params.environmentId);
-        if (previous) {
-          await closeContext(previous);
-          assertCurrent();
-        }
-        await ensureTemporaryRoot();
-        assertCurrent();
-        const abortController = new AbortController();
-        const context: TransferContext = {
-          ...owner,
-          temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
-          currentManifestRef: params.baseManifestRef,
-          snapshots: new Map(),
-          downloads: new Map(),
-          abortController,
-        };
-        watchTransferOwnerSignal(context, params.signal);
-        try {
-          assertCurrent();
-          contexts.set(params.environmentId, context);
-        } catch (error) {
-          await closeContext(context);
-          throw error;
-        }
-      });
-    },
+    prepareRepository: (params: RepositoryPreparation) =>
+      replaceContext({ ...params, kind: "repository" }),
 
-    async prepareSync(params: {
-      environmentId: string;
-      ownerEpoch: number;
-      sessionId: string;
-      generation: number;
-      localPath: string;
-      isAuthorized: () => boolean;
-      signal?: AbortSignal;
-      authorize?: () => void;
-    }) {
-      const { authorize, ...owner } = params;
-      const { assertCurrent, isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
-        owner,
-        authorize,
-        options.getOwner,
-      );
-      return await contextOperations.enqueue(params.environmentId, async () => {
-        assertCurrent();
-        const previous = contexts.get(params.environmentId);
-        if (previous) {
-          await closeContext(previous);
-          assertCurrent();
-        }
-        await ensureTemporaryRoot();
-        assertCurrent();
-        const abortController = new AbortController();
-        const context: TransferContext = {
-          ...owner,
-          localPath: await fsp.realpath(params.localPath),
-          temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
-          currentManifestRef: "",
-          snapshots: new Map(),
-          baseCommit: null,
-          downloads: new Map(),
-          abortController,
-        };
-        watchTransferOwnerSignal(context, params.signal);
-        try {
-          assertCurrent();
-          const snapshot = await prepareNodeWorkspaceTransferSnapshot({
-            localPath: params.localPath,
-            temporaryRoot: context.temporaryRoot,
-            signal: AbortSignal.any([
-              context.abortController.signal,
-              AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
-            ]),
-          });
-          assertCurrent();
-          context.snapshots.set(snapshot.manifestRef, snapshot);
-          context.baseCommit = snapshot.manifest.baseCommit;
-          context.currentManifestRef = snapshot.manifestRef;
-          contexts.set(context.environmentId, context);
-          // Only this download retains initiating-turn authority; future workspace
-          // operations keep their independent placement owner.
-          return {
-            snapshot,
-            token: mintDownload(context, snapshot.manifestRef, isOperationAuthorized),
-          };
-        } catch (error) {
-          await closeContext(context);
-          throw error;
-        }
-      });
-    },
+    prepareSync: (params: SyncPreparation) => replaceContext({ ...params, kind: "sync" }),
 
     prepareUpload(environmentId: string, baseManifestRef: string, authorize?: () => void): string {
       authorize?.();

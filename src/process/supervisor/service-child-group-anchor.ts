@@ -46,15 +46,21 @@ function commandStdio(start: ServiceChildStart): {
   return { stdio, lineageFd, inheritedLineageFds };
 }
 
-function delay(ms: number): Promise<void> {
+function delay(ms: number, retainOwner = false): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
-    timer.unref?.();
+    if (!retainOwner) {
+      timer.unref?.();
+    }
   });
 }
 
 export function runServiceChildGroupAnchor(): void {
   let start: ServiceChildStart | undefined;
+  let subreaper:
+    | ReturnType<typeof import("./linux-child-subreaper.js").acquireLinuxChildSubreaper>
+    | undefined;
+  let descendantsReaped = false;
   let state: AnchorState = "starting";
   let sequence = 0;
   let lastHostSequence = 0;
@@ -109,6 +115,29 @@ export function runServiceChildGroupAnchor(): void {
     if (!start || state === "closed") {
       return;
     }
+    if (start.treeOwnership === "linux-subreaper") {
+      // Never exchange owner death for descendant extinction. Startup failure
+      // before admission has no application root; every admitted scope must drain.
+      if (command && !descendantsReaped) {
+        throw new Error("native owner cannot close before descendant extinction");
+      }
+      state = "closed";
+      for (const fd of new Set(start.parentLineageFds ?? [])) {
+        closeSync(fd);
+      }
+      closingSequence = sequence + 1;
+      await send({
+        type: "closing",
+        reason,
+        ...(descendantsReaped ? { descendantsReaped: true } : {}),
+      });
+      const acknowledged = await Promise.race([
+        retirementReady.promise,
+        delay(Math.max(0, deadline - Date.now())).then(() => false),
+      ]);
+      control?.end(() => process.exit(acknowledged ? 0 : 1));
+      return;
+    }
     state = "closed";
     // Retained hosts have no observer outside this group. Killing the local
     // reader with unresolved lineage must not certify escaped descendants gone.
@@ -158,6 +187,11 @@ export function runServiceChildGroupAnchor(): void {
     // A write callback only proves kernel acceptance. Keep the exact anchor alive until the
     // host records the authoritative spawn failure and acknowledges it on this same channel.
     await Promise.race([startupErrorAcknowledged.promise, retirementReady.promise]);
+    if (subreaper) {
+      while (!(descendantsReaped = subreaper.drain("SIGKILL"))) {
+        await delay(10, true);
+      }
+    }
     await closeAuthority("lineage-lost", hardKill);
   };
 
@@ -182,6 +216,51 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     const cleanupDeadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+    if (subreaper) {
+      try {
+        while (
+          !subreaper.drain(forceCleanup || Date.now() >= cleanupDeadline ? "SIGKILL" : "SIGTERM")
+        ) {
+          // Yield so libuv can consume its one direct root. Adopted children stay
+          // with the native wait owner even after the caller gives up waiting.
+          await delay(10, true);
+        }
+        descendantsReaped = true;
+        await rootExited.promise;
+        await rootResultDelivery;
+        await rootSettledDone.promise;
+        await lineageDone.promise;
+        if (!lineageClosed) {
+          throw new Error("native owner lost lineage observation before EOF");
+        }
+        if (start.ownedWorker && lineageCompletion) {
+          let recorded = false;
+          try {
+            recorded = lineageCompletion.recordNodeWorkerDescendantsReaped(start.cleanupBinding);
+          } catch {
+            // The live host can still consume this exact kernel proof. A new
+            // supervisor must retain custody without the separate durable fact.
+          }
+          if (!recorded) {
+            await send({
+              type: "output",
+              stream: "stderr",
+              chunk:
+                "node worker descendant extinction was not recorded; restart recovery retains capacity\n",
+            });
+          }
+        }
+        await closeAuthority(reason, false);
+      } catch (error) {
+        // Failed native custody remains owned and unknown. Transport closure must
+        // not turn a denied signal or failed durable write into a closing receipt.
+        await send({
+          type: "result-error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
     const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
     if (start.ownedWorker) {
       if (!forceCleanup) {
@@ -319,11 +398,18 @@ export function runServiceChildGroupAnchor(): void {
         return;
       }
       workerStarted = true;
-      command.send({ type: "openclaw-worker-start-v1", lineageFds: workerLineageFds }, (error) => {
-        if (error) {
-          void requestCleanup("parent-lost");
-        }
-      });
+      command.send(
+        {
+          type: "openclaw-worker-start-v1",
+          lineageFds: workerLineageFds,
+          ...(start.nativeProcessOwner ? { nativeProcessOwner: start.nativeProcessOwner } : {}),
+        },
+        (error) => {
+          if (error) {
+            void requestCleanup("parent-lost");
+          }
+        },
+      );
       return;
     }
     void requestCleanup("cancel", message.signal);
@@ -380,6 +466,21 @@ export function runServiceChildGroupAnchor(): void {
       next.ownedWorker && (typeof WORKER_DEPLOY_BUILD !== "boolean" || !WORKER_DEPLOY_BUILD)
         ? await import("../../node-host/node-worker-lineage-completion.js").catch(() => undefined)
         : undefined;
+    if (next.treeOwnership === "linux-subreaper") {
+      try {
+        const nativeOwner =
+          typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD
+            ? undefined
+            : await import("./linux-child-subreaper.js");
+        if (!nativeOwner) {
+          throw new Error("portable workers require their admitted host-native process owner");
+        }
+        subreaper = nativeOwner.acquireLinuxChildSubreaper();
+      } catch (error) {
+        await reportStartupFailure(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
     if (
       start !== next ||
       control !== socket ||
@@ -403,6 +504,9 @@ export function runServiceChildGroupAnchor(): void {
         detached: false,
         windowsHide: true,
       });
+      if (command.pid) {
+        subreaper?.retainLibuvChild(command.pid, command);
+      }
       // Failed Bun spawns have no stdio. Preserve the spawn error before checking lineage.
       await once(command, "spawn");
     } catch (error) {
@@ -535,6 +639,7 @@ export function runServiceChildGroupAnchor(): void {
         type: "ready",
         commandPid: command.pid,
         anchorPid: process.pid,
+        ...(subreaper ? { treeOwnership: "linux-subreaper" as const } : {}),
       });
     }
     command.once("exit", (code, signal) => {
@@ -544,19 +649,21 @@ export function runServiceChildGroupAnchor(): void {
       rootResultDelivery = send({ type: "root-result", code, signal });
       rootExited.resolve();
       void settleRoot();
+      // Worker death retires its scope, but an ordinary command may deliberately
+      // leave background descendants. Their lineage still owns natural completion.
+      if (subreaper && start?.ownedWorker && state === "active") {
+        void requestCleanup("lineage-lost");
+      }
     });
   };
 
-  process.on("SIGTERM", () => {
+  const onParentSignal = () => {
     if (state === "active" || (start && state === "starting")) {
       void requestCleanup("parent-lost");
     }
-  });
-  process.on("SIGINT", () => {
-    if (state === "active" || (start && state === "starting")) {
-      void requestCleanup("parent-lost");
-    }
-  });
+  };
+  process.on("SIGTERM", onParentSignal);
+  process.on("SIGINT", onParentSignal);
   process.once("disconnect", () => {
     retirementReady.resolve(false);
     if (state !== "closed") {

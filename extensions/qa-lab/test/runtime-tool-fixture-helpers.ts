@@ -39,6 +39,59 @@ async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSu
 type RuntimeToolFixtureConfig = Parameters<typeof runRuntimeToolFixture>[1];
 type RuntimeToolFixtureDeps = Parameters<typeof runRuntimeToolFixture>[2];
 
+function transcriptToolCall(
+  toolName: string,
+  phase: "happy" | "failure",
+  input: Record<string, unknown>,
+) {
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "tool_use",
+        id: `call-${toolName}-${phase}`,
+        name: toolName,
+        input,
+      },
+    ],
+  };
+}
+
+function transcriptToolResult(
+  toolName: string,
+  phase: "happy" | "failure",
+  content: string,
+  isError?: boolean,
+) {
+  return {
+    role: "tool",
+    toolName,
+    tool_call_id: `call-${toolName}-${phase}`,
+    ...(isError === undefined ? {} : { isError }),
+    content,
+  };
+}
+
+function runLiveRuntimeToolFixture(
+  env: QaSuiteRuntimeEnv,
+  params: {
+    toolName?: string;
+    config?: RuntimeToolFixtureConfig;
+    tools?: Iterable<string>;
+    runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
+  } = {},
+) {
+  const toolName = params.toolName ?? "read";
+  return runRuntimeToolFixture(
+    env,
+    params.config ?? runtimeToolFixtureConfig(toolName),
+    runtimeToolFixtureDeps({
+      tools: params.tools ?? [toolName],
+      runAgentPrompt: params.runAgentPrompt,
+    }),
+  );
+}
+
 const MOCK_BASE_URL = "http://127.0.0.1:9999";
 
 function runtimeToolFixtureConfig(
@@ -154,6 +207,32 @@ async function runMockRuntimeToolFixture(params: {
   );
 }
 
+async function simulateRuntimePatchHappyTurn(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: { sessionKey: string },
+  contents: string | null = "runtime patch\n",
+) {
+  if (params.sessionKey.endsWith(":happy") && contents !== null) {
+    await fs.writeFile(
+      path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt"),
+      contents,
+      "utf8",
+    );
+  }
+  return {};
+}
+
+function runtimePatchAddInput(file = "runtime-tool-fixture-patch.txt") {
+  return `*** Begin Patch\n*** Add File: ${file}\n+runtime patch\n*** End Patch\n`;
+}
+
+function runtimePatchUpdateInput(
+  file = "../runtime-tool-fixture-denied.txt",
+  context = "runtime-tool-fixture-denied-original",
+) {
+  return `*** Begin Patch\n*** Update File: ${file}\n@@\n-${context}\n+runtime patch outside the workspace\n*** End Patch\n`;
+}
+
 export async function writeQaSessionTranscript(
   env: QaSuiteRuntimeEnv,
   sessionKey: string,
@@ -201,8 +280,14 @@ export {
   makeEnv,
   MOCK_BASE_URL,
   mockToolRequests,
+  runLiveRuntimeToolFixture,
   runMockRuntimeToolFixture,
+  runtimePatchAddInput,
+  runtimePatchUpdateInput,
   runtimeToolFixtureConfig,
   runtimeToolFixtureDeps,
+  simulateRuntimePatchHappyTurn,
+  transcriptToolCall,
+  transcriptToolResult,
 };
 export type { RuntimeToolFixtureConfig, RuntimeToolFixtureDeps };

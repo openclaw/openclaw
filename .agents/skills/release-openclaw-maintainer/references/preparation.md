@@ -15,8 +15,8 @@ forward-ports until after publication.
 ## Version and channel
 
 `YYYY.M.PATCH` uses a sequential monthly train number, not the calendar day.
-Choose beta trains from stable/beta tags only; alpha-only tags do not consume a
-train. Continue an existing beta train with its next `beta.N` when appropriate,
+Choose beta trains from stable/beta tags only; historical alpha-only tags do
+not consume a train. Continue an existing beta train with its next `beta.N` when appropriate,
 otherwise increment the highest stable/beta patch and start at `beta.1`.
 Prefer `-beta.N`, never new numeric-only beta suffixes.
 

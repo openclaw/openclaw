@@ -1,10 +1,5 @@
 import type { AssistantMessageEvent, Context, Model, StreamFn } from "@openclaw/llm-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-/**
- * Native Anthropic Messages streaming transport.
- * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
- * back into runtime output blocks, and applies provider request policy.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
@@ -20,6 +15,7 @@ import {
   prepareClaudeNoPrefillRequestContext,
   requiresClaudeAdaptiveThinking,
   resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
@@ -57,11 +53,7 @@ import {
   type AnthropicTransportOptions,
 } from "./anthropic-transport-options.js";
 import { createAssistantOutput } from "./assistant-output.js";
-import {
-  buildGuardedModelFetch,
-  resolveProviderEndpoint,
-  transformTransportMessages,
-} from "./host-policy.js";
+import { buildGuardedModelFetch, resolveProviderEndpoint } from "./host-policy.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
@@ -88,18 +80,6 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
   provider: string;
 };
 
-type AnthropicMessagesClient = {
-  messages: {
-    stream(
-      params: Record<string, unknown>,
-      options?: { signal?: AbortSignal; headers?: Record<string, string> },
-    ): Promise<{
-      response: Response;
-      stream: AsyncIterable<Record<string, unknown>> | Iterable<Record<string, unknown>>;
-    }>;
-  };
-};
-
 function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string {
   if (isDirectAnthropicModel(model) && /^anthropic\//i.test(model.id)) {
     return model.id.replace(/^anthropic\//i, "");
@@ -121,7 +101,8 @@ function isKimiAnthropicProvider(provider: string | undefined): boolean {
 function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean {
   return (
     (usesClaudeFable5MessagesContract(model) ||
-      resolveClaudeOpus5ModelIdentity(model) !== undefined) &&
+      resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+      resolveClaudeSonnet55ModelIdentity(model) !== undefined) &&
     isDirectAnthropicModel(model)
   );
 }
@@ -299,46 +280,42 @@ async function* parseAnthropicSseBody(
   }
 }
 
-function createAnthropicMessagesClient(params: {
+function createAnthropicMessageRequest(params: {
   apiKey?: string | null;
   authToken?: string;
   baseURL?: string;
   defaultHeaders?: Record<string, string>;
   fetch: typeof fetch;
-}): AnthropicMessagesClient {
+}) {
   const url = resolveAnthropicMessagesUrl(params.baseURL);
-  return {
-    messages: {
-      async stream(
-        body: Record<string, unknown>,
-        options?: { signal?: AbortSignal; headers?: Record<string, string> },
-      ) {
-        const headers = new Headers(
-          mergeTransportHeaders(
-            {
-              "content-type": "application/json",
-              "anthropic-version": "2023-06-01",
-              ...(params.apiKey ? { "x-api-key": params.apiKey } : {}),
-              ...(params.authToken ? { authorization: `Bearer ${params.authToken}` } : {}),
-            },
-            params.defaultHeaders,
-          ),
-        );
-        for (const [name, value] of Object.entries(options?.headers ?? {})) {
-          headers.set(name, value);
-        }
-        const response = await params.fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal: options?.signal,
-        });
-        return {
-          response,
-          stream: response.body ? parseAnthropicSseBody(response.body, options?.signal) : [],
-        };
-      },
-    },
+  return async (
+    body: Record<string, unknown>,
+    options?: { signal?: AbortSignal; headers?: Record<string, string> },
+  ) => {
+    const headers = new Headers(
+      mergeTransportHeaders(
+        {
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+          ...(params.apiKey ? { "x-api-key": params.apiKey } : {}),
+          ...(params.authToken ? { authorization: `Bearer ${params.authToken}` } : {}),
+        },
+        params.defaultHeaders,
+      ),
+    );
+    for (const [name, value] of Object.entries(options?.headers ?? {})) {
+      headers.set(name, value);
+    }
+    const response = await params.fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: options?.signal,
+    });
+    return {
+      response,
+      stream: response.body ? parseAnthropicSseBody(response.body, options?.signal) : [],
+    };
   };
 }
 
@@ -394,7 +371,7 @@ function createAnthropicTransportClient(params: {
   if (copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model))) {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
-      client: createAnthropicMessagesClient({
+      request: createAnthropicMessageRequest({
         apiKey: null,
         authToken: apiKey,
         baseURL: model.baseUrl,
@@ -421,7 +398,7 @@ function createAnthropicTransportClient(params: {
     const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: true });
     const identity = buildAnthropicClaudeCodeIdentity(betaHeader, model.headers, optionHeaders);
     return {
-      client: createAnthropicMessagesClient({
+      request: createAnthropicMessageRequest({
         apiKey: null,
         authToken: apiKey,
         baseURL: model.baseUrl,
@@ -446,9 +423,17 @@ function createAnthropicTransportClient(params: {
     },
     model.headers,
     optionHeaders,
+    // Attribution policy headers are protected over config and caller headers, as on the
+    // OpenAI transports (for example OpenRouter or Vercel AI Gateway Messages endpoints).
+    getAiTransportHost().resolveProviderRequestHeaders({
+      provider: model.provider,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      model,
+    }),
   );
   return {
-    client: createAnthropicMessagesClient({
+    request: createAnthropicMessageRequest({
       apiKey,
       baseURL: model.baseUrl,
       defaultHeaders,
@@ -496,7 +481,12 @@ async function buildAnthropicParams(
   });
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const messages = await convertAnthropicMessages(
-    transformTransportMessages(replayPlan.messages, model, normalizeAnthropicToolCallId),
+    getAiTransportHost().transformTransportMessages(
+      replayPlan.messages,
+      model,
+      normalizeAnthropicToolCallId,
+      undefined,
+    ),
     model,
     isOAuthToken,
     {
@@ -514,7 +504,7 @@ async function buildAnthropicParams(
     max_tokens: maxTokens,
     stream: true,
   };
-  // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
+  // Fable 5, Opus 5, and Sonnet 5.5 safety classifiers can decline benign-adjacent work.
   // Anthropic owns the per-category fallback recommendation so routing can
   // evolve without a client release.
   if (!isOAuthToken && useAnthropicServerSideFallback(model)) {
@@ -573,7 +563,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         }
         const transportOptions = resolveAnthropicTransportOptions(model, options, apiKey);
         const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
-        const { client, isOAuthToken, directApiKeyBetaHeader, claudeCodeVersion } =
+        const { request, isOAuthToken, directApiKeyBetaHeader, claudeCodeVersion } =
           createAnthropicTransportClient({
             model,
             context: requestContext,
@@ -604,7 +594,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const bindingHeaders =
           applyAnthropicThinkingBindingControls(params, betaHeader) ??
           (betaHeader ? { "anthropic-beta": betaHeader } : undefined);
-        const { response, stream: anthropicStream } = await client.messages.stream(
+        const { response, stream: anthropicStream } = await request(
           { ...params, stream: true },
           { signal: transportOptions.signal, headers: bindingHeaders },
         );

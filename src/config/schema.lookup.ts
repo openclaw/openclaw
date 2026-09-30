@@ -125,6 +125,20 @@ function resolveLookupChildSchema(
   return null;
 }
 
+function resolveLookupSchema(
+  response: ConfigSchemaResponse,
+  parts: readonly string[],
+): JsonSchemaObject | null {
+  let current = asSchemaObject(response.schema);
+  for (const segment of parts) {
+    if (!current) {
+      break;
+    }
+    current = resolveLookupChildSchema(current, segment);
+  }
+  return current;
+}
+
 type ConfigSchemaPathSegmentKind = "property" | "record-key" | "array-index" | "invalid-record-key";
 
 function classifyLookupChildSchema(
@@ -234,18 +248,8 @@ export function classifyConfigSchemaPathSegment(
   parentParts: readonly string[],
   segment: string,
 ): ConfigSchemaPathSegmentKind | null {
-  let current = asSchemaObject(response.schema);
-  if (!current) {
-    return null;
-  }
-  for (const parentPart of parentParts) {
-    const next = resolveLookupChildSchema(current, parentPart);
-    if (!next) {
-      return null;
-    }
-    current = next;
-  }
-  return classifyLookupChildSchema(current, segment);
+  const current = resolveLookupSchema(response, parentParts);
+  return current ? classifyLookupChildSchema(current, segment) : null;
 }
 
 function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): JsonSchemaNode {
@@ -392,16 +396,9 @@ export function lookupConfigSchema(
     return null;
   }
 
-  let current = asSchemaObject(response.schema);
+  const current = resolveLookupSchema(response, parts);
   if (!current) {
     return null;
-  }
-  for (const segment of parts) {
-    const next = resolveLookupChildSchema(current, segment);
-    if (!next) {
-      return null;
-    }
-    current = next;
   }
 
   // Parent and child lookups share path parsing only for this response.

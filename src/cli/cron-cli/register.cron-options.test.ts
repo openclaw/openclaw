@@ -68,6 +68,48 @@ describe("shared automation mutation options", () => {
     callGatewayFromCli.mockResolvedValue({ ok: true });
   });
 
+  it.each(
+    ["add", "edit"].flatMap((operation) =>
+      [
+        { schedule: ["--at", "2030-01-01T09:00:00"], tz: "Invalid/Timezone", flag: "--tz" },
+        { schedule: ["--at", "2030-01-01T09:00:00Z"], tz: "Invalid/Timezone", flag: "--tz" },
+        { schedule: ["--cron", "0 9 * * *"], tz: "Invalid/Timezone", flag: "--tz" },
+        { schedule: ["--at", "2030-02-30T09:00:00"], tz: "UTC", flag: "--at" },
+        { schedule: ["--at", "2027-03-14T02:30:00"], tz: "America/New_York", flag: "--at" },
+        ...(operation === "edit" ? [{ schedule: [], tz: "Invalid/Timezone", flag: "--tz" }] : []),
+      ].map(({ schedule, tz, flag }) => ({ operation, schedule, tz, flag })),
+    ),
+  )(
+    "reports invalid schedule input as $flag on $operation with $schedule in $tz",
+    async ({ operation, schedule, tz, flag }) => {
+      callGatewayFromCli.mockImplementation(async (method: string) =>
+        method === "cron.get"
+          ? { id: "job-1", schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" } }
+          : { ok: true },
+      );
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const args =
+        operation === "add"
+          ? ["add", "--name", "timezone-proof", "--agent", "main", "--message", "hello"]
+          : ["edit", "job-1"];
+      try {
+        await expect(
+          createMutationProgram().parseAsync([...args, ...schedule, "--tz", tz], { from: "user" }),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining(
+            flag === "--tz"
+              ? "Invalid --tz. Use an IANA timezone such as America/New_York."
+              : "Invalid --at. Use an ISO timestamp or a duration like 20m.",
+          ),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
+
   it.each([
     { operation: "add", method: "cron.add", args: ["add", "--name", "shell", "--every", "1h"] },
     { operation: "edit", method: "cron.update", args: ["edit", "job-1"] },
@@ -87,6 +129,41 @@ describe("shared automation mutation options", () => {
             : { patch: { payload } },
         ),
       );
+    },
+  );
+
+  it.each(
+    ["add", "create"].flatMap((operation) =>
+      ["12", "bogus"].map((timeout) => ({ operation, timeout })),
+    ),
+  )(
+    "rejects --timeout-seconds=$timeout for systemEvent payloads on $operation before RPC",
+    async ({ operation, timeout }) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      try {
+        await expect(
+          createMutationProgram().parseAsync(
+            [
+              operation,
+              "--name",
+              "system-event-timeout",
+              "--every",
+              "1h",
+              "--system-event",
+              "tick",
+              "--timeout-seconds",
+              timeout,
+            ],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("--timeout-seconds is not supported for systemEvent jobs."),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
     },
   );
 

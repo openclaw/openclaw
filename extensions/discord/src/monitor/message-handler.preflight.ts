@@ -51,7 +51,6 @@ import {
   matchesActiveDiscordMentionPatterns,
   resolveDiscordMentionState,
   resolveInjectedBoundThreadLookupRecord,
-  resolvePreflightMentionRequirement,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
 import { buildDiscordPreflightHistoryEntry } from "./message-handler.preflight-history.js";
@@ -460,7 +459,6 @@ export async function preflightDiscordMessage(
     return null;
   }
   const isBoundThreadSession = Boolean(threadBinding && threadChannel);
-  const bypassMentionRequirement = isBoundThreadSession;
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,
@@ -581,7 +579,7 @@ export async function preflightDiscordMessage(
     memberRoleIds,
   });
 
-  const mentionPolicyParams = {
+  const mentionPolicy = resolveDiscordMentionPolicy({
     isGuildMessage,
     isThread: Boolean(threadChannel),
     botId,
@@ -590,13 +588,9 @@ export async function preflightDiscordMessage(
       : undefined,
     channelConfig,
     guildInfo,
-  };
-  const shouldRequireMentionByConfig =
-    resolveDiscordMentionPolicy(mentionPolicyParams).requireMention;
-  const shouldRequireMention = resolvePreflightMentionRequirement({
-    shouldRequireMention: shouldRequireMentionByConfig,
-    bypassMentionRequirement,
   });
+  const shouldRequireMentionByConfig = mentionPolicy.requireMention;
+  const shouldRequireMention = shouldRequireMentionByConfig && !isBoundThreadSession;
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
     guildInfo,
@@ -631,7 +625,7 @@ export async function preflightDiscordMessage(
   }
 
   const { implicitMentionKinds, wasMentioned: wasNormallyMentioned } = resolveDiscordMentionState({
-    ...mentionPolicyParams,
+    botId,
     authorIsBot: Boolean(author.bot),
     hasAnyMention,
     isDirectMessage,
@@ -743,6 +737,7 @@ export async function preflightDiscordMessage(
     policy: {
       isGroup: isGuildMessage,
       requireMention: shouldRequireMention,
+      allowedImplicitMentionKinds: mentionPolicy.allowedImplicitMentionKinds,
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,

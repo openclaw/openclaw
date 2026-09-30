@@ -57,9 +57,7 @@ export function createFirstStreamEventAbortController(
 ): FirstStreamEventAbortController {
   const controller = new AbortController();
   const abortFromParent = () => {
-    if (!controller.signal.aborted) {
-      controller.abort(parentSignal?.reason);
-    }
+    controller.abort(parentSignal?.reason);
   };
   if (parentSignal?.aborted) {
     abortFromParent();
@@ -69,9 +67,7 @@ export function createFirstStreamEventAbortController(
   return {
     signal: controller.signal,
     abort(reason: Error) {
-      if (!controller.signal.aborted) {
-        controller.abort(reason);
-      }
+      controller.abort(reason);
     },
     dispose() {
       parentSignal?.removeEventListener("abort", abortFromParent);

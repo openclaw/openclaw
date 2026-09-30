@@ -14,6 +14,7 @@ import type {
   WorkerEnvironmentAttachmentRecord,
   WorkerEnvironmentSessionIdentity,
 } from "./session-attachment.js";
+import type { WorkerEnvironmentMutationMethods } from "./store-worker-contract.js";
 
 type AttachmentTable = {
   session_id: string;
@@ -122,11 +123,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
   };
   return {
     getSessionAttachmentRecord: (sessionId: string) => get(read(), sessionId),
-    createSessionAttachmentIntent(
-      this: void,
-      input: WorkerEnvironmentIntentInput & WorkerEnvironmentSessionIdentity,
-      assertCurrent: () => void,
-    ) {
+    createSessionAttachmentIntent(this: void, input, assertCurrent) {
       return write((db) => {
         assertCurrent();
         const previous = get(db, input.sessionId);
@@ -149,6 +146,14 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
           throw new Error("Environment request already belongs to an earlier allocation");
         }
         const at = now();
+        const values = {
+          environment_id: input.environmentId,
+          generation: (previous?.generation ?? 0) + 1,
+          session_lifecycle_revision: input.sessionLifecycleRevision ?? null,
+          created_at_ms: at,
+          last_used_at_ms: at,
+          closed_at_ms: null,
+        };
         executeSqliteQuerySync(
           db,
           query(db)
@@ -157,28 +162,14 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
               session_id: input.sessionId,
               session_key: input.sessionKey,
               agent_id: input.agentId,
-              session_lifecycle_revision: input.sessionLifecycleRevision ?? null,
-              environment_id: input.environmentId,
-              generation: (previous?.generation ?? 0) + 1,
-              created_at_ms: at,
-              last_used_at_ms: at,
-              closed_at_ms: null,
+              ...values,
             })
-            .onConflict((oc) =>
-              oc.column("session_id").doUpdateSet({
-                environment_id: input.environmentId,
-                generation: (previous?.generation ?? 0) + 1,
-                session_lifecycle_revision: input.sessionLifecycleRevision ?? null,
-                created_at_ms: at,
-                last_used_at_ms: at,
-                closed_at_ms: null,
-              }),
-            ),
+            .onConflict((oc) => oc.column("session_id").doUpdateSet(values)),
         );
         return { attachment: get(db, input.sessionId)!, environment };
       });
     },
-    closeSessionAttachment(this: void, sessionId: string, assertCurrent: () => void = () => {}) {
+    closeSessionAttachment(this: void, sessionId, assertCurrent = () => {}) {
       return write((db) => {
         assertCurrent();
         const current = get(db, sessionId);
@@ -195,7 +186,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
         return get(db, sessionId);
       });
     },
-    cancelSessionAttachmentReservation(this: void, record: WorkerEnvironmentAttachmentRecord) {
+    cancelSessionAttachmentReservation(this: void, record) {
       write((db) => {
         const current = get(db, record.sessionId);
         const environment = options.getEnvironment(db, record.environmentId);
@@ -233,11 +224,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
         );
       });
     },
-    touchSessionAttachment(
-      this: void,
-      record: WorkerEnvironmentAttachmentRecord,
-      assertCurrent: () => void,
-    ) {
+    touchSessionAttachment(this: void, record, assertCurrent) {
       write((db) => {
         assertCurrent();
         const current = get(db, record.sessionId);
@@ -258,5 +245,13 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
         );
       });
     },
+  } satisfies Pick<
+    WorkerEnvironmentMutationMethods,
+    | "createSessionAttachmentIntent"
+    | "closeSessionAttachment"
+    | "cancelSessionAttachmentReservation"
+    | "touchSessionAttachment"
+  > & {
+    getSessionAttachmentRecord(sessionId: string): WorkerEnvironmentAttachmentRecord | undefined;
   };
 }

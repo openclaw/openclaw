@@ -153,12 +153,8 @@ type TrajectoryExportCliRequest = {
   agent: string;
 };
 
-type TrajectoryExportExecRequest = {
-  argv: string[];
-  command: string;
-  env: Record<string, string> | undefined;
+type TrajectoryExportExecRequest = ReturnType<typeof buildCurrentOpenClawCliExecRequest> & {
   displayCommand: string;
-  encodedRequest: string;
   request: TrajectoryExportCliRequest;
 };
 
@@ -185,7 +181,6 @@ function buildTrajectoryExportExecRequest(
   return {
     ...buildCurrentOpenClawCliExecRequest(args),
     displayCommand: ["openclaw", ...args].join(" "),
-    encodedRequest,
     request,
   };
 }

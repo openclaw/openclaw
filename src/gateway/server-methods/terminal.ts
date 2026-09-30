@@ -39,7 +39,6 @@ import {
 import type { AgentTerminalOwner } from "../terminal/session-manager.types.js";
 import { resolveSessionCatalogProvider } from "./session-catalog.js";
 import {
-  authorizeCatalogTerminalNode,
   authorizeTerminalNodeCommand,
   resolveTerminalOpenSpawnPlan,
 } from "./terminal-open-plan.js";
@@ -83,6 +82,7 @@ async function stageNodeTerminalUpload(
   nodeId: string,
   file: TerminalUploadFile,
 ): Promise<TerminalUploadResult> {
+  file.assertCommitAllowed?.();
   const access = authorizeTerminalNodeCommand(context, nodeId, NODE_TERMINAL_UPLOAD_COMMAND);
   if (!access.ok) {
     throw new Error(access.message);
@@ -94,7 +94,11 @@ async function stageNodeTerminalUpload(
       ? { expectedPairingGeneration: access.node.pairingGeneration }
       : {}),
     command: NODE_TERMINAL_UPLOAD_COMMAND,
-    params: file,
+    params: { name: file.name, contentBase64: file.contentBase64 },
+    isDispatchAuthorized: () => {
+      file.assertCommitAllowed?.();
+      return true;
+    },
     timeoutMs: 120_000,
   });
   if (!result.ok) {
@@ -224,7 +228,11 @@ export async function openTerminalSession(
       }
       const uploadNodeId = nodeCatalogPlan.nodeId;
       const uploadPathStyle = nodeCatalogPlan.uploadPathStyle;
-      const access = authorizeCatalogTerminalNode(context, nodeCatalogPlan);
+      const access = authorizeTerminalNodeCommand(
+        context,
+        nodeCatalogPlan.nodeId,
+        nodeCatalogPlan.command,
+      );
       if (!access.ok) {
         respondTerminalUnavailable(respond, access.message, request.failureHint);
         return;
@@ -358,7 +366,7 @@ export async function openTerminalSession(
   }
   if (nodeRelay) {
     const relay = nodeRelay;
-    const access = authorizeCatalogTerminalNode(context, relay.plan);
+    const access = authorizeTerminalNodeCommand(context, relay.plan.nodeId, relay.plan.command);
     if (!access.ok) {
       respondTerminalUnavailable(respond, access.message, request.failureHint);
       return;
@@ -385,7 +393,7 @@ export async function openTerminalSession(
           (!request.requireCliAgents ||
             context.getRuntimeConfig().gateway?.cliAgents?.enabled !== false) &&
           context.resolveTerminalLaunchPolicy(refreshedLaunch.plan.agentId).ok &&
-          authorizeCatalogTerminalNode(context, relay.plan).ok &&
+          authorizeTerminalNodeCommand(context, relay.plan.nodeId, relay.plan.command).ok &&
           !deadline.controller.signal.aborted &&
           Date.now() < deadline.expiresAtMs,
         command: relay.plan.command,
@@ -484,7 +492,6 @@ export async function openTerminalSession(
   });
 }
 
-/** Handlers for the operator terminal method family. */
 export const terminalHandlers: GatewayRequestHandlers = {
   ...terminalUploadHandlers,
   "terminal.open": async (opts) => {

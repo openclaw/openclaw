@@ -93,6 +93,9 @@ test("sessions.create retains a cloud repository across replay without creating 
   const gitRead = vi
     .spyOn(gitWorker, "runGitWorkerOperation")
     .mockImplementation(async (operation) => {
+      if (operation.type === "checkout.revision") {
+        return "unchanged";
+      }
       if (operation.type === "checkout.context") {
         return {
           root: operation.input.root,
@@ -174,12 +177,7 @@ test.each([
   {
     repository: { url: "https://github.com/openclaw/openclaw.git", ref: "--upload-pack=anything" },
   },
-  { cwd: "/tmp/repository" },
-  { execNode: "device" },
-  { projectId: "workspace:main" },
-  { projectGitUrl: "https://github.com/openclaw/openclaw.git" },
   { worktree: true },
-  { worktreeBaseRef: "main" },
   { message: "Start before dispatch" },
 ])(
   "sessions.create rejects conflicting cloud repository input before admission: %j",

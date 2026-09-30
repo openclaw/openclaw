@@ -172,11 +172,19 @@ describe("buildSessionContext", () => {
           ...entries,
           compactionEntry("compacted", "entry-2", firstKeptEntry.id, "Earlier conversation", 1_000),
         ]);
-        if (runtimeContextCarrier) {
-          expect(replay.messages.some((message) => message.role === "custom")).toBe(
-            replay.messages.some((message) => message.role === "user"),
-          );
-        }
+        expect(replay.messages).toMatchObject([
+          { role: "compactionSummary", summary: "Earlier conversation" },
+          ...[
+            { role: "user", content: "original request" },
+            {
+              role: "custom",
+              customType: runtimeContextCarrier ? "openclaw.runtime-context" : "extension-context",
+              content: "metadata ".repeat(100),
+              details: { runtimeContextCarrier },
+            },
+            { role: "assistant", content: [{ type: "text", text: "done" }] },
+          ].slice(expectedIndex),
+        ]);
       }
     },
   );

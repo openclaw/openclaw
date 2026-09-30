@@ -12,12 +12,7 @@ export function setChannelConversationBindingIdleTimeoutBySessionKey(params: {
   targetSessionKey: string;
   accountId?: string | null;
   idleTimeoutMs: number;
-}): Array<{
-  boundAt: number;
-  lastActivityAt: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-}> {
+}) {
   const setIdleTimeoutBySessionKey = getChannelPlugin(params.channelId)?.conversationBindings
     ?.setIdleTimeoutBySessionKey;
   if (!setIdleTimeoutBySessionKey) {
@@ -41,12 +36,7 @@ export function setChannelConversationBindingMaxAgeBySessionKey(params: {
   targetSessionKey: string;
   accountId?: string | null;
   maxAgeMs: number;
-}): Array<{
-  boundAt: number;
-  lastActivityAt: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-}> {
+}) {
   const setMaxAgeBySessionKey = getChannelPlugin(params.channelId)?.conversationBindings
     ?.setMaxAgeBySessionKey;
   if (!setMaxAgeBySessionKey) {

@@ -616,11 +616,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         settings,
         signal: abortController.signal,
       });
-      if (outcome.status === "skipped") {
-        this.emit({ type: "compaction_end", reason, itemId, outcome });
-        return false;
-      }
-      if (outcome.status === "aborted") {
+      if (outcome.status !== "completed") {
         this.emit({ type: "compaction_end", reason, itemId, outcome });
         return false;
       }
@@ -675,13 +671,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         this.autoCompactionAbortController = undefined;
       }
     }
-  }
-
-  /**
-   * Toggle auto-compaction setting.
-   */
-  setAutoCompactionEnabled(enabled: boolean): void {
-    this.settingsManager.setCompactionEnabled(enabled);
   }
 
   /** Whether auto-compaction is enabled */

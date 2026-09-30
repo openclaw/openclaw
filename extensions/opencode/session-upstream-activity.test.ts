@@ -11,7 +11,7 @@ type StatefulOpenCodeSession = {
   id: string;
   title: string;
   directory: string;
-  seq?: number;
+  seq?: number | string | null;
   messages: Array<{
     info: { id: string; role: string; time: { created: number } };
     parts: Array<{
@@ -60,7 +60,7 @@ async function installStatefulOpenCode(initialSessions: StatefulOpenCodeSession[
   await writeState({ sessions: initialSessions });
   await fs.writeFile(logFile, "");
   await fs.writeFile(
-    executable,
+    `${executable}.js`,
     "#!/usr/bin/env node\n" +
       `const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -84,7 +84,7 @@ if (${version} === 2) {
   }
   if (args[0] === "api" && args[2] === "session.log") {
     if (state.failDb) process.exit(4);
-    process.stdout.write("data: " + JSON.stringify({ type: "log.synced", aggregateID: id, seq: session.seq ?? 0 }) + "\\n\\n");
+    process.stdout.write("data: " + JSON.stringify({ type: "log.synced", aggregateID: id, seq: session.seq }) + "\\n\\n");
   } else if (args[0] === "session" && args[1] === "export") {
     if (state.failExports?.includes(id)) process.exit(5);
     process.stdout.write(JSON.stringify({ info: session, messages: session.messages.map((message) => ({
@@ -124,7 +124,8 @@ if (args[0] === "--pure" && args[1] === "db") {
 }
 `,
   );
-  await fs.chmod(executable, 0o755);
+  // Keep generated payload writers out of the kernel's executable inode check.
+  await fs.symlink(new URL("./test-fixtures/opencode-command.sh", import.meta.url), executable);
   process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
   return {
     writeState,
@@ -226,6 +227,23 @@ describe("OpenCode session upstream activity", () => {
       calls = await fixture.readCalls();
       expect(calls).toHaveLength(2);
       expect(calls.filter((args) => args[1] === "export")).toHaveLength(1);
+    },
+  );
+
+  // OpenCode 2.0.16 omits seq when the captured log watermark is empty.
+  itWithCli("released v2 empty log watermark is a valid zero baseline", async () => {
+    await installStatefulOpenCode([openCodeSession(undefined, [])], 2);
+    const result = await linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a");
+    expect(result.upstream?.marker).toEqual({ seq: 0, lastHumanMessageId: null });
+  });
+
+  itWithCli.each([null, "0", -1, 0.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects an invalid present v2 log watermark (%s)",
+    async (seq) => {
+      await installStatefulOpenCode([{ ...openCodeSession(undefined, []), seq }], 2);
+      await expect(linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a")).resolves.toEqual({
+        sessionKey: "agent:main:ses-a",
+      });
     },
   );
 

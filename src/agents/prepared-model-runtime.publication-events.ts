@@ -55,23 +55,7 @@ export function createCatalogAttemptReporter(
   source: PreparedModelCatalogAttempt["source"],
   isCurrent: () => boolean,
   beforeProviderFailure: () => void,
-): {
-  setPending: (
-    providers: readonly string[] | undefined,
-    kind?: PreparedModelCatalogAcquisitionKind,
-  ) => void;
-  published: (
-    providers?: readonly string[],
-    kind?: PreparedModelCatalogAcquisitionKind,
-    publication?: () => CatalogPublicationChange,
-  ) => void;
-  failed: (
-    error: unknown,
-    providers?: readonly string[],
-    kind?: PreparedModelCatalogAcquisitionKind,
-  ) => void;
-  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
-} {
+) {
   // Compatible reloads share live status; replacement sources start without the old error.
   const attempt: PreparedModelCatalogAttempt =
     owner.catalogAttempt && isDeepStrictEqual(owner.catalogAttempt.source, source)
@@ -120,10 +104,13 @@ export function createCatalogAttemptReporter(
   const hasFailedProviders = () =>
     attempt.failedProviders.provider.size > 0 || attempt.failedProviders.native.size > 0;
   return {
-    setPending: (providers, kind = "provider") => {
+    setPending: (
+      providers: readonly string[] | undefined,
+      kind: PreparedModelCatalogAcquisitionKind = "provider",
+    ) => {
       pendingProviders[kind] = providers;
     },
-    withRefreshStatus: (catalog) => {
+    withRefreshStatus: (catalog: ModelCatalogSnapshot) => {
       const nativeOutcomes = Object.values(catalog.nativeProviderOutcomes ?? {}).flat();
       // Auth rejection leaves inventory incomplete without making its refresh fail.
       // Provider renewal does not retry a failed native inventory.
@@ -158,7 +145,11 @@ export function createCatalogAttemptReporter(
       });
       return catalog;
     },
-    published: (providers, kind, publication) => {
+    published: (
+      providers?: readonly string[],
+      kind?: PreparedModelCatalogAcquisitionKind,
+      publication?: () => CatalogPublicationChange,
+    ) => {
       const previouslyFailed = hasFailedProviders();
       const previouslyPendingCount = pendingCount();
       const acquisitionKind = kind ?? "provider";

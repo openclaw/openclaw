@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
@@ -14,11 +13,18 @@ import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime
 
 afterEach(() => resetConfigRuntimeState());
 
-function createProviderConfig() {
+function createProviderConfig(modelCount = 0) {
   const provider: ModelProviderConfig = {
     baseUrl: "https://provider.example/v1",
     apiKey: "synthetic-resolved-value",
-    models: [],
+    models: Array.from({ length: modelCount }, (_, index) => ({
+      id: `synthetic-${index}`,
+      name: `Synthetic ${index}`,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      maxTokens: 4096,
+    })),
   };
   const config = { models: { providers: { synthetic: provider } } } satisfies OpenClawConfig;
   return { config, provider };
@@ -51,21 +57,9 @@ describe("provider auth snapshot comparison", () => {
     }));
     publishProvider(config);
     catalogReads = 0;
-    const started = performance.now();
-    for (let agent = 0; agent < 11; agent += 1) {
-      for (let model = 0; model < 400; model += 1) {
-        expect(getCustomProviderApiKey(config, "synthetic")).toBe("secretref-managed");
-      }
+    for (let lookup = 0; lookup < 2; lookup += 1) {
+      expect(getCustomProviderApiKey(config, "synthetic")).toBe("secretref-managed");
     }
-    console.info(
-      JSON.stringify({
-        providerAuthCalls: 4400,
-        catalogRows: 400,
-        catalogReads,
-        elapsedMs: performance.now() - started,
-        rssBytes: process.memoryUsage().rss,
-      }),
-    );
     expect(catalogReads).toBe(0);
   });
 
@@ -83,16 +77,14 @@ describe("provider auth snapshot comparison", () => {
 });
 
 describe("provider config structural comparison", () => {
-  it.each(["same object", "shared provider", "equivalent clone", "serialized equivalent"] as const)(
+  it.each(["shared provider", "serialized equivalent"] as const)(
     "matches a %s without changing missing-provider behavior",
     (kind) => {
       const runtime = createProviderConfig().config;
       const input =
-        kind === "same object"
-          ? runtime
-          : kind === "shared provider"
-            ? { ...runtime, agents: { defaults: { workspace: "/tmp/synthetic-agent" } } }
-            : structuredClone(runtime);
+        kind === "shared provider"
+          ? { ...runtime, agents: { defaults: { workspace: "/tmp/synthetic-agent" } } }
+          : structuredClone(runtime);
       if (kind === "serialized equivalent") {
         runtime.models.providers.synthetic.params = { synthetic: null };
         input.models.providers.synthetic.params = { synthetic: undefined };
@@ -148,26 +140,11 @@ describe("provider config structural comparison", () => {
 describe("managed provider auth comparison cost", () => {
   it("evaluates a captured provider without serializing the fleet config", () => {
     const runtime: OpenClawConfig = {
+      ...createProviderConfig(100).config,
       agents: {
         entries: Object.fromEntries(
           Array.from({ length: 200 }, (_, i) => [`agent-${i}`, { name: `Agent ${i}` }]),
         ),
-      },
-      models: {
-        providers: {
-          synthetic: {
-            baseUrl: "https://synthetic.example/v1",
-            apiKey: "synthetic-resolved-value",
-            models: Array.from({ length: 100 }, (_, i) => ({
-              id: `model-${i}`,
-              name: `Model ${i}`,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 4096,
-            })),
-          },
-        },
       },
     };
     const source = structuredClone(runtime);

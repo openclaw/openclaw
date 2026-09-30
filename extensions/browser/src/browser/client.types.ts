@@ -12,6 +12,21 @@ type BrowserCdpLookup = typeof dnsLookupCb;
 /** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
 
+export type ProfileStatus = {
+  name: string;
+  transport?: BrowserTransport;
+  cdpPort: number | null;
+  cdpUrl: string | null;
+  color: string;
+  driver: "openclaw" | "existing-session" | "extension";
+  running: boolean;
+  tabCount: number;
+  isDefault: boolean;
+  isRemote: boolean;
+  missingFromConfig?: boolean;
+  reconcileReason?: string | null;
+};
+
 export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
 
 export type BrowserGraphicsDevice = {

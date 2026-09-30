@@ -36,11 +36,11 @@ vi.mock("node:worker_threads", async () => {
     },
   };
 });
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  StateDatabaseCoordinatorContentionError: class extends Error {},
-  acquireStateDatabaseCoordinator: () => ({ release() {} }),
-  acquireStateDatabaseHandleLease: () => ({ release() {} }),
-  retainHeldStateDatabaseCoordinator: () => undefined,
+vi.mock("../infra/gateway-state-owner.js", () => ({
+  assertStateDatabaseAccessAllowed() {},
+}));
+vi.mock("../infra/sqlite-worker-identity.js", () => ({
+  readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
 }));
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
   runWithSqliteBusyTimeout: (_db: unknown, _ms: number, run: () => unknown) => run(),
@@ -150,12 +150,14 @@ it.each([5, 6, 261, 517])("still retries SQLite contention errcode=%s", async (e
   const { heartbeat, outcome, onLost } = await start();
   try {
     await expect(outcome).resolves.toBeUndefined();
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(24);
+    expect(fixture.renew).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(fixture.renew).toHaveBeenCalledTimes(2);
     expect(onLost).not.toHaveBeenCalled();
     fixture.worker?.emit("exit", 1);
     expect(String(onLost.mock.calls[0]?.[0])).toContain("exitCode=1");
-    expect(String(onLost.mock.calls[0]?.[0])).toContain(`lastRenewedAt=${acquiredAt + 20_100}`);
+    expect(String(onLost.mock.calls[0]?.[0])).toContain(`lastRenewedAt=${acquiredAt + 125}`);
   } finally {
     await heartbeat.stop();
   }

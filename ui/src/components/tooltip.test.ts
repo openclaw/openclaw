@@ -1,12 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
+import { html, type TemplateResult } from "lit";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
+import { renderKbd } from "./kbd.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 type TooltipElement = HTMLElement & {
   closeDelay: number;
   content: string;
+  contentTemplate?: TemplateResult;
   delay: number;
   openOnClick: boolean;
   readonly updateComplete: Promise<boolean>;
@@ -148,6 +151,38 @@ describe("openclaw-tooltip", () => {
     expect(webAwesomeTooltip(tooltip)?.querySelector(".tooltip-content")?.textContent).toBe(
       "Single portal",
     );
+  });
+
+  it("renders shortcut templates without changing plain descriptions or dismissal", async () => {
+    const { tooltip, trigger } = createTooltip("Search (⌘K)");
+    tooltip.contentTemplate = html`Search (${renderKbd(["⌘", "K"], { inline: true })})`;
+    document.body.append(tooltip);
+    await tooltip.updateComplete;
+
+    const popup = webAwesomeTooltip(tooltip);
+    expect(popup?.querySelector(".tooltip-content kbd svg")).not.toBeNull();
+    expect(popup?.querySelector(".tooltip-content")?.textContent?.replace(/\s+/gu, "")).toBe(
+      "Search(⌘K)",
+    );
+    const descriptionId = trigger.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(descriptionId)?.textContent).toBe("Search (⌘K)");
+
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(150);
+    expectOpenCount(1);
+    dispatchMousePointer(trigger, "pointerleave");
+    expectOpenCount(0);
+    focusTrigger(trigger);
+    expectOpenCount(1);
+    dispatchMousePointer(trigger, "pointerdown");
+    expectOpenCount(0);
+
+    tooltip.contentTemplate = undefined;
+    tooltip.content = "Search unavailable";
+    await tooltip.updateComplete;
+    expect(popup?.querySelector(".tooltip-content kbd")).toBeNull();
+    expect(popup?.querySelector(".tooltip-content")?.textContent).toBe("Search unavailable");
+    expect(document.getElementById(descriptionId)?.textContent).toBe("Search unavailable");
   });
 
   it("skins the body and removes the arrow through shared overlay tokens", async () => {

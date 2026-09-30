@@ -1,6 +1,8 @@
+import type { LitElement } from "lit";
 import { expect, vi } from "vitest";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
@@ -8,6 +10,7 @@ import {
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
+import { settleLitElement, settleLitElements } from "../lit-settle.ts";
 
 export const roster: AgentsListResult = {
   defaultId: "main",
@@ -138,6 +141,13 @@ export async function mountRoster(
   return { ...mounted, sessions, request, gatewayHarness, result };
 }
 
+export async function settleRoster(sidebar: SidebarLifecycleState) {
+  await sidebar.updateComplete;
+  await vi.dynamicImportSettled();
+  await settleLitElements(sidebar.querySelectorAll<LitElement>("openclaw-sidebar-agent-roster"));
+  await settleLitElement(sidebar);
+}
+
 export function agentIds(sidebar: HTMLElement) {
   return [...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-roster__row")].map(
     (row) => row.dataset.agentId,
@@ -168,12 +178,5 @@ export async function toggleRoster(sidebar: HTMLElement) {
 }
 
 export async function selectFilter(sidebar: SidebarLifecycleState, value: string) {
-  sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")?.click();
-  await vi.waitFor(() => {
-    expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
-  });
-  sidebar
-    .querySelector(".sidebar-session-sort-menu")
-    ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } }, bubbles: true }));
-  await sidebar.updateComplete;
+  await activateSessionMenuValue(sidebar, value);
 }

@@ -17,7 +17,6 @@ import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js
 import { projectChatDisplayMessages } from "../../../gateway/chat-display-projection.js";
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
-import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import {
   OutboundDeliveryError,
@@ -55,6 +54,7 @@ import {
   testing,
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
+  registerDescendantWakeCurrencyTests,
 } from "./subagent-announce-delivery.test-support.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import { privateCompletionCases } from "./subagent-announce-private-completion.test-fixtures.js";
@@ -942,15 +942,12 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         list: [{ id: "ops" }, { id: "research" }],
       },
     } as never;
-    const getRequesterSessionActivity = vi.fn(() => ({
-      sessionId: "ops-session",
-      isActive: true,
-    }));
+    const isEmbeddedAgentRunActive = vi.fn(() => true);
     const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
-      getRequesterSessionActivity,
+      isEmbeddedAgentRunActive,
       loadSessionEntry,
       queueEmbeddedAgentMessageWithOutcome,
       callGateway: vi.fn(async () => {
@@ -969,7 +966,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
 
     expect(result.delivered).toBe(false);
-    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(isEmbeddedAgentRunActive).not.toHaveBeenCalled();
     expect(loadSessionEntry).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
@@ -1071,15 +1068,12 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         list: [{ id: "ops" }, { id: "research" }],
       },
     } as never;
-    const getRequesterSessionActivity = vi.fn(() => ({
-      sessionId: "ops-session",
-      isActive: true,
-    }));
+    const isEmbeddedAgentRunActive = vi.fn(() => true);
     const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
-      getRequesterSessionActivity,
+      isEmbeddedAgentRunActive,
       loadSessionEntry,
       queueEmbeddedAgentMessageWithOutcome,
       callGateway: vi.fn(async () => {
@@ -1099,7 +1093,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
 
     expect(result.delivered).toBe(false);
-    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(isEmbeddedAgentRunActive).not.toHaveBeenCalled();
     expect(loadSessionEntry).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
@@ -1113,15 +1107,12 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         list: [{ id: "ops" }, { id: "research" }],
       },
     } as never;
-    const getRequesterSessionActivity = vi.fn(() => ({
-      sessionId: "ops-session",
-      isActive: true,
-    }));
+    const isEmbeddedAgentRunActive = vi.fn(() => true);
     const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
-      getRequesterSessionActivity,
+      isEmbeddedAgentRunActive,
       loadSessionEntry,
       queueEmbeddedAgentMessageWithOutcome,
       callGateway: vi.fn(async () => {
@@ -1140,7 +1131,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
 
     expect(result.delivered).toBe(false);
-    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(isEmbeddedAgentRunActive).not.toHaveBeenCalled();
     expect(loadSessionEntry).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
@@ -2212,129 +2203,86 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it.each([undefined, 0, 600])(
-    "delivers dormant child completion with requester budget %s under restrictive gateway roles",
-    async (requesterRunTimeoutSeconds) => {
-      const callGateway = createGatewayMock();
-      const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
-        result: {
-          deliveryStatus: sentDeliveryStatus,
-          payloads: [{ text: "requester voice completion" }],
-          meta: { finalAssistantVisibleText: "requester voice completion" },
-        },
-      });
-      testing.setDepsForTest({
-        callGateway,
-        dispatchGatewayMethodInProcess,
-        getRequesterSessionActivity: () => ({
-          sessionId: "requester-session-local",
-          isActive: false,
-        }),
-        getRuntimeConfig: () => cfg,
-      });
-
-      const ownerContext = { owner: "gateway-a" } as never;
-      const resolveGatewayContext = () => ownerContext;
-      const signal = new AbortController().signal;
-      const result = await deliverSubagentAnnouncement({
-        requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
-        targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
-        requesterRunTimeoutSeconds,
-        triggerMessage: "child done",
-        steerMessage: "child done",
-        requesterSessionOrigin: slackThreadOrigin,
-        completionDirectOrigin: slackThreadOrigin,
-        directOrigin: slackThreadOrigin,
-        sourceSessionKey: "agent:main:subagent:child",
-        internalEvents: taskCompletionEvents({
-          childSessionKey: "agent:main:subagent:child",
-          childSessionId: "child-session-local",
-        }),
-        requesterIsSubagent: false,
-        expectsCompletionMessage: true,
-        bestEffortDeliver: true,
-        directIdempotencyKey: "announce-local-dispatch",
-        resolveGatewayContext,
-        signal,
-      });
-
-      expectDeliveryPath(result, "direct");
-      expect(result).toMatchObject({
-        requesterVisibleFinalDelivered: true,
-        finalAssistantVisibleText: "requester voice completion",
-      });
-      expect(callGateway).not.toHaveBeenCalled();
-      expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
-        deliver: true,
-        timeout: requesterRunTimeoutSeconds,
-        channel: "slack",
-        accountId: "acct-1",
-        to: "channel:C123",
-        threadId: "171.222",
-        bestEffortDeliver: true,
-      });
-      const dispatchOptions = mockCallArg(dispatchGatewayMethodInProcess, 0, 2);
-      expect(dispatchOptions).toMatchObject({
-        cancelOnDeadline: true,
-        expectFinal: true,
-        forceSyntheticClient: true,
-        operatorRoleActor: { kind: "system" },
-        delegatedToolPolicyHandoff: {
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceSessionId: "child-session-local",
-          targetSessionKey: "agent:main:slack:channel:C123:thread:171.222",
-          targetSessionId: "requester-session-local",
-          idempotencyKey: "announce-local-dispatch",
-        },
-        resolveGatewayContext,
-        signal: expect.any(AbortSignal),
-      });
-    },
-  );
-
-  it("wakes settled descendant runs under restrictive gateway roles", async () => {
+  it("delivers dormant child completion under restrictive gateway roles with Gateway-owned timeout policy", async () => {
+    const callGateway = createGatewayMock();
     const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
-      runId: "descendant-wake-run",
-    });
-    const resolveGatewayContext: GatewayContextResolver = () => undefined;
-    const signal = new AbortController().signal;
-    const replaceSubagentRunAfterSteer = vi.fn(() => true);
-    testing.setDepsForTest({
-      getRuntimeConfig: () => cfg,
-      loadSessionEntry: () => ({ sessionId: "nested-session", updatedAt: 1 }),
-    });
-
-    const woke = await runDescendantWake({
-      runId: "nested-parent-run",
-      childSessionKey: "agent:main:subagent:nested-parent",
-      taskLabel: "collect descendant findings",
-      findings: "The descendant completed successfully.",
-      announceId: "descendant-completion",
-      isChildSessionEffectsAllowed: () => true,
-      hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
-        typeof entry === "object" && entry !== null,
-      resolveGatewayContext,
-      signal,
-      deps: {
-        callGateway: createGatewayMock(),
-        dispatchGatewayMethodInProcess,
-        getRuntimeConfig: () => cfg,
-        replaceSubagentRunAfterSteer,
+      result: {
+        deliveryStatus: sentDeliveryStatus,
+        payloads: [{ text: "requester voice completion" }],
+        meta: { finalAssistantVisibleText: "requester voice completion" },
       },
     });
+    testing.setDepsForTest({
+      callGateway,
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => cfg,
+    });
 
-    expect(woke).toBe(true);
-    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
-      cancelOnDeadline: true,
+    const ownerContext = { owner: "gateway-a" } as never;
+    const resolveGatewayContext = () => ownerContext;
+    const signal = new AbortController().signal;
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      sourceSessionKey: "agent:main:subagent:child",
+      internalEvents: taskCompletionEvents({
+        childSessionKey: "agent:main:subagent:child",
+        childSessionId: "child-session-local",
+      }),
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-dispatch",
       resolveGatewayContext,
       signal,
     });
-    expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        previousRunId: "nested-parent-run",
-        nextRunId: "descendant-wake-run",
-      }),
-    );
+
+    expectDeliveryPath(result, "direct");
+    expect(result).toMatchObject({
+      requesterVisibleFinalDelivered: true,
+      finalAssistantVisibleText: "requester voice completion",
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+      bestEffortDeliver: true,
+    });
+    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 1)).not.toHaveProperty("timeout");
+    const dispatchOptions = mockCallArg(dispatchGatewayMethodInProcess, 0, 2);
+    expect(dispatchOptions).toMatchObject({
+      cancelOnDeadline: true,
+      expectFinal: true,
+      forceSyntheticClient: true,
+      operatorRoleActor: { kind: "system" },
+      delegatedToolPolicyHandoff: {
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceSessionId: "child-session-local",
+        targetSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+        targetSessionId: "requester-session-local",
+        idempotencyKey: "announce-local-dispatch",
+      },
+      resolveGatewayContext,
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  registerDescendantWakeCurrencyTests({
+    createRoleRestrictedInProcessGatewayMock,
+    createGatewayMock,
+    runDescendantWake,
   });
 
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {

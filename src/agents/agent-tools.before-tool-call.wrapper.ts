@@ -69,6 +69,7 @@ import {
   bindBeforeToolCallMetadata,
   clearBeforeToolCallWrappedMarker,
   getBeforeToolCallDiagnosticOptions,
+  getBeforeToolCallExecutionWrappers,
   getBeforeToolCallHookContext,
   getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
@@ -272,6 +273,7 @@ export function wrapToolWithBeforeToolCallHook(
     return tool;
   }
   const toolName = tool.name || "tool";
+  const toolOwnerPluginId = getPluginToolMeta(tool)?.pluginId;
   const admitExecution = captureAgentToolExecutionBudget();
   const diagnosticIdentity = resolveToolDiagnosticIdentity(tool);
   const hookOptions: BeforeToolCallDiagnosticOptions = {
@@ -415,7 +417,11 @@ export function wrapToolWithBeforeToolCallHook(
           params: hookParams,
           ...hookMetadata,
           toolCallId,
-          ctx,
+          ctx: ctx
+            ? { ...ctx, toolOwnerPluginId }
+            : toolOwnerPluginId
+              ? { toolOwnerPluginId }
+              : undefined,
           signal,
           approvalMode: hookOptions.approvalMode,
         });
@@ -478,6 +484,7 @@ export function wrapToolWithBeforeToolCallHook(
       const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
         toolCallId,
         toolName,
+        toolKind: hookMetadata?.toolKind,
         params: executeParams,
         ctx,
       });
@@ -679,8 +686,18 @@ export function rewrapToolWithBeforeToolCallHook(
   };
   clearBeforeToolCallWrappedMarker(rewrapSource);
   copyBeforeToolCallWrapperMetadata(tool, rewrapSource);
+  copyAgentToolSourceExecutionGuard(sourceTool, rewrapSource);
   copyAgentToolSourceExecutionGuard(tool, rewrapSource);
-  return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, wrapperOptions);
+  let rebuilt = wrapToolWithBeforeToolCallHook(
+    rewrapSource,
+    ctx ?? preservedContext,
+    wrapperOptions,
+  );
+  // Replace only the hook layer; caller authority and lifetime guards still enclose it.
+  for (const wrapExecution of getBeforeToolCallExecutionWrappers(tool)) {
+    rebuilt = wrapExecution(rebuilt);
+  }
+  return rebuilt;
 }
 
 function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {

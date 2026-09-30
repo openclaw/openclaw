@@ -200,8 +200,7 @@ const GitHubLaunchSchema = workerProtocolObject({
 export function parseWorkerGitHubLaunchBinding(
   value: unknown,
 ): WorkerGitHubLaunchBinding | undefined {
-  const parsed = GitHubLaunchSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return GitHubLaunchSchema.safeParse(value).data;
 }
 
 const AssignmentSchema = workerProtocolObject({

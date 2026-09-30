@@ -486,6 +486,8 @@ on:
         required: false
       GROQ_API_KEY:
         required: false
+      KIE_API_KEY:
+        required: false
       KIMI_API_KEY:
         required: false
       MODELSTUDIO_API_KEY:
@@ -495,6 +497,8 @@ on:
       MISTRAL_API_KEY:
         required: false
       MINIMAX_API_KEY:
+        required: false
+      NOVITA_API_KEY:
         required: false
       OPENCODE_API_KEY:
         required: false
@@ -515,6 +519,8 @@ on:
       GOOGLE_API_KEY:
         required: false
       OPENROUTER_API_KEY:
+        required: false
+      PIXVERSE_API_KEY:
         required: false
       QWEN_API_KEY:
         required: false
@@ -1545,6 +1551,7 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIE_API_KEY: ${{ secrets.KIE_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
       MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
@@ -1957,6 +1964,7 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIE_API_KEY: ${{ secrets.KIE_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
       MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
@@ -4321,8 +4329,10 @@ jobs:
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-smoke
             label: Native live gateway profiles OpenCode Go smoke
-            # Dynamic selection retains bounded fallbacks when a listed Go model drifts unavailable.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # Pinned while the release OpenCode workspace lacks Global regions: deepseek-v4-flash and
+            # deepseek-v4.1-flash now return 400 "requires Global regions". Restore dynamic selection
+            # (drop OPENCLAW_LIVE_GATEWAY_MODELS) once the workspace enables Global.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash-vision-exp OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 45
             profile_env_only: false
             profiles: stable
@@ -4405,6 +4415,7 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIE_API_KEY: ${{ secrets.KIE_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
       MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
@@ -4566,6 +4577,7 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIE_API_KEY: ${{ secrets.KIE_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
       MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
@@ -4776,29 +4788,29 @@ jobs:
           - suite_id: native-live-extensions-media-video-a
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins A
-            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=alibaba,byteplus,deepinfra,fal node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=alibaba,byteplus,deepinfra,fal OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
+            timeout_minutes: 50
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-media-video-b
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins B
-            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,kie,minimax,pixverse OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
+            timeout_minutes: 50
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-media-video-c
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins C
-            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=novita,openrouter,xai,zai OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
+            timeout_minutes: 50
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-media-video-d
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins D
-            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=qwen,runway,together,vydra node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=qwen,runway,together,vydra OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
+            timeout_minutes: 50
             profile_env_only: false
             profiles: full
     env:
@@ -4813,11 +4825,13 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIE_API_KEY: ${{ secrets.KIE_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
       MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
       MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      NOVITA_API_KEY: ${{ secrets.NOVITA_API_KEY }}
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
       OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
@@ -4828,6 +4842,7 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PIXVERSE_API_KEY: ${{ secrets.PIXVERSE_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}

@@ -12,11 +12,15 @@ import type { CronServiceDeps } from "../service/state.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "./key.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
+  finishCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
 } from "./run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "./run-receipt-store.test-support.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "./run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-pending-retention-" });
 
@@ -62,20 +66,21 @@ describe("pending cron receipt retention", () => {
     // next admitted run. Its pending job association must keep the receipt.
     for (let index = 0; index < 64; index += 1) {
       const prepared = prepareCronRunReceiptClaim({
+        observed: undefined,
         storePath,
         job,
         agentId: "alpha",
         startedAtMs: now + 100 + index * 2,
       });
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({
+        claimCronRunReceiptInDatabaseForTest({
           database: db,
           prepared,
           resolveAgentId: (current) => current.agentId!,
         }),
       );
       history.push(receipt.receiptId);
-      finishCronRunReceipt({
+      await finishCronRunReceiptAsync({
         handle: receipt,
         status: "ok",
         finishedAtMs: now + 101 + index * 2,
@@ -104,7 +109,7 @@ describe("pending cron receipt retention", () => {
       expect(retirement()).toEqual({ receipt_id: pending!.receiptId });
 
       database.exec(`
-        CREATE TEMP TRIGGER reject_pending_receipt_completion
+        CREATE TRIGGER reject_pending_receipt_completion
         BEFORE UPDATE ON cron_jobs
         WHEN NEW.job_id = '${job.id}'
           AND json_extract(NEW.state_json, '$.runningAtMs') IS NULL
@@ -123,7 +128,15 @@ describe("pending cron receipt retention", () => {
       const queries = vi.spyOn(sqliteQuery, "executeSqliteQuerySync");
       let fetchedRows: number;
       try {
-        finishCronRunReceipt({ handle: pending!, status: "ok", finishedAtMs: now });
+        runOpenClawStateWriteTransaction(({ db }) =>
+          finishCronRunReceiptInDatabase({
+            database: db,
+            receiptSchema: prepareCronRunReceiptWriteSchema(db),
+            handle: pending!,
+            status: "ok",
+            finishedAtMs: now,
+          }),
+        );
         fetchedRows = queries.mock.results.flatMap((result) =>
           result.type === "return" ? result.value.rows : [],
         ).length;

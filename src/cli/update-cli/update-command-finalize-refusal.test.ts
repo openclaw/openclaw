@@ -8,6 +8,7 @@ import {
   recordDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
+import * as ports from "../../infra/ports-inspect.js";
 import * as updateCheck from "../../infra/update-check.js";
 import {
   createUpdateRun,
@@ -17,10 +18,15 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as utils from "../../utils.js";
+import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as shared from "./shared.js";
+import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import * as freshDoctor from "./update-command-fresh-doctor.js";
 import { validConfigSnapshot } from "./update-command-lifecycle.test-support.js";
 import * as plugins from "./update-command-plugins.js";
+import * as sourceRuntime from "./update-command-runtime.js";
+import * as servicePlan from "./update-command-service-plan.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
 const native = vi.hoisted(() => ({
@@ -31,6 +37,7 @@ const native = vi.hoisted(() => ({
   contend: true,
   elapsedMs: 0,
   root: "",
+  absent: false,
 }));
 vi.mock("../../config/paths.js", async (original) => ({
   ...(await original<typeof import("../../config/paths.js")>()),
@@ -48,18 +55,16 @@ vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
       ? { state: "live", mode: "supervised", pid: 4242 }
       : undefined,
 }));
-vi.mock("../../infra/state-database-coordinator.js", async (original) => {
-  const actual = await original<typeof import("../../infra/state-database-coordinator.js")>();
+vi.mock("../../infra/gateway-state-owner.js", async (original) => {
+  const actual = await original<typeof import("../../infra/gateway-state-owner.js")>();
   return {
     ...actual,
-    acquireGatewayMaintenanceCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayMaintenanceCoordinator>[0],
-    ) => {
-      if (native.inspecting && (!native.stopped || native.contend)) {
+    acquireGatewayStateOwner: (params: Parameters<typeof actual.acquireGatewayStateOwner>[0]) => {
+      if (!native.absent && native.inspecting && (!native.stopped || native.contend)) {
         native.events.push(native.stopped ? "non-serving-holder" : "running-holder");
-        throw new actual.StateDatabaseCoordinatorContentionError("gateway-lifecycle");
+        throw new actual.GatewayStateOwnerContentionError(params.databasePath);
       }
-      return actual.acquireGatewayMaintenanceCoordinator(params);
+      return actual.acquireGatewayStateOwner(params);
     },
   };
 });
@@ -72,6 +77,16 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
       onStopped?: (before: unknown) => void;
     }) => {
       native.inspecting = true;
+      if (native.absent) {
+        return {
+          stopped: false,
+          inspected: true,
+          runtimeInspected: true,
+          running: false,
+          serviceMutationAllowed: false,
+          serviceUpdateVerdict: { kind: "absent" },
+        };
+      }
       if (params.phase !== "inspect") {
         if (native.failStop) {
           throw new GatewayServiceStopUnsafeError("An admitted migration write is incomplete.");
@@ -101,6 +116,8 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({
     readCommand: async () => null,
+    readRuntime: async () => ({ status: "stopped", missingUnit: true }),
+    isLoaded: async () => false,
     restart: async () => {
       native.events.push("restart");
       native.stopped = false;
@@ -119,7 +136,8 @@ vi.mock("../../daemon/service-operation-lock.js", () => ({
     run: (assertCurrent: () => void) => Promise<unknown>,
   ) => run(() => {}),
 }));
-vi.mock("../daemon-cli/restart-health.js", () => ({
+vi.mock("../daemon-cli/restart-health.js", async (original) => ({
+  ...(await original<typeof import("../daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: async () => {
     native.events.push("restart-verified");
     return { healthy: !native.stopped };
@@ -135,7 +153,7 @@ vi.mock("./update-command-triage.js", () => ({
     run(),
 }));
 vi.mock("./update-command-failure-recovery.js", () => ({
-  verifyUpdateFailureRecovery: async (params: { result: unknown }) => params.result,
+  verifyUpdateFailureRecovery: vi.fn(async (params: { result: unknown }) => params.result),
 }));
 vi.mock("../../infra/update-candidate-state.sizes.js", () => ({
   readUpdateStateDatabaseSizes: async () => [],
@@ -159,6 +177,7 @@ const pending = {
 beforeEach(async () => {
   const base = dirs.make("finalize-refusal-");
   native.root = path.join(base, "package");
+  native.absent = false;
   await fs.mkdir(native.root);
   await fs.writeFile(
     path.join(native.root, "package.json"),
@@ -197,44 +216,41 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([undefined, false])(
-  "restores a stopped service and defers non-serving contention (restart=%s)",
-  async (restart) => {
-    const old = createUpdateRun({ trigger: "cli" });
-    const history = finishUpdateRun(old.runId, { status: "failed", reason: "abandoned" });
-    await updateRepairCommand({ json: true, yes: true, restart, deferCompletionCache: true });
-    expect(native.events).toEqual([
-      "running-holder",
-      "stop-verified",
-      "non-serving-holder",
-      "non-serving-holder",
-      "restart",
-      "restart-verified",
-    ]);
-    expect(native.elapsedMs).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "warning",
-        postUpdate: {
-          doctor: {
-            status: "warning",
-            warnings: [expect.stringContaining("openclaw update repair")],
-          },
+it("restores a stopped service and defers non-serving contention", async () => {
+  const old = createUpdateRun({ trigger: "cli" });
+  const history = finishUpdateRun(old.runId, { status: "failed", reason: "abandoned" });
+  await updateRepairCommand({ json: true, yes: true, deferCompletionCache: true });
+  expect(native.events).toEqual([
+    "running-holder",
+    "stop-verified",
+    "non-serving-holder",
+    "non-serving-holder",
+    "restart",
+    "restart-verified",
+  ]);
+  expect(native.elapsedMs).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "warning",
+      postUpdate: {
+        doctor: {
+          status: "warning",
+          warnings: [expect.stringContaining("openclaw update repair")],
         },
-      }),
-    );
-    const run = listUpdateRuns()[0]!;
-    expect(run.status).toBe("succeeded");
-    expect(run.steps).toContainEqual(
-      expect.objectContaining({ step: "warning:finalize:doctor:0", status: "completed" }),
-    );
-    expect(run.steps.some((step) => step.status === "failed")).toBe(false);
-    expect(getUpdateRun(old.runId)).toEqual(history);
-    expect(readDeferredPluginMigrations()).toEqual([pending]);
-    expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
-    expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
-  },
-);
+      },
+    }),
+  );
+  const run = listUpdateRuns()[0]!;
+  expect(run.status).toBe("succeeded");
+  expect(run.steps).toContainEqual(
+    expect.objectContaining({ step: "warning:finalize:doctor:0", status: "completed" }),
+  );
+  expect(run.steps.some((step) => step.status === "failed")).toBe(false);
+  expect(getUpdateRun(old.runId)).toEqual(history);
+  expect(readDeferredPluginMigrations()).toEqual([pending]);
+  expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+  expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
+});
 
 it("keeps a refused stop for an admitted migration write as a failed update", async () => {
   native.failStop = true;
@@ -252,6 +268,63 @@ it("does not downgrade an error after Doctor has begun its schema write", async 
   vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(partial);
   await expect(updateRepairCommand({ json: true, yes: true })).rejects.toBe(partial);
   expect(native.events).toEqual(["running-holder", "stop-verified", "restart", "restart-verified"]);
+  expect(verifyUpdateFailureRecovery).toHaveBeenLastCalledWith(
+    expect.objectContaining({ waitForStartup: true }),
+  );
   expect(listUpdateRuns()[0]?.status).toBe("failed");
   expect(readDeferredPluginMigrations()).toEqual([pending]);
+});
+
+it("reports a headless repair failure after Doctor releases maintenance without probing a Gateway", async () => {
+  native.absent = true;
+  const actual = await vi.importActual<typeof import("./update-command-failure-recovery.js")>(
+    "./update-command-failure-recovery.js",
+  );
+  vi.mocked(verifyUpdateFailureRecovery).mockImplementationOnce(actual.verifyUpdateFailureRecovery);
+  const partial = new Error("Synthetic repair failed");
+  vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(partial);
+  await expect(updateRepairCommand({ json: true, yes: true })).rejects.toBe(partial);
+  expect(native.events).toEqual([]);
+  const run = listUpdateRuns()[0]!;
+  expect(run.status).toBe("failed");
+  expect(run.steps).toContainEqual(
+    expect.objectContaining({
+      step: "diagnostic:gateway recovery observation",
+      detail: expect.stringContaining("no Gateway service or listener"),
+    }),
+  );
+  expect(run.verification.readyz).not.toBe(true);
+  expect(readDeferredPluginMigrations()).toEqual([pending]);
+});
+
+it("observes an early source repair failure once before any Doctor maintenance", async () => {
+  vi.mocked(updateCheck.resolveUpdateInstallKind).mockResolvedValue("git");
+  const failure = new Error("Synthetic runtime artifact ownership refusal");
+  vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockRejectedValueOnce(failure);
+  const actual = await vi.importActual<typeof import("./update-command-failure-recovery.js")>(
+    "./update-command-failure-recovery.js",
+  );
+  vi.mocked(verifyUpdateFailureRecovery).mockImplementationOnce(actual.verifyUpdateFailureRecovery);
+  vi.spyOn(servicePlan, "readManagedGatewayServiceForUpdate").mockResolvedValue(null);
+  const health = await vi.importActual<typeof import("../daemon-cli/restart-health.js")>(
+    "../daemon-cli/restart-health.js",
+  );
+  vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockImplementationOnce(
+    health.waitForGatewayHealthyRestart,
+  );
+  const inspect = vi.spyOn(ports, "inspectPortUsage").mockImplementation(async (port) => ({
+    port,
+    status: "free",
+    listeners: [],
+    hints: [],
+  }));
+  const sleep = vi.spyOn(utils, "sleep").mockImplementation(async () => {
+    throw new Error("No Gateway startup was requested before the source repair refusal");
+  });
+  await expect(updateRepairCommand({ json: true, yes: true })).rejects.toBe(failure);
+  expect(native.inspecting).toBe(false);
+  expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+  expect(inspect).toHaveBeenCalledExactlyOnceWith(19483, expect.anything());
+  expect(sleep).not.toHaveBeenCalled();
+  expect(listUpdateRuns()[0]?.status).toBe("failed");
 });

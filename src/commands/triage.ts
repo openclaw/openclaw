@@ -593,7 +593,6 @@ export async function triageCommand(
           ),
         ),
     },
-    budget: { maxTurns: 1 },
     isCurrent,
     onEvent: (event) => {
       if (event.type === "turn-started" && isCurrent()) {

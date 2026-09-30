@@ -39,7 +39,7 @@ import {
 } from "../app-server/config.js";
 import { ensureCodexPluginActivation } from "../app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
-import { isOpenAiCuratedMarketplace } from "../app-server/plugin-inventory.js";
+import { isOpenAiCuratedMarketplaceName } from "../app-server/plugin-inventory.js";
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
@@ -129,7 +129,6 @@ export async function applyCodexMigrationPlan(params: {
       : plan.source;
   const authSource: CodexAuthSource = {
     codexHome,
-    authPath: path.join(codexHome, "auth.json"),
     modelsCachePath: path.join(codexHome, "models_cache.json"),
   };
   const runtime = withCachedMigrationConfigRuntime(
@@ -319,7 +318,11 @@ async function requestTargetCodexAppServerJson(params: {
       ...params,
       timeoutMs: remainingMs,
     });
-    if (lastResponse.marketplaces.some(isOpenAiCuratedMarketplace)) {
+    if (
+      lastResponse.marketplaces.some((marketplace) =>
+        isOpenAiCuratedMarketplaceName(marketplace.name),
+      )
+    ) {
       return lastResponse;
     }
     if (Date.now() >= discoveryDeadline) {
@@ -339,10 +342,7 @@ function targetCodexMarketplaceDiscoveryTimeoutMs(env: NodeJS.ProcessEnv = proce
   const configured = parseStrictNonNegativeInteger(
     env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
   );
-  if (configured !== undefined) {
-    return configured;
-  }
-  return TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;
+  return configured ?? TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;
 }
 
 function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
@@ -385,14 +385,14 @@ async function applyCodexPluginConfigItem(
   item: MigrationItem,
   appliedItems: readonly MigrationItem[],
 ): Promise<MigrationItem> {
-  const incompletePluginItems = appliedItems.filter(
+  const hasIncompletePlugin = appliedItems.some(
     (candidate) =>
       candidate.kind === "plugin" &&
       candidate.action === "install" &&
-      readCodexPluginPolicy(candidate) !== undefined &&
+      readCodexPluginMigrationConfigEntry(candidate, true) !== undefined &&
       !isCodexPluginConfigTerminal(candidate),
   );
-  if (incompletePluginItems.length > 0) {
+  if (hasIncompletePlugin) {
     return {
       ...item,
       status: "warning",

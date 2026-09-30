@@ -44,7 +44,6 @@ import {
   resolveReplyOperationAgentId,
   retainStateUntilCompleteOperations,
   type ReplyRunAdmissionBarrier,
-  runAfterReplyOperationClear,
   startReplyOperationSuccessorBarriers,
   updateFollowupAdmissionSessionId,
   updateSuccessorAdmissionSessionId,
@@ -136,6 +135,7 @@ export function createReplyOperation(params: {
   };
   const setResult = (next: ReplyOperationResult) => {
     result = next;
+    toolAuthority.close();
     recordActivity();
   };
   const markProgress = (reason: string) => {
@@ -154,6 +154,7 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    toolAuthority.close();
     terminalSettleTimer.clear();
     finalizationLease.clear();
     expireReplyOperationByOperation.delete(operation);
@@ -259,6 +260,9 @@ export function createReplyOperation(params: {
     get toolAuthorityFingerprint() {
       return toolAuthority.toolAuthorityFingerprint;
     },
+    get personalToolParticipants() {
+      return toolAuthority.personalToolParticipants;
+    },
     get toolAuthorityRoute() {
       return toolAuthority.toolAuthorityRoute;
     },
@@ -283,10 +287,6 @@ export function createReplyOperation(params: {
     },
     get lastActivityAtMs() {
       return lastActivityAtMs;
-    },
-    hasOwnedSessionId(candidateSessionId) {
-      const normalizedSessionId = normalizeOptionalString(candidateSessionId);
-      return normalizedSessionId ? ownedSessionIds.has(normalizedSessionId) : false;
     },
     captureOwnedSessionIds() {
       return new Set(ownedSessionIds);
@@ -440,10 +440,6 @@ export function createReplyOperation(params: {
       }
       clearState();
       settleOwner();
-    },
-    completeThen(afterClear) {
-      runAfterReplyOperationClear(operation, afterClear);
-      operation.complete();
     },
     completeWithAfterClearBarrier(barrier, timeoutMs) {
       // Producer work is done; delivery may still need a successor operation.

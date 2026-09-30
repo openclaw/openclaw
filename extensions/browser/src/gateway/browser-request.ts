@@ -34,6 +34,7 @@ import { resolveBrowserNodeTarget } from "../browser-node-routing.js";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
   parseBrowserProxyFailure,
+  parseBrowserProxyRoute,
   type BrowserProxyEnvelope,
 } from "../browser-proxy-envelope.js";
 import { resolveBrowserProxyTimeouts } from "../browser-proxy-timeouts.js";
@@ -54,6 +55,7 @@ import type { BrowserRequest } from "../browser/routes/types.js";
 import { startBrowserControlServiceFromConfig } from "../control-service.js";
 import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 import { withTimeout } from "../sdk-node-runtime.js";
+import { applyBrowserRequestTabScope, browserTabScopeSchema } from "./browser-request-tab-scope.js";
 
 const logger = createSubsystemLogger("browser");
 const dashboardRequestSchema = z.object({
@@ -72,6 +74,20 @@ type BrowserRequestParams = {
   body?: unknown;
   timeoutMs?: number;
   dashboard?: unknown;
+  tabScope?: unknown;
+};
+
+type BrowserGatewayNode = Pick<
+  NodeSession,
+  "nodeId" | "displayName" | "platform" | "deviceFamily" | "caps" | "commands" | "declaredCommands"
+>;
+type BrowserGatewayRequest = Parameters<GatewayRequestHandlers["browser.request"]>[0];
+type BrowserGatewayRequestOptions = Omit<BrowserGatewayRequest, "context"> & {
+  context: {
+    nodeRegistry: Pick<BrowserGatewayRequest["context"]["nodeRegistry"], "invoke"> & {
+      listConnected(): BrowserGatewayNode[];
+    };
+  };
 };
 
 export async function handleBrowserGatewayRequest({
@@ -81,7 +97,9 @@ export async function handleBrowserGatewayRequest({
   client,
   signal: invocationSignal,
   hasCurrentClientAuthority,
-}: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
+}: BrowserGatewayRequestOptions) {
+  const reject = (...error: Parameters<typeof errorShape>) =>
+    respond(false, undefined, errorShape(...error));
   const typed = params as BrowserRequestParams;
   const methodRaw = (normalizeOptionalString(typed.method) ?? "").toUpperCase();
   const path = normalizeBrowserRequestPath(normalizeOptionalString(typed.path) ?? "");
@@ -107,6 +125,20 @@ export async function handleBrowserGatewayRequest({
     }
   };
 
+  const parsedTabScope =
+    typed.tabScope === undefined ? undefined : browserTabScopeSchema.safeParse(typed.tabScope);
+  if (
+    parsedTabScope &&
+    (!parsedTabScope.success || typed.dashboard !== undefined || path === "/dashboard")
+  ) {
+    reject(
+      ErrorCodes.INVALID_REQUEST,
+      "tabScope requires a valid session tab scope and cannot be combined with dashboard",
+    );
+    return;
+  }
+  const tabScope = parsedTabScope?.data;
+
   if (
     (typed.target !== undefined && typed.target !== "host" && !explicitNode) ||
     (typed.node !== undefined &&
@@ -115,42 +147,26 @@ export async function handleBrowserGatewayRequest({
         typeof typed.node !== "string" ||
         typed.node.length > 256))
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        'target must be "host" or "node"; node requires target="node" and a nonempty selector of at most 256 characters',
-      ),
+    reject(
+      ErrorCodes.INVALID_REQUEST,
+      'target must be "host" or "node"; node requires target="node" and a nonempty selector of at most 256 characters',
     );
     return;
   }
 
   if (!methodRaw || !path) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "method and path are required"),
-    );
+    reject(ErrorCodes.INVALID_REQUEST, "method and path are required");
     return;
   }
   if (methodRaw !== "GET" && methodRaw !== "POST" && methodRaw !== "DELETE") {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "method must be GET, POST, or DELETE"),
-    );
+    reject(ErrorCodes.INVALID_REQUEST, "method must be GET, POST, or DELETE");
     return;
   }
   if (path === "/dashboard") {
     if (typed.target === "node" || requestedNode) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Browser dashboards use a local managed browser on the Gateway host",
-        ),
+      reject(
+        ErrorCodes.INVALID_REQUEST,
+        "Browser dashboards use a local managed browser on the Gateway host",
       );
       return;
     }
@@ -158,13 +174,9 @@ export async function handleBrowserGatewayRequest({
       .extend({ resume: z.boolean().optional() })
       .safeParse(methodRaw === "GET" ? query : body);
     if (!request.success) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Browser dashboard requires sessionKey and a stable widget name",
-        ),
+      reject(
+        ErrorCodes.INVALID_REQUEST,
+        "Browser dashboard requires sessionKey and a stable widget name",
       );
       return;
     }
@@ -181,7 +193,7 @@ export async function handleBrowserGatewayRequest({
       });
       respond(true, result);
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+      reject(ErrorCodes.INVALID_REQUEST, String(error));
     }
     return;
   }
@@ -189,13 +201,9 @@ export async function handleBrowserGatewayRequest({
   if (typed.dashboard !== undefined) {
     const scope = dashboardRequestSchema.safeParse(typed.dashboard);
     if (!scope.success || explicitNode || requestedNode) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Dashboard requests require a valid local dashboard identity",
-        ),
+      reject(
+        ErrorCodes.INVALID_REQUEST,
+        "Dashboard requests require a valid local dashboard identity",
       );
       return;
     }
@@ -234,7 +242,7 @@ export async function handleBrowserGatewayRequest({
         assertBrowserDashboardTargetCurrent(dashboard, scope.data.agentId, authority, profile);
       await assertDashboardCurrent();
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+      reject(ErrorCodes.INVALID_REQUEST, String(error));
       return;
     }
   }
@@ -246,14 +254,10 @@ export async function handleBrowserGatewayRequest({
   const forceHostLocal =
     Boolean(assertDashboardCurrent) || isBrowserHostLocalRoute(methodRaw, path);
   if (forceHostLocal && explicitNode) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "this browser route must run on the Gateway host"),
-    );
+    reject(ErrorCodes.INVALID_REQUEST, "this browser route must run on the Gateway host");
     return;
   }
-  let nodeTarget: NodeSession | null = null;
+  let nodeTarget: BrowserGatewayNode | null = null;
   if (!forceHostLocal && typed.target !== "host") {
     try {
       nodeTarget = await resolveBrowserNodeTarget({
@@ -265,32 +269,22 @@ export async function handleBrowserGatewayRequest({
       });
       assertRequesterCurrent();
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      reject(ErrorCodes.UNAVAILABLE, String(err));
       return;
     }
   }
 
   if (nodeTarget && path === "/screencast") {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "browser screencast is not available over a node proxy",
-        { details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" } },
-      ),
-    );
+    reject(ErrorCodes.INVALID_REQUEST, "browser screencast is not available over a node proxy", {
+      details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
+    });
     return;
   }
 
   if (nodeTarget && isPersistentBrowserProfileMutation(methodRaw, path)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "browser.request cannot mutate persistent browser profiles over a node proxy",
-      ),
+    reject(
+      ErrorCodes.INVALID_REQUEST,
+      "browser.request cannot mutate persistent browser profiles over a node proxy",
     );
     return;
   }
@@ -304,7 +298,7 @@ export async function handleBrowserGatewayRequest({
     ) {
       const message = browserProxyUploadUnavailableMessage(nodeTarget.declaredCommands);
       if (explicitNode || configuredNode) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+        reject(ErrorCodes.UNAVAILABLE, message);
         return;
       }
       logger.warn(
@@ -325,7 +319,7 @@ export async function handleBrowserGatewayRequest({
       assertRequesterCurrent();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+      reject(ErrorCodes.INVALID_REQUEST, message);
       return;
     }
     if (preparedUpload.upload) {
@@ -334,6 +328,7 @@ export async function handleBrowserGatewayRequest({
   }
 
   if (nodeTarget && preparedUpload) {
+    const resolvedNodeTarget = nodeTarget;
     const allowlist = resolveNodeCommandAllowlist(cfg, nodeTarget);
     const allowed = isNodeCommandAllowed({
       command: proxyCommand,
@@ -343,42 +338,47 @@ export async function handleBrowserGatewayRequest({
     if (!allowed.ok) {
       const platform = nodeTarget.platform ?? "unknown";
       const hint = `node command not allowed: ${allowed.reason} (platform: ${platform}, command: ${proxyCommand})`;
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, hint, {
-          details: { reason: allowed.reason, command: proxyCommand },
-        }),
-      );
+      reject(ErrorCodes.INVALID_REQUEST, hint, {
+        details: { reason: allowed.reason, command: proxyCommand },
+      });
       return;
     }
 
     const { proxyTimeoutMs, nodeInvokeTimeoutMs } = resolveBrowserProxyTimeouts(timeoutMs);
-    const proxyParams = {
-      method: methodRaw,
-      path,
-      query,
-      body: preparedUpload.body,
-      upload: preparedUpload.upload,
-      timeoutMs: proxyTimeoutMs,
-      profile: resolveRequestedBrowserProfile({ query, body }),
-      errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
-    };
-    let res;
-    try {
+    const invokeProxy = async (
+      proxyRequest: Record<string, unknown>,
+      command = BROWSER_PROXY_COMMAND,
+    ) => {
       assertRequesterCurrent();
-      res = await context.nodeRegistry.invoke({
-        nodeId: nodeTarget.nodeId,
-        command: proxyCommand,
-        params: proxyParams,
+      const invoked = await context.nodeRegistry.invoke({
+        nodeId: resolvedNodeTarget.nodeId,
+        command,
+        params: {
+          ...proxyRequest,
+          timeoutMs: proxyTimeoutMs,
+          errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
+        },
         timeoutMs: nodeInvokeTimeoutMs,
         signal: requestSignal,
         isDispatchAuthorized: isRequesterCurrent,
         idempotencyKey: crypto.randomUUID(),
       });
       assertRequesterCurrent();
+      return invoked;
+    };
+    const proxyParams = {
+      method: methodRaw,
+      path,
+      query,
+      body: preparedUpload.body,
+      upload: preparedUpload.upload,
+      profile: resolveRequestedBrowserProfile({ query, body }),
+    };
+    let res;
+    try {
+      res = await invokeProxy(proxyParams, proxyCommand);
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+      reject(ErrorCodes.UNAVAILABLE, String(error));
       return;
     }
     const allowAutomaticHostFallback =
@@ -398,24 +398,59 @@ export async function handleBrowserGatewayRequest({
       if (failure) {
         const { status, body: errorBody } = failure.error;
         const code = status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
-        respond(false, undefined, errorShape(code, errorBody.error, { details: errorBody }));
+        reject(code, errorBody.error, { details: errorBody });
         return;
       }
       const proxy =
         payload && typeof payload === "object" ? (payload as BrowserProxyEnvelope) : null;
       if (!proxy || !("result" in proxy)) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"));
+        reject(ErrorCodes.UNAVAILABLE, "browser proxy failed");
         return;
       }
       try {
         const result = await persistBrowserProxyResultFiles(proxy.result, proxy.files);
         assertRequesterCurrent();
-        respond(true, result);
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "browser proxy file transfer failed"),
+        const resolvedRoute = parseBrowserProxyRoute(proxy);
+        const scopedResult = tabScope
+          ? await applyBrowserRequestTabScope({
+              scope: tabScope,
+              method: methodRaw,
+              path,
+              body,
+              result,
+              nodeTarget,
+              profile:
+                resolvedRoute?.status === "resolved"
+                  ? resolvedRoute.profile
+                  : resolveRequestedBrowserProfile({ query, body }),
+              requestedProfile: resolveRequestedBrowserProfile({ query, body }),
+              assertCurrent: assertRequesterCurrent,
+              closeTab: async (targetId, profile) => {
+                const closed = await invokeProxy({
+                  method: "DELETE",
+                  path: `/tabs/${encodeURIComponent(targetId)}`,
+                  query: { targetIdMode: "raw" },
+                  profile,
+                });
+                const closePayload = closed.payloadJSON
+                  ? safeParseJson(closed.payloadJSON)
+                  : closed.payload;
+                if (
+                  !closed.ok ||
+                  parseBrowserProxyFailure(closePayload) ||
+                  !asNullableRecord(closePayload)?.result
+                ) {
+                  throw new Error("Failed to close newly opened browser node tab");
+                }
+              },
+            })
+          : result;
+        assertRequesterCurrent();
+        respond(true, scopedResult);
+      } catch (error) {
+        reject(
+          ErrorCodes.UNAVAILABLE,
+          tabScope ? String(error) : "browser proxy file transfer failed",
         );
       }
       return;
@@ -427,11 +462,7 @@ export async function handleBrowserGatewayRequest({
   // `browser.proxy` is a separate remote-host authority.
   const ready = await startBrowserControlServiceFromConfig();
   if (!ready) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, await describeBrowserControlUnavailable()),
-    );
+    reject(ErrorCodes.UNAVAILABLE, await describeBrowserControlUnavailable());
     return;
   }
 
@@ -439,7 +470,7 @@ export async function handleBrowserGatewayRequest({
   try {
     dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
   } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    reject(ErrorCodes.UNAVAILABLE, String(err));
     return;
   }
 
@@ -456,8 +487,12 @@ export async function handleBrowserGatewayRequest({
             hasCurrentClientAuthority?.() !== false,
         }
       : undefined;
+  let resolvedProfile: string | undefined;
   const assertCurrent: NonNullable<BrowserRequest["assertCurrent"]> = async (profile) => {
     assertRequesterCurrent();
+    if (profile) {
+      resolvedProfile = profile.name;
+    }
     await assertDashboardCurrent?.(profile);
     assertRequesterCurrent();
   };
@@ -481,7 +516,7 @@ export async function handleBrowserGatewayRequest({
       ? await withTimeout(dispatch, timeoutMs, "browser request")
       : await dispatch();
   } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    reject(ErrorCodes.UNAVAILABLE, String(err));
     return;
   }
 
@@ -491,13 +526,45 @@ export async function handleBrowserGatewayRequest({
         ? String((result.body as { error?: unknown }).error)
         : `browser request failed (${result.status})`;
     const code = result.status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
-    respond(false, undefined, errorShape(code, message, { details: result.body }));
+    reject(code, message, { details: result.body });
     return;
   }
 
-  respond(true, result.body);
+  try {
+    const scopedResult = tabScope
+      ? await applyBrowserRequestTabScope({
+          scope: tabScope,
+          method: methodRaw,
+          path,
+          body,
+          result: result.body,
+          profile: resolvedProfile,
+          requestedProfile: resolveRequestedBrowserProfile({ query, body }),
+          defaultProfile: ready.resolved.defaultProfile,
+          assertCurrent: assertRequesterCurrent,
+          closeTab: async (targetId, profile) => {
+            assertRequesterCurrent();
+            const closed = await dispatcher.dispatch({
+              method: "DELETE",
+              path: `/tabs/${encodeURIComponent(targetId)}`,
+              query: { profile, targetIdMode: "raw" },
+              signal: requestSignal,
+              ...(requester ? { requester } : {}),
+              assertCurrent,
+            });
+            assertRequesterCurrent();
+            if (closed.status >= 400) {
+              throw new Error(`Failed to close newly opened browser tab (${closed.status})`);
+            }
+          },
+        })
+      : result.body;
+    respond(true, scopedResult);
+  } catch (error) {
+    reject(ErrorCodes.UNAVAILABLE, String(error));
+  }
 }
 
-export const browserHandlers: GatewayRequestHandlers = {
+export const browserHandlers = {
   "browser.request": handleBrowserGatewayRequest,
-};
+} satisfies GatewayRequestHandlers;

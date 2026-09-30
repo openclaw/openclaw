@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import { bindAgentToolActionDescriptor } from "./agent-tool-metadata.js";
+import {
+  bindAgentToolActionDescriptor,
+  type AgentToolActionDescriptor,
+} from "./agent-tool-metadata.js";
 import { getToolParamsRecord, normalizeFileToolPathParam } from "./agent-tools.params.js";
 import {
   createHostWorkspaceEditTool,
@@ -34,6 +37,15 @@ import { createLsTool, type LsOperations } from "./sessions/tools/ls.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "./workspace-access.js";
+
+const filesystemAction: AgentToolActionDescriptor = Object.freeze({
+  family: "data",
+  operation: "filesystem",
+});
+const processAction: AgentToolActionDescriptor = Object.freeze({
+  family: "tool",
+  operation: "process",
+});
 
 function resolveSkillReadRoots(skills?: SkillSnapshot["resolvedSkills"]): string[] | undefined {
   const roots = new Set<string>();
@@ -421,11 +433,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   }
   options.recordToolPrepStage?.("shell-tools");
 
-  base.forEach((tool) =>
-    bindAgentToolActionDescriptor(tool, { family: "data", operation: "filesystem" }),
-  );
-  shell.forEach((tool) =>
-    bindAgentToolActionDescriptor(tool, { family: "tool", operation: "process" }),
-  );
+  base.forEach((tool) => bindAgentToolActionDescriptor(tool, filesystemAction));
+  shell.forEach((tool) => bindAgentToolActionDescriptor(tool, processAction));
   return [...base, ...shell];
 }

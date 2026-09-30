@@ -1,5 +1,6 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { WorkerOptions } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import {
@@ -26,6 +27,7 @@ import {
 
 const reclamation = vi.hoisted(() => ({
   gate: undefined as SharedArrayBuffer | undefined,
+  databasePath: undefined as string | undefined,
   exits: [] as Promise<number>[],
   exitCodes: [] as number[],
 }));
@@ -35,8 +37,14 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return {
     ...actual,
     Worker: class extends actual.Worker {
+      private readonly validationGate: SharedArrayBuffer | undefined;
+      private observedValidation = false;
+
       constructor(filename: string | URL, options: WorkerOptions = {}) {
-        const gate = options.workerData?.operation === "reclaim" ? reclamation.gate : undefined;
+        const gate =
+          options.workerData?.operation === "reclaim" || reclamation.databasePath
+            ? reclamation.gate
+            : undefined;
         let workerOptions = options;
         if (gate) {
           // Hold the real Worker's native validation, with no fake database or
@@ -44,14 +52,16 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           const preload = `
             import { realpathSync } from 'node:fs';
             import { DatabaseSync } from 'node:sqlite';
-            import { workerData } from 'node:worker_threads';
+            import { parentPort, workerData } from 'node:worker_threads';
             const gate = new Int32Array(workerData.reclamationTestGate);
-            const databasePath = realpathSync(workerData.databaseOptions.path);
+            const databasePath = realpathSync(workerData.reclamationTestDatabasePath);
             const validated = new WeakSet();
             const prepare = DatabaseSync.prototype.prepare;
             DatabaseSync.prototype.prepare = function (sql) {
               const statement = prepare.call(this, sql);
-              if (sql !== 'PRAGMA integrity_check;' && sql !== 'PRAGMA foreign_key_check;') {
+              const integrityCheck = sql.startsWith('PRAGMA integrity_check') || sql.startsWith('PRAGMA quick_check');
+              const foreignKeyCheck = sql.startsWith('PRAGMA foreign_key_check');
+              if (!integrityCheck && !foreignKeyCheck) {
                 return statement;
               }
               const target = prepare.call(this, 'PRAGMA database_list').all().some(
@@ -59,11 +69,12 @@ vi.mock("node:worker_threads", async (importOriginal) => {
               );
               if (!target) return statement;
               const database = this;
-              if (sql === 'PRAGMA integrity_check;') {
+              if (integrityCheck) {
                 const all = statement.all.bind(statement);
                 statement.all = (...args) => {
                   Atomics.add(gate, 0, 1);
                   Atomics.notify(gate, 0);
+                  parentPort.postMessage({ type: 'test-reclamation-validation', phase: 'checking' });
                   if (Atomics.wait(gate, 1, 0, 15000) === 'timed-out') {
                     throw new Error('reclamation test gate was not released');
                   }
@@ -72,7 +83,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
                   Atomics.add(gate, 2, 1);
                   return result;
                 };
-              } else if (sql === 'PRAGMA foreign_key_check;') {
+              } else if (foreignKeyCheck) {
                 const iterate = statement.iterate.bind(statement);
                 statement.iterate = function* (...args) {
                   yield* iterate(...args);
@@ -84,7 +95,12 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           `;
           workerOptions = {
             ...options,
-            workerData: { ...options.workerData, reclamationTestGate: gate },
+            workerData: {
+              ...options.workerData,
+              reclamationTestGate: gate,
+              reclamationTestDatabasePath:
+                reclamation.databasePath ?? options.workerData.databaseOptions.path,
+            },
             execArgv: [
               ...(options.execArgv ?? []),
               "--import",
@@ -93,16 +109,34 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           };
         }
         super(filename, workerOptions);
-        if (gate) {
-          reclamation.exits.push(
-            new Promise((resolve) => {
-              this.once("exit", (code) => {
-                reclamation.exitCodes.push(code);
-                resolve(code);
-              });
-            }),
-          );
+        this.validationGate = gate;
+      }
+
+      override emit(event: string | symbol, ...args: unknown[]): boolean {
+        const message = args[0];
+        if (
+          this.validationGate &&
+          event === "message" &&
+          args.length === 1 &&
+          isRecord(message) &&
+          Object.keys(message).length === 2 &&
+          message.type === "test-reclamation-validation" &&
+          message.phase === "checking"
+        ) {
+          if (!this.observedValidation) {
+            this.observedValidation = true;
+            reclamation.exits.push(
+              new Promise((resolve) => {
+                this.once("exit", (code) => {
+                  reclamation.exitCodes.push(code);
+                  resolve(code);
+                });
+              }),
+            );
+          }
+          return true;
         }
+        return super.emit(event, ...args);
       }
     },
   };
@@ -113,14 +147,16 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   reclamation.gate = undefined;
+  reclamation.databasePath = undefined;
   reclamation.exits = [];
   reclamation.exitCodes = [];
   closeOpenClawAgentDatabasesForTest();
 });
 
-function holdReclamationValidation() {
+function holdReclamationValidation(databasePath?: string) {
   const gate = new Int32Array(new SharedArrayBuffer(4 * Int32Array.BYTES_PER_ELEMENT));
   reclamation.gate = gate.buffer;
+  reclamation.databasePath = databasePath;
   const pending: Promise<unknown>[] = [];
   const release = () => {
     Atomics.store(gate, 1, 1);
@@ -273,7 +309,7 @@ test("sessions.delete rejects revoked authority before repairing the same databa
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
       .get("idx_agent_cache_expiry");
   expect(readRepairIndex()).toBeUndefined();
-  const validation = holdReclamationValidation();
+  const validation = holdReclamationValidation(database.path);
   let authorized = true;
   let guardCalls = 0;
   try {
@@ -293,6 +329,7 @@ test("sessions.delete rejects revoked authority before repairing the same databa
     await validation.entered(
       withTestTimeout(deletion, 10_000, "reclamation Worker did not enter native validation"),
     );
+    expect(readRepairIndex()).toBeUndefined();
     expect(openOpenClawAgentDatabase(databaseOptions)).toBe(database);
     expect(database.db.isOpen).toBe(true);
     expect(readLeases()).toHaveLength(originalLeases.length + 1);
@@ -307,11 +344,12 @@ test("sessions.delete rejects revoked authority before repairing the same databa
     await expect(loadSeededTranscriptEvents(transcriptScope)).resolves.toEqual(originalTranscript);
     expect(Atomics.load(validation.gate, 2)).toBeGreaterThan(0);
     expect(Atomics.load(validation.gate, 3)).toBeGreaterThan(0);
-    expect(reclamation.exitCodes).toEqual([]);
+    // Refused native opening joins broker termination before returning its authority error.
+    expect(reclamation.exitCodes).toEqual([1]);
     expect(readLeases()).toEqual(originalLeases);
     expect(readRepairIndex()).toBeUndefined();
     await closeOpenClawAgentDatabasesAsync();
-    expect(reclamation.exitCodes).toEqual([0]);
+    expect(reclamation.exitCodes).toEqual([1]);
   } finally {
     await validation.close();
   }

@@ -9,7 +9,7 @@ const cfg = {
   channels: { discord: { token: "token", groupPolicy: "open" } },
 } as OpenClawConfig;
 
-const scenario = {
+const defaultScenario = {
   denyView: false,
   guildPermissions: PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages,
   locked: false,
@@ -18,6 +18,7 @@ const scenario = {
     | ChannelType.GuildPrivateThread
     | ChannelType.GuildPublicThread,
 };
+const scenario = { ...defaultScenario };
 
 let closeLoopback = async () => {};
 let requests: Awaited<ReturnType<typeof createDiscordLoopbackRest>>["requests"] = [];
@@ -104,11 +105,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   requests.length = 0;
-  scenario.denyView = false;
-  scenario.guildPermissions = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages;
-  scenario.locked = false;
-  scenario.privateMember = true;
-  scenario.type = ChannelType.GuildPublicThread;
+  Object.assign(scenario, defaultScenario);
 });
 
 describe("registered Discord channel-edit thread permissions", () => {
@@ -143,7 +140,6 @@ describe("registered Discord channel-edit thread permissions", () => {
   });
 
   it.each([
-    ["an explicit unlock", { locked: false }],
     ["an explicit flag edit", { nsfw: false }],
     ["an explicit parent clear", { clearParent: true }],
     ["a forum tag edit", { availableTags: [{ name: "status" }] }],

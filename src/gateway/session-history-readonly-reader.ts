@@ -6,7 +6,7 @@ import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
-import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-task-history.js";
+import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-binding.js";
 import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
 import {
@@ -19,6 +19,7 @@ import {
   isSubagentCoordinationHistoryInput,
   type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
+import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
@@ -40,9 +41,7 @@ export function createBoundSessionHistorySubagentProjection(
     readSourceDatabases,
   );
   return {
-    isSubagentSession(sessionKey) {
-      return readSource(sessionKey);
-    },
+    isSubagentSession: readSource,
     isSubagentRunMessage(runId, messageSeq) {
       if (messageSeq === undefined) {
         return false;
@@ -115,8 +114,12 @@ export function createReadonlySessionHistoryReader(
     return result.value.value;
   };
   return {
-    readTranscriptBinding: (run?: { id: string; maxBytes: number }) =>
-      readSnapshot((projection) => readSessionTranscriptBindingFromProjection(projection, run)),
+    readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
+      const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");
+      return readSnapshot((projection) => readArtifactSummariesFromProjection(projection, query));
+    },
+    readTranscriptBinding: () =>
+      readSnapshot((projection) => readSessionTranscriptBindingFromProjection(projection)),
     readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>
       readSnapshot((projection) => readTranscriptDisplayDeltaFromProjection(projection, limits)),
     ...createSessionTranscriptReader({

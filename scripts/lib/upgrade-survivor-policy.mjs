@@ -32,7 +32,6 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "projects-doctor",
   "channel-owner-policy",
   "projects-startup-migration",
-  "taskflow-restoration",
   "workshop-doctor-recovery",
   "update-report-recovery",
   "dreaming-cron-doctor",
@@ -54,7 +53,6 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "projects-doctor" &&
     scenario !== "channel-owner-policy" &&
     scenario !== "projects-startup-migration" &&
-    scenario !== "taskflow-restoration" &&
     scenario !== "workshop-doctor-recovery" &&
     scenario !== "update-report-recovery" &&
     scenario !== "dreaming-cron-doctor" &&
@@ -190,8 +188,7 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec
   if (
     scenario === "projects-doctor" ||
     scenario === "channel-owner-policy" ||
-    scenario === "projects-startup-migration" ||
-    scenario === "taskflow-restoration"
+    scenario === "projects-startup-migration"
   ) {
     return baselineSpec === "openclaw@2026.9.4";
   }

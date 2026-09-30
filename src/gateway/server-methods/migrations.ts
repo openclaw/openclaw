@@ -1,6 +1,5 @@
-// Gateway handlers expose reviewed, memory-only migration plans to trusted operators.
-import crypto from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -22,6 +21,7 @@ import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -105,20 +105,17 @@ function fingerprintMemoryPlan(params: {
   overwrite?: boolean;
   plan: MigrationPlan;
 }): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      stableStringify({
-        version: 3,
-        agentId: params.agentId,
-        workspace: params.workspace,
-        providerId: params.providerId,
-        overwrite: params.overwrite === true,
-        // Apply receives the full plan, so every provider-visible field must bind to the review.
-        plan: params.plan,
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    stableStringify({
+      version: 3,
+      agentId: params.agentId,
+      workspace: params.workspace,
+      providerId: params.providerId,
+      overwrite: params.overwrite === true,
+      // Apply receives the full plan, so every provider-visible field must bind to the review.
+      plan: params.plan,
+    }),
+  );
 }
 
 function targetAgentOrRespond(
@@ -131,7 +128,7 @@ function targetAgentOrRespond(
     return undefined;
   }
   const agentId = normalizeAgentId(rawAgentId);
-  if (!new Set(listAgentIds(config)).has(agentId)) {
+  if (!listAgentIds(config).includes(agentId)) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
     return undefined;
   }
@@ -281,12 +278,9 @@ export const migrationsHandlers: GatewayRequestHandlers = {
         respondMemoryApply(await inFlight.completion, respond, true);
         return;
       }
-      let settle!: (outcome: MemoryApplyOutcome) => void;
-      const completion = new Promise<MemoryApplyOutcome>((resolve) => {
-        settle = resolve;
-      });
+      const completion = createDeferredCore<MemoryApplyOutcome>();
       // Reserve before acquisition. Once apply completes, even an unreadable result is terminal.
-      inFlightMap.set(dedupeKey, { requestFingerprint, completion });
+      inFlightMap.set(dedupeKey, { requestFingerprint, completion: completion.promise });
       let applyCompleted = false;
       let producedOutcome: MemoryApplyOutcome | undefined;
       let outcome: MemoryApplyOutcome;
@@ -422,7 +416,7 @@ export const migrationsHandlers: GatewayRequestHandlers = {
       } finally {
         inFlightMap.delete(dedupeKey);
       }
-      settle(outcome);
+      completion.resolve(outcome);
       respondMemoryApply(outcome, respond);
     },
   ),

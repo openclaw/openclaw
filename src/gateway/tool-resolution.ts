@@ -1,4 +1,9 @@
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
+import {
+  getAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
@@ -46,6 +51,7 @@ import {
 } from "../agents/tools/cron-tool.js";
 import { createChannelQuestionPromptDelivery } from "../agents/tools/question-prompt-send.js";
 import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-target.js";
+import { hasSessionControlAuthority } from "../agents/tools/sessions-control-authority.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -86,6 +92,9 @@ export function resolveGatewayScopedTools(
     agentTo?: string;
     agentThreadId?: string;
     senderIsOwner?: boolean;
+    admittedRunContext?: AdmittedRunContext;
+    /** Host-issued source for limited session controls; execution rechecks its own caller. */
+    sessionControlAuthority?: AdmittedRunOperatorAuthority;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     allowGatewaySubagentBinding?: boolean;
     allowMediaInvokeCommands?: boolean;
@@ -97,6 +106,8 @@ export function resolveGatewayScopedTools(
     isGrantCurrent?: () => boolean;
     /** Authenticated standalone invocation lifetime supplied by its HTTP/RPC owner. */
     assertInvocationCurrent?: () => void;
+    /** SQL-safe input policy, separate from invocation authority that may read state. */
+    assertInputCommitAllowed?: () => void;
     excludeToolNames?: Iterable<string>;
     /** Server-minted coding tools that must be mediated through the loopback surface. */
     mediatedToolNames?: Iterable<string>;
@@ -255,10 +266,23 @@ export function resolveGatewayScopedTools(
             ),
         )
       : [];
-  const ownerOnlyGatewayDeny =
-    params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
-      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter((name) => name !== "portal" || !sessionPortalTarget)
-      : [];
+  const assignmentAdmitted =
+    surface === "loopback" &&
+    params.admittedRunContext &&
+    getAdmittedRunDelegatedAuthority(params.admittedRunContext);
+  const ownerOnlyGatewayDeny = [
+    ...(params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
+      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
+          (name) => name !== "sessions" && (name !== "portal" || !sessionPortalTarget),
+        )
+      : []),
+    // Attach grants also use loopback; session binding is not run authority.
+    ...(params.senderIsOwner !== true &&
+    !assignmentAdmitted &&
+    !(surface === "loopback" && hasSessionControlAuthority(params.sessionControlAuthority))
+      ? ["sessions"]
+      : []),
+  ];
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir =
     params.rootedExecution?.workspaceDir ??
@@ -329,6 +353,7 @@ export function resolveGatewayScopedTools(
         })
       : undefined,
     runId: params.runId,
+    assertInputCommitAllowed: params.assertInputCommitAllowed,
     assertInvocationCurrent:
       params.assertInvocationCurrent || params.isGrantCurrent
         ? () => {
@@ -384,6 +409,7 @@ export function resolveGatewayScopedTools(
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
     requesterSenderId: senderId,
+    sessionControlAuthority: params.sessionControlAuthority,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,

@@ -41,6 +41,7 @@ import { createSessionRowProjectionContext } from "./session-row-projection-cont
 import { createSessionRowGenerationObservations } from "./session-row-projection-generation.js";
 import { createSessionRowCreatorIndex } from "./session-row-projection-identities.js";
 import {
+  createSessionRowDescriptionReader,
   lookupSessionRow,
   findSessionRowById,
   readResidentSessionRow,
@@ -386,6 +387,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     configuredAgentIds = new Set(listAgentIds(cfg)),
     readRow = readResidentSessionRow,
     databaseFacts?: records.PreparedSessionRowDatabaseFacts,
+    repositoryWorkspace?: Parameters<typeof readResidentSessionRow>[0]["repositoryWorkspace"],
   ) {
     if (!row.entry) {
       return false;
@@ -406,6 +408,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       links,
       readSourceEntry: (key) => readSourceEntry(row, key, databaseFacts !== undefined),
       databaseFacts,
+      repositoryWorkspace,
     });
     if (!isIncognitoSessionKey(row.key) && rows.get(records.identity(row)) !== row) {
       return false;
@@ -523,33 +526,21 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     metadata.prepare(epoch, cfg, matching, put, referenced);
     return true;
   }
-  const describe = (query: records.Lookup, captured?: records.Row) =>
-    inOwnerContext(() => {
-      if (disposed || !prepareRead()) {
-        return undefined;
-      }
-      let row = lookup(query);
-      if (row && isIncognitoSessionKey(row.key)) {
-        materialize(row);
-      } else {
-        if (row && dirty.has(records.identity(row))) {
-          // Keyed reads refresh only their owner; unrelated bulk work never gates a response.
-          const id = records.identity(row);
-          refresh([id]);
-          row = lookup(query);
-        }
-        row = archive.describe(row);
-      }
-      if (captured && !isCurrent(captured)) {
-        return undefined;
-      }
-      if (!records.ready(row)) {
-        return undefined;
-      }
+  const describe = createSessionRowDescriptionReader({
+    runInOwner: inOwnerContext,
+    prepare: () => !disposed && prepareRead(),
+    lookup,
+    dirty,
+    refresh,
+    describeArchived: (row) => archive.describe(row),
+    isCurrent,
+    materializePrivate: (row, repository) =>
+      materialize(row, undefined, undefined, undefined, repository),
+    preparePresentation(row) {
       row.materialized.source.cfg = cfg;
       metadata.preparePresentation(row, readChildLinks);
-      return row;
-    });
+    },
+  });
   function dispose() {
     revisions.invalidate(true);
     disposed = true;
@@ -637,7 +628,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         : row;
     },
     findBySessionId(query: Parameters<typeof findSessionRowById>[0]) {
-      return findSessionRowById(query, { disposed, lookup, matching });
+      return findSessionRowById(query, { disposed, lookup, matching, scope });
     },
     describe,
     ...createSessionRowAncestorReads({
@@ -656,7 +647,10 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         needsPreparation: needsExactMembershipPreparation,
       },
       isActive: () => !disposed,
-      projection: (): SessionRowReadView & { isCurrent(row: records.Row): boolean } => projection,
+      projection: (): SessionRowReadView & {
+        isCurrent(row: records.Row): boolean;
+        getPolicyConfig: typeof getPolicyConfig;
+      } => projection,
     }),
     setArchivePageSize: archive.setPageSize,
     modelFacts(query: records.Lookup) {

@@ -147,7 +147,6 @@ async function resolveFeishuAudioTranscript(params: {
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
-  _botName?: string,
   preparedContent?: string,
 ): FeishuMessageContext {
   const mentionedBot = checkBotMentioned(event, botOpenId);
@@ -259,7 +258,6 @@ export async function handleFeishuMessage(params: {
   event: FeishuMessageEvent;
   preparedContent?: string;
   botOpenId?: string;
-  botName?: string;
   runtime?: RuntimeEnv;
   channelRuntime?: ReturnType<typeof getFeishuRuntime>["channel"];
   chatHistories?: Map<string, HistoryEntry[]>;
@@ -273,7 +271,6 @@ export async function handleFeishuMessage(params: {
     event,
     preparedContent,
     botOpenId,
-    botName,
     runtime,
     channelRuntime,
     chatHistories,
@@ -307,7 +304,7 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId, botName, preparedContent);
+  let ctx = parseFeishuMessageEvent(event, botOpenId, preparedContent);
   const isGroup = isFeishuGroupChatType(ctx.chatType);
   const isDirect = !isGroup;
   const directPreDispatchTarget = isDirect
@@ -384,12 +381,7 @@ export async function handleFeishuMessage(params: {
         );
         return;
       }
-      const deliveredCtx = parseFeishuMessageEvent(
-        verifiedEvent,
-        localBotOpenId,
-        botName,
-        preparedContent,
-      );
+      const deliveredCtx = parseFeishuMessageEvent(verifiedEvent, localBotOpenId, preparedContent);
       ctx = {
         ...deliveredCtx,
         mentionedBot: true,
@@ -1548,48 +1540,6 @@ export async function handleFeishuMessage(params: {
       type BroadcastInboundVariant =
         | { kind: "observeOnly" }
         | { kind: "active"; dispatcher: ReturnType<typeof createFeishuReplyDispatcher> };
-      const createBroadcastInboundAdapter = (paramsLocal: {
-        agentId: string;
-        sessionKey: string;
-        ctxPayload: Awaited<ReturnType<typeof buildCtxPayloadForAgent>>;
-        record: {
-          updateLastRoute: ReturnType<typeof buildFeishuInboundLastRouteUpdate>;
-          onRecordError: (err: unknown) => void;
-        };
-        lifecycle: FeishuIngressLifecycle;
-        variant: BroadcastInboundVariant;
-      }) => ({
-        ingest: () => ({
-          id: ctx.messageId,
-          timestamp: messageCreateTimeMs,
-          rawText: ctx.content,
-          textForAgent: paramsLocal.ctxPayload.BodyForAgent,
-          textForCommands: paramsLocal.ctxPayload.CommandBody,
-          raw: ctx,
-        }),
-        resolveTurn: () => ({
-          cfg,
-          channel: "feishu" as const,
-          accountId: route.accountId,
-          route: { agentId: paramsLocal.agentId, sessionKey: paramsLocal.sessionKey },
-          ctxPayload: paramsLocal.ctxPayload,
-          record: paramsLocal.record,
-          ...(paramsLocal.variant.kind === "observeOnly"
-            ? {
-                admission: { kind: "observeOnly" as const, reason: "broadcast-observer" },
-                delivery: { deliver: async () => ({ visibleReplySent: false }) },
-                replyOptions: bindIngressLifecycleToReplyOptions(paramsLocal.lifecycle),
-              }
-            : {
-                dispatcherOptions: paramsLocal.variant.dispatcher.dispatcherOptions,
-                delivery: paramsLocal.variant.dispatcher.delivery,
-                replyOptions: {
-                  ...paramsLocal.variant.dispatcher.replyOptions,
-                  ...bindIngressLifecycleToReplyOptions(paramsLocal.lifecycle),
-                },
-              }),
-        }),
-      });
 
       const dispatchForAgent = async (agentId: string) => {
         const normalizedAgentId = normalizeAgentId(agentId);
@@ -1692,14 +1642,38 @@ export async function handleFeishuMessage(params: {
             channel: "feishu",
             accountId: route.accountId,
             raw: ctx,
-            adapter: createBroadcastInboundAdapter({
-              agentId,
-              sessionKey: agentSessionKey,
-              ctxPayload: agentCtx,
-              record: agentRecord,
-              lifecycle: lane.lifecycle,
-              variant,
-            }),
+            adapter: {
+              ingest: () => ({
+                id: ctx.messageId,
+                timestamp: messageCreateTimeMs,
+                rawText: ctx.content,
+                textForAgent: agentCtx.BodyForAgent,
+                textForCommands: agentCtx.CommandBody,
+                raw: ctx,
+              }),
+              resolveTurn: () => ({
+                cfg,
+                channel: "feishu",
+                accountId: route.accountId,
+                route: { agentId, sessionKey: agentSessionKey },
+                ctxPayload: agentCtx,
+                record: agentRecord,
+                ...(variant.kind === "observeOnly"
+                  ? {
+                      admission: { kind: "observeOnly" as const, reason: "broadcast-observer" },
+                      delivery: { deliver: async () => ({ visibleReplySent: false }) },
+                      replyOptions: bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                    }
+                  : {
+                      dispatcherOptions: variant.dispatcher.dispatcherOptions,
+                      delivery: variant.dispatcher.delivery,
+                      replyOptions: {
+                        ...variant.dispatcher.replyOptions,
+                        ...bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                      },
+                    }),
+              }),
+            },
           });
           if (
             variant.kind === "active" &&

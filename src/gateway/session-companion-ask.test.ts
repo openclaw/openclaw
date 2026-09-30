@@ -11,6 +11,7 @@ import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as attachmentProcessor from "../media/attachment-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
@@ -132,6 +133,44 @@ describe("session companion embedded invocation", () => {
     });
   });
 
+  it("passes a selected-text comment to the model without persisting it as a file", async () => {
+    const companion = createCompanion();
+    const respond = vi.fn();
+    try {
+      await sessionCompanionHandlers["sessions.companion.ask"]!({
+        params: {
+          sessionKey: question.sessionKey,
+          question: "What changed?",
+          selectionContext: "Selected text:\n<untrusted passage>\n\nUser comment:\nCheck this.",
+        },
+        client: { connId: "selection-connection" },
+        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ answer: expect.any(String) }),
+      );
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining("&lt;untrusted passage&gt;"),
+          images: undefined,
+        }),
+      );
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
+      expect(
+        companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges,
+      ).toEqual([
+        { question: "What changed?", answer: expect.any(String), ts: expect.any(Number) },
+      ]);
+      await companion.ask({ ...question, question: "What next?" });
+      expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toBe("What next?");
+      expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Check this.");
+    } finally {
+      companion.dispose();
+    }
+  });
+
   it.each([0, 2_000_001])(
     "delivers an image with %i padding bytes from the registered RPC to the read-only model run",
     async (padding) => {
@@ -166,6 +205,75 @@ describe("session companion embedded invocation", () => {
           }),
         );
       } finally {
+        companion.dispose();
+      }
+    },
+  );
+
+  it.each(["preparation", "dispatch", "accepted"] as const)(
+    "rechecks the original RPC image policy until model admission (%s)",
+    async (phase) => {
+      const cfg: OpenClawConfig = {};
+      let committed: OpenClawConfig = cfg;
+      const disable = () => {
+        committed = { gateway: { uploads: { enabled: false } } };
+      };
+      const companion = createCompanion(cfg);
+      const respond = vi.fn();
+      const prepare = attachmentProcessor.prepareMediaAttachment;
+      const preparation = vi.spyOn(attachmentProcessor, "prepareMediaAttachment");
+      if (phase === "preparation") {
+        preparation.mockImplementationOnce(async (...args) => {
+          const result = await prepare(...args);
+          disable();
+          return result;
+        });
+      } else if (phase === "dispatch") {
+        admitWrite.mockImplementationOnce(async (_manager, write) => {
+          write();
+          disable();
+        });
+      } else {
+        runEmbeddedAgent.mockImplementationOnce(async () => {
+          disable();
+          return { meta: { durationMs: 1, finalAssistantVisibleText: "Accepted image answer" } };
+        });
+      }
+      try {
+        await sessionCompanionHandlers["sessions.companion.ask"]!({
+          params: {
+            sessionKey: question.sessionKey,
+            question: "Describe the image",
+            attachments: [{ mimeType: "image/png", content: imageBase64 }],
+          },
+          client: { connId: "late-policy-image" },
+          context: {
+            sessionCompanion: companion,
+            getRuntimeConfig: () => cfg,
+            getCommittedRuntimeConfig: () => committed,
+          },
+          respond,
+        } as never);
+        if (phase === "accepted") {
+          expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ answer: "Accepted image answer" }),
+          );
+        } else {
+          expect(runEmbeddedAgent).not.toHaveBeenCalled();
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "FORBIDDEN",
+              details: { code: "UPLOADS_DISABLED" },
+            }),
+          );
+          expect(companion.state(question).exchanges).toEqual([]);
+        }
+      } finally {
+        preparation.mockRestore();
         companion.dispose();
       }
     },

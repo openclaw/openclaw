@@ -8,7 +8,7 @@ import {
   writeStdoutLine,
 } from "./cli-shared.js";
 import type { GoogleMeetConfig } from "./config.js";
-import { createGoogleMeetSpace, fetchGoogleMeetSpace } from "./meet.js";
+import { createGoogleMeetSpace, fetchGoogleMeetSpace } from "./meet-api.js";
 import { resolveGoogleMeetAccessToken } from "./oauth.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 

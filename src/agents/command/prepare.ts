@@ -9,6 +9,7 @@ import {
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
@@ -263,14 +264,31 @@ export async function prepareAgentCommandExecution(
     agentId: sessionAgentId,
     sessionKey,
   });
-  const workspaceDirRaw =
-    normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const agentWorkspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const workspaceDirRaw = normalizedSpawned.workspaceDir ?? agentWorkspaceDir;
   const workspaceDir = resolveUserPath(workspaceDirRaw);
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
+  const assertAcpPreparationCurrent = () => {
+    if (opts.abortSignal?.aborted) {
+      throw createAbortError("Operation aborted", { cause: opts.abortSignal.reason });
+    }
+    opts.assertSourceCurrent?.();
+    opts.operatorAuthority?.assertCurrent();
+    if (opts.lifecycleGeneration !== undefined) {
+      assertAgentRunLifecycleGenerationCurrent(opts.lifecycleGeneration);
+    }
+    assertAgentDatabaseAdmitted(sessionAgentId);
+  };
   const acpResolution = sessionKey
-    ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
+    ? await acpManager.resolveSessionAsync({
+        cfg,
+        sessionKey,
+        agentId: sessionAgentId,
+        assertCurrent: assertAcpPreparationCurrent,
+      })
     : null;
+  assertAcpPreparationCurrent();
   // Configured run cwd is a Gateway-local path; ACP-placed sessions ("ready" or
   // "stale") execute on their own node with a node-owned execCwd, so the config
   // fallback applies only to ordinary sessions and never bridges into a node.
@@ -358,13 +376,13 @@ export async function prepareAgentCommandExecution(
     const workspaceProvisioning = await resolveAcpAgentWorkspaceProvisioningForTurn({
       cfg,
       agentId: sessionAgentId,
-      workspaceDir,
+      workspaceDir: agentWorkspaceDir,
       cwd: resolvedCwd,
       sessionKey: sessionKey ?? undefined,
       sessionEntry: sessionEntryRaw ?? undefined,
     });
     await ensureAgentWorkspace({
-      dir: workspaceDirRaw,
+      dir: agentWorkspaceDir,
       ensureBootstrapFiles: !agentCfg?.skipBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       provisioning: workspaceProvisioning,

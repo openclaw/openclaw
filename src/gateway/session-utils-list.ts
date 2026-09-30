@@ -114,7 +114,9 @@ function buildSessionsListResult(
   // the requested agent when scoped, otherwise the legacy compatibility agent.
   // Legacy plain-array catalogs (direct list callers) pass through
   // unchanged; per-agent maps resolve by the same identity.
-  const defaultsAgentId = resolveSessionsListDefaultsAgentId(cfg, opts.agentId);
+  const defaultsAgentId = normalizeAgentId(
+    opts.agentId || (tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID),
+  );
   const preparedDefaultsCatalog =
     modelCatalog instanceof Map ? modelCatalog.get(defaultsAgentId) : undefined;
   const defaultsCatalog =
@@ -143,7 +145,9 @@ function buildSessionsListResult(
     nextOffset: list.nextOffset,
     hasMore: list.hasMore,
     owners: list.ownerFacet,
+    ...(list.ownerSessionCounts ? { ownerSessionCounts: list.ownerSessionCounts } : {}),
     involvingProfileId: list.involvingProfileId,
+    ...(list.activityPulse ? { activityPulse: list.activityPulse } : {}),
     ...(list.people
       ? {
           people: list.people,
@@ -154,15 +158,6 @@ function buildSessionsListResult(
     defaults: policy ? policy.defaults(defaults) : defaults,
     sessions,
   };
-}
-
-function resolveSessionsListDefaultsAgentId(
-  cfg: OpenClawConfig,
-  requestedAgentId?: string,
-): string {
-  return requestedAgentId
-    ? normalizeAgentId(requestedAgentId)
-    : normalizeAgentId(tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID);
 }
 
 type RecordRow = ReturnType<SessionRowProjection["selectEntries"]>[number];
@@ -201,16 +196,20 @@ export function prepareSessionRowSelection(
     subagentRuns: residentContext.subagentRuns.atTime(now),
   };
   const keyed = prepared?.key !== undefined || prepared?.sessionIdOrKey !== undefined;
+  // Person references resolve against the full visible roster before child filtering.
+  const parentSessionKey = !keyed && !opts.involvingProfileId ? opts.spawnedBy : undefined;
+  const broad = !keyed && !parentSessionKey;
   const activeOnly = opts.activeOnly === true;
-  let selection = keyed
-    ? undefined
-    : sessionRowSelections.get(revision)?.get(selectedScope)?.get(activeOnly);
+  let selection = broad
+    ? sessionRowSelections.get(revision)?.get(selectedScope)?.get(activeOnly)
+    : undefined;
   if (!selection) {
     const rows = projection
       .selectEntries({
         agentId: selectedScope.agentId,
         key: prepared?.key,
         sessionIdOrKey: prepared?.sessionIdOrKey,
+        parentSessionKey,
         sortBy: null,
       })
       .filter(
@@ -268,7 +267,7 @@ export function prepareSessionRowSelection(
       ),
       entries,
     };
-    if (!keyed) {
+    if (broad) {
       const currentRevision = projection.state.revision;
       let scopes = sessionRowSelections.get(currentRevision);
       if (!scopes) {

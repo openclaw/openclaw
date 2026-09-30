@@ -498,8 +498,9 @@ describeBrowserLayout("touch-primary form controls", () => {
             appearance: style.appearance,
             image: style.backgroundImage,
             paddingRight: Number.parseFloat(style.paddingRight),
-            positionX: style.backgroundPositionX,
-            repeat: style.backgroundRepeat,
+            positionX: style.backgroundPositionX.split(",").map((value) => value.trim()),
+            size: style.backgroundSize.split(",").map((value) => value.trim()),
+            repeat: style.backgroundRepeat.split(",").map((value) => value.trim()),
           };
         }),
       );
@@ -507,10 +508,11 @@ describeBrowserLayout("touch-primary form controls", () => {
       expect(selects).toHaveLength(2);
       for (const select of selects) {
         expect(select.appearance).toBe("none");
-        expect(select.image).not.toBe("none");
+        expect(select.image.match(/linear-gradient[(]/g)).toHaveLength(2);
         expect(select.paddingRight).toBeGreaterThanOrEqual(32);
-        expect(select.positionX).toBe("calc(100% - 10px)");
-        expect(select.repeat).toContain("no-repeat");
+        expect(select.positionX).toEqual(["calc(100% - 18px)", "calc(100% - 14px)"]);
+        expect(select.size).toEqual(["5px 5px", "5px 5px"]);
+        expect(select.repeat).toEqual(["no-repeat", "no-repeat"]);
       }
     } finally {
       await closeMobileFixture(fixture);

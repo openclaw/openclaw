@@ -39,9 +39,7 @@ export function isExcludedWrapperShadowingSource(filePath: string) {
 }
 
 function compareViolations(left: WrapperShadowingViolation, right: WrapperShadowingViolation) {
-  return `${left.name}\0${left.wrapper}\0${left.wrapped}\0${left.via ?? ""}`.localeCompare(
-    `${right.name}\0${right.wrapper}\0${right.wrapped}\0${right.via ?? ""}`,
-  );
+  return violationKey(left).localeCompare(violationKey(right));
 }
 
 function violationKey(violation: WrapperShadowingViolation) {

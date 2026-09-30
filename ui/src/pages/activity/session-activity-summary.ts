@@ -11,9 +11,8 @@ export function renderSessionActivitySummary(
   const state =
     summary?.state === "current" && !summary.text ? "missing" : (summary?.state ?? "missing");
   const updating = state === "updating";
-  const feedback = updating
-    ? ""
-    : state === "stale"
+  const feedback =
+    state === "stale"
       ? t(summary?.text ? "activityFeed.recapStale" : "activityFeed.recapMissing")
       : state === "unavailable"
         ? t(summary?.text ? "activityFeed.recapRefreshFailed" : "activityFeed.recapUnavailable")
@@ -52,13 +51,13 @@ export function renderSessionActivitySummary(
     }
     ${
       feedback
-        ? html`<div class="activity-feed__recap-feedback">
+        ? html`<div class="activity-feed__note">
             <span>${feedback}</span>
             ${
               onRetry &&
               summary?.canEnsure === true &&
               (state === "unavailable" || state === "stale")
-                ? html`<button class="activity-feed__recap-retry" @click=${() => onRetry(row)}>
+                ? html`<button class="activity-feed__note-action" @click=${() => onRetry(row)}>
                     ${t("activityFeed.recapRetry")}
                   </button>`
                 : nothing

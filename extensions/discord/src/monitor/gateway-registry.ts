@@ -1,4 +1,4 @@
-import type { GatewayPlugin } from "../internal/gateway.js";
+import type { GatewayPluginContract } from "../internal/plugin-contract.js";
 
 /**
  * Module-level registry of active Discord GatewayPlugin instances.
@@ -6,7 +6,7 @@ import type { GatewayPlugin } from "../internal/gateway.js";
  * and the gateway WebSocket (needed for operations like updatePresence).
  * Follows the same pattern as presence-cache.ts.
  */
-const gatewayRegistry = new Map<string, GatewayPlugin>();
+const gatewayRegistry = new Map<string, GatewayPluginContract>();
 
 // Sentinel key for the default (unnamed) account. Uses a prefix that cannot
 // collide with user-configured account IDs.
@@ -16,7 +16,10 @@ function resolveAccountKey(accountId?: string): string {
   return accountId ?? DEFAULT_ACCOUNT_KEY;
 }
 
-export function registerGateway(accountId: string | undefined, gateway: GatewayPlugin): void {
+export function registerGateway(
+  accountId: string | undefined,
+  gateway: GatewayPluginContract,
+): void {
   gatewayRegistry.set(resolveAccountKey(accountId), gateway);
 }
 
@@ -24,7 +27,7 @@ export function unregisterGateway(accountId?: string): void {
   gatewayRegistry.delete(resolveAccountKey(accountId));
 }
 
-export function getGateway(accountId?: string): GatewayPlugin | undefined {
+export function getGateway(accountId?: string): GatewayPluginContract | undefined {
   return gatewayRegistry.get(resolveAccountKey(accountId));
 }
 

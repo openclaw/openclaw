@@ -67,26 +67,31 @@ function renderSessionFilterSummary(host: SessionListHost) {
   </button>`;
 }
 
+type SessionFilterHost = Pick<
+  SessionListHost,
+  "sessionOwnerFilterActive" | "sessionInvolvingMeFilterActive" | "sessionsStatusFilter"
+>;
+
+/** Only Owners and Status filter sessions; the other panel rows are display choices. */
+export function countSidebarSessionFilters(host: SessionFilterHost) {
+  return (
+    Number(host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive) +
+    Number(host.sessionsStatusFilter !== "active")
+  );
+}
+
 export function renderSidebarSessionFilter(
-  host: Pick<
-    SessionListHost,
-    | "sidebarMenus"
-    | "sessionOwnerFilterActive"
-    | "sessionInvolvingMeFilterActive"
-    | "sessionsStatusFilter"
-  >,
+  host: SessionFilterHost & Pick<SessionListHost, "sidebarMenus">,
   className: string,
 ) {
-  const filtered =
-    host.sessionOwnerFilterActive ||
-    host.sessionInvolvingMeFilterActive ||
-    host.sessionsStatusFilter !== "active";
+  const count = countSidebarSessionFilters(host);
   return html`<button
     type="button"
-    class="${className} sidebar-session-sort ${filtered ? "sidebar-session-sort--filtered" : ""}"
+    class="${className} sidebar-session-sort ${count > 0 ? "sidebar-session-sort--filtered" : ""}"
     title=${t("chat.sidebar.sortSessions")}
     aria-label=${t("chat.sidebar.sortSessions")}
-    aria-haspopup="menu"
+    aria-description=${count > 0 ? t("chat.sidebar.activeFilterCount", { count: String(count) }) : nothing}
+    aria-haspopup="dialog"
     aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
     @click=${(event: MouseEvent) => {
       if (event.currentTarget instanceof HTMLElement) {

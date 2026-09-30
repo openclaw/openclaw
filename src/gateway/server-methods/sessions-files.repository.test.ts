@@ -45,9 +45,10 @@ import type {
   WorkerWorkspaceCommand,
   WorkerWorkspaceReconcileRequest,
 } from "../worker-environments/tunnel-contract.js";
+import { captureWorkspaceManifest } from "../worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../worker-environments/workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "../worker-environments/workspace-operation-coordinator.js";
-import { readActualWorkspaceManifest } from "../worker-environments/workspace-reconcile-core.js";
+import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { loadSessionDiff } from "./sessions-diff.js";
 import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
 import {
@@ -58,7 +59,6 @@ import {
   hashContent,
   removeWorkspaceFixture,
 } from "./sessions-files.test-support.js";
-import { WORKSPACE_PREVIEW_MAX_BYTES } from "./workspace-fs.js";
 
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
@@ -117,7 +117,7 @@ let gatewayRoot: string;
 let nodeRoot: string;
 let workspace: string;
 let store: ReturnType<typeof createSessionRepositoryWorkspaceStore>;
-let source: ReturnType<typeof store.create>;
+let source: Awaited<ReturnType<typeof store.create>>;
 let runtime: NodeWorkerWorkspaceRuntime;
 let generation: number;
 let active: boolean;
@@ -198,19 +198,19 @@ beforeEach(async () => {
   git("add", ".");
   git("commit", "-qm", "base");
   store = createSessionRepositoryWorkspaceStore({
-    database: openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") }),
+    path: path.join(gatewayRoot, "state.sqlite"),
   });
-  source = store.create({
+  source = await store.create({
     agentId: "main",
     sessionKey,
     url: "https://example.test/repository.git",
     assertCurrent: () => {},
   });
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: git("rev-parse", "HEAD"),
   });
-  source = store.bindBase({
+  source = await store.bindBase({
     workspaceId: source.workspaceId,
     expectedRevision: source.revision,
     baseCommit: base.manifest.baseCommit!,
@@ -291,7 +291,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     });
   }
   generation = placement.generation;
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -317,7 +317,7 @@ async function withCheckpointAcceptance(failCapture = false) {
         if (request.source.kind !== "repository") {
           throw new Error("expected repository capture");
         }
-        const current = await readActualWorkspaceManifest({
+        const current = await captureWorkspaceManifest({
           root: workspace,
           baseCommit: source.baseCommit,
         });
@@ -348,7 +348,7 @@ async function withCheckpointAcceptance(failCapture = false) {
           verifyStable: async () => {
             expect(
               (
-                await readActualWorkspaceManifest({
+                await captureWorkspaceManifest({
                   root: workspace,
                   baseCommit: source.baseCommit,
                 })
@@ -370,7 +370,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     resolveWorkspace: async () => ({
       kind: "repository",
-      repository: store.get(source.workspaceId)!,
+      repository: (await store.get(source.workspaceId))!,
     }),
   });
   return { placements, context: { ...context, workerRepositoryWorkspaceMutationService: service } };
@@ -432,7 +432,7 @@ it("reports failed editor checkpoint capture and retains the durable recovery ow
     ),
   ).rejects.toThrow("checkpoint capture failed");
   expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("saved\n");
-  expect(store.get(source.workspaceId)).toMatchObject({
+  expect(await store.get(source.workspaceId)).toMatchObject({
     checkpointRef: source.checkpointRef,
     manifestHash: source.manifestHash,
   });
@@ -595,7 +595,7 @@ it.each(["stop", "reset"])(
 );
 
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -605,7 +605,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     path.join(workspace, "oversized.txt"),
     Buffer.alloc(WORKSPACE_PREVIEW_MAX_BYTES + 1, 97),
   );
-  const current = await readActualWorkspaceManifest({
+  const current = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });

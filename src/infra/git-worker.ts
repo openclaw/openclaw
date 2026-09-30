@@ -72,7 +72,9 @@ function poolFor(state: GitWorkerRuntime, command: GitWorkerCommand): GitPool {
         ? "worktrees"
         : command.type.startsWith("workspace.")
           ? "workspace"
-          : command.type === "repository.branches" || command.type === "checkout.context"
+          : command.type === "repository.branches" ||
+              command.type === "checkout.context" ||
+              command.type === "checkout.revision"
             ? "reads"
             : "content";
   // Preparation can hold the allocation lease; unrelated maintenance must not block it.

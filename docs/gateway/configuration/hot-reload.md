@@ -22,6 +22,12 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+If a busy state store temporarily refuses the reload's lifecycle lease, the
+Gateway keeps the change pending and retries automatically with a capped backoff.
+No additional config edit is needed. The previous runtime stays active until the
+change applies, and shutdown cancels pending retries. Other reload failures remain
+visible in the Gateway log.
+
 Direct file edits are treated as untrusted until they validate. The source's file adapter waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
 invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config
@@ -93,6 +99,12 @@ Model runtime selection keeps your authored settings separate from catalog defau
 Hot reload and secrets reload preserve that distinction: catalog compatibility
 metadata does not become a custom request override that switches a native runtime
 back to OpenClaw.
+
+Channel transport edits, such as `channels.slack.streaming.mode`, retain prepared
+session rows and model catalogs. Agent rosters, session policy, store topology,
+configured model references, and channel activation still invalidate their affected
+facts. When model or provider authentication inputs change, catalog requests wait
+for the replacement publication instead of reporting that startup is incomplete.
 
 Changing `session.store` does not migrate conversations. Queued notifications
 bound to the previous physical store end with a recorded `store-replaced` outcome.
@@ -182,6 +194,8 @@ pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and
 `dangerouslyAllowHostHeaderOriginFallback` also hot-apply: pending handshakes
 recheck the new policy, and browser connections it no longer allows close.
+Removing an admitted browser origin also revokes its accepted runs and delegated
+work, even after the connection has closed; removing an unrelated origin does not.
 Disabling the Control UI stops serving dashboard pages and assets and cancels
 pending asset preparation. Existing Gateway connections and agent runs continue.
 Re-enabling prepares missing dashboard assets in the background; requests return
@@ -217,9 +231,18 @@ Title edits apply to future captures and preserve existing transcript titles.
 Disabling transcript storage stops capture writers without ending their meetings.
 
 Role definitions, proxy trust, identity scopes, Tailscale authentication, and
-trusted-proxy policies apply live. Connections and pending handshakes that retain
-old policy lose authority and reconnect. Accepted policy writes can finish their
-response; other work must pass the current authority checks before writing.
+trusted-proxy policies apply live. Transport policy changes can require a new
+handshake without cancelling accepted runs. Proxy headers, OIDC mapping, device
+auto-approval, and proxy-address changes fence connections but preserve accepted
+work when the owner's grant is unchanged. This includes a requested initial turn
+after `sessions.create` commits its new session. Editing another login's identity scopes
+or reordering the same scopes keeps the connection and its accepted runs active.
+Changing the owner's identity-scope grant, removing that identity from the proxy
+allowlist, or disabling its authentication method revokes retained and delegated
+work, even if the grant is restored afterward. Shared-secret rotation also revokes
+work admitted with the old credential. Role restrictions remain enforced by each
+run's authority. Accepted policy writes can finish their response; subsequent
+requests must reauthenticate under the current transport policy.
 Changing authentication mode or listener topology still requires a Gateway restart.
 
 Node command policy updates connected nodes immediately. Disabling node-published

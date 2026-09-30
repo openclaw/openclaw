@@ -2,12 +2,14 @@
 // oxfmt-ignore
 import { emptyReply, mock, queueTask, tempDirs } from "./openclaw-state-read-worker.test-harness.js";
 import path from "node:path";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { expect, it, vi } from "vitest";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
+import { createRetainedOperation } from "../infra/retained-operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import * as readWorker from "./openclaw-state-read-worker.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { withOpenClawStateSettlementRead } from "./openclaw-state-settlement-read.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -75,10 +77,10 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
     expect(publish.mock.invocationCallOrder[0]).toBeLessThan(
       mock.closePool.mock.invocationCallOrder[0]!,
     );
+    expect(() => captureOpenClawStateWorkerContext(options)).toThrow(/admission is closed/);
     poolStopped.resolve();
     await closing;
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname });
-    exclusion.release();
+    expect(captureOpenClawStateWorkerContext(options).admission.assertCurrent).not.toThrow();
   } finally {
     mutationSettled.resolve();
     poolStopped.resolve();
@@ -131,13 +133,11 @@ it.each([false, true])(
     });
     expect(publish).not.toHaveBeenCalled();
     expect(release).not.toHaveBeenCalled();
-    expect(() =>
-      acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }),
-    ).toThrow();
     if (retryFails) {
       await expect(closeOpenClawStateDatabaseByPathAsync(pathname)).rejects.toBe(retryFailure);
       expect(publish).not.toHaveBeenCalled();
       expect(release).not.toHaveBeenCalled();
+      expect(() => captureOpenClawStateWorkerContext(options)).toThrow(/admission is closed/);
     }
     const retry = queueTask();
     const retryCloseStarted = createDeferredCore();
@@ -162,6 +162,7 @@ it.each([false, true])(
       await retryCloseStarted.promise;
       expect(publish).not.toHaveBeenCalled();
       expect(release).not.toHaveBeenCalled();
+      expect(() => captureOpenClawStateWorkerContext(options)).toThrow(/admission is closed/);
     } finally {
       retry.result.resolve(reply);
       stopped.resolve();
@@ -172,7 +173,182 @@ it.each([false, true])(
     expect(mutation).toHaveBeenCalledOnce();
     expect(task.close).toHaveBeenCalledTimes(retryFails ? 3 : 2);
     expect(retry.close).toHaveBeenCalledOnce();
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname });
-    exclusion.release();
+    expect(captureOpenClawStateWorkerContext(options).admission.assertCurrent).not.toThrow();
   },
 );
+
+it("services two accepted recovery reads through release from their follower's captured source", async () => {
+  const root = tempDirs.make("openclaw-settlement-queued-reader-");
+  const options = { path: path.join(root, "source.sqlite"), env: { OPENCLAW_STATE_DIR: root } };
+  const profiles = [
+    ensureProfileForEmail("first-recovery@example.test", options),
+    ensureProfileForEmail("second-recovery@example.test", options),
+  ];
+  const descriptorMap = new Map(
+    selectProfileDisplayEntries(
+      openOpenClawStateDatabase(options).db,
+      profiles.map((profile) => profile.id),
+    ),
+  );
+  const descriptors = profiles.map((profile) => descriptorMap.get(profile.id)!);
+  await closeOpenClawStateDatabaseAsync();
+  const context = captureOpenClawStateWorkerContext(options);
+  const started = createDeferredCore();
+  const replies: OpenClawStateReadReply[] = descriptors.map((profile) => ({
+    ok: true,
+    type: "userProfiles.reconcile",
+    sourceAdmitted: true,
+    profile,
+    emailBindings: [],
+  }));
+  let rawReady = false;
+  let submissions = 0;
+  let released = 0;
+  let dispatchFollower: (() => void) | undefined;
+  let followerDispatched = false;
+  const raw = replies.map((reply) => {
+    const completion = createRetainedOperation<OpenClawStateReadReply>(() => {
+      if (rawReady) {
+        completion.resolve(reply);
+      }
+    });
+    return completion;
+  });
+  const releases = replies.map(() => {
+    const completion = createRetainedOperation<void>(() => {
+      if (completion.operation.read().status === "pending") {
+        released++;
+        completion.resolve(undefined);
+      }
+    });
+    return vi.fn(() => completion.operation);
+  });
+  const followerRaw = createRetainedOperation<OpenClawStateReadReply>(() => {
+    // Receiving raw replies does not release custody held by the recovery owner.
+    for (const completion of raw) {
+      completion.operation.service();
+    }
+    if (released === 2 && !followerDispatched) {
+      dispatchFollower?.();
+      followerDispatched = true;
+      followerRaw.resolve(emptyReply);
+    }
+  });
+  mock.runTask.mockImplementation((input) => {
+    const index = submissions++;
+    const enter = () => {
+      const request = typeof input === "function" ? input() : input;
+      if (isPromiseLike(request)) {
+        throw new Error("The shared-state transport fixture requires synchronous admission");
+      }
+      expect(request.command).toEqual(
+        index < 2
+          ? { type: "userProfiles.reconcile", profileId: profiles[index]!.id }
+          : { type: "fleet.list" },
+      );
+    };
+    if (index < 2) {
+      enter();
+      if (submissions === 2) {
+        started.resolve();
+      }
+      return { ...raw[index]!.operation, release: releases[index]! };
+    }
+    dispatchFollower = enter;
+    return {
+      ...followerRaw.operation,
+      release() {
+        const completion = createRetainedOperation<void>(() => {});
+        completion.resolve(undefined);
+        return completion.operation;
+      },
+    };
+  });
+  const publish = profiles.map(() => vi.fn());
+  const releasePublication = profiles.map(() => vi.fn());
+  const deliveries = profiles.map(
+    (_, index) => new Error(`recovery ${index} result delivery failed`),
+  );
+  const recoveries = profiles.map((profile, index) =>
+    withOpenClawStateSettlementRead(context, async (read) => {
+      read.bind(
+        { type: "userProfiles.reconcile", profileId: profile.id },
+        Promise.resolve({ kind: "completed" }),
+        publish[index]!,
+        releasePublication[index]!,
+      );
+      const failure = deliveries[index];
+      if (!failure) {
+        throw new Error("Settlement fixture has no delivery failure");
+      }
+      throw failure;
+    }).catch((error: unknown) => error),
+  );
+  let follower: ReturnType<typeof executeExistingOpenClawStateRead> | undefined;
+  const captureSource = readWorker.captureOpenClawStateReadSource;
+  const captured: { source?: ReturnType<typeof captureSource>; released: boolean } = {
+    released: false,
+  };
+  const capture = vi.spyOn(readWorker, "captureOpenClawStateReadSource").mockImplementation(() => {
+    const selected = captureSource();
+    captured.source = selected;
+    return {
+      ...selected,
+      own(service, close) {
+        const unregister = selected.own(service, close);
+        return () => {
+          unregister();
+          captured.released = true;
+        };
+      },
+    };
+  });
+  try {
+    await Promise.race([
+      started.promise,
+      ...recoveries.map((recovery) =>
+        recovery.then(() => {
+          throw new Error("Recovery failed before occupying both reader slots");
+        }),
+      ),
+    ]);
+    expect(submissions).toBe(2);
+    expect(released).toBe(0);
+    follower = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+    const followerSource = captured.source;
+    if (!followerSource) {
+      throw new Error("Follower read source was not captured");
+    }
+    expect(submissions).toBe(3);
+    expect(followerDispatched).toBe(false);
+    rawReady = true;
+    let microtaskRan = false;
+    queueMicrotask(() => {
+      microtaskRan = true;
+    });
+    // No await or direct recovery release: service the actual follower's captured source.
+    for (let pass = 0; pass < 4 && !captured.released; pass++) {
+      followerSource.service();
+    }
+    expect(microtaskRan).toBe(false);
+    expect(captured.released).toBe(true);
+    expect(released).toBe(2);
+    expect(followerDispatched).toBe(true);
+    for (let index = 0; index < profiles.length; index++) {
+      expect(releases[index]).toHaveBeenCalledOnce();
+      expect(publish[index]).toHaveBeenCalledExactlyOnceWith(descriptors[index], []);
+    }
+    expect(await Promise.all(recoveries)).toEqual(deliveries);
+    await expect(follower).resolves.toEqual(emptyReply);
+    for (const release of releasePublication) {
+      expect(release).toHaveBeenCalledOnce();
+    }
+  } finally {
+    // Let ordinary continuations clean up if the synchronous-progress assertion failed.
+    raw.forEach((completion, index) => completion.resolve(replies[index]!));
+    followerRaw.resolve(emptyReply);
+    await Promise.allSettled(recoveries);
+    await Promise.allSettled([follower]);
+    capture.mockRestore();
+  }
+});

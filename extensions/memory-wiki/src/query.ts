@@ -18,6 +18,7 @@ import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import {
   loadMemoryWikiCompiledCache,
+  type MemoryWikiCompiledCacheSnapshot,
   type MemoryWikiCompiledClaim,
   type MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
@@ -27,11 +28,11 @@ import {
   scanWikiPageSummary,
   type WikiClaim,
   type WikiPageSummary,
+  WIKI_PAGE_GROUPS,
 } from "./markdown.js";
 import { isPersonLikePage } from "./person-page.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
 const QUERY_PAGE_READ_CONCURRENCY = 16;
 const WIKI_SNIPPET_MAX_CHARS = 700;
 const RELATED_BLOCK_PATTERN =
@@ -97,11 +98,6 @@ export const WIKI_SEARCH_MODES = [
 ] as const;
 
 export type WikiSearchMode = (typeof WIKI_SEARCH_MODES)[number];
-
-type QueryDigestBundle = {
-  pages: MemoryWikiCompiledDigestPage[];
-  claims: MemoryWikiCompiledClaim[];
-};
 
 type WikiSearchResult = {
   corpus: "wiki" | "memory";
@@ -201,7 +197,7 @@ function mergeWikiSearchCorpusResults(params: {
 
 async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
   const files = await Promise.all(
-    QUERY_DIRS.map((relativeDir) => listMemoryWikiPagePaths(rootDir, relativeDir)),
+    WIKI_PAGE_GROUPS.map(({ dir }) => listMemoryWikiPagePaths(rootDir, dir)),
   );
   return files.flat().toSorted((left, right) => left.localeCompare(right));
 }
@@ -245,13 +241,6 @@ async function readQueryableWikiPagesByPaths(
     throwOnError: true,
   });
   return results.filter((page): page is QueryableWikiPage => page !== null);
-}
-
-async function readQueryDigestBundle(
-  config: ResolvedMemoryWikiConfig,
-): Promise<QueryDigestBundle | null> {
-  const snapshot = await loadMemoryWikiCompiledCache(config);
-  return snapshot ? { pages: snapshot.digest.pages, claims: snapshot.claims } : null;
 }
 
 function buildSnippet(raw: string, query: string): string {
@@ -401,7 +390,7 @@ function buildDigestPageSearchText(
 }
 
 function isClaimTextOrIdMatch(
-  claim: Pick<MemoryWikiCompiledClaim, "id" | "text"> | Pick<WikiClaim, "id" | "text">,
+  claim: Pick<WikiClaim, "id" | "text">,
   queryLower: string,
   queryTokens: readonly string[] = buildQueryTokens(queryLower),
 ): boolean {
@@ -456,18 +445,6 @@ function scoreClaimMatch(params: {
   }
   score += isClaimContestedStatus(params.status) ? -6 : 4;
   return score;
-}
-
-function scoreDigestClaimMatch(claim: MemoryWikiCompiledClaim, queryLower: string): number {
-  return scoreClaimMatch({
-    text: claim.text,
-    id: claim.id,
-    confidence: claim.confidence,
-    status: claim.status,
-    freshnessLevel: claim.freshnessLevel,
-    queryLower,
-    queryTokens: buildQueryTokens(queryLower),
-  });
 }
 
 function scoreWikiMetadataMatch(params: {
@@ -617,7 +594,7 @@ function scoreWikiSearchModeBoost(params: {
 }
 
 function buildDigestCandidatePaths(params: {
-  digest: QueryDigestBundle;
+  snapshot: MemoryWikiCompiledCacheSnapshot;
   query: string;
   maxResults: number;
   mode: WikiSearchMode;
@@ -625,13 +602,13 @@ function buildDigestCandidatePaths(params: {
   const queryLower = normalizeLowercaseStringOrEmpty(params.query);
   const queryTokens = buildQueryTokens(queryLower);
   const claimsByPage = new Map<string, MemoryWikiCompiledClaim[]>();
-  for (const claim of params.digest.claims) {
+  for (const claim of params.snapshot.claims) {
     const current = claimsByPage.get(claim.pagePath) ?? [];
     current.push(claim);
     claimsByPage.set(claim.pagePath, current);
   }
 
-  return params.digest.pages
+  return params.snapshot.digest.pages
     .map((page) => {
       const claims = claimsByPage.get(page.path) ?? [];
       const metadataLower = normalizeLowercaseStringOrEmpty(
@@ -655,15 +632,12 @@ function buildDigestCandidatePaths(params: {
           sourceIds: page.sourceIds,
           queryLower,
         });
-      const matchingClaims = claims
-        .filter((claim) => isClaimTextOrIdMatch(claim, queryLower, queryTokens))
-        .toSorted(
-          (left, right) =>
-            scoreDigestClaimMatch(right, queryLower) - scoreDigestClaimMatch(left, queryLower),
-        );
+      const matchingClaims = getMatchingClaims(claims, queryLower, queryTokens, (claim) =>
+        scoreClaimMatch({ ...claim, queryLower, queryTokens }),
+      );
       const [bestMatchingClaim] = matchingClaims;
       if (bestMatchingClaim) {
-        score += scoreDigestClaimMatch(bestMatchingClaim, queryLower);
+        score += bestMatchingClaim.score;
         score += Math.min(10, (matchingClaims.length - 1) * 2);
       }
       score += scoreWikiSearchModeBoost({
@@ -687,40 +661,23 @@ function buildDigestCandidatePaths(params: {
     .map((candidate) => candidate.path);
 }
 
-function rankClaimMatch(
-  page: QueryableWikiPage,
-  claim: WikiClaim,
+function getMatchingClaims<Claim extends Pick<WikiClaim, "id" | "text">>(
+  claims: readonly Claim[],
   queryLower: string,
   queryTokens: readonly string[],
-): number {
-  const freshness = assessClaimFreshness({ page, claim });
-  return scoreClaimMatch({
-    text: claim.text,
-    id: claim.id,
-    confidence: claim.confidence,
-    status: claim.status,
-    freshnessLevel: freshness.level,
-    queryLower,
-    queryTokens,
-  });
-}
-
-function getMatchingClaims(page: QueryableWikiPage, queryLower: string): WikiClaim[] {
-  const queryTokens = buildQueryTokens(queryLower);
-  return page.claims
+  score: (claim: Claim) => number,
+): Array<{ claim: Claim; score: number }> {
+  return claims
     .filter((claim) => isClaimTextOrIdMatch(claim, queryLower, queryTokens))
-    .toSorted(
-      (left, right) =>
-        rankClaimMatch(page, right, queryLower, queryTokens) -
-        rankClaimMatch(page, left, queryLower, queryTokens),
-    );
+    .map((claim) => ({ claim, score: score(claim) }))
+    .toSorted((left, right) => right.score - left.score);
 }
 
 function scorePage(
   page: QueryableWikiPage,
   query: string,
   mode: WikiSearchMode,
-  matchingClaims: readonly WikiClaim[],
+  matchingClaims: readonly { claim: WikiClaim; score: number }[],
 ): number {
   const queryLower = normalizeLowercaseStringOrEmpty(query);
   const queryTokens = buildQueryTokens(queryLower);
@@ -755,7 +712,7 @@ function scorePage(
     });
   const [bestMatchingClaim] = matchingClaims;
   if (bestMatchingClaim) {
-    score += rankClaimMatch(page, bestMatchingClaim, queryLower, queryTokens);
+    score += bestMatchingClaim.score;
     score += Math.min(10, (matchingClaims.length - 1) * 2);
   }
   score += scoreWikiSearchModeBoost({
@@ -795,7 +752,7 @@ function resolveExactWikiPagePath(lookup: string): string | null {
   const segments = normalized.split("/");
   const [directory, ...pageSegments] = segments;
   if (
-    !QUERY_DIRS.some((queryDirectory) => queryDirectory === directory) ||
+    !WIKI_PAGE_GROUPS.some(({ dir }) => dir === directory) ||
     pageSegments.length === 0 ||
     pageSegments.some((segment) => !segment || segment === "." || segment === "..") ||
     !normalized.endsWith(".md") ||
@@ -1018,8 +975,16 @@ function toWikiSearchResult(
   mode: WikiSearchMode,
 ): WikiSearchResult {
   const queryLower = normalizeLowercaseStringOrEmpty(query);
-  const matchingClaims = getMatchingClaims(page, queryLower);
-  const [matchingClaim] = matchingClaims;
+  const queryTokens = buildQueryTokens(queryLower);
+  const matchingClaims = getMatchingClaims(page.claims, queryLower, queryTokens, (claim) =>
+    scoreClaimMatch({
+      ...claim,
+      freshnessLevel: assessClaimFreshness({ page, claim }).level,
+      queryLower,
+      queryTokens,
+    }),
+  );
+  const matchingClaim = matchingClaims[0]?.claim;
   return {
     corpus: "wiki",
     path: page.relativePath,
@@ -1062,11 +1027,11 @@ async function searchWikiCorpus(params: {
   mode: WikiSearchMode;
   canReadPage: (page: QueryableWikiPage) => boolean;
 }): Promise<WikiSearchResult[]> {
-  const digest = await readQueryDigestBundle(params.config);
+  const snapshot = await loadMemoryWikiCompiledCache(params.config);
   const rootDir = params.config.vault.path;
-  const candidatePaths = digest
+  const candidatePaths = snapshot
     ? buildDigestCandidatePaths({
-        digest,
+        snapshot,
         query: params.query,
         maxResults: params.maxResults,
         mode: params.mode,
@@ -1103,10 +1068,13 @@ async function searchWikiCorpus(params: {
   ];
 }
 
-function resolveDigestClaimLookup(digest: QueryDigestBundle, lookup: string): string | null {
+function resolveDigestClaimLookup(
+  snapshot: MemoryWikiCompiledCacheSnapshot,
+  lookup: string,
+): string | null {
   const trimmed = lookup.trim();
   const claimId = trimmed.replace(/^claim:/i, "");
-  const match = digest.claims.find((claim) => claim.id === claimId);
+  const match = snapshot.claims.find((claim) => claim.id === claimId);
   return match?.pagePath ?? null;
 }
 
@@ -1255,7 +1223,7 @@ export async function getMemoryWikiPage(input: {
 
   if (shouldSearchWiki(effectiveConfig)) {
     const canReadPage = createWikiPageVisibilityFilter(params);
-    const digest = await readQueryDigestBundle(effectiveConfig);
+    const digest = await loadMemoryWikiCompiledCache(effectiveConfig);
     const digestClaimPagePath = digest ? resolveDigestClaimLookup(digest, params.lookup) : null;
     const digestLookupPage = digestClaimPagePath
       ? ((

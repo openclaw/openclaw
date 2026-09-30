@@ -10,10 +10,12 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { hiddenSessionNotFound } from "./session-sharing-policy.js";
 import { prepareSessionSharing, resolveSessionSharingTarget } from "./session-sharing.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
+import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
 
 function resolveCompanionTarget(
   params: { sessionKey: string; agentId?: string | undefined },
@@ -65,7 +67,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
     "sessions.companion.ask",
     validateSessionsCompanionAskParams,
     async ({ params, respond, client, context, signal, hasCurrentClientAuthority }) => {
-      const { sessionKey, agentId, question, attachments } = params;
+      const { sessionKey, agentId, question, selectionContext, attachments } = params;
       if (!question.trim()) {
         respond(
           false,
@@ -98,6 +100,12 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       const companion = context.sessionCompanion;
       const connId = client.connId;
       const originalAttachments = attachments?.length ? structuredClone(attachments) : undefined;
+      const assertInputCurrent = captureGatewayClientUploadCommitGuard({
+        method: "sessions.companion.ask",
+        requestParams: { attachments: originalAttachments },
+        client,
+        context,
+      });
       const assertSourceCurrent = () => {
         signal?.throwIfAborted();
         if (
@@ -112,6 +120,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       };
       let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
       try {
+        assertInputCurrent?.();
         capturedOperator = await captureGatewayOperatorRunAuthority({
           client,
           context,
@@ -119,19 +128,26 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           invocationAuthority: { assertCurrent: assertSourceCurrent, signal },
         });
         assertSourceCurrent();
+        assertInputCurrent?.();
         const result = await companion.ask({
           sessionKey: target.sessionKey,
           agentId: target.agentId,
           question,
+          ...(selectionContext ? { selectionContext } : {}),
           ...(originalAttachments ? { attachments: originalAttachments } : {}),
           connId,
           assertSourceCurrent,
+          ...(assertInputCurrent ? { assertInputCurrent } : {}),
           ...(capturedOperator ? { operatorAuthority: capturedOperator.authority } : {}),
           ...(signal ? { signal } : {}),
         });
         capturedOperator?.authority.assertCurrent();
         respond(true, result);
       } catch (error) {
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          respond(false, undefined, error.error);
+          return;
+        }
         if (!(error instanceof SessionCompanionAskError)) {
           respond(
             false,

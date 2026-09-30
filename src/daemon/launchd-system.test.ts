@@ -9,9 +9,7 @@ const state = vi.hoisted(() => ({
   launchctl: { stdout: "", stderr: "Could not find service", code: 113 },
   files: new Map<string, string>(),
   accessErrors: new Map<string, string>(),
-  readdirError: "",
   plutilValues: new Map<string, unknown>(),
-  plutilErrors: new Map<string, string>(),
   capturedPaths: new Map<Uint8Array, string>(),
 }));
 
@@ -22,9 +20,6 @@ function fsError(code: string, target: string): NodeJS.ErrnoException {
 vi.mock("node:fs/promises", () => {
   const mocked = {
     readdir: vi.fn(async (dir: string) => {
-      if (state.readdirError) {
-        throw fsError(state.readdirError, dir);
-      }
       const prefix = `${dir}/`;
       return Array.from(state.files.keys())
         .filter((file) => file.startsWith(prefix) && !file.slice(prefix.length).includes("/"))
@@ -71,10 +66,6 @@ const runExec = vi.hoisted(() =>
     const target = state.capturedPaths.get(options.input);
     if (!target) {
       throw new Error("Native parser requires the captured definition bytes");
-    }
-    const error = state.plutilErrors.get(target);
-    if (error) {
-      throw new Error(error);
     }
     return { stdout: JSON.stringify(state.plutilValues.get(target) ?? {}), stderr: "" };
   }),
@@ -185,9 +176,7 @@ describe("system LaunchDaemon ownership", () => {
     state.launchctl = { stdout: "", stderr: "Could not find service", code: 113 };
     state.files.clear();
     state.accessErrors.clear();
-    state.readdirError = "";
     state.plutilValues.clear();
-    state.plutilErrors.clear();
     state.capturedPaths.clear();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", {
@@ -276,7 +265,6 @@ describe("system LaunchDaemon ownership", () => {
     const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
     state.files.set(unrelated, "<plist/>");
     state.accessErrors.set(unrelated, "EACCES");
-    state.plutilErrors.set(unrelated, "Operation not permitted");
 
     await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
       status: "absent",
@@ -312,7 +300,6 @@ describe("system LaunchDaemon ownership", () => {
     const owner = "/Library/LaunchDaemons/vendor-openclaw.plist";
     state.files.set(unrelated, "<plist/>");
     state.accessErrors.set(unrelated, "EACCES");
-    state.plutilErrors.set(unrelated, "Operation not permitted");
     state.files.set(owner, "<plist/>");
     state.plutilValues.set(owner, { Label: "ai.openclaw.gateway" });
 

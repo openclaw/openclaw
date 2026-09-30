@@ -12,10 +12,8 @@ import {
   type SessionStoreTarget,
 } from "../config/sessions.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import type {
-  SessionEntryListScope,
-  SessionEntryReadSource,
-} from "../config/sessions/session-accessor.types.js";
+import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { ExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -494,7 +492,7 @@ export function createGatewaySessionEntryReader(params: {
 }
 
 /** Resolve one synchronous set of logical metadata targets using exact grouped reads. */
-export function resolveGatewaySessionStoreTargetsReadOnly(params: {
+function resolveGatewaySessionStoreTargetsReadOnly(params: {
   env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];

@@ -13,6 +13,8 @@ import {
   extractReplyText,
   FeishuReplyCommentError,
   formatFeishuApiError,
+  type FeishuDriveCommentCard,
+  type FeishuDriveCommentReply,
 } from "./comment-shared.js";
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
@@ -48,31 +50,6 @@ type FeishuDriveApiResponse<T> = {
   log_id?: string;
   msg?: string;
   data?: T;
-};
-
-type FeishuDriveCommentReply = {
-  reply_id?: string;
-  user_id?: string;
-  create_time?: number;
-  update_time?: number;
-  content?: {
-    elements?: unknown[];
-  };
-};
-
-type FeishuDriveCommentCard = {
-  comment_id?: string;
-  user_id?: string;
-  create_time?: number;
-  update_time?: number;
-  is_solved?: boolean;
-  is_whole?: boolean;
-  has_more?: boolean;
-  page_token?: string;
-  quote?: string;
-  reply_list?: {
-    replies?: FeishuDriveCommentReply[];
-  };
 };
 
 type FeishuDriveListCommentsResponse = FeishuDriveApiResponse<{
@@ -287,23 +264,13 @@ async function listFolder(client: Lark.Client, params: Record<string, unknown> =
 }
 
 async function getRootFileInfo(client: Lark.Client, fileToken: string) {
-  const res = await client.drive.file.list({ params: {} });
-  assertFeishuApiSuccess(res);
-
-  const file = res.data?.files?.find((candidate) => candidate.token === fileToken);
+  const { files } = await listFolder(client);
+  const file = files.find((candidate) => candidate.token === fileToken);
   if (!file) {
     throw new Error(`File not found: ${fileToken}`);
   }
 
-  return {
-    token: file.token,
-    name: file.name,
-    type: file.type,
-    url: file.url,
-    created_time: file.created_time,
-    modified_time: file.modified_time,
-    owner_id: file.owner_id,
-  };
+  return file;
 }
 
 async function getFileInfo(

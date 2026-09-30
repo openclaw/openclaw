@@ -3,6 +3,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { BrokerChild } from "../process/spawn-broker/child.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createSqliteAuthTransferReceiver } from "./sqlite-readonly-auth-transfer.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import {
@@ -40,6 +41,7 @@ export function isSameSqliteReadOnlyWorkerLaunch(
 }
 
 type SqliteReadOnlyWorkerSession = {
+  readonly closed: Promise<void>;
   readonly notStarted: boolean;
   createNativeReplacement: () => SqliteReadOnlyWorkerSession;
   isRetired: () => boolean;
@@ -96,11 +98,9 @@ export function createSqliteReadOnlyWorkerSession(
         auth?: ReturnType<typeof createSqliteAuthTransferReceiver>;
       }
     | undefined;
-  let resolveClosed: () => void;
+  const { promise: closeSignal, resolve: resolveClosed } = createDeferredCore();
   // Broker loss retains group cleanup later in the same turn as proxy close.
-  const closed = new Promise<void>((resolve) => {
-    resolveClosed = resolve;
-  }).then(() => {
+  const closed = closeSignal.then(() => {
     if (
       transport.kind === "broker" &&
       child instanceof BrokerChild &&
@@ -123,6 +123,7 @@ export function createSqliteReadOnlyWorkerSession(
     void retainSnapshotWork(closed, () => retire(new Error("SQLite snapshot owner stopped")));
   }
   let spawned = false;
+  let nativeClosed = false;
   child.once("spawn", () => {
     spawned = true;
   });
@@ -140,6 +141,7 @@ export function createSqliteReadOnlyWorkerSession(
     ),
   );
   child.once("close", (code, signal) => {
+    nativeClosed = true;
     retired = true;
     if (pending) {
       const request = pending;
@@ -241,11 +243,12 @@ export function createSqliteReadOnlyWorkerSession(
     }
   });
   return {
+    closed,
     isRetired() {
       return retired;
     },
     get notStarted() {
-      return child instanceof BrokerChild && child.notStarted;
+      return child instanceof BrokerChild ? child.notStarted : nativeClosed && !spawned;
     },
     createNativeReplacement() {
       return createSqliteReadOnlyWorkerSession({
@@ -303,7 +306,6 @@ export function createSqliteReadOnlyWorkerSession(
                   ? {
                       auth: {
                         expectedIdentity: options.expectedIdentity,
-                        coordinatorRuntime: options.coordinatorRuntime,
                       },
                     }
                   : {}),

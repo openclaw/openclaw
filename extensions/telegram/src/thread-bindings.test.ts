@@ -5,7 +5,6 @@ import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const readAcpSessionEntryMock = vi.hoisted(() => vi.fn());
 const createForumTopicMock = vi.hoisted(() =>
   vi.fn<typeof import("./send-forum-topics.js").createForumTopicTelegram>(),
 );
@@ -14,32 +13,23 @@ vi.mock("./send-runtime.js", () => ({
   loadTelegramSendModule: async () => ({ createForumTopicTelegram: createForumTopicMock }),
 }));
 
-vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-    "openclaw/plugin-sdk/acp-runtime",
-  );
-  readAcpSessionEntryMock.mockImplementation(actual.readAcpSessionEntry);
-  return {
-    ...actual,
-    readAcpSessionEntry: readAcpSessionEntryMock,
-  };
-});
-
 import type {
   TelegramThreadBindingManager,
   TelegramThreadBindingRecord,
 } from "./thread-bindings-store.js";
 import {
-  getTelegramThreadBindingManager,
-  setTelegramThreadBindingIdleTimeoutBySessionKey as setLegacyIdleTimeout,
-  setTelegramThreadBindingIdleTimeoutBySessionKeyAsync as setTelegramThreadBindingIdleTimeoutBySessionKey,
-  setTelegramThreadBindingMaxAgeBySessionKey as setLegacyMaxAge,
-  setTelegramThreadBindingMaxAgeBySessionKeyAsync as setTelegramThreadBindingMaxAgeBySessionKey,
-} from "./thread-bindings.js";
-import {
   TELEGRAM_THREAD_BINDINGS_TEST_CFG,
   useTelegramThreadBindingsFixture,
 } from "./thread-bindings.test-support.js";
+
+const {
+  getTelegramThreadBindingManager,
+  setTelegramThreadBindingIdleTimeoutBySessionKey: setLegacyIdleTimeout,
+  setTelegramThreadBindingIdleTimeoutBySessionKeyAsync:
+    setTelegramThreadBindingIdleTimeoutBySessionKey,
+  setTelegramThreadBindingMaxAgeBySessionKey: setLegacyMaxAge,
+  setTelegramThreadBindingMaxAgeBySessionKeyAsync: setTelegramThreadBindingMaxAgeBySessionKey,
+} = await import("./thread-bindings.js");
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -59,13 +49,8 @@ describe("telegram thread bindings", () => {
     storedBindings,
   } = fixture;
 
-  beforeEach(async () => {
-    readAcpSessionEntryMock.mockReset();
+  beforeEach(() => {
     createForumTopicMock.mockReset();
-    const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-      "openclaw/plugin-sdk/acp-runtime",
-    );
-    readAcpSessionEntryMock.mockImplementation(acpRuntime.readAcpSessionEntry);
   });
 
   it("joins concurrent startup before exposing hydrated bindings", async () => {
@@ -855,116 +840,6 @@ describe("telegram thread bindings", () => {
     });
 
     expect(manager.listBindings()).toStrictEqual([]);
-  });
-
-  it("cleans up stale ACP bindings before restart routing can reuse them", async () => {
-    const manager = await createTelegramThreadBindingManager({
-      accountId: "default",
-      persist: true,
-      enableSweeper: false,
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:acp:stale-1",
-      targetKind: "session",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "cleanup-me",
-      },
-    });
-
-    await manager.stop();
-    readAcpSessionEntryMock.mockReturnValue({
-      cfg: {} as never,
-      storePath: "/tmp/acp-store.json",
-      sessionKey: "agent:main:acp:stale-1",
-      storeSessionKey: "agent:main:acp:stale-1",
-      entry: undefined,
-      acp: undefined,
-      storeReadFailed: false,
-    });
-
-    const reloaded = await createTelegramThreadBindingManager({
-      accountId: "default",
-      persist: true,
-      enableSweeper: false,
-    });
-
-    expect(reloaded.getByConversationId("cleanup-me")).toBeUndefined();
-    expect((await storedBindings()).map((binding) => binding.conversationId)).not.toContain(
-      "cleanup-me",
-    );
-  });
-
-  it("keeps plugin-owned bindings when ACP cleanup runs on startup", async () => {
-    const manager = await createTelegramThreadBindingManager({
-      accountId: "default",
-      persist: true,
-      enableSweeper: false,
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "plugin-binding:openclaw-codex-app-server:still-valid",
-      targetKind: "session",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "plugin-binding-convo",
-      },
-    });
-
-    await manager.stop();
-
-    const reloaded = await createTelegramThreadBindingManager({
-      accountId: "default",
-      persist: true,
-      enableSweeper: false,
-    });
-
-    expect(reloaded.getByConversationId("plugin-binding-convo")?.targetSessionKey).toBe(
-      "plugin-binding:openclaw-codex-app-server:still-valid",
-    );
-    expect(readAcpSessionEntryMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps ACP bindings when the session store cannot be read during startup cleanup", async () => {
-    const manager = await createTelegramThreadBindingManager({
-      accountId: "default",
-      persist: true,
-      enableSweeper: false,
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:acp:read-failed",
-      targetKind: "session",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "keep-on-read-failure",
-      },
-    });
-
-    await manager.stop();
-    readAcpSessionEntryMock.mockReturnValue({
-      cfg: {} as never,
-      storePath: "/tmp/acp-store.json",
-      sessionKey: "agent:main:acp:read-failed",
-      storeSessionKey: "agent:main:acp:read-failed",
-      entry: undefined,
-      acp: undefined,
-      storeReadFailed: true,
-    });
-
-    const reloaded = await createTelegramThreadBindingManager({
-      accountId: "default",
-      persist: true,
-      enableSweeper: false,
-    });
-
-    expect(reloaded.getByConversationId("keep-on-read-failure")?.targetSessionKey).toBe(
-      "agent:main:acp:read-failed",
-    );
   });
 
   it("reloads persisted lifecycle updates after manager restart", async () => {

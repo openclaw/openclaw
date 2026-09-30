@@ -5,14 +5,11 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -68,29 +65,24 @@ async function withFixture(
   // Only the physical stores survive; every case owns its reader, projection and session rows.
   sharedState ??= await createOpenClawTestState({ scenario: "minimal" });
   sharedState.applyEnv();
-  await withStateDatabaseCoordinatorRuntimeDirectory(
-    { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
-    async () => {
-      const work = new AsyncWorkScope();
-      let fixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  const work = new AsyncWorkScope();
+  let fixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  try {
+    await work.track(async () => {
+      fixture = await createFixture(scope, false, initialSessionPatch);
       try {
-        await work.track(async () => {
-          fixture = await createFixture(scope, false, initialSessionPatch);
-          try {
-            await run(fixture);
-          } finally {
-            await fixture.close();
-          }
-        });
+        await run(fixture);
       } finally {
-        try {
-          await work.drain();
-        } finally {
-          await fixture?.removeSessions();
-        }
+        await fixture.close();
       }
-    },
-  );
+    });
+  } finally {
+    try {
+      await work.drain();
+    } finally {
+      await fixture?.removeSessions();
+    }
+  }
 }
 
 function frames(socket: ReturnType<typeof createGatewayWsTestSocket>) {
@@ -116,7 +108,7 @@ describe("registered session PR subscriptions", () => {
         "operator.admin",
         async (f) => {
           const key = "agent:main:dashboard:incognito-pr-retirement";
-          const repository = getSessionRepositoryWorkspaceStore().create({
+          const repository = await getSessionRepositoryWorkspaceStore().create({
             agentId: "main",
             sessionKey: key,
             url: "https://github.com/synthetic/private",
@@ -183,7 +175,7 @@ describe("registered session PR subscriptions", () => {
         async (f) => {
           const key = "agent:main:dashboard:incognito-pr-reader";
           const workspace = repository
-            ? getSessionRepositoryWorkspaceStore().create({
+            ? await getSessionRepositoryWorkspaceStore().create({
                 agentId: "main",
                 sessionKey: key,
                 url: "https://github.com/synthetic/private",
@@ -220,23 +212,31 @@ describe("registered session PR subscriptions", () => {
         f.load.mockResolvedValue(refreshed);
         const entered = createDeferredCore();
         const release = createDeferredCore();
-        const createTransport = stateReadWorker.createOpenClawStateReadTransport;
+        const captureSource = stateReadWorker.captureOpenClawStateReadSource;
         let held = false;
         const transport = vi
-          .spyOn(stateReadWorker, "createOpenClawStateReadTransport")
-          .mockImplementation((command) => {
-            const owned = createTransport(command);
-            if (held || command.type !== "agentDatabaseDeletion.snapshot") {
-              return owned;
-            }
-            held = true;
+          .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
+          .mockImplementation(() => {
+            const source = captureSource();
             return {
-              ...owned,
-              async read(...args: Parameters<typeof owned.read>) {
-                const result = await owned.read(...args);
-                entered.resolve();
-                await release.promise;
-                return result;
+              ...source,
+              createTransport(command) {
+                const owned = source.createTransport(command);
+                if (held || command.type !== "agentDatabaseDeletion.snapshot") {
+                  return owned;
+                }
+                held = true;
+                return {
+                  ...owned,
+                  startRead(...args) {
+                    return startAwaitedReadMock(async () => {
+                      const result = await owned.startRead(...args).result;
+                      entered.resolve();
+                      await release.promise;
+                      return result;
+                    });
+                  },
+                };
               },
             };
           });
@@ -706,7 +706,7 @@ it.each(["local", "repository"] as const)(
       const repositories = getSessionRepositoryWorkspaceStore();
       const repository =
         source === "repository"
-          ? repositories.create({
+          ? await repositories.create({
               agentId: "main",
               sessionKey,
               url: "https://github.com/synthetic/publication",
@@ -780,7 +780,7 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
     vi.stubGlobal("fetch", provider);
     const f = await createFixture("operator.read", true);
     try {
-      const repository = getSessionRepositoryWorkspaceStore().create({
+      const repository = await getSessionRepositoryWorkspaceStore().create({
         agentId: "main",
         sessionKey,
         url: "https://github.com/synthetic/publication",
@@ -854,7 +854,7 @@ it("drops cached subscription hydration after physical database replacement", as
       vi.stubGlobal("fetch", provider);
       const f = await createFixture("operator.read", true);
       try {
-        const repository = getSessionRepositoryWorkspaceStore().create({
+        const repository = await getSessionRepositoryWorkspaceStore().create({
           agentId: "main",
           sessionKey,
           url: "https://github.com/synthetic/publication",
@@ -940,7 +940,7 @@ it.each(["concurrency limit", "earlier refresh", "refresh timer", "publication"]
           for (let index = 0; index < (waitingOn === "concurrency limit" ? 5 : 1); index++) {
             const key = `agent:main:queued-pr-${index}`;
             keys.push(key);
-            const repository = getSessionRepositoryWorkspaceStore().create({
+            const repository = await getSessionRepositoryWorkspaceStore().create({
               agentId: "main",
               sessionKey: key,
               url: `https://github.com/synthetic/queued-${index}`,

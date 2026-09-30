@@ -229,6 +229,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const effort = page.locator("[data-chat-thinking-select]");
       await expect.poll(() => effort.isVisible()).toBe(true);
+      await page.locator('[data-chat-thinking-select][aria-disabled="false"]').waitFor();
       expect(await effort.getAttribute("aria-disabled")).toBe("false");
       expect(await page.locator(".chat-controls__effort-picker").getAttribute("aria-hidden")).toBe(
         "false",

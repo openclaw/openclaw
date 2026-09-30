@@ -1,12 +1,15 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
-import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   asNullableObjectRecord as readRecord,
   asNullableRecord,
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   extractCanvasFromDetails,
@@ -29,14 +32,10 @@ export type ToolPreview = NonNullable<ToolCard["preview"]>;
 export type CanvasToolPreview = Extract<ToolPreview, { kind: "canvas" }>;
 
 function resolveTranscriptMessageId(message: Record<string, unknown>): string | undefined {
-  if (typeof message.messageId === "string" && message.messageId.trim()) {
-    return message.messageId;
-  }
-  const openClawMeta = message["__openclaw"];
-  const transcriptMeta = asNullableRecord(openClawMeta);
-  return typeof transcriptMeta?.id === "string" && transcriptMeta.id.trim()
-    ? transcriptMeta.id
-    : undefined;
+  return (
+    readNonBlankString(message.messageId) ??
+    readNonBlankString(asNullableRecord(message["__openclaw"])?.id)
+  );
 }
 
 function readToolOutputMetadata(value: unknown): ToolOutputMetadata | undefined {
@@ -67,21 +66,9 @@ function coerceArgs(value: unknown): unknown {
     return value;
   }
   const trimmed = value.trim();
-  if (!trimmed) {
-    return value;
-  }
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return value;
-  }
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
-  }
-}
-
-function parseJsonRecord(value: string): Record<string, unknown> | null {
-  return safeParseJsonRecord(value.trim()) ?? null;
+  return trimmed.startsWith("{") || trimmed.startsWith("[")
+    ? (safeParseJson(trimmed) ?? value)
+    : value;
 }
 
 function extractToolText(item: Record<string, unknown>): string | undefined {
@@ -118,6 +105,9 @@ function readToolExitCode(...values: unknown[]): number | undefined {
 }
 
 export function isToolCardSkipped(card: ToolCard): boolean {
+  if (card.activity) {
+    return card.activity.status === "skipped";
+  }
   const details = readRecord(card.details);
   return (
     (card.live !== true || card.completed === true) &&
@@ -223,21 +213,20 @@ function resolveToolCallId(
   message: Record<string, unknown>,
 ): string | undefined {
   return (
-    resolveToolUseId(item) ||
-    (typeof item.callId === "string" && item.callId.trim()) ||
-    (typeof message.toolCallId === "string" && message.toolCallId.trim()) ||
-    (typeof message.tool_call_id === "string" && message.tool_call_id.trim()) ||
-    (typeof message.toolUseId === "string" && message.toolUseId.trim()) ||
-    (typeof message.tool_use_id === "string" && message.tool_use_id.trim()) ||
-    undefined
+    resolveToolUseId(item) ??
+    normalizeOptionalString(item.callId) ??
+    normalizeOptionalString(message.toolCallId) ??
+    normalizeOptionalString(message.tool_call_id) ??
+    normalizeOptionalString(message.toolUseId) ??
+    normalizeOptionalString(message.tool_use_id)
   );
 }
 
 function resolveToolName(item: Record<string, unknown>, message: Record<string, unknown>): string {
   return (
-    (typeof item.name === "string" && item.name.trim()) ||
-    (typeof message.toolName === "string" && message.toolName.trim()) ||
-    (typeof message.tool_name === "string" && message.tool_name.trim()) ||
+    normalizeOptionalString(item.name) ??
+    normalizeOptionalString(message.toolName) ??
+    normalizeOptionalString(message.tool_name) ??
     "tool"
   );
 }
@@ -437,7 +426,12 @@ function extractToolCards(message: unknown): ToolCard[] {
           : (existing?.name ?? envelopeName ?? name);
       const presentation = extractToolPresentation(details, text, name, browserToolName);
       const isError = readToolErrorFlag(item) ?? messageIsError;
-      const exitCode = readToolExitCode(item, details, text ? parseJsonRecord(text) : undefined, m);
+      const exitCode = readToolExitCode(
+        item,
+        details,
+        text ? safeParseJsonRecord(text.trim()) : undefined,
+        m,
+      );
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
@@ -494,7 +488,11 @@ function extractToolCards(message: unknown): ToolCard[] {
       "tool";
     const text = extractToolText(m);
     const callId = resolveToolCallId({}, m);
-    const exitCode = readToolExitCode(m, m.details, text ? parseJsonRecord(text) : undefined);
+    const exitCode = readToolExitCode(
+      m,
+      m.details,
+      text ? safeParseJsonRecord(text.trim()) : undefined,
+    );
     cards.push({
       id: callId ?? `${resolveToolName({}, m)}:0`,
       ...(callId ? { callId } : {}),
@@ -545,5 +543,27 @@ export function extractToolCardsCached(message: unknown): ToolCard[] {
   }
   const cards = extractToolCards(message);
   toolCardsByMessage.set(message, cards);
+  return cards;
+}
+
+const toolCardsByBlock = new WeakMap<object, WeakMap<object, ToolCard[]>>();
+
+// Messages and blocks are immutable snapshots, including live stream updates.
+// Key block projections by their source identities, never a temporary envelope.
+export function extractToolBlockCardsCached(
+  message: Record<string, unknown>,
+  block: Record<string, unknown>,
+): ToolCard[] {
+  let byBlock = toolCardsByBlock.get(message);
+  const cached = byBlock?.get(block);
+  if (cached) {
+    return cached;
+  }
+  const cards = extractToolCards({ ...message, content: [block] });
+  if (!byBlock) {
+    byBlock = new WeakMap();
+    toolCardsByBlock.set(message, byBlock);
+  }
+  byBlock.set(block, cards);
   return cards;
 }

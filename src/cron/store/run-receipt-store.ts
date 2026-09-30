@@ -8,6 +8,7 @@ import type {
 import {
   bindExecutionOwnerLifecycleMetadata,
   deleteExecutionOwnerLifecycleMetadata,
+  ensureExecutionOwnerLifecycleBindingSchema,
 } from "../../audit/execution-owner-lifecycle-binding-store.js";
 import {
   executeSqliteQuerySync,
@@ -15,10 +16,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { describeUnavailableCronAgent, type CronAgentAvailability } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -28,16 +26,20 @@ import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import {
   receiptFromRow,
   receiptHandle,
+  readActiveCronRunReceiptsInDatabase,
   type CronRunReceiptDatabase,
   type CronRunReceiptRow,
 } from "./run-receipt-read.js";
 import { createCronRunReceiptSettlementOwner } from "./run-receipt-settlement.js";
+import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import type {
   CronRunReceipt,
   CronRunReceiptHandle,
   CronRunReceiptOwnerObservation,
   CronRunReceiptRecoveryCandidate,
   CronRunReceiptStatus,
+  PreparedCronRunReceiptAdjudication,
+  PreparedCronRunReceiptClaim,
 } from "./run-receipt.types.js";
 
 /**
@@ -60,17 +62,6 @@ export type CronRunReceiptSettlementDisposition = "owner-unavailable";
 
 type ResolveReceiptAgentId = (job: CronJob) => string;
 
-type PreparedCronRunReceiptAdjudication = {
-  storeKey: string;
-  observed?: CronRunReceiptOwnerObservation;
-  observedStale: boolean;
-};
-
-export type PreparedCronRunReceiptClaim = PreparedCronRunReceiptAdjudication & {
-  handle: CronRunReceiptHandle;
-  requestRunId?: string;
-};
-
 const CRON_RUN_RECEIPT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS cron_run_receipts (";
 const CRON_RUN_RECEIPT_SCHEMA_END =
   "ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);";
@@ -78,7 +69,6 @@ const CRON_RUN_RECEIPT_TERMINAL_RETENTION = 64;
 const CRON_RUN_RECEIPT_DELETE_BATCH_SIZE = 500;
 /** Recovery horizon for abandoned markers and unverifiable foreign receipts. */
 export const CRON_STUCK_RUN_MS = 2 * 60 * 60_000;
-const initializedDatabases = new WeakSet<DatabaseSync>();
 export class CronRunReceiptConflictError extends Error {
   readonly candidate: CronRunReceiptRecoveryCandidate;
 
@@ -101,17 +91,12 @@ export class CronRunReceiptRevisionError extends Error {
 }
 
 const settlement = createCronRunReceiptSettlementOwner({
-  finishNative: (params) =>
-    withReceiptWrite("cron.run-receipt.finish", params.env ? { env: params.env } : {}, (database) =>
-      finishCronRunReceiptInDatabase({ database, ...params }),
-    ),
   revisionError: (receiptId, message) => new CronRunReceiptRevisionError(receiptId, message),
 });
 export const {
+  claimLocalCronRunReceiptOwnership,
   trackCronRunReceiptSettlement,
   retainCronRunReceiptSettlement,
-  isCronRunReceiptSettlementPending,
-  finishCronRunReceipt,
   finishCronRunReceiptAsync,
   releaseLocalCronRunReceiptOwnership,
 } = settlement;
@@ -156,34 +141,12 @@ function activeRow(db: DatabaseSync, key: string, jobId?: string) {
   }
 }
 
-function withReceiptWrite<T>(
-  operationLabel: string,
-  options: OpenClawStateDatabaseOptions,
-  operation: (database: DatabaseSync) => T,
-): T {
-  let initializedDatabase: DatabaseSync | undefined;
-  const result = runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      if (!initializedDatabases.has(db)) {
-        ensureCronRunReceiptSchema(db);
-        initializedDatabase = db;
-      }
-      return operation(db);
-    },
-    options,
-    { operationLabel },
-  );
-  if (initializedDatabase) {
-    initializedDatabases.add(initializedDatabase);
-  }
-  return result;
-}
-
 /** Binds the exact admitted execution to its authoritative receipt without changing lifecycle. */
 export function bindCronRunReceiptExecutionInDatabase(
   database: DatabaseSync,
   handle: CronRunReceiptHandle,
   binding: ExecutionOwnerBinding,
+  receiptSchema: CronRunReceiptWriteSchema,
 ): ExecutionOwnerBindingResult {
   ensureCronRunReceiptSchema(database);
   try {
@@ -193,6 +156,11 @@ export function bindCronRunReceiptExecutionInDatabase(
       throw error;
     }
     return "missing";
+  }
+  // Only a live exact receipt may allocate opt-in binding storage. DDL and
+  // metadata remain in this admitted transaction, so refusal rolls both back.
+  if (!receiptSchema.executionOwnerLifecycleBindings) {
+    ensureExecutionOwnerLifecycleBindingSchema(database);
   }
   return bindExecutionOwnerLifecycleMetadata({
     db: database,
@@ -214,15 +182,6 @@ function sameOwner(left: CronRunReceiptRow, right: CronRunReceiptOwnerObservatio
     left.owner_start_time === right.ownerStartTime &&
     left.started_at_ms === right.startedAtMs
   );
-}
-
-function observeOwner(row: CronRunReceiptRow): CronRunReceiptOwnerObservation {
-  return {
-    receiptId: row.receipt_id,
-    ownerPid: row.owner_pid,
-    ownerStartTime: row.owner_start_time,
-    startedAtMs: row.started_at_ms,
-  };
 }
 
 function ownerStale(owner: CronRunReceiptOwnerObservation, nowMs = Date.now()): boolean {
@@ -264,6 +223,7 @@ function pruneTerminalReceipts(
   storeKey: string,
   jobId: string,
   job: CronJob | undefined,
+  receiptSchema: CronRunReceiptWriteSchema,
 ): void {
   const pendingReceiptId =
     job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId;
@@ -297,6 +257,7 @@ function pruneTerminalReceipts(
       db: database,
       ownerKind: "cron",
       ownerIds: receiptIds,
+      executionOwnerLifecycleBindings: receiptSchema.executionOwnerLifecycleBindings,
     });
     executeSqliteQuerySync(
       database,
@@ -313,19 +274,14 @@ function pruneTerminalReceipts(
 /** Prepares process liveness facts before the caller enters its commit transaction. */
 export function prepareCronRunReceiptAdjudication(params: {
   storePath: string;
-  jobId: string;
+  observed: CronRunReceiptOwnerObservation | undefined;
   nowMs?: number;
-  env?: NodeJS.ProcessEnv;
 }): PreparedCronRunReceiptAdjudication {
-  const storeKey = cronStoreKey(params.storePath);
-  const options = params.env ? { env: params.env } : {};
-  const observed = withReceiptWrite("cron.run-receipt.inspect", options, (database) =>
-    activeRow(database, storeKey, params.jobId),
-  );
+  const { observed } = params;
   return {
-    storeKey,
-    ...(observed ? { observed: observeOwner(observed) } : {}),
-    observedStale: observed ? ownerStale(observeOwner(observed), params.nowMs) : false,
+    storeKey: cronStoreKey(params.storePath),
+    ...(observed ? { observed } : {}),
+    observedStale: observed ? ownerStale(observed, params.nowMs) : false,
   };
 }
 
@@ -335,7 +291,7 @@ export function prepareCronRunReceiptClaim(params: {
   agentId: string;
   startedAtMs: number;
   requestRunId?: string;
-  env?: NodeJS.ProcessEnv;
+  observed: CronRunReceiptOwnerObservation | undefined;
 }): PreparedCronRunReceiptClaim {
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   if (ownerStartTime === null) {
@@ -343,9 +299,8 @@ export function prepareCronRunReceiptClaim(params: {
   }
   const adjudication = prepareCronRunReceiptAdjudication({
     storePath: params.storePath,
-    jobId: params.job.id,
+    observed: params.observed,
     nowMs: params.startedAtMs,
-    env: params.env,
   });
   const storeKey = cronStoreKey(params.storePath);
   const handle: CronRunReceiptHandle = {
@@ -402,6 +357,7 @@ export function adjudicateActiveCronRunReceiptInDatabase(params: {
 export function claimCronRunReceiptInDatabase(params: {
   database: DatabaseSync;
   prepared: PreparedCronRunReceiptClaim;
+  receiptSchema: CronRunReceiptWriteSchema;
   resolveAgentId: ResolveReceiptAgentId;
 }): CronRunReceiptHandle {
   const { handle } = params.prepared;
@@ -419,7 +375,7 @@ export function claimCronRunReceiptInDatabase(params: {
     handle,
     resolveAgentId: params.resolveAgentId,
   });
-  pruneTerminalReceipts(params.database, handle.storeKey, handle.jobId, job);
+  pruneTerminalReceipts(params.database, handle.storeKey, handle.jobId, job, params.receiptSchema);
   executeSqliteQuerySync(
     params.database,
     query(params.database)
@@ -439,11 +395,7 @@ export function claimCronRunReceiptInDatabase(params: {
         error_text: null,
       }),
   );
-  const claimed = receiptHandle(
-    receiptFromRow(activeRow(params.database, handle.storeKey, handle.jobId)!),
-  );
-  settlement.claim(claimed.receiptId);
-  return claimed;
+  return receiptHandle(receiptFromRow(activeRow(params.database, handle.storeKey, handle.jobId)!));
 }
 
 export function findActiveCronRunReceiptInDatabase(params: {
@@ -489,16 +441,20 @@ export function assertCronRunReceiptOwnedInDatabase(params: {
   handle: CronRunReceiptHandle;
 }): void {
   const current = activeRow(params.database, params.handle.storeKey, params.handle.jobId);
+  assertReceiptOwner(current ? receiptHandle(receiptFromRow(current)) : undefined, params.handle);
+}
+
+function assertReceiptOwner(
+  current: CronRunReceiptHandle | undefined,
+  handle: CronRunReceiptHandle,
+): void {
   if (
     !current ||
-    current.receipt_id !== params.handle.receiptId ||
-    current.owner_pid !== params.handle.ownerPid ||
-    current.owner_start_time !== params.handle.ownerStartTime
+    current.receiptId !== handle.receiptId ||
+    current.ownerPid !== handle.ownerPid ||
+    current.ownerStartTime !== handle.ownerStartTime
   ) {
-    throw new CronRunReceiptRevisionError(
-      params.handle.receiptId,
-      "cron run fence is no longer current",
-    );
+    throw new CronRunReceiptRevisionError(handle.receiptId, "cron run fence is no longer current");
   }
 }
 
@@ -543,10 +499,9 @@ export function readCronRunReceiptCurrentJob(params: {
   allowMissingJob?: boolean;
   env?: NodeJS.ProcessEnv;
 }): CronJob | undefined {
-  return withReceiptWrite(
-    "cron.run-receipt.assert-current",
-    params.env ? { env: params.env } : {},
-    (database) => {
+  // A worker may hold BEGIN while asking this host guard for commit authority.
+  const result = withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db: database }) => {
       if (params.isAgentAvailable?.(params.handle.agentId, database) === false) {
         throw new CronRunReceiptRevisionError(
           params.handle.receiptId,
@@ -554,10 +509,30 @@ export function readCronRunReceiptCurrentJob(params: {
           "owner-unavailable",
         );
       }
-      assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });
-      return params.allowMissingJob ? undefined : validateCurrentJob({ database, ...params });
+      let current: CronRunReceiptHandle | undefined;
+      try {
+        current = readActiveCronRunReceiptsInDatabase(database, params.handle.storeKey, [
+          params.handle.jobId,
+        ])[0];
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== "no such table: cron_run_receipts") {
+          throw error;
+        }
+      }
+      assertReceiptOwner(current, params.handle);
+      return {
+        job: params.allowMissingJob ? undefined : validateCurrentJob({ database, ...params }),
+      };
     },
+    params.env ? { env: params.env } : {},
   );
+  if (!result) {
+    throw new CronRunReceiptRevisionError(
+      params.handle.receiptId,
+      "cron run fence is no longer current",
+    );
+  }
+  return result.job;
 }
 
 export function assertCronRunReceiptCurrent(
@@ -569,6 +544,7 @@ export function assertCronRunReceiptCurrent(
 /** Completes the exact active receipt inside its caller's cron-state transaction. */
 export function finishCronRunReceiptInDatabase(params: {
   database: DatabaseSync;
+  receiptSchema: CronRunReceiptWriteSchema;
   handle: CronRunReceiptHandle;
   status: Exclude<CronRunReceiptStatus, "running">;
   finishedAtMs: number;
@@ -592,6 +568,7 @@ export function finishCronRunReceiptInDatabase(params: {
     params.handle.storeKey,
     params.handle.jobId,
     currentJob(params.database, params.handle.storeKey, params.handle.jobId),
+    params.receiptSchema,
   );
   const row = executeSqliteQueryTakeFirstSync(
     params.database,

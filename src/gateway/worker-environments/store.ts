@@ -156,7 +156,7 @@ export async function createWorkerEnvironmentStore(
     if (closing) {
       throw new Error("Worker environment inventory is closing");
     }
-    const captured = structuredClone(input);
+    const captured = structuredClone({ ...input, nowMs: options.now?.() });
     const operation = owner.enqueue(async () => {
       await reconcilePending();
       const token = {};
@@ -195,7 +195,6 @@ export async function createWorkerEnvironmentStore(
           },
           {
             assertCurrent: check,
-            requireStateLifecycle: true,
             createAdmission: () => {
               let stage: "transaction" | "commit" = "transaction";
               admission = createSqliteWorkerOperationAdmission((request, grant) => {
@@ -282,7 +281,7 @@ export async function createWorkerEnvironmentStore(
     },
   });
   try {
-    await mutate("workerEnvironments.initialize", { nowMs: options.now?.() }, []);
+    await mutate("workerEnvironments.initialize", {}, []);
     // First creation publishes its physical identity through the captured admission.
     workerEnvironmentProjections.get(context.admission.identity);
     // Hydration joins writer publication; native commits invalidate an in-flight snapshot.
@@ -380,14 +379,9 @@ export async function createWorkerEnvironmentStore(
       };
     },
     createIntent: (input: Input<"createIntent">, assertCurrent?: () => void) =>
-      mutate(
-        "workerEnvironments.createIntent",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-        assertCurrent,
-      ),
+      mutate("workerEnvironments.createIntent", { input }, [input.environmentId], assertCurrent),
     ensureNodeEnrollment: (input: string) =>
-      mutate("workerEnvironments.ensureNodeEnrollment", { input, nowMs: options.now?.() }, [input]),
+      mutate("workerEnvironments.ensureNodeEnrollment", { input }, [input]),
     async revokeEnvironmentCredential(
       input: string,
       opts: {
@@ -401,7 +395,6 @@ export async function createWorkerEnvironmentStore(
         "workerEnvironments.revokeEnvironmentCredential",
         {
           input: { environmentId, expectedOwnerEpoch: opts.expectedOwnerEpoch },
-          nowMs: options.now?.(),
         },
         [environmentId],
         opts.assertCurrent,
@@ -409,17 +402,13 @@ export async function createWorkerEnvironmentStore(
       );
     },
     reconcileSharedHost: (input: Input<"reconcileSharedHost">) =>
-      mutate("workerEnvironments.reconcileSharedHost", { input, nowMs: options.now?.() }, [
-        input.environmentId,
-      ]),
+      mutate("workerEnvironments.reconcileSharedHost", { input }, [input.environmentId]),
     adoptProvisionCleanupFailure: (input: Input<"adoptProvisionCleanupFailure">) =>
-      mutate("workerEnvironments.adoptProvisionCleanupFailure", { input, nowMs: options.now?.() }, [
-        input.environmentId,
-      ]),
+      mutate("workerEnvironments.adoptProvisionCleanupFailure", { input }, [input.environmentId]),
     requestDestroy({ assertCurrent, ...input }: Input<"requestDestroy">) {
       return mutate(
         "workerEnvironments.requestDestroy",
-        { input, nowMs: options.now?.() },
+        { input },
         [input.environmentId],
         assertCurrent,
       );
@@ -427,7 +416,7 @@ export async function createWorkerEnvironmentStore(
     refreshBootstrapReceipt({ assertCurrent, ...input }: Input<"refreshBootstrapReceipt">) {
       return mutate(
         "workerEnvironments.refreshBootstrapReceipt",
-        { input, nowMs: options.now?.() },
+        { input },
         [input.environmentId],
         assertCurrent,
       );
@@ -438,7 +427,7 @@ export async function createWorkerEnvironmentStore(
         : undefined;
       return mutate(
         "workerEnvironments.transition",
-        { input: { ...input, placementBinding: binding }, nowMs: options.now?.() },
+        { input: { ...input, placementBinding: binding } },
         [input.environmentId],
         () => {
           assertCurrent?.();
@@ -449,7 +438,7 @@ export async function createWorkerEnvironmentStore(
     renewCredential({ assertCurrent, ...input }: Input<"renewCredential">) {
       return mutate(
         "workerEnvironments.renewCredential",
-        { input, nowMs: options.now?.() },
+        { input },
         [input.environmentId],
         assertCurrent,
       );
@@ -457,7 +446,7 @@ export async function createWorkerEnvironmentStore(
     markCredentialDelivered({ assertCurrent, ...input }: Input<"markCredentialDelivered">) {
       return mutate(
         "workerEnvironments.markCredentialDelivered",
-        { input, nowMs: options.now?.() },
+        { input },
         [input.environmentId],
         assertCurrent,
       );
@@ -465,7 +454,7 @@ export async function createWorkerEnvironmentStore(
     recordError({ assertCurrent, ...input }: Input<"recordError">) {
       return mutate(
         "workerEnvironments.recordError",
-        { input, nowMs: options.now?.() },
+        { input },
         [input.environmentId],
         assertCurrent,
       );
@@ -473,7 +462,7 @@ export async function createWorkerEnvironmentStore(
     ensurePreparedIntent({ assertCurrent, ...input }: Input<"ensurePreparedIntent">) {
       return mutate(
         "workerEnvironments.ensurePreparedIntent",
-        { input, nowMs: options.now?.() },
+        { input },
         owner
           .list()
           .filter((row) => row.preparation !== null)
@@ -485,7 +474,7 @@ export async function createWorkerEnvironmentStore(
     requestPreparedDestroy({ assertCurrent, ...input }: Input<"requestPreparedDestroy">) {
       return mutate(
         "workerEnvironments.requestPreparedDestroy",
-        { input, nowMs: options.now?.() },
+        { input },
         [input.environmentId],
         assertCurrent,
       );
@@ -496,30 +485,23 @@ export async function createWorkerEnvironmentStore(
     ) {
       return mutate(
         "workerEnvironments.createSessionAttachmentIntent",
-        { input, nowMs: options.now?.() },
+        { input },
         [input.environmentId],
         assertCurrent,
       );
     },
     closeSessionAttachment(input: string, assertCurrent: () => void = () => {}) {
-      return mutate(
-        "workerEnvironments.closeSessionAttachment",
-        { input, nowMs: options.now?.() },
-        [],
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.closeSessionAttachment", { input }, [], assertCurrent);
     },
     cancelSessionAttachmentReservation(input: Input<"cancelSessionAttachmentReservation">) {
-      return mutate(
-        "workerEnvironments.cancelSessionAttachmentReservation",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-      );
+      return mutate("workerEnvironments.cancelSessionAttachmentReservation", { input }, [
+        input.environmentId,
+      ]);
     },
     touchSessionAttachment(input: Input<"touchSessionAttachment">, assertCurrent: () => void) {
       return mutate(
         "workerEnvironments.touchSessionAttachment",
-        { input, nowMs: options.now?.() },
+        { input },
         [input.environmentId],
         assertCurrent,
       );
@@ -565,7 +547,6 @@ export async function createWorkerEnvironmentStore(
           "workerEnvironments.pruneTerminalEnvironments",
           {
             input: { approved: approved.map((candidate) => candidate.observed) },
-            nowMs: options.now?.(),
           },
           approved.map((candidate) => candidate.observed.environment_id),
           () => {

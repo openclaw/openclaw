@@ -1,4 +1,6 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
+import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -15,12 +17,16 @@ import {
 } from "./plugin-state-worker-errors.js";
 
 type Scope = Pick<SqliteWorkerStore<PluginStateWorkerOperations>, "execute">;
-type HostAdmission = { env?: NodeJS.ProcessEnv; assertActive?: () => void };
+type HostAdmission = {
+  env?: NodeJS.ProcessEnv;
+  assertActive?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+};
 type Input<Key extends keyof PluginStateWorkerOperations> =
   PluginStateWorkerOperations[Key]["input"] & HostAdmission;
 
 async function execute<Key extends keyof PluginStateWorkerOperations>(
-  { env, assertActive }: HostAdmission,
+  { env, assertActive, sessionEntryCurrent }: HostAdmission,
   command: { type: Key; input: PluginStateWorkerOperations[Key]["input"] },
   missing?: () => PluginStateWorkerRequests[Key]["output"],
   checks: {
@@ -49,7 +55,17 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       ]);
     const operation = async (scope: Scope) => {
       dispatched = true;
-      const result = await scope.execute<Key>(command);
+      const result = await scope.execute<Key>(
+        command.input === undefined
+          ? command
+          : {
+              type: command.type,
+              input: {
+                ...command.input,
+                sessionEntryCurrentSource: sessionEntryCurrent?.source,
+              },
+            },
+      );
       if (!result.ok) {
         throw restorePluginStateWorkerFailure(result.error);
       }
@@ -63,15 +79,18 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       assertActive?.();
       return result === undefined ? missing() : result;
     }
-    const createAdmission = createSqliteWorkerWriteAdmission(() => {
-      context.admission.assertCurrent();
-      assertAdmission?.();
-    }, [databasePath]);
+    const createAdmission = createSqliteWorkerWriteAdmission(
+      (request) => {
+        context.admission.assertCurrent();
+        assertAdmission?.();
+        assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
+      },
+      [databasePath],
+    );
     // Writable operations, including comparison observations, must share the
     // host lifecycle owner before dispatch so sibling maintenance cannot overtake them.
     const result = await runOpenClawStateWorkerOperation(context, operation, {
       assertCurrent: assertAdmission,
-      requireStateLifecycle: true,
       createAdmission,
     });
     if (isObservation?.(result)) {
@@ -92,62 +111,92 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
 export function registerPluginStateInWorker(
   params: Input<"pluginState.register"> & { assertCurrent?: () => void },
 ): Promise<void> {
-  const { env, assertActive, assertCurrent, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.register", input }, undefined, {
-    assertCurrent,
-  });
+  const { env, assertActive, assertCurrent, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.register", input },
+    undefined,
+    {
+      assertCurrent,
+    },
+  );
 }
 
 export function observePluginStateInWorker(params: Input<"pluginState.observe">) {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.observe", input }, undefined, {
-    isObservation: () => true,
-  });
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.observe", input },
+    undefined,
+    {
+      isObservation: () => true,
+    },
+  );
 }
 
 export function comparePluginStateUpdateInWorker(params: Input<"pluginState.compareUpdate">) {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.compareUpdate", input }, undefined, {
-    isObservation: (result) => result.status === "conflict",
-  });
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.compareUpdate", input },
+    undefined,
+    {
+      isObservation: (result) => result.status === "conflict",
+    },
+  );
 }
 
 export function comparePluginStateDeleteInWorker(params: Input<"pluginState.compareDelete">) {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.compareDelete", input }, undefined, {
-    isObservation: (result) => result.status === "conflict",
-  });
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.compareDelete", input },
+    undefined,
+    {
+      isObservation: (result) => result.status === "conflict",
+    },
+  );
 }
 
 export function registerPluginStateIfAbsentInWorker(
   params: Input<"pluginState.registerIfAbsent">,
 ): Promise<boolean> {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.registerIfAbsent", input });
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.registerIfAbsent", input },
+  );
 }
 
 export function deletePluginStateIfEqualInWorker(
   params: Input<"pluginState.deleteIfEqual">,
 ): Promise<boolean> {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.deleteIfEqual", input });
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.deleteIfEqual", input },
+  );
 }
 
 export function lookupPluginStateInWorker(params: Input<"pluginState.lookup">): Promise<unknown> {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.lookup", input }, () => undefined);
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.lookup", input },
+    () => undefined,
+  );
 }
 
 export async function lookupManyPluginStateInWorker(
   params: Input<"pluginState.lookupMany">,
 ): Promise<Array<Result<unknown, PluginStateStoreError>>> {
-  const { env, assertActive, ...input } = params;
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
   params.assertActive?.();
   if (input.keys.length === 0) {
     return [];
   }
   const results = await execute(
-    { env, assertActive },
+    { env, assertActive, sessionEntryCurrent },
     { type: "pluginState.lookupMany", input },
     () => input.keys.map(() => ok<unknown, PluginStateWorkerFailure>(undefined)),
   );
@@ -157,27 +206,39 @@ export async function lookupManyPluginStateInWorker(
 }
 
 export function consumePluginStateInWorker(params: Input<"pluginState.consume">): Promise<unknown> {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.consume", input });
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.consume", input },
+  );
 }
 
 export function deletePluginStateInWorker(
   params: Input<"pluginState.delete"> & { assertCurrent?: () => void },
 ): Promise<boolean> {
-  const { env, assertActive, assertCurrent, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.delete", input }, undefined, {
-    assertCurrent,
-  });
+  const { env, assertActive, assertCurrent, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.delete", input },
+    undefined,
+    {
+      assertCurrent,
+    },
+  );
 }
 
 export function listPluginStateInWorker(params: Input<"pluginState.entries">) {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.entries", input }, () => []);
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.entries", input },
+    () => [],
+  );
 }
 
 export function clearPluginStateInWorker(params: Input<"pluginState.clear">): Promise<void> {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.clear", input });
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute({ env, assertActive, sessionEntryCurrent }, { type: "pluginState.clear", input });
 }
 
 export function sweepExpiredPluginStateEntriesInWorker(
@@ -187,21 +248,35 @@ export function sweepExpiredPluginStateEntriesInWorker(
 }
 
 export function countPluginStateInWorker(params: Input<"pluginState.count">): Promise<number> {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.count", input }, () => 0);
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.count", input },
+    () => 0,
+  );
 }
 
 export function registerPluginStateJournalInWorker(params: Input<"pluginState.appendJournal">) {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.appendJournal", input });
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.appendJournal", input },
+  );
 }
 
 export function listPluginStateInKeyRangeInWorker(params: Input<"pluginState.entriesInKeyRange">) {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.entriesInKeyRange", input }, () => []);
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.entriesInKeyRange", input },
+    () => [],
+  );
 }
 
 export function movePluginStateEntriesInWorker(params: Input<"pluginState.moveEntries">) {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, { type: "pluginState.moveEntries", input });
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.moveEntries", input },
+  );
 }

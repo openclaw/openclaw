@@ -37,40 +37,34 @@ import {
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callNodesToolNodeInvoke, resolveNodesToolInvokeTimeouts } from "./nodes-tool-invoke.js";
-import { resolveAgentNode, resolveAgentNodeId } from "./nodes-utils.js";
+import { resolveAgentNode, type NodeListNode } from "./nodes-utils.js";
 
-type NodeMediaAction =
-  | "camera_snap"
-  | "photos_latest"
-  | "camera_clip"
-  | "screen_record"
-  | "screen_snapshot";
+const NODE_MEDIA_ACTIONS = {
+  camera_snap: executeCameraSnap,
+  photos_latest: executePhotosLatest,
+  camera_clip: executeCameraClip,
+  screen_record: executeScreenRecord,
+  screen_snapshot: executeScreenSnapshot,
+};
 const MAX_RECORDING_DURATION_MS = 300_000;
 
 type ExecuteNodeMediaActionParams = {
-  action: NodeMediaAction;
   params: Record<string, unknown>;
   gatewayOpts: GatewayCallOptions;
   modelHasVision?: boolean;
   imageSanitization: ImageSanitizationLimits;
 };
 
+type ResolvedNodeMediaActionParams = ExecuteNodeMediaActionParams & { node: NodeListNode };
+
 export async function executeNodeMediaAction(
-  input: ExecuteNodeMediaActionParams,
+  input: ExecuteNodeMediaActionParams & { action: keyof typeof NODE_MEDIA_ACTIONS },
 ): Promise<AgentToolResult<unknown>> {
-  switch (input.action) {
-    case "camera_snap":
-      return await executeCameraSnap(input);
-    case "photos_latest":
-      return await executePhotosLatest(input);
-    case "camera_clip":
-      return await executeCameraClip(input);
-    case "screen_record":
-      return await executeScreenRecord(input);
-    case "screen_snapshot":
-      return await executeScreenSnapshot(input);
+  if (!Object.hasOwn(NODE_MEDIA_ACTIONS, input.action)) {
+    throw new Error("Unsupported node media action");
   }
-  throw new Error("Unsupported node media action");
+  const node = await resolveAgentNode(input.gatewayOpts, requireString(input.params, "node"));
+  return await NODE_MEDIA_ACTIONS[input.action]({ ...input, node });
 }
 
 function validateNodePhoto(
@@ -148,19 +142,15 @@ async function createNodePhotoResult(params: {
 async function executeCameraSnap({
   params,
   gatewayOpts,
+  node: resolvedNode,
   modelHasVision,
   imageSanitization,
-}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
-  const node = requireString(params, "node");
-  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
+}: ResolvedNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const nodeId = resolvedNode.nodeId;
-  const facingRaw = normalizeLowercaseStringOrEmpty(params.facing) || "front";
-  const facing =
-    facingRaw === "both" || facingRaw === "front" || facingRaw === "back"
-      ? facingRaw
-      : (() => {
-          throw new Error("invalid facing (front|back|both)");
-        })();
+  const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
+  if (facing !== "both" && facing !== "front" && facing !== "back") {
+    throw new Error("invalid facing (front|back|both)");
+  }
   const maxWidth = readPositiveIntegerParam(params, "maxWidth") ?? 1600;
   const quality =
     readFiniteNumberParam(params, "quality", {
@@ -212,11 +202,10 @@ async function executeCameraSnap({
 async function executePhotosLatest({
   params,
   gatewayOpts,
+  node: resolvedNode,
   modelHasVision,
   imageSanitization,
-}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
-  const node = requireString(params, "node");
-  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
+}: ResolvedNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const nodeId = resolvedNode.nodeId;
   const limit = Math.min(
     readPositiveIntegerParam(params, "limit") ?? DEFAULT_PHOTOS_LIMIT,
@@ -268,9 +257,8 @@ async function executePhotosLatest({
 async function executeCameraClip({
   params,
   gatewayOpts,
-}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
-  const node = requireString(params, "node");
-  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
+  node: resolvedNode,
+}: ResolvedNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const nodeId = resolvedNode.nodeId;
   const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   if (facing !== "front" && facing !== "back") {
@@ -322,9 +310,8 @@ async function executeCameraClip({
 async function executeScreenRecord({
   params,
   gatewayOpts,
-}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
-  const node = requireString(params, "node");
-  const nodeId = await resolveAgentNodeId(gatewayOpts, node);
+  node: { nodeId },
+}: ResolvedNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const durationMs = Math.min(
     readPositiveIntegerParam(params, "durationMs") ??
       (typeof params.duration === "string" ? parseDurationMs(params.duration) : 10_000),
@@ -377,9 +364,8 @@ async function executeScreenRecord({
 async function executeScreenSnapshot({
   params,
   gatewayOpts,
-}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
-  const node = requireString(params, "node");
-  const nodeId = await resolveAgentNodeId(gatewayOpts, node);
+  node: { nodeId },
+}: ResolvedNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const maxWidth = readPositiveIntegerParam(params, "maxWidth");
   const outPath = normalizeOptionalString(params.outPath);

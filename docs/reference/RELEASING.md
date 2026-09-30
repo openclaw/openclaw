@@ -27,9 +27,6 @@ It does not include native apps or ClawHub publication, and it does not change
 the regular stable channel. Its GitHub release is not marked Latest. A monthly
 line retires when it falls outside the two supported completed months.
 
-Alpha builds are a separate internal testing track, not a recommended user
-channel.
-
 ## Version naming
 
 | Release            | Version example                                                       |
@@ -44,7 +41,8 @@ number within the month, not a day of the month. Regular releases use patches
 below `33`; extended-stable starts at `33`. Git tags add `v`, as in `v2026.9.6`.
 
 Published npm versions and release tags are never replaced. A fix receives a
-new version. Alpha-only versions do not advance the regular release number.
+new version. Historical alpha-only versions do not advance the regular release
+number; alpha releases are retired.
 
 ## Release cadence
 
@@ -63,13 +61,35 @@ Stable publication requires stable or full validation, longer-running soak tests
 and blocking performance checks. These requirements also apply to a final version
 first published on the beta channel. Beta-profile evidence cannot qualify stable.
 
-Every selected validation lane must pass; publication waivers cannot bypass
-failures or required coverage. Validation covers source CI, packages, plugins,
+Windows Node unit-test CI shards (`checks-windows-node-*`) in Full Release
+Validation's normal CI child (`normalCi`) are advisory for Release Decision and
+publication. The `windows-node-ci` class is defined by
+`scripts/full-release-validation-policy.mjs`; its failures remain visible in the
+decision, GitHub step summary, and release evidence manifest. This policy is not
+an operator-selectable input or waiver. Ordinary PR, push, scheduled, and main CI
+still require Windows shards to pass.
+
+Every other selected validation lane remains blocking: macOS Node and other
+normal CI jobs, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
+qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
+including Windows packaged install/upgrade checks in Release Checks. A cancelled
+run still blocks. Publication waivers cannot bypass failures or required
+coverage. Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
 live-provider checks. All-group qualification includes all nine Gateway
 install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
+
+Dependency advisories never block or delay a release. Release dependency
+evidence records every advisory finding, at any severity, and CI dispatched by
+release validation or publication reports a failing dependency audit as a
+warning. The dependency fix ships through `main` after publication. Only a
+known-malware finding stops publication.
+
+The health of `main` CI does not gate a release. Validation and publication run
+from the release branch with pinned release tooling, so a red `main` is not a
+reason to wait, re-cut, or pause.
 
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
@@ -119,6 +139,12 @@ To consume a release lock:
 The companion `npm-package-locks.md` includes counts and a package table. Each
 entry records `bundleRuntimeDependencies` and direct dependency counts so
 packagers can identify lockless packages that need an external lock.
+Each entry also records a path-sorted `bundledDependencies` array with `path`,
+`name`, `version`, and `parent`. These dependencies carry `inBundle: true` in the
+npm lock; `parent` identifies the nearest enclosing non-bundled package whose
+`resolved` and `integrity` verify the tarball carrying their bytes. The report
+rejects missing or unverifiable carriers and preserves the lock payload. The
+Markdown table counts bundled dependencies per package and includes their total.
 
 ## Maintainer procedures
 

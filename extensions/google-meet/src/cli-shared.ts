@@ -35,17 +35,20 @@ export type OAuthLoginOptions = {
   timeoutSec?: string;
 };
 
-export type ResolveSpaceOptions = {
-  meeting?: string;
-  today?: boolean;
-  event?: string;
-  calendar?: string;
+type OAuthOptions = {
   accessToken?: string;
   refreshToken?: string;
   clientId?: string;
   clientSecret?: string;
   expiresAt?: string;
   json?: boolean;
+};
+
+export type ResolveSpaceOptions = OAuthOptions & {
+  meeting?: string;
+  today?: boolean;
+  event?: string;
+  calendar?: string;
 };
 
 export type MeetArtifactOptions = ResolveSpaceOptions & {
@@ -135,16 +138,10 @@ type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false;
 const GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
-export type DoctorOptions = {
-  json?: boolean;
+export type DoctorOptions = OAuthOptions & {
   oauth?: boolean;
   meeting?: string;
   createSpace?: boolean;
-  accessToken?: string;
-  refreshToken?: string;
-  clientId?: string;
-  clientSecret?: string;
-  expiresAt?: string;
 };
 
 export type JsonOptions = {
@@ -155,23 +152,12 @@ export type RecoverTabOptions = JsonOptions & {
   transport?: string;
 };
 
-export type CreateOptions = {
-  accessToken?: string;
-  refreshToken?: string;
-  clientId?: string;
-  clientSecret?: string;
-  expiresAt?: string;
-  accessType?: string;
-  entryPointAccess?: string;
-  join?: boolean;
-  transport?: string;
-  mode?: string;
-  message?: string;
-  dialInNumber?: string;
-  pin?: string;
-  dtmfSequence?: string;
-  json?: boolean;
-};
+export type CreateOptions = OAuthOptions &
+  JoinOptions & {
+    accessType?: string;
+    entryPointAccess?: string;
+    join?: boolean;
+  };
 
 export function parseGoogleMeetMode(value: string | undefined): GoogleMeetModeInput | undefined {
   if (
@@ -193,6 +179,18 @@ export function parseGoogleMeetTransport(
     return value;
   }
   throw new Error(`transport must be chrome, chrome-node, or twilio; received ${value}`);
+}
+
+export function resolveCliJoinRequest(url: string, options: JoinOptions) {
+  return {
+    url,
+    transport: parseGoogleMeetTransport(options.transport),
+    mode: parseGoogleMeetMode(options.mode),
+    message: options.message,
+    dialInNumber: options.dialInNumber,
+    pin: options.pin,
+    dtmfSequence: options.dtmfSequence,
+  };
 }
 
 export function parseGoogleMeetBrowserTransport(

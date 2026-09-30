@@ -49,7 +49,7 @@ export function startGatewayNodePairingSshApproval(params: {
   }
   // Gate on the request actually being approved, not just this
   // connect's params: requestDevicePairing can refresh an older
-  // pending request in place (incomingApprovalCoveredByExisting), so a
+  // pending request in place, so a
   // device could seed a scoped pending request, then reconnect
   // scopeless from an SSH-verifiable host. SSH auto-approval must stay
   // limited to a fresh node request that carries no roles/scopes

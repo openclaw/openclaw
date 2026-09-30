@@ -18,12 +18,18 @@ import {
 } from "../../pages/chat/chat-send-ack.ts";
 import { formatTerminalChatSendAckError } from "../../pages/chat/chat-send-support.ts";
 import type { HumanMention } from "../chat/chat-types.ts";
+import type { SessionCapability } from "./session-capability.ts";
 import type {
   SessionPlacementStartMode,
   SessionPlacementTarget,
 } from "./session-placement-recovery.ts";
 
 registerNewSessionSetupEnglish();
+
+type SessionPlacementRequests = {
+  client: Pick<GatewayBrowserClient, "request"> | null;
+  describe: SessionCapability["describe"];
+};
 
 type SessionPlacementStartOutcome =
   | { status: "started"; messageId: string }
@@ -91,13 +97,11 @@ function isAmbiguousDispatchError(error: unknown): boolean {
 }
 
 async function readPlacement(
-  client: Pick<GatewayBrowserClient, "request">,
+  requests: SessionPlacementRequests & { client: Pick<GatewayBrowserClient, "request"> },
   key: string,
 ): Promise<PlacementReadResult> {
   try {
-    const described = await client.request<{
-      session?: { placement?: SessionPlacement; sessionId?: string } | null;
-    }>("sessions.describe", { key });
+    const described = await requests.describe({ key }, { refresh: true, client: requests.client });
     if (described?.session === null) {
       return { status: "missing" };
     }
@@ -154,7 +158,7 @@ async function cancelSessionPlacement(
 }
 
 async function resolveActivePlacement(
-  client: Pick<GatewayBrowserClient, "request">,
+  requests: SessionPlacementRequests & { client: Pick<GatewayBrowserClient, "request"> },
   params: {
     key: string;
     agentId: string;
@@ -164,12 +168,13 @@ async function resolveActivePlacement(
   },
   isCurrent: () => boolean,
 ): Promise<PlacementResolution> {
+  const { client } = requests;
   let next = params.initial ? ({ status: "read", placement: params.initial } as const) : undefined;
   let lookupFailures = 0;
   let emptyPlacements = 0;
   let placementPending = false;
   for (let attempt = 0; attempt < DISPATCH_RECONCILE_ATTEMPTS; attempt += 1) {
-    const result = next ?? (await readPlacement(client, params.key));
+    const result = next ?? (await readPlacement(requests, params.key));
     placementPending =
       result.status === "read" &&
       result.placement !== undefined &&
@@ -258,23 +263,24 @@ async function resolveActivePlacement(
 }
 
 export async function deleteSessionPlacementDraft(
-  client: Pick<GatewayBrowserClient, "request"> | null,
+  requests: SessionPlacementRequests,
   key: string,
   agentId: string,
 ): Promise<string | undefined> {
-  return deletePlacementDraft(client, key, agentId, false);
+  return deletePlacementDraft(requests, key, agentId, false);
 }
 
 async function deletePlacementDraft(
-  client: Pick<GatewayBrowserClient, "request"> | null,
+  requests: SessionPlacementRequests,
   key: string,
   agentId: string,
   recovered: boolean,
 ): Promise<string | undefined> {
+  const { client } = requests;
   if (!client) {
     return "gateway unavailable during draft cleanup";
   }
-  const existing = await readPlacement(client, key);
+  const existing = await readPlacement({ ...requests, client }, key);
   if (existing.status === "missing") {
     return undefined;
   }
@@ -345,15 +351,15 @@ async function archiveAndDeleteSessionPlacementDraft(
 }
 
 export async function deleteRecoveredSessionPlacementDraft(
-  client: Pick<GatewayBrowserClient, "request"> | null,
+  requests: SessionPlacementRequests,
   key: string,
   agentId: string,
 ): Promise<string | undefined> {
-  return deletePlacementDraft(client, key, agentId, true);
+  return deletePlacementDraft(requests, key, agentId, true);
 }
 
 export async function startSessionPlacementInitialTurn(
-  client: Pick<GatewayBrowserClient, "request">,
+  requests: SessionPlacementRequests & { client: Pick<GatewayBrowserClient, "request"> },
   params: {
     key: string;
     agentId: string;
@@ -368,6 +374,7 @@ export async function startSessionPlacementInitialTurn(
   isCurrent: () => boolean,
   beforeSend: () => boolean = () => true,
 ): Promise<SessionPlacementStartOutcome> {
+  const { client } = requests;
   const message = params.message;
   const mentions = params.mentions?.map((mention) => ({ ...mention }));
   const cleanupOnCancellation = params.cleanupOnCancellation ?? (() => true);
@@ -375,7 +382,7 @@ export async function startSessionPlacementInitialTurn(
   let dispatchError = "";
   if (params.mode !== "dispatch") {
     resolution = await resolveActivePlacement(
-      client,
+      requests,
       { key: params.key, agentId: params.agentId, mode: params.mode, cleanupOnCancellation },
       isCurrent,
     );
@@ -390,7 +397,7 @@ export async function startSessionPlacementInitialTurn(
         sessionPlacementDispatchParams(params),
       );
       resolution = await resolveActivePlacement(
-        client,
+        requests,
         {
           key: params.key,
           agentId: params.agentId,
@@ -409,7 +416,7 @@ export async function startSessionPlacementInitialTurn(
         return { status: "dispatch-rejected", error: dispatchError };
       }
       resolution = await resolveActivePlacement(
-        client,
+        requests,
         { key: params.key, agentId: params.agentId, mode: "recover", cleanupOnCancellation },
         isCurrent,
       );

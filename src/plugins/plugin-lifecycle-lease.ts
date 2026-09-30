@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { runOutsideOpenClawStateLeaseScope } from "../state/openclaw-state-lease-exclusion.js";
 import {
   OpenClawStateLeaseError,
   withOpenClawStateLease,
@@ -43,6 +42,8 @@ type PluginLifecycleLeaseOptions = Pick<
   signal?: AbortSignal;
   leaseMs?: number;
   waitMs?: number;
+  /** Opt in only when protected mutations cannot outlive this process. */
+  processBound?: boolean;
   /** Additional live caller authority; never replaces the plugin lease. */
   assertCurrent?: () => void;
 };
@@ -55,7 +56,7 @@ export function hasPluginLifecycleLease(): boolean {
 
 /** Detached observers must acquire ownership rather than borrow their writer's lease. */
 export function runOutsidePluginLifecycleLease<T>(run: () => T): T {
-  return activePluginLifecycleLease.exit(() => runOutsideOpenClawStateLeaseScope(run));
+  return activePluginLifecycleLease.exit(run);
 }
 
 function resolveLifecycleLeaseEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
@@ -97,6 +98,15 @@ export async function withPluginLifecycleLease<T>(
         ? lease
         : {
             ...lease,
+            ...(lease.renew
+              ? {
+                  renew: () =>
+                    assertAuthority(() => {
+                      assertCurrent?.();
+                      lease.renew?.();
+                    }),
+                }
+              : {}),
             assertCurrent: () =>
               assertAuthority(() => {
                 assertCurrent?.();
@@ -164,6 +174,7 @@ export async function withPluginLifecycleLease<T>(
       },
       leaseMs: options.leaseMs ?? DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS,
       waitMs: options.waitMs ?? DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS,
+      processBound: options.processBound,
       ...(options.signal ? { signal: options.signal } : {}),
       leaseLabel: "plugin lifecycle lease",
       operationLabel: "plugins.lifecycle.lease",
@@ -174,6 +185,7 @@ export async function withPluginLifecycleLease<T>(
         stateLease: lease,
         assertCurrent: () => assertAuthority(() => lease.signal.throwIfAborted()),
         signal: lease.signal,
+        ...(lease.renew ? { renew: () => lease.renew?.() } : {}),
         assertOwned: () => lease.assertOwned(),
         assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
       };

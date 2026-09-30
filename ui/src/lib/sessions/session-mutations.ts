@@ -15,6 +15,7 @@ import { projectSessionResultRows } from "./reconcile.ts";
 import { createSessionArchiveState, projectSessionArchiveFields } from "./session-archive-state.ts";
 import type {
   SessionCapability,
+  SessionConnectionScope,
   SessionCreateReconciliation,
   SessionRefreshOutcome,
   SessionResetOptions,
@@ -47,6 +48,11 @@ import {
 import { createSessionRowLocalPatch } from "./session-row-local-patch.ts";
 
 export function createSessionMutations(host: SessionMutationsHost) {
+  const reportError = (scope: SessionConnectionScope, error: unknown) => {
+    if (host.connection.isCurrent(scope)) {
+      host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+    }
+  };
   const modelOverrides = createSessionModelOverrides(host);
   const archiveState = createSessionArchiveState(
     host.publishedRow,
@@ -113,9 +119,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       const reconciliation = host.reconcileMutation(params.agentId);
       if (options.reconciliation === "background") {
         void reconciliation.catch((error: unknown) => {
-          if (host.connection.isCurrent(scope)) {
-            host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-          }
+          reportError(scope, error);
         });
       } else {
         await reconciliation;
@@ -127,9 +131,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result;
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       return null;
     }
   };
@@ -155,6 +157,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     const patchSnapshot = host.snapshot();
     const pendingConversation =
       hasSettingsPatch ||
+      patchParams.label !== undefined ||
       patchParams.category !== undefined ||
       patchParams.pinned !== undefined ||
       patchParams.unread === false ||
@@ -375,7 +378,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
       // Commit and list reconciliation are separate outcomes. Callers must not
       // turn a failed refresh into an apparent rollback of the committed patch.
       let refreshOutcome: SessionRefreshOutcome = { status: "refreshed" };
-      if (!options.deferListRefresh) {
+      // Read receipts settle their row fields; events still invalidate roster membership.
+      const confirmedRead =
+        rowPatchConfirmed && patchParams.unread === false && Object.keys(patchParams).length === 1;
+      if (!options.deferListRefresh && !confirmedRead) {
         if (Object.hasOwn(patchParams, "permissionMode")) {
           refreshOutcome = await host.reconcileMutation(
             options.agentId,
@@ -506,9 +512,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       await requestSessionReset(scope.client, key, options);
       return host.connection.isCurrent(scope) ? "completed" : "uncertain";
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       // Reset can commit before awaited lifecycle work rejects; never infer safe retry.
       return "uncertain";
     }
@@ -549,9 +553,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result.owner;
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       return null;
     }
   };

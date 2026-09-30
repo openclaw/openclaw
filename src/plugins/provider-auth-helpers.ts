@@ -104,18 +104,10 @@ export function buildApiKeyCredential(
   metadata?: Record<string, string>;
 } {
   const secretInput = resolveApiKeySecretInput(provider, input, options);
-  if (typeof secretInput === "string") {
-    return {
-      type: "api_key",
-      provider,
-      key: secretInput,
-      ...(metadata ? { metadata } : {}),
-    };
-  }
   return {
     type: "api_key",
     provider,
-    keyRef: secretInput,
+    ...(typeof secretInput === "string" ? { key: secretInput } : { keyRef: secretInput }),
     ...(metadata ? { metadata } : {}),
   };
 }

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
@@ -217,8 +216,12 @@ describe("AppSidebar session indicators", () => {
 
     // A restored/replaced backing image arrives as a new route revision; the
     // mounted row must fetch the new URL instead of reusing the sticky 404.
-    row.channelAvatarUrl = restoredUrl;
-    sidebar.requestUpdate();
+    sessions.publish({
+      result: reconcileSessionChanged(sessions.sessions.state.result, {
+        sessionKey: avatarKey,
+        channelAvatarUrl: restoredUrl,
+      }).result,
+    });
     await sidebar.updateComplete;
 
     await waitForFast(() => {
@@ -298,9 +301,11 @@ describe("AppSidebar session indicators", () => {
       );
       sidebar.activeRouteId = "chat";
       sidebar.sessionKey = workingKey;
-      sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
-      sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
-      sidebar.requestUpdate();
+      sidebar.storedOutboxes = {
+        total: 2,
+        attentionCountForSession: (sessionKey) => (sessionKey === mainKey ? 2 : 0),
+        hasSessionDraft: (sessionKey) => sessionKey === mainKey,
+      };
       await sidebar.updateComplete;
 
       const home = sidebar.querySelector(".nav-item--home");
@@ -585,40 +590,21 @@ describe("AppSidebar session indicators", () => {
     await waitForFast(() => {
       expect(request).toHaveBeenCalledWith(
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        expect.objectContaining({
-          sessionKeys: expect.arrayContaining([keys.openPullRequest, keys.mergedPullRequest]),
-        }),
+        { sessionKeys: [] },
         { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
       );
     });
-    gatewayHarness.publishEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-      sessions: Object.fromEntries(
-        [keys.openPullRequest, keys.mergedPullRequest].map((key) => [
-          key,
-          {
-            pullRequests: [
-              {
-                number: 1,
-                owner: "openclaw",
-                repo: "openclaw",
-                branch: "feature/test",
-                title: "Test",
-                url: "https://example.test/pr/1",
-                state: key.endsWith("open-pr") ? "open" : "merged",
-              },
-            ],
-            rateLimited: false,
-            status: "ready",
-          },
-        ]),
-      ),
+    sessions.sessions.setPullRequestSummary(keys.openPullRequest, { numbers: [1], state: "open" });
+    sessions.sessions.setPullRequestSummary(keys.mergedPullRequest, {
+      numbers: [1],
+      state: "merged",
     });
 
     await waitForFast(() => {
       expect(sidebar.querySelector('[data-pull-request-state="open"]')).not.toBeNull();
       expect(sidebar.querySelector('[data-pull-request-state="merged"]')).not.toBeNull();
     });
-    // Opening chat hydrates its detailed summary from the same pushed snapshot.
+    // Opening chat hydrates its detailed summary from the same last-known snapshot.
     // It must not add a second PR icon beside the sidebar's existing indicator.
     sessions.sessions.setPullRequestSummary(keys.openPullRequest, { numbers: [1], state: "open" });
     await sidebar.updateComplete;

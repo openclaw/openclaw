@@ -9,7 +9,7 @@ import {
   asNonArrayRecord as asParamRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isGoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
+import { GoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
 import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
   type GoogleMeetConfig,
@@ -23,6 +23,7 @@ export const loadGoogleMeetPluginHelpers = createLazyRuntimeModule(
   () => import("./plugin-helpers.js"),
 );
 export const loadGoogleMeetCliModule = createLazyRuntimeModule(() => import("./cli.js"));
+export const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./create.js"));
 export const loadGoogleMeetNodeHostModule = createLazyRuntimeModule(() => import("./node-host.js"));
 
 const loadGoogleMeetRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
@@ -312,7 +313,7 @@ export function createLazyGoogleMeetNodeInvokePolicy(
 }
 
 export function formatGoogleMeetGatewayError(err: unknown) {
-  return isGoogleMeetBrowserManualActionError(err)
+  return err instanceof GoogleMeetBrowserManualActionError
     ? err.payload
     : { error: formatErrorMessage(err) };
 }

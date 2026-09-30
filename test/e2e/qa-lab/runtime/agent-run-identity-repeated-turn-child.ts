@@ -1,5 +1,9 @@
 // Runs two real public-ingress turns in one session so QA can inspect their executions.
 import { pathToFileURL } from "node:url";
+import {
+  disposeAllSessionMcpRuntimes,
+  setSessionMcpRuntimeScheduler,
+} from "../../../../src/agents/agent-bundle-mcp-manager-api.js";
 import { createAuditEventRecorder } from "../../../../src/audit/audit-recorder.js";
 import { configureExecutionIdentityAdmissionSink } from "../../../../src/audit/execution-identity-admission.js";
 import { getRuntimeConfig } from "../../../../src/config/io.js";
@@ -15,6 +19,7 @@ async function main() {
   const recorder = createAuditEventRecorder({ scheduler, getConfig: getRuntimeConfig });
   const clearSink = configureExecutionIdentityAdmissionSink(recorder.recordExecutionIdentity);
   try {
+    await setSessionMcpRuntimeScheduler(scheduler);
     for (const message of [
       "Reply exactly: REPEATED-TURN-ONE",
       "Reply exactly: REPEATED-TURN-TWO",
@@ -40,7 +45,11 @@ async function main() {
     try {
       await recorder.stop();
     } finally {
-      await scheduler.stop();
+      try {
+        await disposeAllSessionMcpRuntimes();
+      } finally {
+        await scheduler.stop();
+      }
     }
   }
 }

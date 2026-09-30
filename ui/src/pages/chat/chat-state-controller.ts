@@ -15,6 +15,7 @@ import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
@@ -94,9 +95,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const reads = this.attachmentReads;
     const readSignal = reads.readSignal;
     return {
+      uploadConfig: state.uploadConfig,
       attachmentReads: reads,
       attachments: state.chatAttachments,
-      attachmentLimits: state.hello?.policy?.attachments,
+      attachmentLimits: resolveChatAttachmentLimits(state.hello?.policy),
       getAttachments: () => state.chatAttachments,
       pendingAttachmentReads: reads.pendingReads,
       getPendingAttachmentReads: () => reads.pendingReads,

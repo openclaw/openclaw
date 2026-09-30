@@ -31,8 +31,47 @@ title: "Agent schema history"
 | 21      | Incremental canonical-session validation with transactional node, window, and main-key invalidation                                                                                                                                                    | Unreleased                                      |
 | 22      | Exact transcript FTS row ownership for session-local deletion and reconciliation ([#153834](https://github.com/openclaw/openclaw/pull/153834))                                                                                                         | Unreleased                                      |
 | 23      | Selective transcript compression, binary memory embeddings, and stable memory full-text index identities                                                                                                                                               | Unreleased                                      |
+| 24      | Canonical session hot facts separated from keyed diff, skills, and system-prompt snapshots                                                                                                                                                             | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
+
+### Session hot facts and snapshots
+
+Agent schema **24** keeps exact hot session facts in `session_nodes.entry_json`
+and moves `sessionDiffBaseline`, `skillsSnapshot`, and `systemPromptReport` into
+`session_entry_snapshots`, keyed by session key and field. Existing indexed
+columns remain query projections; they do not replace canonical values such as
+the distinct `interrupted` status. Full entry consumers select hot facts and
+requested snapshot columns in one SQLite statement. List and resident projection
+readers select only hot facts. Public full-entry reads retain their existing shape.
+
+The entry writer retains policy, lifecycle, and publication ownership. It writes
+only changed snapshot values, in the same transaction as the hot entry. Snapshot
+table triggers advance the node's `snapshot_revision`, including raw SQL changes;
+prepared mutations compare that revision before reusing their original snapshot.
+Rollback restores both data and revision. Existing cache revisions and foreign
+commit checks remain authoritative. Cached hot facts are immutable; internal
+borrowers share them while public mutable readers receive detached values.
+
+The existing startup/Doctor schema owner extracts the three fields in bounded
+keyed batches and commits the representation change with both schema markers.
+Malformed or identity-mismatched entries remain unchanged for Doctor repair.
+Snapshot JSON retains JavaScript parsing semantics, including values beyond
+SQLite's JSON nesting limit. Transcript bytes, pending inputs, progress cards,
+retention, and permissions are unchanged. Deleting a logical node cascades its
+snapshots; clearing an entry while retaining transcript windows clears its
+snapshots too. Doctor repair/import and full-entry copy consumers preserve the
+selected entry's snapshots.
+
+This is a versioned representation change under the
+[material-change checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
+The accepted storage split and migration are recorded in
+[#160358](https://github.com/openclaw/openclaw/pull/160358).
+Use the existing verified backup and candidate Doctor update flow, including the
+[published updater migration rules](/reference/database-schemas/versioning#schema-bumps-and-older-updaters).
+Interrupted extraction rolls back. Older builds refuse schema 24; rollback
+requires the pre-upgrade database backup and matching build, not lower version
+markers. Freed SQLite pages remain available for reuse under existing maintenance.
 
 ### Compact agent payload storage
 

@@ -1,5 +1,3 @@
-// Gateway chat attachment parser.
-// Normalizes image attachments, offloads large media, and reports unsupported payloads.
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
@@ -17,6 +15,7 @@ import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
 import { DEFAULT_CHAT_ATTACHMENT_MAX_BYTES } from "./chat-attachment-policy.js";
 import { registerMediaCleanupDrain } from "./server-media-cleanup-lifecycle.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { formatForLog } from "./ws-log.js";
 
 export type ChatAttachment = {
@@ -157,38 +156,55 @@ export async function persistInboundImagesForTranscript(params: {
   offloadedRefs: OffloadedRef[];
   log: Pick<AttachmentLog, "warn">;
   logContext: string;
+  assertCurrent?: () => void;
 }): Promise<PersistInboundImagesResult> {
   const entries: PersistInboundImagesResult["entries"] = [];
   let omission: PersistInboundImagesResult["omission"] = "none";
-  for (const image of params.images) {
-    try {
-      const saved = await saveMediaBuffer(
-        Buffer.from(image.data, "base64"),
-        image.mimeType,
-        "inbound",
-        undefined,
-        image.fileName,
-      );
-      const trusted = assertSavedMedia(saved, `inline image ${image.sourceIndex + 1}`);
-      entries.push({
-        id: trusted.id,
-        path: trusted.path,
-        sourceIndex: image.sourceIndex,
-        imageKind: "inline",
-        fact: {
-          url: trusted.mediaRef,
-          contentType: saved.contentType ?? image.mimeType,
-          kind: "image",
-          ...(image.fileName ? { fileName: image.fileName } : {}),
-          sizeBytes: saved.size,
-        },
-      });
-    } catch (err) {
-      omission = "inline-image-save-failed";
-      params.log.warn(
-        `${params.logContext}: failed to persist inbound image (${image.mimeType}): ${formatErrorMessage(err)}`,
-      );
+  try {
+    params.assertCurrent?.();
+    for (const image of params.images) {
+      try {
+        params.assertCurrent?.();
+        const saved = await saveMediaBuffer(
+          Buffer.from(image.data, "base64"),
+          image.mimeType,
+          "inbound",
+          undefined,
+          image.fileName,
+          undefined,
+          { assertCommitAllowed: params.assertCurrent },
+        );
+        const trusted = assertSavedMedia(saved, `inline image ${image.sourceIndex + 1}`);
+        entries.push({
+          id: trusted.id,
+          path: trusted.path,
+          sourceIndex: image.sourceIndex,
+          imageKind: "inline",
+          fact: {
+            url: trusted.mediaRef,
+            contentType: saved.contentType ?? image.mimeType,
+            kind: "image",
+            ...(image.fileName ? { fileName: image.fileName } : {}),
+            sizeBytes: saved.size,
+          },
+        });
+      } catch (err) {
+        // An ended input admission is not a best-effort image omission.
+        if (err instanceof SessionMutationAuthorizationChangedError) {
+          throw err;
+        }
+        params.assertCurrent?.();
+        omission = "inline-image-save-failed";
+        params.log.warn(
+          `${params.logContext}: failed to persist inbound image (${image.mimeType}): ${formatErrorMessage(err)}`,
+        );
+      }
     }
+
+    params.assertCurrent?.();
+  } catch (error) {
+    await discardPreparedInboundMedia(entries, params.log);
+    throw error;
   }
 
   for (const ref of params.offloadedRefs) {
@@ -265,12 +281,12 @@ function assertSavedMedia(
     value === null ||
     typeof value !== "object" ||
     !("id" in value) ||
-    typeof (value as Record<string, unknown>).id !== "string"
+    typeof value.id !== "string"
   ) {
     throw new Error(`attachment ${label}: saveMediaBuffer returned an unexpected shape`);
   }
-  const id = (value as Record<string, unknown>).id as string;
-  const path = (value as Record<string, unknown>).path;
+  const id = value.id;
+  const path = "path" in value ? value.path : undefined;
   if (typeof path !== "string" || path.length === 0) {
     throw new Error(`attachment ${label}: saveMediaBuffer returned no on-disk path`);
   }
@@ -343,6 +359,7 @@ export async function parseMessageWithAttachments(
   const savedMediaIds: string[] = [];
 
   try {
+    opts?.assertCurrent?.();
     for (const [idx, att] of attachments.entries()) {
       if (!att) {
         continue;
@@ -368,6 +385,7 @@ export async function parseMessageWithAttachments(
       const isImage = finalMime.startsWith("image/");
       const shouldForceImageOffload = isImage && !(await resolveSupportsImages());
       opts?.signal?.throwIfAborted();
+      opts?.assertCurrent?.();
       if (isImage && !supportsInlineImages && !shouldForceImageOffload) {
         throw new UnsupportedAttachmentError(
           "text-only-image",
@@ -393,11 +411,7 @@ export async function parseMessageWithAttachments(
         );
       }
 
-      if (
-        shouldForceImageOffload &&
-        isImage &&
-        textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT
-      ) {
+      if (shouldForceImageOffload && textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT) {
         log?.warn(
           `attachment ${label}: dropping image because text-only offload limit ` +
             `${TEXT_ONLY_OFFLOAD_LIMIT} was reached`,
@@ -438,9 +452,15 @@ export async function parseMessageWithAttachments(
           "inbound",
           maxBytes,
           labelWithExt,
+          undefined,
+          { assertCommitAllowed: opts?.assertCurrent },
         );
         savedMedia = assertSavedMedia(rawResult, label);
       } catch (err) {
+        if (err instanceof SessionMutationAuthorizationChangedError) {
+          throw err;
+        }
+        opts?.assertCurrent?.();
         throw new MediaOffloadError(
           `[Gateway Error] Failed to save intercepted media to disk: ${formatErrorMessage(err)}`,
           { cause: err },
@@ -452,7 +472,7 @@ export async function parseMessageWithAttachments(
       const mediaRef = savedMedia.mediaRef;
       updatedMessage += `\n[media attached: ${mediaRef}]`;
       log?.info?.(
-        shouldForceImageOffload && isImage
+        shouldForceImageOffload
           ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
           : `[Gateway] Offloaded attachment (${finalMime}). Saved: ${mediaRef}`,
       );
@@ -486,6 +506,8 @@ export async function parseMessageWithAttachments(
         }
       }
     }
+    await enrichOffloadedMediaMetadata(offloadedRefs);
+    opts?.assertCurrent?.();
   } catch (err) {
     if (savedMediaIds.length > 0) {
       await Promise.allSettled(savedMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
@@ -501,8 +523,6 @@ export async function parseMessageWithAttachments(
     }
     throw err;
   }
-
-  await enrichOffloadedMediaMetadata(offloadedRefs);
 
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,

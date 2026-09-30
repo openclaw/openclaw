@@ -169,7 +169,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.78.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.79.0"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
@@ -185,6 +185,60 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expectWrapperToContainPathSuffix(wrapper, ["dist", "index.js"]);
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
   });
+
+  it.each([
+    { agent: "codex", packageName: "codex-acp", version: "1.12.0" },
+    { agent: "claude", packageName: "claude-agent-acp", version: "0.79.0" },
+  ] as const)(
+    "launches $agent after its captured adapter is removed",
+    async ({ agent, packageName, version }) => {
+      const { root, generated, generatedClaude, prepare } = createWrapperFixture();
+      const capturedBin = path.join(root, "captured-adapter.cjs");
+      await fs.writeFile(capturedBin, "console.log('captured adapter');\n");
+      await prepare({
+        resolveInstalledCodexAcpBinPath: async () => capturedBin,
+        resolveInstalledClaudeAcpBinPath: async () => capturedBin,
+      });
+      const wrapperPath = agent === "codex" ? generated.wrapperPath : generatedClaude.wrapperPath;
+      const packageDir = path.join(root, "node_modules", "@agentclientprotocol", packageName);
+      const binDir = path.join(root, "node_modules", ".bin");
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: `@agentclientprotocol/${packageName}`,
+          version,
+          bin: { [packageName]: "index.cjs" },
+        }),
+      );
+      const fallbackBin = path.join(packageDir, "index.cjs");
+      await fs.writeFile(fallbackBin, "#!/usr/bin/env node\nconsole.log('fallback adapter');\n", {
+        mode: 0o755,
+      });
+      if (process.platform === "win32") {
+        await fs.writeFile(
+          path.join(binDir, `${packageName}.cmd`),
+          `@"${process.execPath}" "${fallbackBin}" %*\r\n`,
+        );
+      } else {
+        await fs.symlink(fallbackBin, path.join(binDir, packageName));
+      }
+      const options = {
+        cwd: root,
+        env: {
+          ...process.env,
+          npm_config_offline: "true",
+          npm_config_cache: path.join(root, "cache"),
+        },
+      };
+      const present = await execFileAsync(process.execPath, [wrapperPath], options);
+      expect(present.stdout.trim()).toBe("captured adapter");
+      await fs.rm(capturedBin);
+      const reclaimed = await execFileAsync(process.execPath, [wrapperPath], options);
+      expect(reclaimed.stdout.trim()).toBe("fallback adapter");
+    },
+  );
 
   it("keeps the orphaned wrapper alive long enough to force-kill the child process group", async () => {
     const { generated, prepare } = createWrapperFixture();

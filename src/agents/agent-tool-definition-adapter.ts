@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { isPlainObject } from "../utils.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -341,6 +342,7 @@ export function toToolDefinitions(
     signal && abortSignal ? AbortSignal.any([signal, abortSignal]) : (signal ?? abortSignal);
   return tools.map((tool) => {
     const name = tool.name || "tool";
+    const toolOwnerPluginId = getPluginToolMeta(tool)?.pluginId;
     const normalizedName = normalizeToolPolicyName(name);
     const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
     const sourcePreparer = getInternalToolExecutionPreparer(tool);
@@ -387,7 +389,11 @@ export function toToolDefinitions(
                 params: hookParams,
                 ...hookMetadata,
                 toolCallId,
-                ctx: hookContext,
+                ctx: hookContext
+                  ? { ...hookContext, toolOwnerPluginId }
+                  : toolOwnerPluginId
+                    ? { toolOwnerPluginId }
+                    : undefined,
                 signal,
               });
               if (hookOutcome.blocked) {
@@ -417,6 +423,7 @@ export function toToolDefinitions(
               const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
                 toolCallId,
                 toolName: name,
+                toolKind: hookMetadata?.toolKind,
                 params: executeParams,
                 ctx: hookContext,
               });

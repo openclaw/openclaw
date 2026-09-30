@@ -27,6 +27,14 @@ type RoleSnapshotStats = {
   interactive: number;
 };
 
+export type RoleSnapshotResult<T extends RoleRef = RoleRef> = {
+  snapshot: string;
+  truncated?: boolean;
+  refs: Record<string, T>;
+  stats: RoleSnapshotStats;
+  newElements?: number;
+};
+
 const ROLE_SNAPSHOT_TRUNCATION_MARKER = "[...TRUNCATED - page too large]";
 
 /** Options for filtering and compacting role snapshots. */
@@ -118,13 +126,7 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
     mode: RoleSnapshotIdentityMode;
     previousKeys?: ReadonlySet<string>;
   };
-}): {
-  snapshot: string;
-  truncated?: boolean;
-  refs: Record<string, T>;
-  stats: RoleSnapshotStats;
-  newElements?: number;
-} {
+}): RoleSnapshotResult<T> {
   const normalizedMaxChars =
     typeof params.maxChars === "number" && Number.isFinite(params.maxChars) && params.maxChars > 0
       ? Math.floor(params.maxChars)
@@ -177,7 +179,7 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
       }
     }
   }
-  const refs = Object.fromEntries(visibleEntries) as Record<string, T>;
+  const refs = Object.fromEntries(visibleEntries);
   const newElements = newKeys?.size;
   const stats: RoleSnapshotStats = {
     lines: snapshot ? outputLines.length : 0,
@@ -195,9 +197,7 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
 }
 
 function getIndentLevel(line: string): number {
-  const match = line.match(/^(\s*)/);
-  const indent = match?.[1];
-  return indent === undefined ? 0 : Math.floor(indent.length / 2);
+  return Math.floor((line.length - line.trimStart().length) / 2);
 }
 
 function parseSnapshotLine(line: string) {
@@ -256,11 +256,9 @@ function compactTree(lines: readonly string[]) {
       return;
     }
     current.keep ||= current.hasRef;
-    if (current.hasRef && stack.length > 0) {
-      const parent = stack.at(-1);
-      if (parent !== undefined) {
-        parent.hasRef = true;
-      }
+    const parent = stack.at(-1);
+    if (current.hasRef && parent) {
+      parent.hasRef = true;
     }
   };
 
@@ -297,21 +295,12 @@ function compactTree(lines: readonly string[]) {
 /** Normalize a role snapshot ref accepted by browser actions. */
 export function parseRoleRef(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
   const normalized = trimmed.startsWith("@")
     ? trimmed.slice(1)
     : trimmed.startsWith("ref=")
       ? trimmed.slice(4)
       : trimmed;
-  if (/^e\d+$/i.test(normalized)) {
-    return normalized;
-  }
-  if (/^\d{1,9}$/.test(normalized)) {
-    return normalized;
-  }
-  return null;
+  return /^(?:e\d+|\d{1,9})$/i.test(normalized) ? normalized : null;
 }
 
 function parseAiSnapshotRef(ref: string | undefined): string | null {

@@ -1,4 +1,3 @@
-// Doctor gateway methods inspect and repair memory dreaming artifacts and managed cron state.
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -14,6 +13,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingConfig,
@@ -25,7 +25,6 @@ import {
 import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { formatError } from "../server-utils.js";
 import {
   listWorkspaceDailyFiles,
   readDreamDiary,

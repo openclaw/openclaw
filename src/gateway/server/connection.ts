@@ -6,7 +6,8 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/serv
 import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { recordPairedNodeDisconnection } from "../../infra/device-pairing-node.js";
-import { upsertPresence } from "../../infra/system-presence.js";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
+import { commitPresence, upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
@@ -24,10 +25,10 @@ import {
   reconcileClientPluginNodeCapabilities,
   type PluginNodeCapabilitySurface,
 } from "../plugin-node-capability.js";
+import { serializeGatewayFrame } from "../serialized-json.js";
 import type { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
-import { formatError } from "../server-utils.js";
 import { cleanupTalkConnection } from "../talk/session-registry.js";
 import type { WebSocketHeartbeatDiagnostics } from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
@@ -179,7 +180,6 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
   const requestOrigin = headerValue(upgradeReq.headers.origin);
   const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
   const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
-  const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
   const openedDuringStartup = isStartupPending?.() === true;
 
   logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });
@@ -311,14 +311,18 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       closeWithGrace(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
       return { kind: "unavailable" } as const;
     }
-    let encoded: string;
+    let encoded: string | Buffer;
     try {
-      encoded = JSON.stringify(obj);
+      encoded = serializeGatewayFrame(obj);
     } catch (error) {
       return { kind: "serialization", error } as const;
     }
     try {
-      socket.send(encoded);
+      if (typeof encoded === "string") {
+        socket.send(encoded);
+      } else {
+        socket.send(encoded, { binary: false });
+      }
       return { kind: "sent" } as const;
     } catch {
       socket.terminate();
@@ -482,6 +486,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
           reason: "disconnect",
           watchedSessions: undefined,
         });
+        commitPresence(client.presenceKey, connId);
         buildRequestContext().publishPresence();
       }
       if (currentDisconnectedNodeId) {
@@ -625,7 +630,6 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     localPort,
     endpoint,
     forwardedFor,
-    realIp,
     requestHost,
     requestOrigin,
     requestUserAgent,

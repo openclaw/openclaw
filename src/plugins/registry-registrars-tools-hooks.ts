@@ -98,7 +98,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    if (typeof (factory as unknown) !== "function") {
+    if (typeof factory !== "function") {
       reportRegistrationError(record, "codex app-server extension factory must be a function");
       return;
     }
@@ -131,7 +131,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
     policy?: PluginTypedHookPolicy,
   ) => {
-    if (typeof (handler as unknown) !== "function") {
+    if (typeof handler !== "function") {
       reportRegistrationError(record, "agent tool result middleware must be a function");
       return;
     }
@@ -311,32 +311,21 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       return;
     }
     const description = entry?.hook.description ?? opts?.description ?? "";
-    const hookEntry: HookEntry = entry
-      ? {
-          ...entry,
-          hook: {
-            ...entry.hook,
-            name: hookName,
-            description,
-            source: "openclaw-plugin",
-            pluginId: record.id,
-          },
-          metadata: { ...entry.metadata, events: normalizedEvents },
-        }
-      : {
-          hook: {
-            name: hookName,
-            description,
-            source: "openclaw-plugin",
-            pluginId: record.id,
-            filePath: record.source,
-            baseDir: path.dirname(record.source),
-            handlerPath: record.source,
-          },
-          frontmatter: {},
-          metadata: { events: normalizedEvents },
-          invocation: { enabled: true },
-        };
+    const hookEntry: HookEntry = {
+      ...(entry ?? { frontmatter: {}, invocation: { enabled: true } }),
+      hook: {
+        ...(entry?.hook ?? {
+          filePath: record.source,
+          baseDir: path.dirname(record.source),
+          handlerPath: record.source,
+        }),
+        name: hookName,
+        description,
+        source: "openclaw-plugin",
+        pluginId: record.id,
+      },
+      metadata: { ...entry?.metadata, events: normalizedEvents },
+    };
     record.hookNames.push(hookName);
     registry.hooks.push({
       pluginId: record.id,

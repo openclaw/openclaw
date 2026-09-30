@@ -15,7 +15,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
-import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator-errors.js";
 import * as sessionRunError from "../../sessions/session-run-error.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
@@ -219,7 +218,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         });
 
         const failure = stateContention
-          ? new StateDatabaseCoordinatorContentionError("state-lifecycle")
+          ? Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 })
           : sessionChanged
             ? new DispatchSessionRefreshRequiredError(
                 new Error(`Session "${target.sessionKey}" changed while starting work. Retry.`),
@@ -241,7 +240,10 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         expect(broadcast).toHaveBeenLastCalledWith(
           "chat",
           expect.objectContaining({ state: "error" }),
-          expect.objectContaining({ liveText: { group: previewGroup?.signal } }),
+          {
+            liveText: { group: previewGroup?.signal, settle: true },
+            sessionKeys: [target.sessionKey],
+          },
         );
         expect(chatRunState.runs.has(runId)).toBe(false);
         expect(previewGroup?.signal.aborted).toBe(true);
@@ -263,7 +265,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         ]);
         if (stateContention) {
           const summary =
-            "The turn was interrupted while the server was busy. Check its status before trying again.";
+            "Your request was interrupted while the server was busy. Check its status before trying again.";
           const terminal = broadcast.mock.calls.at(-1)?.[1];
           expect(terminal).toMatchObject({ errorKind: "state_contention" });
           expect(terminal.errorMessage).toMatch(new RegExp(`^${summary.replaceAll(".", "\\.")}`));

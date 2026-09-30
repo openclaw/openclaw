@@ -15,6 +15,7 @@ import {
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
 type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
@@ -30,6 +31,26 @@ const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
   sse: "sse",
   stdio: "stdio",
 };
+
+/** Session-shared harness connections must exclude requester-owned credentials. */
+export function loadStaticBundleMcpConfig(
+  params: Parameters<typeof loadMergedBundleMcpConfig>[0],
+): MergedBundleMcpConfig & { requesterScopedServerNames: string[] } {
+  const loaded = loadMergedBundleMcpConfig(params);
+  const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope(
+    loaded.config.mcpServers,
+  );
+  return {
+    ...loaded,
+    config: { mcpServers: staticServers },
+    prepareDataDirsByServer: Object.fromEntries(
+      Object.entries(loaded.prepareDataDirsByServer).filter(([name]) =>
+        Object.hasOwn(staticServers, name),
+      ),
+    ),
+    requesterScopedServerNames,
+  };
+}
 
 export function prepareOwnedBundleMcpDataDirs(params: {
   config: BundleMcpConfig;

@@ -14,12 +14,12 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stableHash } from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
   resolveRuntimeParityUsagePolicy,
   runRuntimeParityScenario,
-  type RuntimeId,
   type RuntimeParityCell,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";

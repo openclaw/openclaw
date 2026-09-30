@@ -473,9 +473,14 @@ describe("OpenRouter OAuth", () => {
       type: "authorization_code" as const,
       code: "AUTHCODE",
       state: "state-1",
+      parameters: new URLSearchParams({ code: "AUTHCODE", state: "state-1" }),
     }));
     const close = vi.fn(async () => undefined);
-    const startCallback = vi.fn(async () => ({ waitForCallback, close }));
+    const startCallback = vi.fn(async () => ({
+      waitForCallback,
+      complete: async () => undefined,
+      close,
+    }));
     const { ctx, openUrl, text } = createOpenRouterOAuthContext({ isRemote: false });
 
     await loginOpenRouterOAuth(ctx, {
@@ -514,7 +519,11 @@ describe("OpenRouter OAuth", () => {
       errorDescription: "Denied",
     }));
     const close = vi.fn(async () => undefined);
-    const startCallback = vi.fn(async () => ({ waitForCallback, close }));
+    const startCallback = vi.fn(async () => ({
+      waitForCallback,
+      complete: async () => undefined,
+      close,
+    }));
     const { ctx, text } = createOpenRouterOAuthContext({ isRemote: false });
 
     await expect(

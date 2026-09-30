@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { GatewayChatStreamProjection } from "../../packages/gateway-client/src/chat-stream-projection.js";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -43,6 +43,10 @@ import {
   resolveGatewayUrlOverride,
 } from "../gateway/client-bootstrap.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
+import {
+  resolveGatewayDeviceAuthRoute,
+  type GatewaySshRoute,
+} from "../gateway/connection-details.js";
 import { resolveExplicitGatewayAuth } from "../gateway/credentials.js";
 import {
   gatewayEdgeAuthValueForTarget,
@@ -56,6 +60,7 @@ import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
@@ -79,15 +84,7 @@ import type {
   TuiImageData,
 } from "./tui-backend.js";
 import { isListedTuiSession } from "./tui-session-list-policy.js";
-
-type GatewayConnectionOptions = {
-  url?: string;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-  allowConfiguredAuthForExactTarget?: boolean;
-  suppressEnvAuthFallback?: boolean;
-};
+import type { TuiBoundGateway, TuiGatewayConnectionOptions } from "./tui-types.js";
 
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
@@ -96,6 +93,7 @@ const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 type ResolvedGatewayConnection = {
   url: string;
   deviceAuthScope?: string;
+  sshTunnel?: GatewaySshRoute;
   token?: string;
   password?: string;
   edgeAuthHeaders?: Readonly<Record<string, string>>;
@@ -169,9 +167,9 @@ type HandoffSessionResolveParams = Required<
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
+  private readonly chatStream = new GatewayChatStreamProjection();
   private readonly historyLifetime = new AbortController();
-  private readyPromise: Promise<void>;
-  private resolveReady?: () => void;
+  private ready = createDeferredCore();
   private pendingConnectError?: Error;
   private readonly modelCatalogs = new Map<string | undefined, GatewayModelCatalogEntry>();
   readonly connection: ResolvedGatewayConnection;
@@ -187,13 +185,10 @@ export class GatewayChatClient implements TuiBackend {
   constructor(connection: ResolvedGatewayConnection) {
     this.connection = connection;
 
-    this.readyPromise = new Promise((resolve) => {
-      this.resolveReady = resolve;
-    });
-
     this.client = new GatewayClient({
       url: connection.url,
       ...(connection.deviceAuthScope ? { deviceAuthScope: connection.deviceAuthScope } : {}),
+      ...(connection.sshTunnel ? { sshTunnel: connection.sshTunnel } : {}),
       token: connection.token,
       password: connection.password,
       edgeAuthHeaders: connection.edgeAuthHeaders,
@@ -217,23 +212,23 @@ export class GatewayChatClient implements TuiBackend {
       onHelloOk: (hello) => {
         this.pendingConnectError = undefined;
         this.hello = hello;
-        this.resolveReady?.();
+        this.ready.resolve();
         this.onConnected?.();
       },
       onEvent: (evt) => {
         this.refreshModelsForEvent(evt);
-        this.onEvent?.({
+        const projected = this.chatStream.project({
           event: evt.event,
           payload: evt.payload,
           seq: evt.seq,
         });
+        this.onEvent?.(projected.event);
       },
       onClose: (_code, reason) => {
+        this.chatStream.clear();
         this.modelCatalogs.clear();
         // Reset so waitForReady() blocks again until the next successful reconnect.
-        this.readyPromise = new Promise((resolve) => {
-          this.resolveReady = resolve;
-        });
+        this.ready = createDeferredCore();
         if (this.pendingConnectError && this.onConnectError) {
           // Dedupe is per close-cycle: clearing here lets the next reconnect
           // attempt report its own failure cause. Holding the guard until a
@@ -251,14 +246,14 @@ export class GatewayChatClient implements TuiBackend {
     });
   }
 
-  static async connect(opts: GatewayConnectionOptions): Promise<GatewayChatClient> {
+  static async connect(opts: TuiGatewayConnectionOptions): Promise<GatewayChatClient> {
     const connection = await resolveGatewayConnection(opts);
     return new GatewayChatClient(connection);
   }
 
   /** Connect to a target already selected and authenticated by a preceding Gateway probe. */
   static async connectBound(
-    opts: GatewayConnectionOptions & { config: OpenClawConfig; url: string },
+    opts: TuiBoundGateway & { config: OpenClawConfig },
   ): Promise<GatewayChatClient> {
     return new GatewayChatClient(await resolveBoundGatewayConnection(opts));
   }
@@ -308,6 +303,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   stop() {
+    this.chatStream.clear();
     this.historyLifetime.abort();
     this.modelCatalogs.clear();
     // Keep TUI teardown ordered after the transport closes. Otherwise the
@@ -320,7 +316,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async waitForReady() {
-    await this.readyPromise;
+    await this.ready.promise;
   }
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
@@ -346,21 +342,15 @@ export class GatewayChatClient implements TuiBackend {
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       ...(opts.runId ? { runId: opts.runId } : {}),
     };
-    if (opts.runId) {
-      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
-        "chat.abort",
-        params,
-      );
-    }
     try {
       return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
         "chat.abort",
-        { ...params, preserveSideRuns: true },
+        opts.runId ? params : { ...params, preserveSideRuns: true },
       );
     } catch (err) {
       // Protocol v4 peers reject unknown fields. Retry the shipped abort shape
       // so mixed-version TUI stops still work, even without BTW isolation.
-      if (!isLegacyParameterError(err, "chat.abort", "preservesideruns")) {
+      if (opts.runId || !isLegacyParameterError(err, "chat.abort", "preservesideruns")) {
         throw err;
       }
       return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
@@ -438,9 +428,9 @@ export class GatewayChatClient implements TuiBackend {
     const signal = this.historyLifetime.signal;
     for (;;) {
       signal.throwIfAborted();
-      const connection = this.readyPromise;
+      const connection = this.ready;
       const hello = this.hello;
-      const isCurrentConnection = () => connection === this.readyPromise && hello === this.hello;
+      const isCurrentConnection = () => connection === this.ready && hello === this.hello;
       try {
         const [description, listing] = await Promise.all([
           this.client.request<Pick<TuiSessionDescription, "session">>(
@@ -463,7 +453,7 @@ export class GatewayChatClient implements TuiBackend {
           throw error;
         }
       }
-      await racePromiseWithAbortSignal(this.readyPromise, signal);
+      await racePromiseWithAbortSignal(this.ready.promise, signal);
     }
   }
 
@@ -650,7 +640,7 @@ export class GatewayChatClient implements TuiBackend {
  * credentials, while still applying the normal remote URL safety policy.
  */
 async function resolveBoundGatewayConnection(
-  opts: GatewayConnectionOptions & { config: OpenClawConfig; url: string },
+  opts: TuiBoundGateway & { config: OpenClawConfig },
 ): Promise<ResolvedGatewayConnection> {
   const url = buildGatewayConnectionDetails({
     config: opts.config,
@@ -667,9 +657,17 @@ async function resolveBoundGatewayConnection(
     targetUrl: url,
     env: process.env,
   });
+  const { deviceAuthScope, sshTunnel } = resolveGatewayDeviceAuthRoute({
+    config: opts.config,
+    url,
+    remote: true,
+    configuredRemote: opts.configuredRemote,
+    tlsFingerprint: opts.tlsFingerprint,
+  });
   return {
     url,
-    deviceAuthScope: gatewayOriginScope(url),
+    deviceAuthScope,
+    ...(sshTunnel ? { sshTunnel } : {}),
     token: explicitAuth.token,
     password: explicitAuth.password,
     ...(edgeAuthHeaders ? { edgeAuthHeaders } : {}),
@@ -678,7 +676,7 @@ async function resolveBoundGatewayConnection(
 }
 
 async function resolveGatewayConnection(
-  opts: GatewayConnectionOptions,
+  opts: TuiGatewayConnectionOptions,
 ): Promise<ResolvedGatewayConnection> {
   const config = getRuntimeConfig();
   const env = process.env;
@@ -748,6 +746,7 @@ async function resolveGatewayConnection(
   return {
     url: bootstrap.url,
     deviceAuthScope: bootstrap.deviceAuthScope,
+    ...(bootstrap.sshTunnel ? { sshTunnel: bootstrap.sshTunnel } : {}),
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
     ...(edgeAuthHeaders ? { edgeAuthHeaders } : {}),

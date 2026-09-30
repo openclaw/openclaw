@@ -22,21 +22,10 @@ import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import * as logger from "../../logger.js";
 import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
 import * as statusText from "../../status/status-text.js";
-import {
-  completeTaskRunByRunIdCore,
-  createQueuedTaskRunCore,
-  createRunningTaskRunCore,
-  failTaskRunByRunIdCore,
-} from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import { buildKiraStatusReply, buildStatusReplyForTest } from "./commands-status.test-support.js";
-import {
-  baseCommandTestConfig,
-  buildCommandTestParams,
-  configureInMemoryTaskRegistryStoreForTests,
-} from "./commands.test-harness.js";
+import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
 
 // Tests status command rendering for sessions, agents, and diagnostics.
 
@@ -301,13 +290,10 @@ describe("buildStatusReply subagent summary", () => {
       ],
     });
     resetSubagentRegistryForTests();
-    resetTaskRegistryForTests({ persist: false });
-    configureInMemoryTaskRegistryStoreForTests();
   });
 
   afterEach(() => {
     resetSubagentRegistryForTests();
-    resetTaskRegistryForTests({ persist: false });
   });
 
   it("counts ended orchestrators with active descendants as active", async () => {
@@ -440,233 +426,6 @@ describe("buildStatusReply subagent summary", () => {
     const reply = await buildStatusReplyForTest({});
 
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
-  });
-
-  it("includes active and total task counts for the current session", async () => {
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:subagent:status-task-running",
-      runId: "run-status-task-running",
-      task: "active background task",
-      progressSummary: "still working",
-    });
-    createQueuedTaskRunCore({
-      runtime: "cron",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:subagent:status-task-queued",
-      runId: "run-status-task-queued",
-      task: "queued background task",
-    });
-
-    const reply = await buildStatusReplyForTest({});
-
-    expect(reply?.text).toContain("📌 Tasks: 2 active · 2 total");
-    expect(reply?.text).toMatch(/📌 Tasks: 2 active · 2 total · (subagent|cron) · /);
-  });
-
-  it.each(["research", "ops"])("isolates global task status for %s", async (agentId) => {
-    for (const requesterAgentId of ["research", "ops", undefined]) {
-      const executorAgentId = requesterAgentId === "research" ? "ops" : "research";
-      createRunningTaskRunCore({
-        runtime: "cli",
-        requesterSessionKey: "global",
-        requesterAgentId,
-        agentId: executorAgentId,
-        childSessionKey: `agent:${executorAgentId}:subagent:${requesterAgentId ?? "unknown"}`,
-        runId: `global-status-task-${requesterAgentId ?? "unknown"}`,
-        task: `${requesterAgentId ?? "unknown"} private task`,
-      });
-    }
-
-    const reply = await buildStatusReplyForTest({
-      sessionKey: "global",
-      agentId,
-      cfg: {
-        ...baseCfg,
-        session: { scope: "global" },
-        agents: {
-          ownership: "explicit",
-          entries: {
-            research: { sandbox: { mode: "all" } },
-            ops: { sandbox: { mode: "off" } },
-          },
-        },
-      },
-    });
-
-    expect(reply?.text).toContain("📌 Tasks: 1 active · 1 total");
-    expect(reply?.text).toContain(`${agentId} private task`);
-    expect(reply?.text).not.toContain(
-      `${agentId === "research" ? "ops" : "research"} private task`,
-    );
-    expect(reply?.text).not.toContain("unknown private task");
-    expect(reply?.text).toContain(`Execution: ${agentId === "research" ? "docker/all" : "direct"}`);
-  });
-
-  it("hides stale completed task rows from the session task line", async () => {
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:subagent:status-task-live",
-      runId: "run-status-task-live",
-      task: "live background task",
-      progressSummary: "still working",
-    });
-    createQueuedTaskRunCore({
-      runtime: "cron",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:subagent:status-task-stale-done",
-      runId: "run-status-task-stale-done",
-      task: "stale completed task",
-    });
-    completeTaskRunByRunIdCore({
-      runId: "run-status-task-stale-done",
-      endedAt: Date.now() - 10 * 60_000,
-      terminalSummary: "done a while ago",
-    });
-
-    const reply = await buildStatusReplyForTest({});
-
-    expect(reply?.text).toContain("📌 Tasks: 1 active · 1 total");
-    expect(reply?.text).toContain("live background task");
-    expect(reply?.text).not.toContain("stale completed task");
-    expect(reply?.text).not.toContain("done a while ago");
-  });
-
-  it("shows blocked completion outcomes when no active tasks remain", async () => {
-    createRunningTaskRunCore({
-      runtime: "acp",
-      requesterSessionKey: "agent:main:main",
-      runId: "run-status-task-blocked",
-      task: "blocked background task",
-    });
-    completeTaskRunByRunIdCore({
-      runId: "run-status-task-blocked",
-      endedAt: Date.now(),
-      terminalOutcome: "blocked",
-      terminalSummary: "Additional input required.",
-    });
-
-    const reply = await buildStatusReplyForTest({});
-
-    expect(reply?.text).toContain("📌 Tasks: 1 recent failure · blocked");
-    expect(reply?.text).toContain("blocked background task");
-    expect(reply?.text).toContain("Additional input required.");
-  });
-
-  it("does not leak internal runtime context through the task status line", async () => {
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:subagent:status-task-leak",
-      runId: "run-status-task-leak",
-      task: "leaked context task",
-    });
-    failTaskRunByRunIdCore({
-      runId: "run-status-task-leak",
-      endedAt: Date.now(),
-      error: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
-    });
-
-    const reply = await buildStatusReplyForTest({});
-
-    expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
-    expect(reply?.text).toContain("leaked context task");
-    expect(reply?.text).not.toContain("OpenClaw runtime context (internal):");
-    expect(reply?.text).not.toContain("Internal task completion event");
-  });
-
-  it("truncates long task titles and details in the session task line", async () => {
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:subagent:status-task-truncated",
-      runId: "run-status-task-truncated",
-      task: "This is a deliberately long task prompt that should never be emitted in full by /status because it can include internal instructions and file paths that are not appropriate for the headline line shown to users.",
-      progressSummary:
-        "This progress detail is also intentionally long so the status surface proves it truncates verbose task context instead of dumping a multi-sentence internal update into the reply output.",
-    });
-
-    const reply = await buildStatusReplyForTest({});
-
-    expect(reply?.text).toContain(
-      "This is a deliberately long task prompt that should never be emitted in full by…",
-    );
-    expect(reply?.text).toContain(
-      "This progress detail is also intentionally long so the status surface proves it truncates verbose task context instead…",
-    );
-    expect(reply?.text).not.toContain("internal instructions and file paths");
-    expect(reply?.text).not.toContain("dumping a multi-sentence internal update");
-  });
-
-  it("prefers failure context over newer success context when showing recent failures", async () => {
-    createRunningTaskRunCore({
-      runtime: "acp",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:acp:status-task-failed-priority",
-      runId: "run-status-task-failed-priority",
-      task: "failed background task",
-    });
-    failTaskRunByRunIdCore({
-      runId: "run-status-task-failed-priority",
-      endedAt: Date.now() - 30_000,
-      error: "approval denied",
-    });
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:subagent:status-task-succeeded-later",
-      runId: "run-status-task-succeeded-later",
-      task: "later successful task",
-    });
-    completeTaskRunByRunIdCore({
-      runId: "run-status-task-succeeded-later",
-      endedAt: Date.now(),
-      terminalSummary: "all done",
-    });
-
-    const reply = await buildStatusReplyForTest({});
-
-    expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
-    expect(reply?.text).toContain("failed background task");
-    expect(reply?.text).toContain("approval denied");
-    expect(reply?.text).not.toContain("later successful task");
-    expect(reply?.text).not.toContain("all done");
-  });
-
-  it("falls back to same-agent task counts without details when the current session has none", async () => {
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:other",
-      childSessionKey: "agent:main:subagent:status-agent-fallback-running",
-      runId: "run-status-agent-fallback-running",
-      agentId: "main",
-      task: "hidden task title",
-      progressSummary: "hidden progress detail",
-    });
-    createQueuedTaskRunCore({
-      runtime: "cron",
-      requesterSessionKey: "agent:main:another",
-      childSessionKey: "agent:main:subagent:status-agent-fallback-queued",
-      runId: "run-status-agent-fallback-queued",
-      agentId: "main",
-      task: "another hidden task title",
-    });
-
-    const reply = await buildStatusReplyForTest({ sessionKey: "agent:main:empty-session" });
-
-    expect(reply?.text).toContain("📌 Tasks: 2 active · 2 total · agent-local");
-    expect(reply?.text).not.toContain("hidden task title");
-    expect(reply?.text).not.toContain("hidden progress detail");
-    expect(reply?.text).not.toContain("subagent");
-    expect(reply?.text).not.toContain("cron");
   });
 
   it("uses transcript usage fallback in /status output", async () => {

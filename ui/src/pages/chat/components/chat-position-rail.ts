@@ -4,6 +4,7 @@ import { directive } from "lit/directive.js";
 import { t } from "../../../i18n/index.ts";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
+import type { PositionRailAssistant } from "./chat-position-rail-view.ts";
 import { renderChatPositionRailView } from "./chat-position-rail-view.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
@@ -22,6 +23,7 @@ type RailInteraction = {
 type PositionRailParams = {
   positions: ChatPositionIndex;
   transcript: ChatTranscriptSession;
+  assistant?: PositionRailAssistant;
   requestUpdate: () => void;
 };
 
@@ -70,7 +72,10 @@ class ChatPositionRailDirective extends AsyncDirective {
   private resizeScrollTarget: { offset: number; atEnd: boolean } | undefined;
   private followingResize = false;
   private readonly stopScrollInput = {
-    handleEvent: (event: Event) => event.stopPropagation(),
+    handleEvent: (event: Event) => {
+      this.followActive = false;
+      event.stopPropagation();
+    },
     passive: true,
   };
 
@@ -224,7 +229,11 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.disconnectVisibility();
       this.transcriptElement = root;
       this.stopTranscriptScroll = subscribeTranscriptScroll(root, (observation) => {
-        if (observation.type === "input") {
+        if (observation.type === "offset") {
+          // The reading position can cross a landmark without changing the
+          // rendered rows; follow it here instead of re-rendering the pane.
+          this.scheduleLayout();
+        } else if (observation.type === "input") {
           if (this.followingResize) {
             this.followActive = true;
             this.scheduleLayout();
@@ -455,7 +464,8 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.syncVisibleMarks();
     this.syncTabStop();
     if (initialize || this.followActive) {
-      this.followActive = false;
+      // Navigation must reach the final viewport, even if its slot resized before this frame.
+      this.followActive = this.session?.layout.viewportResizePending ?? false;
       const focused = this.markerElements.get(this.interaction.focusedId ?? "");
       const current =
         (initialize || focused?.matches(":focus-visible")
@@ -592,7 +602,7 @@ class ChatPositionRailDirective extends AsyncDirective {
 
   render(params: PositionRailParams) {
     this.renderParams = params;
-    const { positions, transcript, requestUpdate } = params;
+    const { positions, transcript, assistant, requestUpdate } = params;
     this.requestUpdate = requestUpdate;
     if (this.session !== transcript) {
       this.session = transcript;
@@ -605,16 +615,18 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.markersChanged = true;
     }
     const markers = positions.markers;
-    if (
-      this.markerIdsByMessageId.size !== positions.markerIdsByMessageId.size ||
-      [...positions.markerIdsByMessageId].some(
-        ([messageId, markerId]) => this.markerIdsByMessageId.get(messageId) !== markerId,
-      )
-    ) {
-      this.targetsChanged = true;
+    if (positions.markerIdsByMessageId !== this.markerIdsByMessageId) {
+      if (
+        this.markerIdsByMessageId.size !== positions.markerIdsByMessageId.size ||
+        [...positions.markerIdsByMessageId].some(
+          ([messageId, markerId]) => this.markerIdsByMessageId.get(messageId) !== markerId,
+        )
+      ) {
+        this.targetsChanged = true;
+      }
+      this.markerIdsByMessageId = positions.markerIdsByMessageId;
+      this.positionMessageIds = [...positions.markerIdsByMessageId.keys()];
     }
-    this.markerIdsByMessageId = positions.markerIdsByMessageId;
-    this.positionMessageIds = [...positions.markerIdsByMessageId.keys()];
     const count = markers.length;
     if (count === 0) {
       this.disconnected();
@@ -675,12 +687,14 @@ class ChatPositionRailDirective extends AsyncDirective {
     };
     return renderChatPositionRailView({
       transcript,
+      assistant,
       markers,
       renderedIndexes: this.renderedIndexes,
       markerHeight: MARKER_HEIGHT,
       activeId: this.activeId,
       visibleIds: this.visibleIds,
       rovingId,
+      hoveredId: interaction.hoveredId,
       previewId: interaction.dismissed
         ? undefined
         : (interaction.hoveredId ?? interaction.focusedId),

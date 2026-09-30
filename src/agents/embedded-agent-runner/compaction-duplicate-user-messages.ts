@@ -1,6 +1,3 @@
-/**
- * Removes short-window duplicate user turns from compaction summaries.
- */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 
@@ -27,10 +24,7 @@ function normalizeUserMessageContent(content: unknown): string | undefined {
   }
   const textParts: string[] = [];
   for (const block of content) {
-    if (!isRecord(block)) {
-      return undefined;
-    }
-    if (block.type === "image") {
+    if (!isRecord(block) || block.type === "image") {
       return undefined;
     }
     if (block.type === "text" && typeof block.text === "string") {
@@ -66,7 +60,6 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
 ): T[] {
   const windowMs = options.windowMs ?? DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS;
   const lastSeenAtByKey = new Map<string, number>();
-  let removed = 0;
   const result: T[] = [];
   for (const message of messages) {
     const signature = duplicateSignature(message);
@@ -88,10 +81,9 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
     ) {
       // Keep the first prompt and drop only later repeats. The first copy anchors the summarized
       // branch while duplicate retries no longer inflate compaction context.
-      removed += 1;
       continue;
     }
     result.push(message);
   }
-  return removed > 0 ? result : [...messages];
+  return result;
 }

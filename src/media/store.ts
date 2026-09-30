@@ -386,21 +386,25 @@ async function writeSavedMediaBuffer(params: {
   subdir: string;
   id: string;
   buffer: Buffer;
+  assertCommitAllowed?: () => void;
 }): Promise<string> {
+  params.assertCommitAllowed?.();
   const readScope = captureChannelReadScope();
   readScope?.assertCurrent();
   const dir = resolveMediaScopedDir(params.subdir, "writeSavedMediaBuffer");
   const relativePath = resolveMediaRelativePath(params.id, params.subdir, "writeSavedMediaBuffer");
   return await retryAfterRecreatingDir(dir, async () => {
-    if (readScope) {
+    if (readScope || params.assertCommitAllowed) {
       const { writeReadScopeMedia } = await import("./store.read-scope.js");
       await writeReadScopeMedia({
         dir,
         tempPrefix: `.${params.id}`,
         scope: readScope,
+        assertCommitAllowed: params.assertCommitAllowed,
         durable: true,
         write: async (handle) => {
-          readScope.assertCurrent();
+          readScope?.assertCurrent();
+          params.assertCommitAllowed?.();
           await handle.writeFile(params.buffer);
           return { id: params.id };
         },
@@ -534,7 +538,9 @@ export async function saveMediaBuffer(
   maxBytes = MEDIA_MAX_BYTES,
   originalFilename?: string,
   detectionFilePathHint?: string,
+  options?: { assertCommitAllowed?: () => void },
 ): Promise<SavedMedia> {
+  options?.assertCommitAllowed?.();
   if (buffer.byteLength > maxBytes) {
     throw SaveMediaSourceError.tooLarge(maxBytes);
   }
@@ -555,7 +561,12 @@ export async function saveMediaBuffer(
     detectionFilePathHint,
   });
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
-  await writeSavedMediaBuffer({ subdir, id, buffer });
+  await writeSavedMediaBuffer({
+    subdir,
+    id,
+    buffer,
+    assertCommitAllowed: options?.assertCommitAllowed,
+  });
   return { id, path: path.join(dir, id), size: buffer.byteLength, contentType: mime };
 }
 
@@ -567,7 +578,9 @@ export async function saveMediaStream(
   maxBytes = MEDIA_MAX_BYTES,
   originalFilename?: string,
   detectionFilePathHint?: string,
+  options?: { assertCommitAllowed?: () => void },
 ): Promise<SavedMedia> {
+  options?.assertCommitAllowed?.();
   const readScope = captureChannelReadScope();
   readScope?.assertCurrent();
   const dir = resolveMediaScopedDir(subdir, "saveMediaStream");
@@ -583,11 +596,15 @@ export async function saveMediaStream(
   })();
   const write = async (handle: FileHandle): Promise<Omit<SavedMedia, "path">> => {
     readScope?.assertCurrent();
+    options?.assertCommitAllowed?.();
     const { sniffBuffer, size } = await writeMediaStreamToFile({
       stream: mediaStream,
       handle,
       maxBytes,
-      assertCurrent: readScope?.assertCurrent,
+      assertCurrent: () => {
+        readScope?.assertCurrent();
+        options?.assertCommitAllowed?.();
+      },
     });
     const mime = await detectMime({
       buffer: sniffBuffer,
@@ -607,12 +624,13 @@ export async function saveMediaStream(
   const result = await retryAfterRecreatingDir(
     dir,
     async () => {
-      if (readScope) {
+      if (readScope || options?.assertCommitAllowed) {
         const { writeReadScopeMedia } = await import("./store.read-scope.js");
         return await writeReadScopeMedia({
           dir,
           tempPrefix: `.${baseId}`,
           scope: readScope,
+          assertCommitAllowed: options?.assertCommitAllowed,
           write,
         });
       }

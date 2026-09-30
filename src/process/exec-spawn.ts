@@ -300,6 +300,7 @@ export function shouldSpawnWithShell(params: {
 
 type SpawnCommandOptions = CommandSpawnOptions & {
   baseEnv?: NodeJS.ProcessEnv;
+  executionTimeoutMs?: number;
   /** The command runner routes scope cancellation through its termination owner. */
   inheritScopeCancellation?: boolean;
 };
@@ -323,6 +324,7 @@ export function spawnCommandWithInvocation<
     env,
     windowsVerbatimArguments,
     cancelSignal,
+    executionTimeoutMs,
     inheritScopeCancellation = true,
     ...execaOptions
   } = sourceOptions;
@@ -349,6 +351,10 @@ export function spawnCommandWithInvocation<
   // CLI and other platforms have no broker scope. Independent applications and
   // native descriptors retain their explicitly selected in-process transport.
   const remoteOptions = broker ? brokerExecaOptions(commandOptions) : undefined;
+  if (remoteOptions && executionTimeoutMs !== undefined) {
+    // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
+    remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
+  }
   const child: CommandSubprocess<CommandSpawnOptions> =
     broker && remoteOptions
       ? spawnBrokerCommand(
@@ -381,27 +387,17 @@ export function resolveCommandEnv(params: {
 }): NodeJS.ProcessEnv {
   const baseEnv = params.baseEnv ?? process.env;
   const platform = params.platform ?? process.platform;
-  const argv = params.argv;
-  const shouldSuppressNpmFund = (() => {
-    const cmd = path.basename(argv[0] ?? "");
-    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
-      return true;
-    }
-    if (cmd === "node" || cmd === "node.exe") {
-      const script = argv[1] ?? "";
-      return script.includes("npm-cli.js");
-    }
-    return false;
-  })();
+  const cmd = path.basename(params.argv[0] ?? "");
+  const shouldSuppressNpmFund =
+    cmd === "npm" ||
+    cmd === "npm.cmd" ||
+    cmd === "npm.exe" ||
+    ((cmd === "node" || cmd === "node.exe") && (params.argv[1] ?? "").includes("npm-cli.js"));
 
   const resolvedEnv = mergeProcessEnv([baseEnv, params.env], platform);
   if (shouldSuppressNpmFund) {
-    if (resolvedEnv.NPM_CONFIG_FUND == null) {
-      resolvedEnv.NPM_CONFIG_FUND = "false";
-    }
-    if (resolvedEnv.npm_config_fund == null) {
-      resolvedEnv.npm_config_fund = "false";
-    }
+    resolvedEnv.NPM_CONFIG_FUND ??= "false";
+    resolvedEnv.npm_config_fund ??= "false";
   }
   return markOpenClawExecEnv(resolvedEnv);
 }

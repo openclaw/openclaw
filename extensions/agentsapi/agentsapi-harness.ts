@@ -8,9 +8,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
+import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
 import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
+import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 
 const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
   "exec",
@@ -28,6 +29,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   let closing = false;
   const runningSessions = new Map<string, number>();
   const isolatedRuns = new Map<AbortController, Promise<unknown>>();
+  const promptHistories: AgentsApiPromptHistories = new WeakMap();
   let bindings: ReturnType<typeof createAgentsApiBindings> | undefined;
   const getBindings = () => (bindings ??= createAgentsApiBindings(runtime));
   const assertCurrent = () => {
@@ -136,6 +138,8 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
                 assertLeaseCurrent();
               },
               target,
+              () => runtime.config.current().plugins?.entries?.agentsapi?.config,
+              promptHistories,
             );
           },
         );
@@ -197,38 +201,21 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
     AGENTS_API_NATIVE_TOOL_REQUIREMENTS.some((name) => !runtimeToolAllowed(name))
   ) {
     throw new AgentHarnessPreflightError(
-      "Agents API cannot enforce this run's restrictions on hosted shell, file, or web-search tools.",
+      "Agents API cannot enforce this run's restrictions on native shell, file, or web-search tools.",
       { scope: "harness" },
     );
   }
-  const target = params.sessionTarget;
-  if (
-    !target?.agentId ||
-    !target.sessionId ||
-    !target.sessionKey ||
-    !target.storePath ||
-    target.sessionId !== params.sessionId ||
-    target.agentId !== params.agentId ||
-    target.sessionKey !== params.sessionKey
-  ) {
-    throw new Error("Agents API requires a matching host-prepared session target");
-  }
+  const target = requireAgentsApiSessionTarget(params);
   if (!params.resolvedApiKey) {
     throw new Error("Agents API MVP requires an OpenAI API key");
   }
   if (params.images?.length || params.sandbox) {
     throw new Error(
-      "Agents API MVP supports text and its hosted VM only; images and Gateway sandbox placement are unsupported",
+      "Agents API MVP supports text in its selected execution environment only; images and Gateway sandbox placement are unsupported",
     );
   }
   if (params.contextEngine && params.contextEngine.info.id !== "legacy") {
     throw new Error("Agents API MVP currently supports only the default legacy context engine");
   }
-  return {
-    ...target,
-    agentId: target.agentId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-  };
+  return target;
 }

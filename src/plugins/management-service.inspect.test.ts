@@ -1,13 +1,27 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import type { McpServerConfig } from "../config/types.mcp.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as bundleMcp from "./bundle-mcp.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import {
   emptyMetadataSnapshot,
   hostedFeedDiffsEntry,
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
+import { bindPluginMetadataSnapshotCache, createPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
-const mocks = vi.hoisted(() => ({ metadata: vi.fn(), officialCatalog: vi.fn() }));
+const mocks = vi.hoisted(() => ({ metadata: vi.fn(), officialCatalog: vi.fn(), mcpAuth: vi.fn() }));
+
+vi.mock("../agents/mcp-oauth.js", () => ({
+  readMcpOAuthCredentialsStatuses: (...args: unknown[]) => mocks.mcpAuth(...args),
+}));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
@@ -24,13 +38,254 @@ const { clearManagedPluginCatalogCache } = await import("./management-catalog.js
 const { inspectManagedPlugin } = await import("./management-service.js");
 
 describe("managed plugin inspection", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
     clearManagedPluginCatalogCache();
     mocks.metadata.mockReset();
     mocks.officialCatalog.mockReset();
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
+    mocks.mcpAuth.mockReset();
   });
+
+  it("projects each matching MCP connection's stored OAuth state without credential details", async () => {
+    const snapshot = metadataSnapshot({ enabled: true });
+    const states = [
+      "unauthenticated",
+      "pending-authorization",
+      "requires-authorization",
+      "authorized",
+    ] as const;
+    const servers = Object.fromEntries(
+      states.map((state, i) => [
+        `connection-${i}`,
+        {
+          transport: "streamable-http" as const,
+          url: `https://example.test/${state}`,
+          auth: "oauth" as const,
+        },
+      ]),
+    );
+    snapshot.plugins[0]!.mcpServers = servers;
+    mocks.metadata.mockReturnValue({
+      ...snapshot,
+      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
+    });
+    mocks.mcpAuth.mockResolvedValue(states.map((state) => ({ state, expiresAt: 100 })));
+
+    const inspection = await inspectManagedPlugin({
+      config: { plugins: { entries: { workboard: { enabled: true } } }, mcp: { servers } },
+      pluginId: "workboard",
+      env: {},
+    });
+
+    expect(inspection.mcpAuth).toEqual(
+      states.map((state, i) => ({ serverName: `connection-${i}`, state })),
+    );
+    expect(mocks.mcpAuth).toHaveBeenCalledWith(
+      states.map((state, i) =>
+        expect.objectContaining({
+          serverName: `connection-${i}`,
+          serverUrl: `https://example.test/${state}`,
+          principal: "operator",
+        }),
+      ),
+    );
+  });
+
+  it.each([
+    { enabled: false },
+    { command: "node" },
+    { auth: undefined },
+    { oauth: { identity: "per-requester" as const } },
+    { oauth: { authProfileId: "existing-account" } },
+    { url: "https://other.example.test/mcp" },
+  ])("omits ineligible or unrelated MCP credentials: %j", async (override) => {
+    const server: McpServerConfig = {
+      transport: "streamable-http",
+      url: "https://example.test/mcp",
+      auth: "oauth",
+    };
+    const snapshot = metadataSnapshot({ enabled: true });
+    snapshot.plugins[0]!.mcpServers = { docs: server };
+    mocks.metadata.mockReturnValue({
+      ...snapshot,
+      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
+    });
+
+    const inspection = await inspectManagedPlugin({
+      config: {
+        plugins: { entries: { workboard: { enabled: true } } },
+        mcp: { servers: { docs: { ...server, ...override } } },
+      },
+      pluginId: "workboard",
+      env: {},
+    });
+
+    expect(inspection.mcpAuth).toBeUndefined();
+    expect(mocks.mcpAuth).not.toHaveBeenCalled();
+  });
+
+  it("does not attribute a later plugin's same-name MCP server to the shadowed plugin", async () => {
+    const server = { url: "https://example.test/mcp", auth: "oauth" as const };
+    const snapshot = metadataSnapshot({ enabled: true });
+    snapshot.plugins[0]!.mcpServers = { docs: server };
+    const other = { ...snapshot.plugins[0]!, id: "other" };
+    mocks.metadata.mockReturnValue({
+      ...snapshot,
+      manifestRegistry: { plugins: [...snapshot.plugins, other], diagnostics: [] },
+    });
+
+    const inspection = await inspectManagedPlugin({
+      config: {
+        plugins: { entries: { workboard: { enabled: true }, other: { enabled: true } } },
+        mcp: { servers: { docs: server } },
+      },
+      pluginId: "workboard",
+      env: {},
+    });
+
+    expect(inspection.mcpAuth).toBeUndefined();
+    expect(mocks.mcpAuth).not.toHaveBeenCalled();
+  });
+
+  it("reuses MCP ownership until config or metadata changes while reading OAuth state live", async () => {
+    const server = { url: "https://example.test/mcp", auth: "oauth" as const };
+    const snapshot = metadataSnapshot({ enabled: true });
+    snapshot.plugins[0]!.mcpServers = { docs: server };
+    const other = { ...snapshot.plugins[0]!, id: "other" };
+    const metadata = {
+      ...snapshot,
+      manifestRegistry: { plugins: [...snapshot.plugins, other], diagnostics: [] },
+    };
+    bindPluginMetadataSnapshotCache(metadata, createPluginCache());
+    mocks.metadata.mockReturnValue(metadata);
+    const config: OpenClawConfig = {
+      plugins: { entries: { workboard: { enabled: true }, other: { enabled: false } } },
+      mcp: { servers: { docs: server } },
+    };
+    const inspect = (currentConfig = config) =>
+      inspectManagedPlugin({ config: currentConfig, pluginId: "workboard", env: {} });
+    const load = vi.spyOn(bundleMcp, "loadEnabledBundleMcpConfig");
+    mocks.mcpAuth.mockResolvedValue([{ state: "unauthenticated" }]);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "unauthenticated" }]);
+    mocks.mcpAuth.mockResolvedValue([{ state: "authorized" }]);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
+    expect(load).toHaveBeenCalledOnce();
+    expect(mocks.mcpAuth).toHaveBeenCalledTimes(2);
+
+    const shadowedConfig = {
+      ...config,
+      plugins: { entries: { workboard: { enabled: true }, other: { enabled: true } } },
+    };
+    expect((await inspect(shadowedConfig)).mcpAuth).toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
+    expect(load).toHaveBeenCalledTimes(2);
+
+    const replacement = {
+      ...metadata,
+      manifestRegistry: { plugins: [other], diagnostics: [] },
+    };
+    bindPluginMetadataSnapshotCache(replacement, createPluginCache());
+    mocks.metadata.mockReturnValue(replacement);
+    expect((await inspect(shadowedConfig)).mcpAuth).toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(3);
+    mocks.metadata.mockReturnValue(metadata);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
+  it("omits resolver-owned requester credentials from operator plugin inspection", async () => {
+    const server = { url: "https://example.test/mcp", auth: "oauth" as const };
+    const snapshot = metadataSnapshot({ enabled: true });
+    snapshot.plugins[0]!.mcpServers = { docs: server };
+    mocks.metadata.mockReturnValue({
+      ...snapshot,
+      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.mcpServerConnectionResolvers.push({
+      pluginId: "workboard",
+      source: "/plugins/workboard/index.ts",
+      resolver: { serverName: "docs", resolve: async () => null },
+    });
+
+    const inspection = await withPluginRuntimeRegistryScope(registry, () =>
+      inspectManagedPlugin({
+        config: {
+          plugins: { entries: { workboard: { enabled: true } } },
+          mcp: { servers: { docs: server } },
+        },
+        pluginId: "workboard",
+        env: {},
+      }),
+    );
+
+    expect(inspection.mcpAuth).toBeUndefined();
+    expect(mocks.mcpAuth).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { value: undefined, env: {}, status: "missing" },
+    { value: "private-literal", env: {}, status: "configured" },
+    { value: undefined, env: { ALTERNATIVE_KEY: "private-env" }, status: "configured" },
+    {
+      value: { source: "file", provider: "vault", id: "/private/key" },
+      env: {},
+      status: "configured",
+    },
+    { value: { invalid: true }, env: {}, status: "invalid" },
+    { value: "${WORKBOARD_KEY}", env: {}, status: "unresolved", unresolved: true },
+  ])(
+    "projects only public credential status $status",
+    async ({ value, env, status, unresolved }) => {
+      mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true }));
+      const registry = createEmptyPluginRegistry();
+      registry.webSearchProviders.push({
+        pluginId: "workboard",
+        source: "/plugins/workboard/index.ts",
+        provider: {
+          id: "workboard",
+          label: "Workboard",
+          hint: "Search",
+          placeholder: "",
+          signupUrl: "",
+          credentialPath: "plugins.entries.workboard.config.apiKey",
+          credentialLabel: "Workboard key",
+          envVars: ["WORKBOARD_KEY", "ALTERNATIVE_KEY"],
+          getCredentialValue: () => undefined,
+          setCredentialValue: () => {},
+          createTool: () => null,
+        },
+      });
+      const config: OpenClawConfig = {
+        plugins: { entries: { workboard: { enabled: true, config: { apiKey: value } } } },
+      };
+      if (unresolved) {
+        const path = "plugins.entries.workboard.config.apiKey";
+        setConfigResolutionFacts(
+          config,
+          createConfigResolutionFacts(
+            [{ configPath: path, varName: "WORKBOARD_KEY" }],
+            new Map([[path, "WORKBOARD_KEY"]]),
+          ),
+        );
+      }
+      const inspection = await withPluginRuntimeRegistryScope(registry, () =>
+        inspectManagedPlugin({ config, pluginId: "workboard", env }),
+      );
+      expect(inspection.credentials).toEqual([
+        {
+          path: ["plugins", "entries", "workboard", "config", "apiKey"],
+          label: "Workboard key",
+          envVars: ["WORKBOARD_KEY", "ALTERNATIVE_KEY"],
+          status,
+        },
+      ]);
+    },
+  );
 
   it("inspects bundled plugin metadata with its effective default hook grants", async () => {
     mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true }));

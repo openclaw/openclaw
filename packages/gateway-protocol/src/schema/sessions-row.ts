@@ -30,6 +30,7 @@ export const SessionRunStatusSchema = Type.Union([
   Type.Literal("running"),
   Type.Literal("done"),
   Type.Literal("failed"),
+  Type.Literal("interrupted"),
   Type.Literal("killed"),
   Type.Literal("timeout"),
 ]);
@@ -225,6 +226,8 @@ export const SessionRowSchema = Type.Object(
     participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
+    /** Recipient-local send admission; null explicitly clears a previous restriction. */
+    sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     createdAt: Type.Optional(Type.Number()),
     forkSource: Type.Optional(
       Type.Object({
