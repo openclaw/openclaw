@@ -1,20 +1,18 @@
-// Slack tests cover channels plugin behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackRuntimeContextReader } from "../runtime-policy.js";
+import { registerSlackChannelEvents, registerSlackChannelIdChangedEvent } from "./channels.js";
+import { createSlackSystemEventTestHarness } from "./system-event-test-harness.js";
 
 const { enqueueSystemEventMock, mutateConfigFileMock, readConfigSnapshotMock } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   mutateConfigFileMock: vi.fn(),
   readConfigSnapshotMock: vi.fn(),
 }));
-let registerSlackChannelEvents: typeof import("./channels.js").registerSlackChannelEvents;
-let registerSlackChannelIdChangedEvent: typeof import("./channels.js").registerSlackChannelIdChangedEvent;
-let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueRoutedSystemEvent: (
@@ -63,12 +61,6 @@ function requireChannelHandler(handler: SlackChannelHandler | null): SlackChanne
 
 describe("registerSlackChannelEvents", () => {
   afterEach(() => clearRuntimeConfigSnapshot());
-  beforeAll(async () => {
-    ({ registerSlackChannelEvents, registerSlackChannelIdChangedEvent } =
-      await import("./channels.js"));
-    ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
-  });
-
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
     mutateConfigFileMock.mockReset();

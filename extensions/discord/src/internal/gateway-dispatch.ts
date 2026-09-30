@@ -23,13 +23,13 @@ export function dispatchVoiceGatewayEvent(client: Client, payload: GatewayDispat
 }
 
 export function mapGatewayDispatchData(client: Client, type: string, data: unknown): unknown {
-  const messageCreate: string = GatewayDispatchEvents.MessageCreate;
-  const reactionAdd: string = GatewayDispatchEvents.MessageReactionAdd;
-  const reactionRemove: string = GatewayDispatchEvents.MessageReactionRemove;
-  if (type === messageCreate) {
+  if (type === GatewayDispatchEvents.MessageCreate) {
     return createMessageDispatchData(client, data as MessageCreatePayload);
   }
-  if (type === reactionAdd || type === reactionRemove) {
+  if (
+    type === GatewayDispatchEvents.MessageReactionAdd ||
+    type === GatewayDispatchEvents.MessageReactionRemove
+  ) {
     return createReactionDispatchData(client, data as ReactionPayload);
   }
   return data;
