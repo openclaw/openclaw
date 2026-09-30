@@ -258,15 +258,15 @@ export function buildTurnCollaborationMode(
 export function buildCodexParentLocalInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
-    turnScopedDeveloperInstructions?: string;
+    personaInstructions?: string;
     skillsInstructions?: string;
-    memoryCollaborationInstructions?: string;
+    memoryInstructions?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
-    options.turnScopedDeveloperInstructions,
+    options.personaInstructions,
     options.skillsInstructions,
-    options.memoryCollaborationInstructions,
+    options.memoryInstructions,
   );
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);

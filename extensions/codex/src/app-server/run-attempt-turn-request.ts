@@ -254,11 +254,9 @@ export async function prepareCodexAttemptTurnRequest(
         text: usesSupervisionConnection
           ? ""
           : (buildCodexParentLocalInstructions(runtimeParams, {
-              turnScopedDeveloperInstructions:
-                workspaceBootstrapContext.turnScopedDeveloperInstructions,
+              personaInstructions: workspaceBootstrapContext.personaInstructions,
               skillsInstructions: context.skillsInstructions,
-              memoryCollaborationInstructions:
-                workspaceBootstrapContext.memoryCollaborationInstructions,
+              memoryInstructions: workspaceBootstrapContext.memoryInstructions,
             }) ?? ""),
         signal: runAbortController.signal,
         assertCurrent: () => {

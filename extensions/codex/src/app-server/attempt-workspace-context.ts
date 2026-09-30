@@ -35,15 +35,15 @@ export type CodexWorkspaceBootstrapContext = {
   inheritsAgentWorkspace: boolean;
   promptContextFiles?: EmbeddedContextFile[];
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
-  turnScopedDeveloperInstructionFiles?: EmbeddedContextFile[];
+  personaFiles?: EmbeddedContextFile[];
   memoryReferenceFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolNames?: string[];
   memoryToolRouted?: boolean;
   promptContext?: string;
   threadDeveloperInstructions?: string;
-  turnScopedDeveloperInstructions?: string;
-  memoryCollaborationInstructions?: string;
+  personaInstructions?: string;
+  memoryInstructions?: string;
 };
 
 /** A child baseline reads the bounded workspace snapshot without invoking admission hooks. */
@@ -147,14 +147,14 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     const threadDeveloperInstructionFiles = includeAgentWorkspaceInstructions
       ? prepared.instructionSnapshot.files
       : [];
-    const turnScopedDeveloperInstructionFiles = injectOpenClawContext ? prepared.personaFiles : [];
+    const personaFiles = injectOpenClawContext ? prepared.personaFiles : [];
     return {
       bootstrapFiles,
       contextFiles,
       inheritsAgentWorkspace,
       promptContextFiles,
       threadDeveloperInstructionFiles,
-      turnScopedDeveloperInstructionFiles,
+      personaFiles,
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
       memoryToolNames,
@@ -164,11 +164,9 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
         ? (params.agentWorkspaceDeveloperInstructions ?? prepared.instructionSnapshot.instructions)
         : undefined,
-      turnScopedDeveloperInstructions: injectOpenClawContext
-        ? prepared.personaInstructions
-        : undefined,
-      memoryCollaborationInstructions: injectOpenClawContext
-        ? renderCodexWorkspaceMemoryCollaborationInstructions({
+      personaInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
+      memoryInstructions: injectOpenClawContext
+        ? renderCodexWorkspaceMemoryInstructions({
             files: memoryReferenceFiles,
             toolNames: memoryToolNames,
             memoryRecallInstructions: prepared.memoryRecallInstructions,
@@ -230,7 +228,7 @@ function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
-function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+function renderCodexWorkspaceMemoryInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
   memoryRecallInstructions?: string;

@@ -443,8 +443,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   let parentLocalEgress = false;
   const parentLocalContext = {
-    turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-    memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+    personaInstructions: workspaceBootstrapContext.personaInstructions,
+    memoryInstructions: workspaceBootstrapContext.memoryInstructions,
   };
   // Observability view of the whole developer surface the model sees (reports,
   // trajectory, size estimates). The lifecycle receives the generic policy and the

@@ -273,8 +273,8 @@ async function buildCodexTurnContextForTest(
     appServer: resolveCodexAppServerRuntimeOptions({}),
     developerInstructions: testing.buildDeveloperInstructions(params, { dynamicTools }),
     refreshableInstructions: [
-      workspaceBootstrapContext.turnScopedDeveloperInstructions,
-      workspaceBootstrapContext.memoryCollaborationInstructions,
+      workspaceBootstrapContext.personaInstructions,
+      workspaceBootstrapContext.memoryInstructions,
     ]
       .filter(Boolean)
       .join("\n\n"),

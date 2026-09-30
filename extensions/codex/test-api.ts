@@ -82,7 +82,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
   config?: JsonObject;
   promptText?: string;
   developerInstructionAdditions?: string;
-  turnScopedDeveloperInstructions?: string;
+  personaInstructions?: string;
 }): CodexHarnessPromptSnapshot {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
@@ -93,7 +93,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
   return {
     developerInstructions,
     parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt, {
-      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      personaInstructions: params.personaInstructions,
     }),
     threadStartParams: buildThreadStartParams(params.attempt, {
       cwd: params.cwd,

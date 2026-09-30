@@ -165,7 +165,7 @@ export function buildCodexSystemPromptReport(params: {
       omitReferenceFiles: params.omitWorkspaceReferences,
       developerInstructionFiles: [
         ...(params.workspaceBootstrapContext.threadDeveloperInstructionFiles ?? []),
-        ...(params.workspaceBootstrapContext.turnScopedDeveloperInstructionFiles ?? []),
+        ...(params.workspaceBootstrapContext.personaFiles ?? []),
       ],
       memoryToolRoutedBootstrapFiles:
         params.workspaceBootstrapContext.memoryToolRoutedBootstrapFiles ?? [],

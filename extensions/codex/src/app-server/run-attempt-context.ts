@@ -183,8 +183,8 @@ export async function prepareCodexAttemptContext(
   const refreshableInstructions =
     joinPresentSections(
       skillsInstructions,
-      workspaceBootstrapContext.turnScopedDeveloperInstructions,
-      workspaceBootstrapContext.memoryCollaborationInstructions,
+      workspaceBootstrapContext.personaInstructions,
+      workspaceBootstrapContext.memoryInstructions,
     ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
