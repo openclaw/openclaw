@@ -56,14 +56,15 @@ const SETTINGS_BUCKET = "tlon";
  * Settings-store doesn't support nested objects, so we store as JSON string.
  */
 function parseChannelRules(value: unknown): TlonSettingsStore["channelRules"] {
+  let parsed = value;
   if (typeof value === "string") {
     try {
-      value = JSON.parse(value);
+      parsed = JSON.parse(value);
     } catch {
       return undefined;
     }
   }
-  return isChannelRulesObject(value) ? value : undefined;
+  return isChannelRulesObject(parsed) ? parsed : undefined;
 }
 
 /**
