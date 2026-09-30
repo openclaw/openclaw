@@ -5,7 +5,6 @@ import {
   prepareSandboxProcessCleanup,
   sanitizeEnvVars,
 } from "openclaw/plugin-sdk/sandbox";
-import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexNativeProcessClient } from "../native-process-authority.js";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { resolveFsSandboxPolicy } from "./fs-policy.js";
@@ -493,7 +492,7 @@ function buildEnvFromPolicy(value: unknown): Record<string, string> {
   }
   const policy = value as Record<string, unknown>;
   const inheritedEnv = readEnv(policy.set);
-  const includeOnly = filterStringEntries(policy.includeOnly);
+  const includeOnly = readStringList(policy.includeOnly);
   if (includeOnly.length > 0) {
     const regexes = includeOnly.map(wildcardPatternToRegex);
     for (const key of Object.keys(inheritedEnv)) {
@@ -508,4 +507,10 @@ function buildEnvFromPolicy(value: unknown): Record<string, string> {
 function wildcardPatternToRegex(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/gu, "\\$&");
   return new RegExp(`^${escaped.replaceAll("*", ".*").replaceAll("?", ".")}$`, "iu");
+}
+
+function readStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }

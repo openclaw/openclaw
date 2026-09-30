@@ -1,5 +1,4 @@
-import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -736,5 +735,16 @@ export function readTranscriptEventId(event: TranscriptEvent): string | undefine
 }
 
 export function readEventTimestamp(event: unknown): number | undefined {
-  return parseDateFirstTimestampMs(asOptionalRecord(event)?.timestamp);
+  if (!isRecord(event)) {
+    return undefined;
+  }
+  const value = event.timestamp;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }

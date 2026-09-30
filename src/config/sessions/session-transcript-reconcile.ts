@@ -109,6 +109,10 @@ function prepareReconcileParams(params: SessionTranscriptReconcileParams): Prepa
   };
 }
 
+function reconcileKey(params: OpenClawAgentDatabaseOptions): string {
+  return resolveOpenClawAgentSqlitePath(params);
+}
+
 function captureMemorySource(params: OpenClawAgentDatabaseOptions) {
   const database = getOpenClawAgentDatabaseIfOpen(params);
   return database && isIncognitoOpenClawAgentDatabase(database)
@@ -142,9 +146,9 @@ export async function reconcileSessionTranscriptIndexes(
   return runSessionTranscriptReconcileOperation(
     prepared.generation,
     (operation) => reconcilePreparedTranscriptIndexes(prepared, operation),
-    isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(prepared), prepared)
+    isIncognitoOpenClawAgentSqlitePath(reconcileKey(prepared), prepared)
       ? undefined
-      : { agentId: prepared.agentId, path: resolveOpenClawAgentSqlitePath(prepared) },
+      : { agentId: prepared.agentId, path: reconcileKey(prepared) },
   );
 }
 
@@ -513,7 +517,7 @@ function startPreparedSessionTranscriptIndexReconcile(params: PreparedReconcileP
   if (!isSessionTranscriptReconcileGenerationCurrent(params.generation)) {
     return;
   }
-  const key = resolveOpenClawAgentSqlitePath(params);
+  const key = reconcileKey(params);
   const running = runningReconciles.get(key);
   let runningCurrent = true;
   try {
@@ -624,14 +628,14 @@ function startPreparedSessionTranscriptIndexReconcile(params: PreparedReconcileP
 export function isSessionTranscriptIndexReconcileRunning(
   params: OpenClawAgentDatabaseOptions,
 ): boolean {
-  return runningReconciles.has(resolveOpenClawAgentSqlitePath(params));
+  return runningReconciles.has(reconcileKey(params));
 }
 
 /** Test and maintenance wait hook for an already-scheduled reconcile. */
 export async function waitForSessionTranscriptIndexReconcile(
   params: OpenClawAgentDatabaseOptions,
 ): Promise<void> {
-  await runningReconciles.get(resolveOpenClawAgentSqlitePath(params))?.promise;
+  await runningReconciles.get(reconcileKey(params))?.promise;
 }
 
 /** Test and maintenance drain for scheduled reconciles owned by one state directory. */
@@ -657,7 +661,7 @@ export async function waitForSessionTranscriptProjection(
 ): Promise<void> {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = prepareReconcileParams(toDatabaseOptions(resolved));
-  const key = resolveOpenClawAgentSqlitePath(databaseOptions);
+  const key = reconcileKey(databaseOptions);
   let running = runningReconciles.get(key);
   if (!running) {
     return;
