@@ -4,11 +4,13 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -124,7 +126,7 @@ let active: boolean;
 let onTunnel: (() => void) | undefined;
 let onResult: (() => void) | undefined;
 let sessionId: string;
-let lifecycleRevision: number;
+let lifecycleRevision: string;
 let archivedAt: number | undefined;
 let run: ReturnType<
   typeof vi.fn<(command: WorkerWorkspaceCommand) => ReturnType<NodeWorkerWorkspaceRuntime["exec"]>>
@@ -176,11 +178,12 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mocks.beforeWrite.mockReset();
   gatewayRoot = createWorkspaceFixture("repository-files-gateway-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", gatewayRoot);
   nodeRoot = createWorkspaceFixture("repository-files-node-");
   generation = 1;
   active = true;
   sessionId = identity.sessionId;
-  lifecycleRevision = 0;
+  lifecycleRevision = "original";
   archivedAt = undefined;
   onTunnel = undefined;
   onResult = undefined;
@@ -254,11 +257,23 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseByPathAsync(path.join(gatewayRoot, "state.sqlite"));
+  await closeOpenClawAgentDatabasesAsync(gatewayRoot);
+  vi.unstubAllEnvs();
   removeWorkspaceFixture(nodeRoot);
   removeWorkspaceFixture(gatewayRoot);
 });
 
 async function withCheckpointAcceptance(failCapture = false) {
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    {
+      sessionId,
+      updatedAt: Date.now(),
+      repositoryWorkspaceId: source.workspaceId,
+      lifecycleRevision,
+      archivedAt,
+    },
+  );
   const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
   const placements = createWorkerSessionPlacementStore({ database });
   seedAttachedPlacementEnvironment(database, {
@@ -523,7 +538,7 @@ it.each(["reset", "archive", "lifecycle revision"])(
       } else if (change === "archive") {
         archivedAt = Date.now();
       } else {
-        lifecycleRevision++;
+        lifecycleRevision = `${lifecycleRevision}-next`;
       }
     };
     await expect(
@@ -683,7 +698,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   hostReads.mockImplementation(async (...args) => {
     const result = await originalGitRead(...args);
     if (args[1][1] === "blob") {
-      lifecycleRevision++;
+      lifecycleRevision = `${lifecycleRevision}-next`;
     }
     return result;
   });

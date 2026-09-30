@@ -290,6 +290,18 @@ Child coordination stays in agent context and raw transcripts. The receiving cha
 
 Pass `watch: true` to also register the sender as a state-change watcher of the target: when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince`. Registration happens after successful dispatch, targets the session that actually received the message, and starts at its current state version, so only later changes produce notices. The result reports `watched: true` when registration succeeded. See [Session state awareness](/concepts/session-state).
 
+For a nonblocking follow-up to your existing native child, `watch: true` also
+gives the current requester turn a completion claim before the tool returns.
+Call `sessions_yield` after acceptance to wait for that completion, including
+when the follow-up is queued behind the child's active run. The normal child
+settlement path delivers the result once. Sends without a requester turn keep
+the ordinary state-watch behavior. A watched steer can claim an existing child's
+pending announcing completion for the current turn without creating another
+completion or changing the child's task identity.
+If steering was admitted but its completion can no longer be claimed, the tool
+returns an error with `sentBeforeError: true`. Inspect the target before retrying;
+the guidance was already admitted.
+
 ## Status and orchestration helpers
 
 `session_status` is the lightweight `/status`-equivalent tool for the current or another visible session. It reports usage, time, model/runtime state, and linked background-task context when present. Like `/status`, it can backfill sparse token/cache counters from the latest transcript usage entry, and `model=default` clears a per-session override. Use `sessionKey="current"` for the caller's current session; visible client labels such as `openclaw-tui` are not session keys.

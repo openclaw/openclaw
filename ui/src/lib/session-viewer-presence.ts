@@ -80,11 +80,8 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       snapshot.hello !== null &&
       isGatewayMethodAdvertised(snapshot, SESSION_VIEWERS_SET_METHOD) === true;
     if (!available) {
-      lastHello = null;
-      lastSignature = null;
+      clearReceipt();
       retireRequest();
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
       if (!isActive()) {
         lifecycle.detach();
       }

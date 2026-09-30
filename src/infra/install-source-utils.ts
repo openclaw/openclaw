@@ -1,4 +1,3 @@
-// Resolves and packages install sources for plugin installs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";

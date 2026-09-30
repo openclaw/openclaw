@@ -205,10 +205,7 @@ export type ReplyBackendHandle = {
   isStopped?: () => boolean;
   isAbortable?: () => boolean;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
-  queueMessage?: (
-    text: string,
-    options?: ReplyBackendQueueMessageOptions,
-  ) => Promise<void | ReplyBackendQueueMessageResult>;
+  queueMessage?: ReplyBackendMessageInjection["queueMessage"];
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.
@@ -361,15 +358,7 @@ export type ReplyOperation = {
   /** Capture lineage before a pending barrier outlives this operation's lane. */
   captureOwnedSessionIds(): Set<string>;
   recordActivity(): void;
-  setPhase(
-    next:
-      | "queued"
-      | "waiting_for_deferred_maintenance"
-      | "waiting_for_global_lane"
-      | "preflight_compacting"
-      | "memory_flushing"
-      | "running",
-  ): void;
+  setPhase(next: Exclude<ReplyOperationPhase, "completed" | "failed" | "aborted">): void;
   markWaitingForDeferredMaintenance(): void;
   /** Return a maintenance-waiting operation to queued if the run has not started. */
   markDeferredMaintenanceWaitEnded(): void;

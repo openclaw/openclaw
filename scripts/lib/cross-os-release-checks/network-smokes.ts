@@ -17,14 +17,14 @@ import {
 import { stopGateway } from "./process.ts";
 import { formatError, sleep } from "./shared.ts";
 
-export function buildCrossOsDiscordRoundtripNonces() {
+function buildCrossOsDiscordRoundtripNonces() {
   return {
     outboundNonce: `native-cross-os-outbound-${randomUUID()}`,
     inboundNonce: `native-cross-os-inbound-${randomUUID()}`,
   };
 }
 
-export function buildDiscordSmokeGuildsConfig(guildId: string, channelId: string) {
+function buildDiscordSmokeGuildsConfig(guildId: string, channelId: string) {
   return {
     [guildId]: {
       channels: {

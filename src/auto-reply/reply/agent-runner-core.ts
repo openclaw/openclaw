@@ -41,6 +41,7 @@ import {
 } from "./agent-runner-failure-reply.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
@@ -487,12 +488,7 @@ export type RunReplyAgentParams = {
   toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;
   blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
-  };
+  blockReplyChunking?: ReturnType<typeof resolveBlockStreamingChunking>;
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;

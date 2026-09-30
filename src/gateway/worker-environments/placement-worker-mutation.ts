@@ -1,5 +1,6 @@
 import {
   createSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
@@ -15,6 +16,7 @@ export function createPlacementWorkerMutation<Receipt>(params: {
   nativeLocation: string;
   orderedAdmission?: boolean;
   assertCurrent?: () => void;
+  admissionFacts?(request: SqliteWorkerAdmissionRequest): unknown;
   stageCommit(facts: unknown): Publication | undefined;
   readReceipt(facts: unknown, publication: Publication | undefined): Receipt | undefined;
   publish?(receipt: Receipt): void;
@@ -60,8 +62,11 @@ export function createPlacementWorkerMutation<Receipt>(params: {
                   throw new Error(`${params.label} admission is out of order`);
                 }
                 check();
+                const facts = params.admissionFacts
+                  ? params.admissionFacts(request)
+                  : request.facts;
                 if (request.stage === "commit") {
-                  publication = params.stageCommit(request.facts) ?? publication;
+                  publication = params.stageCommit(facts) ?? publication;
                 }
                 if (!grant()) {
                   publication?.rollback();

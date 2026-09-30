@@ -22,12 +22,12 @@ import {
   prepareStateDatabaseInitialization,
   type StateDatabaseInitialization,
 } from "./openclaw-state-db-initialization.js";
-import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateSchemaRepairAllowed } from "./openclaw-state-db-schema-policy.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 
 // Native Swift stores may create only these canonical objects before Node owns schema bootstrap.

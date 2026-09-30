@@ -243,7 +243,7 @@ describe("worker placement idle suspension", () => {
         }
       } else if (kind === "reconciling-result") {
         const basePack = Buffer.from("idle workspace journal");
-        placements.beginWorkspaceReconciliation(
+        await placements.beginWorkspaceReconciliation(
           {
             sessionId: active.sessionId,
             environmentId: active.environmentId,

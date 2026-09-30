@@ -152,20 +152,19 @@ function createSessionPatchHandler(
         return;
       }
       if (request.many) {
-        const outcomes: SessionsPatchManyResult["outcomes"] = [];
         diagnostics?.scope("response");
-        for (const [index, outcome] of executed.outcomes.entries()) {
-          const target = targets[index]!;
-          const identity = {
-            key: target.key,
-            ...(target.agentId ? { agentId: target.agentId } : {}),
-          };
-          outcomes.push(
-            outcome.ok
+        const outcomes: SessionsPatchManyResult["outcomes"] = executed.outcomes.map(
+          (outcome, index) => {
+            const target = targets[index]!;
+            const identity = {
+              key: target.key,
+              ...(target.agentId ? { agentId: target.agentId } : {}),
+            };
+            return outcome.ok
               ? { ok: true, ...identity }
-              : { ok: false, ...identity, error: outcome.error },
-          );
-        }
+              : { ok: false, ...identity, error: outcome.error };
+          },
+        );
         respond(true, { outcomes }, undefined);
         return;
       }

@@ -54,7 +54,6 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         let watchdogTimeout = Self.watchdogTimeoutSeconds(
             text: trimmed,
             language: language ?? utterance.voice?.language)
-        self.watchdog?.cancel()
         self.watchdog = Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(watchdogTimeout * 1_000_000_000))

@@ -384,17 +384,17 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
           base: snapshot.base,
           current: snapshot.current,
           journal: {
-            load: () => undefined,
-            begin: (journal) => {
+            load: async () => undefined,
+            begin: async (journal) => {
               update({
                 journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
                 journal_pack: journal.basePack,
               });
             },
-            abort: () => {
+            abort: async () => {
               update({ journal_json: null, journal_pack: null });
             },
-            commit: () => {
+            commit: async () => {
               if (!accepted) {
                 throw new Error("Local workspace acceptance is missing");
               }

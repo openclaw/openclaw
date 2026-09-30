@@ -1,4 +1,3 @@
-// Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
 import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";

@@ -36,7 +36,6 @@ import {
   parseSessionDeliveryRoute,
 } from "../../sessions/session-key-utils.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
-import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -69,10 +68,7 @@ import {
   PlacedSessionsSendSchema,
   PLACED_SESSIONS_SEND_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
-import {
-  prepareSessionsSendFollowup,
-  startSessionsSendFollowup,
-} from "./sessions-send-followup.js";
+import { dispatchSessionsSendFollowup } from "./sessions-send-followup.js";
 import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
@@ -82,7 +78,6 @@ import {
   isConfiguredAgentMainSessionKey,
   notifySessionsSendSession,
   resolveConfiguredAgentMainSessionKey,
-  trySessionsSendActiveRunDelivery,
 } from "./sessions-send-tool.delivery.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
@@ -638,22 +633,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             targetSessionEntry,
             targetAcpMeta,
           );
-          // Register watches only after successful dispatch, using any Cron fallback's actual target.
-          const watchRequested = params.watch === true;
-          const registerWatchIfRequested = (targetSessionKey: string) => {
-            const watched =
-              watchRequested &&
-              !expectedSessionId &&
-              replyRequesterSessionKey &&
-              replyRequesterSessionKey !== targetSessionKey
-                ? registerSessionStateWatch({
-                    watcherSessionKey: replyRequesterSessionKey,
-                    targetSessionKey,
-                    targetAgentId,
-                  })
-                : false;
-            return watchRequested ? { watched } : {};
-          };
           const agentMessageContext =
             requesterIsSubagent || targetIsSubagent
               ? undefined
@@ -734,7 +713,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 : "peer";
 
           const ownChild = targetSessionEntry?.spawnedBy === effectiveRequesterKey;
-          const startParams: Parameters<typeof startSessionsSendFollowup>[1] = {
+          const startParams: Parameters<typeof dispatchSessionsSendFollowup>[0] = {
             cfg,
             callGateway: gatewayCall,
             runId,
@@ -747,25 +726,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             allowActiveRunQueueDelivery: timeoutSeconds === 0,
             expectedSessionId,
           };
-          const activeDelivery = await trySessionsSendActiveRunDelivery(startParams, ownChild);
-          const followup =
-            !("ok" in activeDelivery) &&
-            replyMode === "one-way" &&
-            ownChild &&
-            // Key-only DM rerouting keeps its run-scoped contract, not new authority for another key.
-            replyRequesterSessionKey === effectiveRequesterKey &&
-            replyRequesterSessionKey
-              ? await prepareSessionsSendFollowup({
-                  withRequesterAuthority,
-                  requesterTurnRunId: opts?.requesterTurnRunId,
-                  runId,
-                  requesterAgentId,
-                  requesterSessionKey: replyRequesterSessionKey,
-                  targetAgentId,
-                  targetSessionKey: resolvedKey,
-                })
-              : undefined;
-          const replyContext: Parameters<typeof startSessionsSendFollowup>[2] = {
+          const replyContext: Parameters<typeof dispatchSessionsSendFollowup>[1] = {
             callGateway: gatewayCall,
             targetSessionKey: resolvedKey,
             targetAgentId,
@@ -781,21 +742,26 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             requesterOrigin,
             requesterChannel,
           };
-          const { start, completion } =
-            "ok" in activeDelivery
-              ? { start: activeDelivery, completion: undefined }
-              : await startSessionsSendFollowup(
-                  followup,
-                  { ...startParams, ...activeDelivery },
-                  replyContext,
-                );
+          const { start, completion, registryCompletion, watchField } =
+            await dispatchSessionsSendFollowup(startParams, replyContext, {
+              ownChild,
+              nativeChild: !targetAcpMeta,
+              requesterSessionKey: effectiveRequesterKey,
+              requesterAgentId,
+              requesterTurnRunId: opts?.requesterTurnRunId,
+              withRequesterAuthority,
+              watch: params.watch === true,
+            });
           if (!start.ok) {
             return start.result;
           }
           const acceptedTargetSessionKey = start.a2aSessionKey ?? resolvedKey;
           // Steering keeps its active owner; an inline child reply is already delivered.
           const delayedDelivery = {
-            status: replyMode && start.targetDisposition === "queued" ? "pending" : "skipped",
+            status:
+              registryCompletion || (replyMode && start.targetDisposition === "queued")
+                ? "pending"
+                : "skipped",
             mode: "announce",
           } as const;
           const delivery =
@@ -835,7 +801,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             log.warn("failed to record session participant", { error });
           }
           runId = start.runId;
-          const watchField = registerWatchIfRequested(acceptedTargetSessionKey);
           const accepted = (acceptedDelivery: typeof delayedDelivery) =>
             jsonResult({
               runId,
@@ -857,7 +822,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               runId,
               completion,
               reply,
-              skip: (reply ? delivery : delayedDelivery).status === "skipped",
+              skip: registryCompletion || (reply ? delivery : delayedDelivery).status === "skipped",
               targetSessionKey: acceptedTargetSessionKey,
               displayKey: start.a2aSessionKey ?? displayKey,
               notifyRequesterOnWaitFailure:

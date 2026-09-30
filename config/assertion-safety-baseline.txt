@@ -1263,7 +1263,7 @@ src/acp/server.ts	2
 src/acp/session-mapper.ts	1
 src/acp/tool-status.ts	1
 src/acp/translator.agent-events.ts	11
-src/acp/translator.prompt-stream.ts	9
+src/acp/translator.prompt-stream.ts	7
 src/acp/translator.replay.ts	1
 src/acp/translator.session-lifecycle.ts	1
 src/acp/translator.session-list.ts	1
@@ -1673,7 +1673,6 @@ src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
 src/auto-reply/reply/commands-acp/diagnostics.ts	2
-src/auto-reply/reply/commands-acp/shared.ts	1
 src/auto-reply/reply/commands-allowlist.ts	6
 src/auto-reply/reply/commands-config.ts	1
 src/auto-reply/reply/commands-context-report.ts	1
@@ -2213,7 +2212,7 @@ src/gateway/server-methods/approval-shared.ts	1
 src/gateway/server-methods/approval.ts	2
 src/gateway/server-methods/attachment-normalize.ts	1
 src/gateway/server-methods/base-hash.ts	1
-src/gateway/server-methods/channels.ts	12
+src/gateway/server-methods/channels.ts	2
 src/gateway/server-methods/chat-abort-authorization.ts	3
 src/gateway/server-methods/chat-assistant-content.ts	1
 src/gateway/server-methods/chat-broadcast.ts	1
@@ -2229,7 +2228,6 @@ src/gateway/server-methods/config.ts	4
 src/gateway/server-methods/cron.ts	3
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3
-src/gateway/server-methods/exec-approval.ts	2
 src/gateway/server-methods/exec-approvals.ts	2
 src/gateway/server-methods/mcp-app.ts	1
 src/gateway/server-methods/memory-search.ts	3
@@ -2254,7 +2252,6 @@ src/gateway/server-methods/sessions-create.ts	1
 src/gateway/server-methods/sessions-messaging.ts	3
 src/gateway/server-methods/sessions-patch-engine.ts	1
 src/gateway/server-methods/skills-workspace-handler.ts	1
-src/gateway/server-methods/skills.ts	3
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
 src/gateway/server-methods/task-suggestions.ts	5
@@ -2503,7 +2500,7 @@ src/logging/config.ts	2
 src/logging/console.ts	4
 src/logging/diagnostic-run-activity.ts	1
 src/logging/diagnostic-session-recovery-coordinator.ts	1
-src/logging/diagnostic-stability-bundle.ts	6
+src/logging/diagnostic-stability-bundle.ts	3
 src/logging/diagnostic-stability.ts	2
 src/logging/diagnostic-support-redaction.ts	1
 src/logging/diagnostic.ts	1
@@ -2516,7 +2513,7 @@ src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
-src/logging/subsystem.ts	4
+src/logging/subsystem.ts	3
 src/mcp/channel-bridge.ts	4
 src/mcp/channel-shared.ts	2
 src/mcp/codex-supervision-tools-serve.ts	6
@@ -2609,12 +2606,11 @@ src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	3
-src/plugin-sdk/provider-onboard.ts	5
+src/plugin-sdk/provider-onboard.ts	3
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	4
 src/plugin-sdk/qa-channel-protocol.ts	1
-src/plugin-sdk/qa-lab.ts	2
 src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
 src/plugin-sdk/runtime-store.ts	2
@@ -2929,8 +2925,7 @@ src/wizard/setup.ts	1
 src/worker/inference-stream.runtime.ts	4
 src/worker/launch-descriptor.ts	5
 src/worker/node-workspace-protocol.ts	1
-src/worker/worker-connection-admission.ts	2
-src/worker/worker-connection-frames.ts	4
+src/worker/worker-connection-frames.ts	3
 src/worker/worker-process.ts	1
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/app-navigation.ts	1

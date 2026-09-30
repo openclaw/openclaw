@@ -1,10 +1,16 @@
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
+import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (isWorkspaceJournalReadCommand(command)) {
+    return command.type === "placementJournals.owners"
+      ? { ...command }
+      : { ...command, owner: { ...command.owner } };
+  }
   if (command.type === "workerPlacements.changeSnapshot" && command.profileIds) {
     return { ...command, profileIds: [...command.profileIds] };
   }
@@ -183,6 +189,9 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
 }
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
+  if (isWorkspaceJournalReadCommand(command)) {
+    return Buffer.byteLength(JSON.stringify(command), "utf8");
+  }
   let bytes = Buffer.byteLength(command.type, "utf8");
   if (command.type === "cron.activeReceiptOwners") {
     return bytes + Buffer.byteLength(command.agentId, "utf8");

@@ -79,6 +79,7 @@ import {
   type EmbeddedRunRegistration,
   type EmbeddedRunWaiter,
   type EmbeddedAgentQueueFailureReason,
+  type EmbeddedAgentQueueMessageOutcome,
 } from "./run-state.js";
 import {
   canSteerEmbeddedRunDuringCompaction,
@@ -86,32 +87,16 @@ import {
   isEmbeddedRunHandleSupersedable,
 } from "./runs.probes.js";
 
-export type { EmbeddedAgentQueueHandle, EmbeddedAgentQueueMessageOptions } from "./run-state.js";
+export type {
+  EmbeddedAgentQueueHandle,
+  EmbeddedAgentQueueMessageOptions,
+  EmbeddedAgentQueueMessageOutcome,
+} from "./run-state.js";
 
 export type EmbeddedRunTimeoutRecoveryMarker = {
   sessionId: string;
   recoveryToken: symbol;
 };
-
-export type EmbeddedAgentQueueMessageOutcome =
-  | {
-      queued: true;
-      sessionId: string;
-      target: "embedded_run" | "reply_run";
-      gatewayHealth: "live";
-      /** Input is non-replayable, but its delivery or commitment could not be confirmed. */
-      transcriptCommit?: "unconfirmed";
-      errorMessage?: string;
-      deliveredAtMs?: number;
-      enqueuedAtMs?: number;
-    }
-  | {
-      queued: false;
-      sessionId: string;
-      reason: EmbeddedAgentQueueFailureReason;
-      gatewayHealth: "live";
-      errorMessage?: string;
-    };
 
 type PreparedEmbeddedAgentQueueMessage =
   | {
@@ -124,6 +109,7 @@ type PreparedEmbeddedAgentQueueMessage =
     }
   | {
       kind: "embedded_run";
+      runId?: string;
       queueMessage: EmbeddedAgentQueueHandle["queueMessage"];
       options: EmbeddedAgentQueueMessageOptions;
     };
@@ -661,6 +647,7 @@ async function queueEmbeddedAgentMessageAsync(
       sessionId,
       target: "embedded_run",
       gatewayHealth: "live",
+      ...(prepared.kind === "embedded_run" && prepared.runId ? { runId: prepared.runId } : {}),
       transcriptCommit: "unconfirmed",
       errorMessage,
       enqueuedAtMs,
@@ -734,6 +721,7 @@ async function queueEmbeddedAgentMessageAsync(
       sessionId,
       target: "embedded_run",
       gatewayHealth: "live",
+      ...(prepared.runId ? { runId: prepared.runId } : {}),
       ...(deliveredAtMs !== undefined ? { deliveredAtMs } : {}),
       enqueuedAtMs,
     };
@@ -855,7 +843,12 @@ function prepareEmbeddedAgentQueueMessage(
   ) {
     return reject("no_active_run");
   }
-  return { kind: "embedded_run", queueMessage: injection.queueMessage, options: backendOptions };
+  return {
+    kind: "embedded_run",
+    runId: handle.runId,
+    queueMessage: injection.queueMessage,
+    options: backendOptions,
+  };
 }
 
 function revokeCompletionClaim(sessionId: string, runId?: string): void {
@@ -1809,33 +1802,6 @@ async function forceClearEmbeddedAgentRun(
 
 const testing = {
   persistForceClearedEmbeddedRunTerminalState,
-  resetActiveEmbeddedRuns() {
-    for (const handle of ACTIVE_EMBEDDED_RUNS.values()) {
-      EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(handle);
-    }
-    for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
-      for (const waiter of waiters) {
-        if (waiter.timer) {
-          clearTimeout(waiter.timer);
-        }
-        waiter.resolve(!waiter.handle);
-      }
-    }
-    EMBEDDED_RUN_WAITERS.clear();
-    ACTIVE_EMBEDDED_RUNS.clear();
-    ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.clear();
-    for (const claim of EMBEDDED_RUN_COMPLETION_CLAIMS.values()) {
-      claim.settleRegistration(undefined);
-    }
-    EMBEDDED_RUN_COMPLETION_CLAIMS.clear();
-    RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.clear();
-    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
-    ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.clear();
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
-  },
 };
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

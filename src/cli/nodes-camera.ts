@@ -1,4 +1,3 @@
-// Camera payload validation and artifact writers for node media commands.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";

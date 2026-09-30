@@ -353,8 +353,8 @@ describe("gateway server chat", () => {
     });
   });
 
-  const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
-    const res = await rpcReq(ws, "agent.wait", {
+  const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000, socket = ws) => {
+    const res = await rpcReq(socket, "agent.wait", {
       runId,
       timeoutMs,
     });
@@ -362,10 +362,10 @@ describe("gateway server chat", () => {
     expect(res.payload?.status, JSON.stringify(res.payload)).toBe("ok");
     return res;
   };
-  const waitForAgentRunDrained = async (runId: string) => {
+  const waitForAgentRunDrained = async (runId: string, socket = ws) => {
     await requestExecution.waitForCompletion(runId);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-    await waitForAgentRunOk(runId, 0);
+    await waitForAgentRunOk(runId, 0, socket);
   };
   const abortChatRun = async (runId: string) => {
     const res = await rpcReq(ws, "chat.abort", {
@@ -1675,12 +1675,7 @@ describe("gateway server chat", () => {
         });
         expect(sendRes.ok).toBe(true);
 
-        const waitRes = await rpcReq(scopedWs, "agent.wait", {
-          runId: "idem-write-scope-verbose-no-persist",
-          timeoutMs: 1_000,
-        });
-        expect(waitRes.ok).toBe(true);
-        expect(waitRes.payload?.status).toBe("ok");
+        await waitForAgentRunDrained("idem-write-scope-verbose-no-persist", scopedWs);
 
         const sessionStorePath = testState.sessionStorePath;
         if (!sessionStorePath) {

@@ -1,4 +1,3 @@
-// CLI container targeting: parse --container and re-exec the command inside Docker/Podman.
 import { spawnSync } from "node:child_process";
 import { isIP } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";

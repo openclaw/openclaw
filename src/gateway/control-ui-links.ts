@@ -1,4 +1,3 @@
-// Control UI link builder for local, LAN, tailnet, and custom gateway binds.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
 import {

@@ -360,10 +360,6 @@ function collectQueuedPromptMedia(
   };
 }
 
-function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
-  return item.currentInboundEventKind === "room_event" || item.currentInboundAudio === true;
-}
-
 function buildCollectTranscriptInput(
   items: FollowupRun[],
   messages?: (PersistedUserTurnMessage | undefined)[],
@@ -494,7 +490,8 @@ function requiresIndividualCollectDrain(item: FollowupRun): boolean {
     item.disableCollectBatching === true ||
     item.run.skillWorkshopProposalRevision !== undefined ||
     item.run.skillLibraryAuthoring !== undefined ||
-    hasRuntimeOnlyFollowupMetadata(item)
+    item.currentInboundEventKind === "room_event" ||
+    item.currentInboundAudio === true
   );
 }
 
@@ -675,8 +672,6 @@ async function runQueueSummaryDelivery(
         });
         return false;
       }
-    }
-    if (!admitted) {
       consumeQueueSummaryDelivery(queue, delivery);
     }
     return true;
@@ -1165,7 +1160,8 @@ export function scheduleFollowupDrain(
               activeGroupItems.some((item) =>
                 hasExclusiveTurnAdmission(item.turnAdoptionLifecycle),
               );
-            const consumeAdmittedGroup = () => {
+            const admitGroupSources = async () => {
+              await Promise.all(activeGroupItems.map((item) => admitFollowupRunLifecycle(item)));
               cancellation.admit();
               admitted = true;
               removeQueuedItemsByRef(queue.items, activeGroupItems);
@@ -1174,10 +1170,6 @@ export function scheduleFollowupDrain(
                   retireFollowupRunCancellation(item);
                 }
               }
-            };
-            const admitGroupSources = async () => {
-              await Promise.all(activeGroupItems.map((item) => admitFollowupRunLifecycle(item)));
-              consumeAdmittedGroup();
             };
             const completeGroup = () => {
               removeQueuedItemsByRef(queue.items, activeGroupItems);
