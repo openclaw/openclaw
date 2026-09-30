@@ -119,21 +119,6 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   getPendingReplacement: () => getBlockingReplacement()?.promise,
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
-const remoteCatalogPublication: configuredRefresh.PreparedModelRuntimeCatalogPublicationHost = {
-  owners,
-  agentBuildCompletions,
-  publicationQueue,
-  replyDispatchPublication,
-  captureLifetime: captureModelRuntimeLifetime,
-  getEpoch: () => refreshRequestEpoch,
-  getCancellationSignal: () => refreshCancellation.signal,
-  getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
-  getBuildTimeoutMs: () => modelRuntimeBuildTimeoutMs,
-};
-export const applyRemoteModelCatalogUpdate =
-  configuredRefresh.applyRemoteModelCatalogUpdateNow.bind(null, remoteCatalogPublication);
-export const advancePreparedModelRuntimeConfig =
-  configuredRefresh.advancePreparedModelRuntimeConfigNow.bind(null, remoteCatalogPublication);
 
 let releaseProcessLifetime: (() => void) | undefined;
 function captureModelRuntimeLifetime(): () => void {
@@ -159,8 +144,7 @@ export function cancelPreparedModelRuntimeRefresh(): void {
 
 async function closeModelRuntime(error: Error): Promise<void> {
   refreshRequestEpoch += 1;
-  remoteCatalogPublication.pending?.controller.abort(error);
-  remoteCatalogPublication.pending = undefined;
+  configuredRefresh.cancelRemoteModelCatalogAdoption(remoteCatalogPublication, error);
   authPublication.reset(error);
   pendingModelRuntimeReplacement?.reject(error);
   pendingModelRuntimeReplacement = undefined;
@@ -408,6 +392,18 @@ const preparedModelRuntimeLeaseContext = {
   getGatewayLifecycleActive: () => gatewayLifecycleActive,
   getPendingReplacement: getBlockingReplacement,
 };
+const remoteCatalogPublication: configuredRefresh.PreparedModelRuntimeCatalogPublicationHost = {
+  ...preparedModelRuntimeLeaseContext,
+  publicationQueue,
+  replyDispatchPublication,
+  getEpoch: () => refreshRequestEpoch,
+  getCancellationSignal: () => refreshCancellation.signal,
+  getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
+};
+export const applyRemoteModelCatalogUpdate =
+  configuredRefresh.applyRemoteModelCatalogUpdateNow.bind(null, remoteCatalogPublication);
+export const advancePreparedModelRuntimeConfig =
+  configuredRefresh.advancePreparedModelRuntimeConfigNow.bind(null, remoteCatalogPublication);
 
 /** Acquires a run generation from configured facts; full catalog discovery is explicit. */
 export async function acquireAgentRunPreparedModelRuntime(
