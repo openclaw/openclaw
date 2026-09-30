@@ -431,6 +431,12 @@ describe("canonical transcript archive batch transactions", () => {
       rename.mockRestore();
       expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(1);
       expect(
+        transcriptDirectiveArchivesNeedMigration(f.database, {
+          generation: "g",
+          sessionId: "s99999",
+        }),
+      ).toBe(true);
+      expect(
         f.database
           .prepare(
             "SELECT published_at FROM session_transcript_archives WHERE session_id = 's00033'",
@@ -443,12 +449,92 @@ describe("canonical transcript archive batch transactions", () => {
       ).toBe(0);
       expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
       expect(
+        transcriptDirectiveArchivesNeedMigration(f.database, {
+          generation: "g",
+          sessionId: "s99999",
+        }),
+      ).toBe(false);
+      expect(
         f.database
           .prepare(
             "SELECT count(*) AS count FROM session_transcript_archives WHERE published_at = 123",
           )
           .get()?.count,
       ).toBe(35);
+    } finally {
+      f.close();
+    }
+  });
+
+  it("keeps a missing-file receipt across later batches until its copy returns", async () => {
+    const f = fixture(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
+    try {
+      const missingPath = path.join(f.archiveDirectory, "archive-1.jsonl");
+      let leaveMissing = false;
+      const prepareFile = (archivePath: string) => {
+        if (leaveMissing && archivePath === missingPath) {
+          return;
+        }
+        if (!fs.existsSync(archivePath)) {
+          fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+          fs.writeFileSync(archivePath, originalContent);
+        }
+      };
+      await expect(
+        f.migrate({
+          transformContent: changeContent,
+          onArchive: prepareFile,
+          writeCursor: () => {
+            throw new Error("cursor write failed");
+          },
+        }),
+      ).rejects.toThrow("cursor write failed");
+      fs.unlinkSync(missingPath);
+      leaveMissing = true;
+
+      const retry = await f.migrate({ transformContent: changeContent, onArchive: prepareFile });
+      expect(retry.rewrittenArchives).toBe(3);
+      expect(retry.warnings[0]).toContain("Missing 1 canonical transcript archive file(s)");
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(1);
+      expect(
+        transcriptDirectiveArchivesNeedMigration(f.database, {
+          generation: "g",
+          sessionId: "s99999",
+        }),
+      ).toBe(true);
+      expect(
+        f.database
+          .prepare(
+            "SELECT published_at FROM session_transcript_archives WHERE session_id = 's00001'",
+          )
+          .get()?.published_at,
+      ).toBeNull();
+      expect(
+        f.database
+          .prepare(
+            "SELECT published_at FROM session_transcript_archives WHERE session_id = 's00034'",
+          )
+          .get()?.published_at,
+      ).toBe(123);
+
+      fs.writeFileSync(missingPath, originalContent);
+      const recovered = await f.migrate({ transformContent: changeContent });
+      expect(recovered.rewrittenArchives).toBe(0);
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
+      expect(
+        transcriptDirectiveArchivesNeedMigration(f.database, {
+          generation: "g",
+          sessionId: "s99999",
+        }),
+      ).toBe(false);
+      expect(
+        f.database
+          .prepare(
+            "SELECT published_at FROM session_transcript_archives WHERE session_id = 's00001'",
+          )
+          .get()?.published_at,
+      ).toBe(123);
+      expect(fs.readFileSync(missingPath)).toEqual(archiveBlob(f.database, "s00001"));
     } finally {
       f.close();
     }

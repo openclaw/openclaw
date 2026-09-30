@@ -71,9 +71,18 @@ type ArchiveRowPlan = {
   sessionId: string;
 };
 
-type ArchiveRecoveryJournal = {
-  rows: { generation: string; nextSha256: string; publishedAt: number; sessionId: string }[];
+type ArchiveRecoveryRow = {
+  generation: string;
+  nextSha256: string;
+  publishedAt: number;
+  sessionId: string;
 };
+
+type ArchiveRecoveryJournal = { rows: ArchiveRecoveryRow[] };
+
+function archiveRecoveryRowKey(row: Pick<ArchiveRecoveryRow, "generation" | "sessionId">): string {
+  return `${row.sessionId}\u0000${row.generation}`;
+}
 
 function readArchiveRecoveryJournal(
   database: DatabaseSync,
@@ -127,15 +136,24 @@ function writeArchiveRecoveryJournal(
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
   executeSqliteQuerySync(
     database,
-    db.insertInto("schema_meta").values({
-      agent_id: agentId,
-      app_version: JSON.stringify(journal),
-      created_at: now,
-      meta_key: recoveryKey,
-      role: "agent",
-      schema_version: 1,
-      updated_at: now,
-    }),
+    db
+      .insertInto("schema_meta")
+      .values({
+        agent_id: agentId,
+        app_version: JSON.stringify(journal),
+        created_at: now,
+        meta_key: recoveryKey,
+        role: "agent",
+        schema_version: 1,
+        updated_at: now,
+      })
+      .onConflict((conflict) =>
+        conflict.column("meta_key").doUpdateSet({
+          agent_id: agentId,
+          app_version: JSON.stringify(journal),
+          updated_at: now,
+        }),
+      ),
   );
 }
 
@@ -381,6 +399,7 @@ function finalizeArchiveCursor(params: {
   database: DatabaseSync;
   fileCurrent: boolean;
   planned: ArchiveRowPlan;
+  recoveredPublishedAt?: number;
   writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
 }): void {
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(params.database);
@@ -401,12 +420,17 @@ function finalizeArchiveCursor(params: {
         `Transcript archive changed before migration commit for ${params.planned.sessionId}`,
       );
     }
-    if (params.planned.changed && params.planned.publishedAt !== null && params.fileCurrent) {
+    const publishedAt = params.planned.publishedAt ?? params.recoveredPublishedAt;
+    if (
+      (params.planned.changed || params.recoveredPublishedAt !== undefined) &&
+      publishedAt !== undefined &&
+      params.fileCurrent
+    ) {
       executeSqliteQuerySync(
         params.database,
         db
           .updateTable("session_transcript_archives")
-          .set({ published_at: params.planned.publishedAt })
+          .set({ published_at: publishedAt })
           .where("session_id", "=", params.planned.sessionId)
           .where("generation", "=", params.planned.generation)
           .where("archive_sha256", "=", params.planned.nextSha256),
@@ -423,6 +447,7 @@ function finalizeArchiveCursor(params: {
 // The media caller starts from the beginning on every run, and ordinary archive
 // retention or insertion may change which rows fit in a listed page.
 function recoverArchivePublication(params: {
+  agentId: string;
   archiveDirectory: string;
   database: DatabaseSync;
   onArchive?: (archivePath: string) => void;
@@ -434,12 +459,8 @@ function recoverArchivePublication(params: {
     return;
   }
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(params.database);
-  const ready: {
-    generation: string;
-    nextSha256: string;
-    publishedAt: number;
-    sessionId: string;
-  }[] = [];
+  const ready: ArchiveRecoveryRow[] = [];
+  const unresolved: ArchiveRecoveryRow[] = [];
   for (const recorded of journal.rows) {
     const row = executeSqliteQueryTakeFirstSync(
       params.database,
@@ -466,6 +487,8 @@ function recoverArchivePublication(params: {
     });
     if (fileCurrent) {
       ready.push(recorded);
+    } else {
+      unresolved.push(recorded);
     }
   }
   runSqliteImmediateTransactionSync(
@@ -484,7 +507,13 @@ function recoverArchivePublication(params: {
             .where("published_at", "is", null),
         );
       }
-      clearArchiveRecoveryJournal(params.database, params.recoveryKey);
+      if (unresolved.length > 0) {
+        writeArchiveRecoveryJournal(params.database, params.agentId, params.recoveryKey, {
+          rows: unresolved,
+        });
+      } else {
+        clearArchiveRecoveryJournal(params.database, params.recoveryKey);
+      }
       assertAgentDatabaseMaintenanceAuthority();
     },
     {
@@ -510,6 +539,7 @@ export async function migrateCanonicalTranscriptArchives(
     path: params.pathname,
   });
   recoverArchivePublication({
+    agentId: params.agentId,
     archiveDirectory,
     database: params.database,
     onArchive: params.onArchive,
@@ -572,7 +602,18 @@ export async function migrateCanonicalTranscriptArchives(
             : [],
         );
         if (rows.length > 0) {
-          writeArchiveRecoveryJournal(params.database, params.agentId, recoveryKey, { rows });
+          const pending = new Map(
+            (readArchiveRecoveryJournal(params.database, recoveryKey)?.rows ?? []).map((row) => [
+              archiveRecoveryRowKey(row),
+              row,
+            ]),
+          );
+          for (const row of rows) {
+            pending.set(archiveRecoveryRowKey(row), row);
+          }
+          writeArchiveRecoveryJournal(params.database, params.agentId, recoveryKey, {
+            rows: [...pending.values()],
+          });
         }
         assertAgentDatabaseMaintenanceAuthority();
         return result;
@@ -598,20 +639,39 @@ export async function migrateCanonicalTranscriptArchives(
       }
       return fileCurrent;
     });
-    // Cursor progress and timestamp restoration are atomic with journal removal.
+    // Cursor progress and verified timestamp restoration are atomic with
+    // removal of only the settled receipts. Missing files keep their receipts.
     runSqliteImmediateTransactionSync(
       params.database,
       () => {
         assertAgentDatabaseMaintenanceAuthority();
+        const journal = readArchiveRecoveryJournal(params.database, recoveryKey);
+        const pending = new Map(
+          (journal?.rows ?? []).map((row) => [archiveRecoveryRowKey(row), row]),
+        );
         for (const [index, planned] of batch.entries()) {
+          const key = archiveRecoveryRowKey(planned);
+          const recorded = pending.get(key);
+          const fileCurrent = filesCurrent[index] === true;
           finalizeArchiveCursor({
             database: params.database,
-            fileCurrent: filesCurrent[index] === true,
+            fileCurrent,
             planned,
+            recoveredPublishedAt:
+              recorded?.nextSha256 === planned.nextSha256 ? recorded.publishedAt : undefined,
             writeCursor: params.writeCursor,
           });
+          if (!rowsPresent[index] || (fileCurrent && recorded?.nextSha256 === planned.nextSha256)) {
+            pending.delete(key);
+          }
         }
-        clearArchiveRecoveryJournal(params.database, recoveryKey);
+        if (pending.size > 0) {
+          writeArchiveRecoveryJournal(params.database, params.agentId, recoveryKey, {
+            rows: [...pending.values()],
+          });
+        } else if (journal) {
+          clearArchiveRecoveryJournal(params.database, recoveryKey);
+        }
         assertAgentDatabaseMaintenanceAuthority();
       },
       {
