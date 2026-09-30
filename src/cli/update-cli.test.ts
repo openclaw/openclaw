@@ -3272,6 +3272,39 @@ describe("update-cli", () => {
     );
   });
 
+  it("retains a plugin convergence error when attaching pre-plugin Doctor warnings", async () => {
+    const result = await completeChangedPostCorePluginUpdate({
+      pluginUpdate: {
+        status: "error",
+        changed: true,
+        reason: "plugin-convergence-failed",
+        warnings: [],
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: { changed: true, outcomes: [] },
+        integrityDrifts: [],
+      },
+      prePluginDoctorWarnings: ["Pre-plugin repair warning."],
+    });
+
+    expect(result.pluginUpdate).toMatchObject({
+      status: "error",
+      reason: "plugin-convergence-failed",
+    });
+    expect(result.pluginUpdate.warnings).toContainEqual(
+      expect.objectContaining({
+        reason: "doctor-advisory",
+        message: "Pre-plugin repair warning.",
+      }),
+    );
+    expect(runExec).not.toHaveBeenCalled();
+  });
+
   it("records an authenticated plugin Doctor advisory exit as a warning", async () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",

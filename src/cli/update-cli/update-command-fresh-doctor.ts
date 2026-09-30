@@ -107,18 +107,22 @@ function createPostPluginDoctorExecutionWarning(
   pluginUpdate: PostCorePluginUpdateResult,
   warnings: readonly string[],
 ): PostCorePluginUpdateResult {
+  const doctorWarnings = warnings.map((message) => ({
+    reason: "doctor-advisory",
+    message,
+    guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
+  }));
+  if (pluginUpdate.status === "error") {
+    return {
+      ...pluginUpdate,
+      warnings: [...(pluginUpdate.warnings ?? []), ...doctorWarnings],
+    };
+  }
   return {
     ...pluginUpdate,
     status: "warning",
     reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
-    warnings: [
-      ...(pluginUpdate.warnings ?? []),
-      ...warnings.map((message) => ({
-        reason: "doctor-advisory",
-        message,
-        guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
-      })),
-    ],
+    warnings: [...(pluginUpdate.warnings ?? []), ...doctorWarnings],
   };
 }
 
