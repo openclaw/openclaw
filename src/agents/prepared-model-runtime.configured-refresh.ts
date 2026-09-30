@@ -102,18 +102,24 @@ export function applyRemoteModelCatalogUpdateNow(
   const assertLifetime = host.captureLifetime();
   const completion: Promise<RemoteCatalogPublicationResult> = host.publicationQueue.track(
     runOutsideRemoteModelCatalogSnapshot(async (): Promise<RemoteCatalogPublicationResult> => {
-      let config = getConfig();
-      const catalog = await readRemoteModelCatalogUpdate(config);
-      assertLifetime();
-      if (!catalog) {
+      let config: OpenClawConfig;
+      let update: ActiveRemoteModelCatalog | undefined;
+      do {
+        config = getConfig();
+        update = await readRemoteModelCatalogUpdate(config);
+        assertLifetime();
+        // Join outside the queue: degraded startup still owns a queued final commit.
+        const replacement = update ? host.getPendingReplacement() : undefined;
+        if (replacement) {
+          await replacement;
+          assertLifetime();
+        }
+        // A read made under a superseded config must not replace a current adoption.
+      } while (!preparedModelRuntimeConfigsMatch(config, getConfig()));
+      if (!update) {
         return "unchanged";
       }
-      // Join outside the queue: degraded startup still owns a queued final commit.
-      const replacement = host.getPendingReplacement();
-      if (replacement) {
-        await replacement;
-        assertLifetime();
-      }
+      const catalog = update;
       let previous = captureRemoteModelCatalogStartupSnapshot();
       if (previous?.sourceUrl === catalog.sourceUrl) {
         if (previous.revision === catalog.revision) {
@@ -321,9 +327,10 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
 }
 
 /**
- * In-flight work whose settlement can make every configured owner claimable again.
- * Undefined means a retry cannot progress: no configured owners, or a failed owner
- * that rebuilds only on its next admission.
+ * Publication gates whose settlement can make every configured owner claimable again.
+ * Replacement and owner gates settle when their publication commits, fails, or times out;
+ * a raw build completion can outlive a timed-out build, so an owner without a gate
+ * (including a failed build) cannot progress until its next admission and ends this adoption.
  */
 function configuredOwnerSettlements(
   host: PreparedModelRuntimeCatalogPublicationHost,
@@ -339,14 +346,11 @@ function configuredOwnerSettlements(
       continue;
     }
     configured = true;
-    if (owner.snapshot && !owner.needsRefresh && !owner.pending) {
-      continue;
-    }
-    const settlement = owner.pending ?? owner.buildCompletion;
-    if (!settlement) {
+    if (owner.pending) {
+      settlements.push(owner.pending);
+    } else if (!owner.snapshot || owner.needsRefresh) {
       return undefined;
     }
-    settlements.push(settlement);
   }
   return configured ? settlements : undefined;
 }
