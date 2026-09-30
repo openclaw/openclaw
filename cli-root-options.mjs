@@ -32,7 +32,10 @@ export function consumeRootOptionToken(args, index) {
     return 1;
   }
   if (ROOT_VALUE_FLAGS.has(arg)) {
-    return isValueToken(args[index + 1]) ? 2 : 1;
+    // A defined-but-empty next token is a legitimate (if unusual) value, not
+    // a missing one; only a flag-looking or `--` token stays unconsumed here.
+    const next = args[index + 1];
+    return next === "" || isValueToken(next) ? 2 : 1;
   }
   return 0;
 }

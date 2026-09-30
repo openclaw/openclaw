@@ -1,6 +1,7 @@
 // Covers root CLI option token parsing.
 import { describe, expect, it } from "vitest";
 import {
+  consumeRootCommandOptionToken,
   consumeRootOptionToken,
   getCommandArgsWithRootOptions,
   getCommandPositionalsWithRootOptions,
@@ -45,11 +46,20 @@ describe("consumeRootOptionToken", () => {
     { args: ["--profile", "--no-color"], index: 0, expected: 1 },
     { args: ["--profile", "--"], index: 0, expected: 1 },
     { args: ["x", "--profile", "work"], index: 1, expected: 2 },
-    { args: ["--log-level", ""], index: 0, expected: 1 },
+    { args: ["--log-level", ""], index: 0, expected: 2 },
     { args: ["--unknown"], index: 0, expected: 0 },
     { args: [], index: 0, expected: 0 },
   ])("consumes %j at %d", ({ args, index, expected }) => {
     expect(consumeRootOptionToken(args, index)).toBe(expected);
+  });
+
+  it("agrees with consumeRootCommandOptionToken on a bare empty-string value", () => {
+    // Regression: a literal empty-string argv token (e.g. `--profile ""`) must not be
+    // under-consumed here while command-path discovery consumes it as the flag's value —
+    // that divergence used to leave the "" as a stray token for later scanners.
+    const args = ["--profile", ""];
+    expect(consumeRootOptionToken(args, 0)).toBe(2);
+    expect(consumeRootCommandOptionToken(args, 0)).toBe(2);
   });
 });
 

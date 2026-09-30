@@ -893,6 +893,39 @@ describe("openclaw launcher", () => {
     expect(result.stderr).toContain("--profile requires a value");
   });
 
+  it("rewrites the legacy --update flag past an empty --log-level value instead of falling into bare-root onboarding", async () => {
+    // Regression: --profile/--container reject an empty value before the --update
+    // rewrite ever runs, so they can't reach it. --log-level has no such early
+    // validator; its empty value is only checked later by Commander. Before the
+    // fix, the leftover "" token made rewriteUpdateFlagArgv bail out, --update was
+    // never rewritten to the `update` command, and the invocation silently fell
+    // through to bare-root onboarding instead of surfacing the real validation error.
+    const fixtureRoot = await makeLauncherFixture(fixtures);
+    await addCompiledMjsEntryFixture(fixtureRoot);
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        import.meta.resolve("tsx"),
+        path.join(fixtureRoot, "openclaw.mjs"),
+        "--log-level",
+        "",
+        "--update",
+        "--help",
+      ],
+      {
+        cwd: process.cwd(),
+        env: launcherEnv({ OPENCLAW_NO_RESPAWN: "1", HOME: fixtureRoot, OPENCLAW_HOME: fixtureRoot }),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("Invalid --log-level");
+    expect(result.stderr).not.toContain("Onboarding needs an interactive TTY");
+  });
+
   it.runIf(process.env.OPENCLAW_TEST_BUN_LAUNCHER === "1" && hasBunRuntime())(
     "gates the real Bun runtime on node:sqlite availability",
     async () => {
