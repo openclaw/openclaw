@@ -312,6 +312,13 @@ environment and move checks remain live, and reclaim rechecks idle policy,
 session work, and the exact placement before draining. Those synchronous guards
 remain separate migration work; suspension policy and teardown are unchanged.
 
+Disk-space monitoring discovers placement identities in the same reader, then
+hydrates their current records through the existing placement projection. Probe
+order remains the database's session-ID order. Live row checks still prune old
+observations and reject samples from an owner replaced during a tunnel probe;
+those synchronous checks remain separate migration work. Disk-pressure thresholds,
+probe limits, and notification behavior are unchanged.
+
 Worker session-tool grants and operation journals use the same shared-state
 writer. The placement authority owner publishes committed tool grants and fences
 pending revocation, so synchronous tool-grant checks do not query SQLite. Closing a
