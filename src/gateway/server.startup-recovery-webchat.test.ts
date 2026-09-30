@@ -394,6 +394,12 @@ it(
       if (!gatewayContext) {
         throw new Error("Saved-batch proof needs the active Gateway owner");
       }
+      // Startup activation schedules a registry sweep that also resumes pending settle
+      // wakes. Retire it so the manual replays below are the only claimants.
+      const registry = Reflect.get(globalThis, Symbol.for("openclaw.subagentRegistryTestApi")) as {
+        resetSubagentRegistryForTests(options: { persist: false }): Promise<void>;
+      };
+      await registry.resetSubagentRegistryForTests({ persist: false });
       const resolver = () => gatewayContext;
       const reloadSavedBatch = (entry: SubagentRunRecord) => {
         subagentRuns.set(entry.runId, entry);
