@@ -5,6 +5,7 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   createSqliteTranscriptTarget,
@@ -88,7 +89,11 @@ const queueKey = "agent:main:telegram:direct:stalled";
 const settings: QueueSettings = { mode: "followup", debounceMs: 0 };
 
 function createStalledRun(
-  options: { isHeartbeat?: boolean; operatorAuthority?: AdmittedRunOperatorAuthority } = {},
+  options: {
+    isHeartbeat?: boolean;
+    operatorAuthority?: AdmittedRunOperatorAuthority;
+    queuedFollowupReplyDisposition?: FollowupRun["queuedFollowupReplyDisposition"];
+  } = {},
 ): StalledRun {
   const followupRun = createTestFollowupRun({
     sessionId: "stalled-session",
@@ -99,6 +104,7 @@ function createStalledRun(
   followupRun.originatingChannel = "telegram";
   followupRun.originatingTo = "12345";
   followupRun.operatorAuthority = options.operatorAuthority;
+  followupRun.queuedFollowupReplyDisposition = options.queuedFollowupReplyDisposition;
   followupRun.images = [{ type: "image", data: "aW1n", mimeType: "image/png" }];
   followupRun.transcriptPrompt = "what is good at the hotel restaurant?";
   const transcriptTarget = createSqliteTranscriptTarget({
@@ -340,6 +346,27 @@ describe("runReplyAgent stalled turn continuation", () => {
     const stalled = createStalledRun({ operatorAuthority });
     await stallBeforeOutput(stalled);
     revoked = true;
+
+    expect(stalled.runState.continueStalledTurn?.()).toBe(false);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+
+    await settleStalledOwner(stalled);
+    expect(drainedRuns).not.toHaveBeenCalled();
+  });
+
+  it("leaves the notice with a Web UI chat.send turn whose reply owner never queued", async () => {
+    // The Gateway's chat.send reply owner delivers only follow-ups it deferred itself.
+    const gatewayDeliver = vi.fn(async () => ({ kind: "delivered" as const }));
+    const chatSendOwner = createChatSendLateFollowupDisposition({
+      runId: "chat-send-run",
+      originatingChannel: "webchat",
+      logGateway: { info: vi.fn() } as never,
+      deliver: gatewayDeliver,
+    });
+    const stalled = createStalledRun({
+      queuedFollowupReplyDisposition: { kind: "deliver", deliver: chatSendOwner.deliver },
+    });
+    await stallBeforeOutput(stalled);
 
     expect(stalled.runState.continueStalledTurn?.()).toBe(false);
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
