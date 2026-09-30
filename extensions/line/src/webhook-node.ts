@@ -63,6 +63,16 @@ type LineWebhookTarget = {
   bot: Pick<ReturnType<typeof createLineBot>, "handleWebhook">;
 };
 
+function sendLineWebhookJson(
+  res: ServerResponse,
+  statusCode: number,
+  body: { error: string } | { status: "ok" },
+): void {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(body));
+}
+
 export function createLineNodeWebhookHandler(params: {
   getTargets: () => readonly LineWebhookTarget[];
   runtime: RuntimeEnv;
@@ -92,10 +102,8 @@ export function createLineNodeWebhookHandler(params: {
     }
 
     if (req.method !== "POST") {
-      res.statusCode = 405;
       res.setHeader("Allow", "GET, HEAD, POST");
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Method Not Allowed" }));
+      sendLineWebhookJson(res, 405, { error: "Method Not Allowed" });
       return;
     }
 
@@ -110,9 +118,7 @@ export function createLineNodeWebhookHandler(params: {
 
       if (!signature) {
         logVerbose("line: webhook missing X-Line-Signature header");
-        res.statusCode = 400;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Missing X-Line-Signature header" }));
+        sendLineWebhookJson(res, 400, { error: "Missing X-Line-Signature header" });
         return;
       }
 
@@ -127,26 +133,20 @@ export function createLineNodeWebhookHandler(params: {
       );
       if (match.kind === "none") {
         logVerbose("line: webhook signature validation failed");
-        res.statusCode = 401;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Invalid signature" }));
+        sendLineWebhookJson(res, 401, { error: "Invalid signature" });
         return;
       }
 
       if (match.kind === "ambiguous") {
         logVerbose("line: webhook signature matched multiple accounts");
-        res.statusCode = 401;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Ambiguous webhook target" }));
+        sendLineWebhookJson(res, 401, { error: "Ambiguous webhook target" });
         return;
       }
 
       const body = parseLineWebhookBody(rawBody);
 
       if (!body) {
-        res.statusCode = 400;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Invalid webhook payload" }));
+        sendLineWebhookJson(res, 400, { error: "Invalid webhook payload" });
         return;
       }
 
@@ -157,18 +157,14 @@ export function createLineNodeWebhookHandler(params: {
           res.setHeader("x-openclaw-delivery-accepted", "durable");
         }
       }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ status: "ok" }));
+      sendLineWebhookJson(res, 200, { status: "ok" });
     } catch (err) {
       if (await rejectLineWebhookRequest(req, res, err)) {
         return;
       }
       params.runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
       if (!res.headersSent) {
-        res.statusCode = 500;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Internal server error" }));
+        sendLineWebhookJson(res, 500, { error: "Internal server error" });
       }
     }
   };

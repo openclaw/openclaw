@@ -28,6 +28,7 @@ async function composition(mode, acquisitionReady = Promise.resolve()) {
   const originalFetch = globalThis.fetch;
   const originalSpawn = childProcess.spawn;
   const originalWriteFileSync = fs.writeFileSync;
+  const originalExistsSync = fs.existsSync;
   const originalKill = process.kill;
   let released = 0;
   let healthy = true;
@@ -37,10 +38,20 @@ async function composition(mode, acquisitionReady = Promise.resolve()) {
   let bodyController;
   let observedRequest;
   const waiters = new Map();
+  let baselineBarrier;
   const observe = (name, value) => {
     events.push(name);
     waiters.get(name)?.resolve(value);
   };
+  if (mode === "late") {
+    fs.existsSync = (pathname) => {
+      const exists = originalExistsSync(pathname);
+      if (pathname === baselineBarrier && !exists) {
+        observe("baseline-wait");
+      }
+      return exists;
+    };
+  }
   if (mode === "success" && process.env.TELEGRAM_TEST_CONFINED === "1") {
     process.kill = (pid, signal) => {
       const gateway = children.find((entry) => entry.argv.includes("dist/entry.js"))?.child;
@@ -145,6 +156,7 @@ sys.exit(record.main())
     else {
       const index=process.argv.indexOf('--ready-file');
       if(index>=0) fs.writeFileSync(process.argv[index+1],JSON.stringify({schemaVersion:1,startedAtUnixMs:Date.now(),chatId:-1001}));
+      if(${JSON.stringify(mode)}==='late') fs.watch(${JSON.stringify(root)},()=>{});
       console.log('recorder done');
     }
   `,
@@ -209,8 +221,10 @@ sys.exit(record.main())
         };
       }
     }
-    if (argv.some((value) => String(value).endsWith("user-record.py")))
+    if (argv.some((value) => String(value).endsWith("user-record.py"))) {
+      baselineBarrier = path.join(argv[argv.indexOf("--barrier-dir") + 1], "0");
       child.once("exit", () => observe("recorder-terminated"));
+    }
     child.stdout?.on("data", (data) => {
       if (data.toString().includes("fixture blocked")) observe("mock-wait");
       if (data.toString().includes("recorder done")) observe("recorder-exit");
@@ -281,7 +295,10 @@ sys.exit(record.main())
   };
   const actions =
     mode === "late"
-      ? [{ type: "patchConfig", atMs: 0, patch: { messages: { responsePrefix: "test" } } }]
+      ? [
+          { type: "send", atMs: 0, text: "BEFORE", awaitReply: { text: "BEFORE" } },
+          { type: "restartGateway", atMs: 0, graceMs: 15_000 },
+        ]
       : mode === "control"
         ? [{ type: "followupDrainWaitHeld", atMs: 0, timeoutMs: 60_000 }]
         : mode === "uncertain-send"
@@ -337,6 +354,9 @@ sys.exit(record.main())
     wait,
     headerBody,
     bodyStarted,
+    releaseBaseline() {
+      fs.writeFileSync(baselineBarrier, JSON.stringify({ sentMessageId: 10, messageId: 11 }));
+    },
     finishOldGatewayStop() {
       fs.writeFileSync(path.join(root, "release-stop"), "");
     },
@@ -380,6 +400,7 @@ sys.exit(record.main())
       for (const watcher of watchers) watcher.close();
       childProcess.spawn = originalSpawn;
       fs.writeFileSync = originalWriteFileSync;
+      fs.existsSync = originalExistsSync;
       syncBuiltinESMExports();
       globalThis.fetch = originalFetch;
       fs.rmSync(root, { recursive: true, force: true });
@@ -510,7 +531,7 @@ test("unconfirmed child termination cannot report clean release", async () => {
   }
 });
 
-test("closed run admission rejects a Gateway replacement after awaited stop", async () => {
+test("restart waits for the visible baseline and rejects replacement after run closure", async () => {
   const acquisition = Promise.withResolvers();
   const f = await composition("late", acquisition.promise);
   try {
@@ -522,6 +543,17 @@ test("closed run admission rejects a Gateway replacement after awaited stop", as
     assert.equal(stopped, false);
     assert.equal(f.children.length, 0, "setup must wait for credential acquisition");
     acquisition.resolve();
+    await deadline(
+      Promise.race([
+        f.wait("baseline-wait"),
+        restartStop.then(() => {
+          throw new Error("Gateway stopped before visible baseline");
+        }),
+      ]),
+      "runner did not wait for the baseline",
+    );
+    assert.equal(stopped, false);
+    f.releaseBaseline();
     await restartStop;
     f.controller.abort(new Error("cancel replacement"));
     f.finishOldGatewayStop();

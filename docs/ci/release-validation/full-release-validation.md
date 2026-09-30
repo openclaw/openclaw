@@ -67,7 +67,13 @@ stage matrix, exact workflow job names, profile differences, the `npm-beta-v1`
 and `npm-stable-v1` coverage policies, artifacts, and focused rerun handles.
 
 The `normal_ci` child dispatches `ci.yml` with the exact target and release scope,
-without `release_gate`. Complete campaigns (`rerun_group=all`) retain QA Smoke's
+without `release_gate`. In FRV only, `windows-node-ci` failures and eligible jobs
+with authenticated `recorded-flake` receipts are advisory. Receipts bind exact
+failed job attempts and retain the reason and fix-in-parallel issue/PR in the
+manifest and release notes. Other children stay strict; coverage, package,
+install/update, and artifact gates cannot be classified. See
+[record a flake](/reference/full-release-validation/continuation#record-a-flake).
+Complete campaigns (`rerun_group=all`) retain QA Smoke's
 full scenario profile and Control UI performance independently of changed paths.
 Docker seed runs all six lanes in every ordinary manual/release scope:
 `cron-mcp-cleanup`, `fleet-cache`, `mcp-channels`, `mcp-code-mode-gateway`,
@@ -230,10 +236,13 @@ checks them during that parent attempt. Parent cancellation or timeout leaves
 adopted exact children running; cancel one explicitly when it is no longer
 needed.
 
-For recovery, classify product, harness/tooling/provenance,
+For recovery, decide blocker or flake for every failed test, then classify product, harness/tooling/provenance,
 infrastructure/credential, and wrapper failures before editing. Only confirmed
 product failure changes the Code SHA. Diagnose and fix the owning defect before an explicit narrow `rerun_group`
-validation run; never retry a failed test automatically or widen to `all`. Narrow evidence is not publish authorization by itself.
+validation run; never retry a failed test automatically or widen to `all`.
+Flakes get at most two explicit same-SHA reruns and a tracked fix on `main`;
+record an eligible still-failing job instead of changing tooling, re-cutting,
+or starting another Full Release Validation. Narrow evidence is not publish authorization by itself.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs. For the Codex npm-plugin live lane, release checks either pass a matching published plugin spec derived from `release_package_spec`, pass the operator-supplied `codex_plugin_spec`, or leave the input blank so the Docker script packs the selected checkout's Codex plugin.
 

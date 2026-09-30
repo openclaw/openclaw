@@ -69,7 +69,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Validate provider secrets before dispatching expensive full release matrices.
 - Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match. The nightly runs this helper route (`--sha <main-sha> --workflow-sha <main-sha>`), so its parent runs on a `release-ci/<sha12>-<id>` branch, not `main`.
 - Every selected validation lane must pass except the policy-owned
-  `windows-node-ci` class in FRV's `normalCi` child; see
+  `windows-node-ci` and authenticated `recorded-flake` classes in FRV's `normalCi` child; see
   [Publication requirements](#publication-requirements). Stable tags require stable/full
   evidence, soak, and blocking performance. Beta-profile evidence cannot qualify
   stable. No lane or soak waiver bypasses these requirements. All-group
@@ -258,7 +258,7 @@ until their dependent enforcement changes land.
   release branch or beta tag records `coveragePolicy=npm-beta-v1`. It keeps
   Linux/macOS/Windows Node, Control UI, plugin, package, install/update,
   Linux/Windows/macOS cross-OS, QA parity, runtime-pair/restart, and tool coverage.
-  All selected tests except `windows-node-ci` gate npm/ClawHub. Native app
+  All selected tests except `windows-node-ci` and bound `recorded-flake` jobs gate npm/ClawHub. Native app
   CI, performance, and published-package Telegram are deferred to confidence.
   Beta `all` without soak also defers Package Acceptance Telegram, including
   beta-profile checks of `main`. Record deferred checks as not run,
@@ -585,11 +585,24 @@ evidence manifest; validators and publish gates recheck the class and child.
 This is policy-derived, never an operator input or waiver. Ordinary PR, push,
 scheduled, and main CI keep Windows blocking.
 
-Every other selected validation lane must succeed: macOS Node and other normal
-CI jobs, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
+Decide blocker or flake for every failed test. Rerun flakes on the same Release
+SHA at most twice, file a fix-in-parallel issue/PR on `main`, and record eligible
+still-failing `normalCi` jobs through `full-release-flake-classification.yml` on
+trusted `main`. The `recorded-flake` receipt binds the parent, child, exact job
+attempt, target SHA, actor, reason, and tracking link. Keep that failure visible;
+never re-cut, change tooling, or start a new FRV for a flake. After the receipt
+succeeds, `frv continue --failed` reseals only the parent when no blockers remain.
+See [operator flow](../../../docs/reference/full-release-validation/continuation.md#record-a-flake).
+
+Other children stay strict in v1; extending classification is follow-up work.
+Never classify CI coverage gates, seal/evidence, Build Artifacts, install smoke,
+survivor lanes, `update-first-hop-compat*`, pack/npm
 qualification, package integrity, Telegram, and Linux/Windows/macOS Gateway
 checks, including Windows packaged install/upgrade checks in Release Checks.
-A cancelled run still blocks. No lane or soak waiver applies.
+A failed CI gate needs at least one recorded flake, every other failed job to be
+advisory, and log proof that each non-passing entry is selected and failed.
+Matrix display names may differ from gate keys. Skipped, cancelled, missing,
+and unknown coverage blocks. No lane or soak waiver applies.
 
 ### Publish children
 
@@ -833,7 +846,8 @@ Interpret state precisely:
   remained active.
 
 Read every selected lane's actual conclusion. `passed` requires all selected
-validation lanes outside `windows-node-ci` to succeed and retains the advisory
+validation lanes outside `windows-node-ci` and authenticated `recorded-flake`
+jobs to succeed and retains the advisory
 failures; omitted coverage is not run, never passed.
 
 The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
@@ -854,7 +868,9 @@ run-ID-cached bytes first.
    them in a clean-home CLI probe, never as a substitute for a required
    Anthropic API-key lane.
 5. For live-cache failures, inspect whether it is missing/invalid key, empty text, provider refusal, timeout, or baseline miss. Do not weaken release gates without clear provider evidence.
-6. Classify before editing:
+6. Decide blocker or flake for each failed test before editing. Flakes use
+   [recorded classification](#publication-requirements) and a fix on `main`;
+   classify blockers further:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence
    - harness, tooling, or source mismatch: keep the Code SHA, fix the smallest

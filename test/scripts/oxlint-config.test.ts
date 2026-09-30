@@ -1,4 +1,3 @@
-// Oxlint Config tests cover oxlint config script behavior.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -228,6 +227,7 @@ describe("oxlint config", () => {
     writeSessionCompatibilityFixture(tempRoot);
     fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
     const fixtures = {
+      "test/types/vitest-codex-attempt-runtime.d.ts": "export {};\n",
       "src/imported.ts": "export function work(): Promise<void> { return Promise.resolve(); }",
       "src/unrelated.ts": "export const unrelated = 1;",
       "src/contracts.d.ts": "declare function fromCore(): Promise<void>;",

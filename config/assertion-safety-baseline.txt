@@ -419,12 +419,10 @@ extensions/google/realtime-voice-provider.ts	4
 extensions/google/transport-stream.ts	13
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
-extensions/googlechat/src/accounts.ts	1
 extensions/googlechat/src/approval-card-actions.ts	1
 extensions/googlechat/src/approval-handler.runtime.ts	1
 extensions/googlechat/src/google-auth.runtime.ts	4
 extensions/googlechat/src/monitor-event.ts	2
-extensions/googlechat/src/setup-core.ts	1
 extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
@@ -560,7 +558,7 @@ extensions/matrix/src/setup-core.ts	5
 extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	9
 extensions/matrix/src/tool-actions.ts	1
-extensions/mattermost/src/channel.ts	6
+extensions/mattermost/src/channel.ts	5
 extensions/mattermost/src/gateway-auth-bypass.ts	3
 extensions/mattermost/src/mattermost/client.ts	6
 extensions/mattermost/src/mattermost/directory.ts	2
@@ -678,8 +676,7 @@ extensions/nextcloud-talk/src/policy.ts	2
 extensions/nextcloud-talk/src/send.ts	1
 extensions/nextcloud-talk/src/setup-core.ts	8
 extensions/nextcloud-talk/src/setup-surface.ts	11
-extensions/nostr/index.ts	4
-extensions/nostr/src/channel.setup.ts	2
+extensions/nostr/index.ts	2
 extensions/nostr/src/gateway.ts	1
 extensions/nostr/src/metrics.ts	1
 extensions/nostr/src/nostr-bus.ts	7
@@ -687,8 +684,6 @@ extensions/nostr/src/nostr-cursor.ts	2
 extensions/nostr/src/nostr-ingress.ts	4
 extensions/nostr/src/nostr-profile-http.ts	1
 extensions/nostr/src/nostr-profile-import.ts	1
-extensions/nostr/src/setup-surface.ts	2
-extensions/nostr/src/types.ts	3
 extensions/nvidia/provider-catalog.ts	1
 extensions/oc-path/src/oc-path/find.ts	9
 extensions/oc-path/src/oc-path/universal.ts	4
@@ -1129,7 +1124,7 @@ extensions/zalouser/src/text-styles-inline.ts	1
 extensions/zalouser/src/text-styles-ranges.ts	1
 extensions/zalouser/src/text-styles-source.ts	1
 extensions/zalouser/src/tool.ts	1
-extensions/zalouser/src/zalo-js.ts	11
+extensions/zalouser/src/zalo-js.ts	9
 extensions/zalouser/src/zca-client.ts	2
 packages/acp-core/src/runtime/errors.ts	6
 packages/agent-core/src/agent-loop.ts	3
@@ -2972,10 +2967,10 @@ ui/src/app/settings.ts	2
 ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
 ui/src/app/user-profile.ts	2
-ui/src/app/web-push.runtime.ts	2
+ui/src/app/web-push.runtime.ts	1
 ui/src/components/agent-select.ts	2
 ui/src/components/app-sidebar-agent-menu.ts	2
-ui/src/components/app-sidebar-nav-menus.ts	6
+ui/src/components/app-sidebar-nav-menus.ts	2
 ui/src/components/app-sidebar-render.ts	4
 ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	1
@@ -3036,11 +3031,10 @@ ui/src/components/terminal/terminal-pending-actions.ts	1
 ui/src/components/theme-mode-toggle.ts	1
 ui/src/components/web-awesome.ts	2
 ui/src/components/wizard-step-controls.ts	4
-ui/src/i18n/lib/registry.ts	2
 ui/src/i18n/lib/translate.ts	1
 ui/src/lib/agents/display.ts	6
 ui/src/lib/board/gateway-provider.ts	2
-ui/src/lib/board/widget-bridge.ts	3
+ui/src/lib/board/widget-bridge.ts	2
 ui/src/lib/board/widget-sandbox-host.ts	1
 ui/src/lib/chat/message-extract.ts	5
 ui/src/lib/chat/message-normalizer.ts	2
@@ -3055,7 +3049,6 @@ ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	2
 ui/src/lib/nodes/inventory.ts	1
-ui/src/lib/plugin-activation.ts	3
 ui/src/lib/session-pull-requests.ts	2
 ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4

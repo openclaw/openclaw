@@ -266,31 +266,25 @@
   flex-shrink: 0;
 }
 
-.chat-tool-row__title {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  color: var(--text);
-}
-
-.chat-tool-row__cmd {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  color: inherit;
-}
-
-.chat-tool-row__verb {
-  flex-shrink: 0;
-}
-
+.chat-tool-row__title,
+.chat-tool-row__cmd,
 .chat-tool-row__target {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+}
+
+.chat-tool-row__title {
+  color: var(--text);
+}
+
+.chat-tool-row__cmd {
+  color: inherit;
+}
+
+.chat-tool-row__verb {
+  flex-shrink: 0;
 }
 
 .chat-tool-row__detail {
