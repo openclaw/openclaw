@@ -322,9 +322,11 @@ Slack-only:
   **Open work session** link when available. `streaming.progress.toolProgress: true`
   adds tool activity, the plan checklist, intermediate error and recovery rows,
   and tool/file/time totals while working; finished detailed cards retain only
-  file diff totals. Neither mode adds emoji, bold text, or status headings. Empty
-  working cards are skipped, and empty finished cards leave the last posted card
-  unchanged. The assistant's final text and failures use normal delivery.
+  file diff totals. Neither mode adds emoji, bold text, or status headings. A
+  card is posted only once it has something to show, so a default turn with only
+  tool activity shows no card; a card whose last visible row goes away, such as
+  a resolved approval, is deleted. The assistant's final text and failures use
+  normal delivery.
 - Cards include **Open in OpenClaw** only when the session is actually openable:
   `gateway.publicOrigin` is set and `gateway.controlUi.enabled` is not `false`.
 - Without a reply thread, default `progress` turns leave only the final answer
@@ -340,7 +342,8 @@ Slack-only:
 - Native and draft preview streaming suppress block replies for that turn, so a
   Slack reply is streamed by one delivery path only.
 - A successful turn with no visible reply still deletes its draft card. A
-  failed no-reply turn retains its progress card.
+  failed no-reply turn retains its progress card when the card still has
+  content.
 
 ### Mattermost
 
