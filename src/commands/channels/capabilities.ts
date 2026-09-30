@@ -286,34 +286,31 @@ export async function channelsCapabilitiesCommand(
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     includeSetupFallbackPlugins: true,
   });
-  const selected =
-    !rawChannel || rawChannel === "all"
-      ? plugins
-      : await (async () => {
-          const resolved = await resolveInstallableChannelPlugin({
-            cfg: configSnapshot.sourceConfig,
-            runtime,
-            agentId: opts.agent,
-            rawChannel,
-            allowInstall: true,
-          });
-          if (resolved.configChanged) {
-            await persistChannelPluginConfig({
-              cfg: resolved.cfg,
-              pluginInstalled: resolved.pluginInstalled,
-              baseHash: configSnapshot.hash,
-              writeOptions: writeSnapshot?.writeOptions,
-              runtime,
-            });
-            // The writer refreshes the active runtime snapshot; probes must use that prepared
-            // view rather than the authored config that installation persisted.
-            cfg = await resolveCapabilitiesRuntimeConfig(getRuntimeConfig(), runtime);
-          }
-          return resolved.plugin ? [resolved.plugin] : null;
-        })();
+  let selected = plugins;
+  if (canInstall) {
+    const resolved = await resolveInstallableChannelPlugin({
+      cfg: configSnapshot.sourceConfig,
+      runtime,
+      agentId: opts.agent,
+      rawChannel,
+      allowInstall: true,
+    });
+    if (resolved.configChanged) {
+      await persistChannelPluginConfig({
+        cfg: resolved.cfg,
+        pluginInstalled: resolved.pluginInstalled,
+        baseHash: configSnapshot.hash,
+        writeOptions: writeSnapshot?.writeOptions,
+        runtime,
+      });
+      // The writer refreshes the prepared view used by probes after installation.
+      cfg = await resolveCapabilitiesRuntimeConfig(getRuntimeConfig(), runtime);
+    }
+    selected = resolved.plugin ? [resolved.plugin] : [];
+  }
 
-  if (!selected || selected.length === 0) {
-    if (!rawChannel || rawChannel === "all") {
+  if (selected.length === 0) {
+    if (!canInstall) {
       if (opts.json) {
         writeRuntimeJson(runtime, { channels: [] });
         return;
