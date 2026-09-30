@@ -5527,7 +5527,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/pages/plugins/plugins-catalog.e2e.test.ts",
   "ui/src/pages/plugins/plugins-lifecycle.e2e.test.ts",
   "ui/src/pages/profile/model-accounts.test.ts",
-  "ui/src/pages/sessions/sessions-page.roster.test.ts",
   "ui/src/pages/sessions/sessions-page.selection.test.ts",
   "ui/src/pages/skill-workshop/revision-admission.e2e.test.ts",
   "ui/src/pages/usage/usage-page-detail-identity.test.ts",
