@@ -183,10 +183,12 @@ describe.skipIf(process.platform !== "linux")(
         if (result.error || result.status === null || result.status === 0) {
           return;
         }
+        // Mirror Codex's own USER_NAMESPACE_FAILURES (codex-rs/sandboxing/src/bwrap.rs);
+        // other namespace errors such as ENOSPC exhaustion must still fail the suite.
         const denial = `${result.stdout}\n${result.stderr}`
           .split(/\r?\n/)
           .find((line) =>
-            /^bwrap: (?:loopback: Failed RTM_NEW(?:ADDR|LINK)|setting up uid map: Permission denied|No permissions to create new namespace|Creating new namespace failed)\b/.test(
+            /^bwrap: (?:loopback: Failed RTM_NEW(?:ADDR|LINK)|setting up uid map: Permission denied|No permissions to create a new namespace)\b/.test(
               line,
             ),
           );
