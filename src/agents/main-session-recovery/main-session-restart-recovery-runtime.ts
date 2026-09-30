@@ -124,7 +124,12 @@ export async function recoverRestartAbortedMainSessions(params: {
     result.settled += storeResult.settled;
     result.failed += storeResult.failed;
     result.skipped += storeResult.skipped;
-    result.capacityDeferred = (result.capacityDeferred ?? 0) + (storeResult.capacityDeferred ?? 0);
+    // Only carry the deferral count when a store actually reported one, so
+    // ordinary scans keep the four-field result shape that existing toEqual
+    // assertions expect.
+    if (storeResult.capacityDeferred) {
+      result.capacityDeferred = (result.capacityDeferred ?? 0) + storeResult.capacityDeferred;
+    }
   }
 
   if (result.started > 0 || result.settled > 0 || result.failed > 0) {
