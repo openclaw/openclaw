@@ -21,6 +21,7 @@ import {
   resolveVitestNoOutputHeartbeatMs,
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
+  resolveVitestPreparationTimeoutMs,
 } from "../../scripts/lib/vitest-process-env.mts";
 import { resolveVitestTestCommand } from "../../scripts/lib/vitest-test-runtime.mts";
 import {
@@ -1568,6 +1569,150 @@ registerHooks({resolve(specifier, context, nextResolve) {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not charge an admitted cold worker preparation to the scoped deadline", () => {
+    vi.useFakeTimers();
+    try {
+      const stdout = new EventEmitter();
+      const timeoutSpy = vi.fn();
+      const logSpy = vi.fn();
+
+      const watchdog = installVitestNoOutputWatchdog({
+        streams: [stdout],
+        timeoutMs: 60_000,
+        preparationTimeoutMs: 300_000,
+        forceKillAfterMs: 0,
+        log: logSpy,
+        onTimeout: timeoutSpy,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      // The borrowed child reports admission, then the runner compiles a cold
+      // generation (55.5s measured in the failing run) while that child stays
+      // silent on the streams this watchdog counts.
+      vi.advanceTimersByTime(5_000);
+      watchdog.beginPreparation();
+      vi.advanceTimersByTime(55_460);
+      expect(timeoutSpy).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(
+        "[vitest] worker preparation admitted; no-output deadline extended to 300000ms.",
+      );
+
+      // Verified readiness restores the scoped deadline, so the warm-cache stall
+      // this shard override exists to catch still fails on its own window.
+      watchdog.endPreparation();
+      vi.advanceTimersByTime(59_999);
+      expect(timeoutSpy).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        "[vitest] no output for 60000ms; terminating stalled Vitest process group.",
+      );
+
+      watchdog.teardown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still bounds an admitted preparation that never reports readiness", () => {
+    vi.useFakeTimers();
+    try {
+      const stdout = new EventEmitter();
+      const timeoutSpy = vi.fn();
+      const logSpy = vi.fn();
+
+      const watchdog = installVitestNoOutputWatchdog({
+        streams: [stdout],
+        timeoutMs: 60_000,
+        preparationTimeoutMs: 300_000,
+        forceKillAfterMs: 0,
+        log: logSpy,
+        onTimeout: timeoutSpy,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      watchdog.beginPreparation();
+      vi.advanceTimersByTime(299_999);
+      expect(timeoutSpy).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        "[vitest] no output for 300000ms; terminating stalled Vitest process group.",
+      );
+
+      watchdog.teardown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the force-kill fallback when a preparation is admitted after the deadline fired", () => {
+    vi.useFakeTimers();
+    try {
+      const stdout = new EventEmitter();
+      const timeoutSpy = vi.fn();
+      const forceKillSpy = vi.fn();
+      const logSpy = vi.fn();
+
+      const watchdog = installVitestNoOutputWatchdog({
+        streams: [stdout],
+        timeoutMs: 60_000,
+        preparationTimeoutMs: 300_000,
+        forceKillAfterMs: 5_000,
+        log: logSpy,
+        onTimeout: timeoutSpy,
+        onForceKill: forceKillSpy,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      // The scoped deadline fires while the worker stays silent, so the watchdog
+      // signals SIGTERM and arms the force-kill fallback.
+      vi.advanceTimersByTime(60_000);
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+
+      // A worker that admits its preparation only now must not cancel that
+      // fallback: the stalled child may still be ignoring SIGTERM.
+      watchdog.beginPreparation();
+      vi.advanceTimersByTime(5_000);
+      expect(forceKillSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        "[vitest] process group still alive after 5000ms; sending SIGKILL.",
+      );
+
+      watchdog.teardown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("parses the optional watchdog preparation window", () => {
+    expect(resolveVitestPreparationTimeoutMs({})).toBeNull();
+    expect(
+      resolveVitestPreparationTimeoutMs({
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
+        OPENCLAW_VITEST_NO_OUTPUT_PREPARATION_TIMEOUT_MS: "300000",
+      }),
+    ).toBe(300000);
+    // The preparation window never narrows the scoped deadline it replaces.
+    expect(
+      resolveVitestPreparationTimeoutMs({
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
+        OPENCLAW_VITEST_NO_OUTPUT_PREPARATION_TIMEOUT_MS: "300000",
+      }),
+    ).toBe(660000);
+    expect(
+      resolveVitestPreparationTimeoutMs({
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
+        OPENCLAW_VITEST_NO_OUTPUT_PREPARATION_TIMEOUT_MS: "0",
+      }),
+    ).toBeNull();
   });
 
   it("parses the optional watchdog heartbeat interval", () => {

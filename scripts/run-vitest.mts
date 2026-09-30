@@ -38,6 +38,7 @@ import {
   resolveRunVitestSpawnEnv,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestNoOutputHeartbeatMs,
+  resolveVitestPreparationTimeoutMs,
   resolveVitestConfigArg,
   normalizeVitestConfigPath,
   matchesVitestConfigPath,
@@ -616,6 +617,13 @@ export function resolveImplicitVitestArgs(argv: string[], cwd = process.cwd()): 
 export function installVitestNoOutputWatchdog(params: {
   streams?: Array<WatchdogStream | null>;
   timeoutMs: number | null;
+  /**
+   * Bound used while an admitted worker preparation is in flight. A cold cache
+   * compiles a whole generation before Vitest writes its first byte and that
+   * compile is silent on the child's streams, so it must not be charged to the
+   * scoped test-silence deadline (#162136). Falls back to `timeoutMs`.
+   */
+  preparationTimeoutMs?: number | null;
   heartbeatMs?: number | null;
   forceKillAfterMs?: number;
   log?: (message: string) => void;
@@ -623,10 +631,20 @@ export function installVitestNoOutputWatchdog(params: {
   onForceKill?: () => void;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
-}): { recordActivity: () => void; teardown: () => void } {
+}): {
+  recordActivity: () => void;
+  beginPreparation: () => void;
+  endPreparation: () => void;
+  teardown: () => void;
+} {
   const timeoutMs = params.timeoutMs;
   if (!timeoutMs || timeoutMs <= 0) {
-    return { recordActivity: () => {}, teardown: () => {} };
+    return {
+      recordActivity: () => {},
+      beginPreparation: () => {},
+      endPreparation: () => {},
+      teardown: () => {},
+    };
   }
 
   const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
@@ -645,6 +663,13 @@ export function installVitestNoOutputWatchdog(params: {
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   let silentForMs = 0;
   let timedOut = false;
+  let preparing = false;
+  // Preparation never gets a shorter window than the scoped deadline it replaces.
+  const preparationTimeoutMs =
+    params.preparationTimeoutMs && params.preparationTimeoutMs > 0
+      ? Math.max(params.preparationTimeoutMs, timeoutMs)
+      : timeoutMs;
+  const activeTimeoutMs = () => (preparing ? preparationTimeoutMs : timeoutMs);
 
   const clearHeartbeatTimer = () => {
     if (heartbeatTimer !== null) {
@@ -678,7 +703,7 @@ export function installVitestNoOutputWatchdog(params: {
       }
       silentForMs += heartbeatMs;
       params.log?.(`[vitest] still running with no output for ${silentForMs}ms.`);
-      if (silentForMs + heartbeatMs < timeoutMs) {
+      if (silentForMs + heartbeatMs < activeTimeoutMs()) {
         scheduleHeartbeatTimer();
       }
     }, heartbeatMs);
@@ -691,6 +716,9 @@ export function installVitestNoOutputWatchdog(params: {
     clearSilenceTimer();
     silentForMs = 0;
     scheduleHeartbeatTimer();
+    // Bind the deadline this timer was armed with so a later phase change cannot
+    // make the terminating message disagree with the timeout that actually fired.
+    const deadlineMs = activeTimeoutMs();
     silenceTimer = setTimeoutFn(() => {
       if (!active) {
         return;
@@ -698,7 +726,7 @@ export function installVitestNoOutputWatchdog(params: {
       clearHeartbeatTimer();
       timedOut = true;
       params.log?.(
-        `[vitest] no output for ${timeoutMs}ms; terminating stalled Vitest process group.`,
+        `[vitest] no output for ${deadlineMs}ms; terminating stalled Vitest process group.`,
       );
       if (forceKillAfterMs > 0) {
         clearForceKillTimer();
@@ -713,7 +741,7 @@ export function installVitestNoOutputWatchdog(params: {
         }, forceKillAfterMs);
       }
       params.onTimeout?.();
-    }, timeoutMs);
+    }, deadlineMs);
   };
 
   const handleActivity = () => {
@@ -721,6 +749,34 @@ export function installVitestNoOutputWatchdog(params: {
       return;
     }
     clearForceKillTimer();
+    resetSilenceTimer();
+  };
+
+  // Admission and readiness are the only two edges of a borrowed worker
+  // preparation. The compile between them owns the preparation deadline so a cold
+  // build cannot be reported as a stalled test run (#162136).
+  const beginPreparation = () => {
+    // Mirrors output activity's post-timeout guard: a preparation that is only
+    // admitted after the silence deadline already fired must not clear the
+    // pending force-kill fallback for a child that ignored SIGTERM.
+    if (!active || timedOut || preparing) {
+      return;
+    }
+    preparing = true;
+    clearForceKillTimer();
+    if (preparationTimeoutMs > timeoutMs) {
+      params.log?.(
+        `[vitest] worker preparation admitted; no-output deadline extended to ${preparationTimeoutMs}ms.`,
+      );
+    }
+    resetSilenceTimer();
+  };
+
+  const endPreparation = () => {
+    if (!active || timedOut || !preparing) {
+      return;
+    }
+    preparing = false;
     resetSilenceTimer();
   };
 
@@ -736,6 +792,8 @@ export function installVitestNoOutputWatchdog(params: {
 
   return {
     recordActivity: handleActivity,
+    beginPreparation,
+    endPreparation,
     teardown() {
       if (!active) {
         return;
@@ -858,9 +916,14 @@ export function spawnWatchedVitestProcess({
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
   });
+  const noOutputTimeoutMs = resolveVitestNoOutputTimeoutMs(env);
   const noOutputWatchdog = installVitestNoOutputWatchdog({
     streams: [child.stdout, child.stderr],
-    timeoutMs: resolveVitestNoOutputTimeoutMs(env),
+    timeoutMs: noOutputTimeoutMs,
+    // A cold worker cache compiles a generation before Vitest prints anything, so a
+    // shard whose scoped deadline is below a cold build declares the longer window
+    // that bounds its admitted preparation instead (#162136).
+    preparationTimeoutMs: resolveVitestPreparationTimeoutMs(env),
     heartbeatMs: resolveVitestNoOutputHeartbeatMs(env),
     log: (message) => {
       console.error(message);
@@ -913,7 +976,13 @@ export function spawnWatchedVitestProcess({
   return {
     child,
     completion: workerRun
-      ? workerRun.borrow(child, completion, noOutputWatchdog.recordActivity)
+      ? workerRun.borrow(child, completion, (state) => {
+          if (state === "admitted") {
+            noOutputWatchdog.beginPreparation();
+            return;
+          }
+          noOutputWatchdog.endPreparation();
+        })
       : completion,
     getForwardedSignal: childCleanup.getForwardedSignal,
     teardown,

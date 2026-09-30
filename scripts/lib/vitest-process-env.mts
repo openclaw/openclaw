@@ -61,6 +61,7 @@ export function resolveSharedVitestCompilerEnv(
     "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON",
     "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS",
     "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS",
+    "OPENCLAW_VITEST_NO_OUTPUT_PREPARATION_TIMEOUT_MS",
   ]);
   // Compilation has one owner before any group requests it. Only scheduling
   // facts may differ; loaders, Node flags and source-build inputs must agree.
@@ -99,6 +100,8 @@ export const DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 300_000;
 export const DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 2_400_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
+const VITEST_NO_OUTPUT_PREPARATION_TIMEOUT_ENV_KEY =
+  "OPENCLAW_VITEST_NO_OUTPUT_PREPARATION_TIMEOUT_MS";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
 export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   ["test/vitest/vitest.e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
@@ -193,6 +196,24 @@ export function resolveVitestNoOutputHeartbeatMs(
   env: NodeJS.ProcessEnv = process.env,
 ): number | null {
   return parsePositiveInt(env[VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]);
+}
+
+/**
+ * Reads the longer no-output window that applies while a borrowed worker
+ * preparation is in flight, if one is configured. A cold worker cache compiles a
+ * whole runtime generation before Vitest writes its first byte, and that compile
+ * reports progress only on the runner's own stderr, so the scoped test-silence
+ * deadline cannot be used to bound it (#162136). Unset keeps the scoped deadline.
+ */
+export function resolveVitestPreparationTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number | null {
+  const configured = parsePositiveInt(env[VITEST_NO_OUTPUT_PREPARATION_TIMEOUT_ENV_KEY]);
+  const scoped = resolveVitestNoOutputTimeoutMs(env);
+  if (configured === null || scoped === null) {
+    return configured;
+  }
+  return Math.max(configured, scoped);
 }
 
 /**

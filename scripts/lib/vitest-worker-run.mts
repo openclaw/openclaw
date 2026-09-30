@@ -14,6 +14,14 @@ import {
 } from "./vitest-worker-artifacts.mts";
 import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
 
+/**
+ * The two observable edges of a borrowed worker preparation. Everything between
+ * them is the runner compiling a generation, which writes to the runner's own
+ * stderr and never to the borrowed child's streams, so a watchdog that only
+ * counts child output has to be told both edges (#162136).
+ */
+export type VitestWorkerPreparationState = "admitted" | "ready";
+
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
 function createVitestWorkerDirectory(env: NodeJS.ProcessEnv) {
@@ -139,7 +147,7 @@ export function createVitestWorkerRun(
     borrow<T>(
       child: ChildProcess,
       completion: Promise<T>,
-      onPreparationProgress?: () => void,
+      onPreparationStateChange?: (state: VitestWorkerPreparationState) => void,
     ): Promise<T> {
       let request: Promise<void> | undefined;
       const onMessage = (message: unknown) => {
@@ -154,7 +162,7 @@ export function createVitestWorkerRun(
             if (disposal) {
               throw new Error("Compiled subprocess owner is closing");
             }
-            onPreparationProgress?.();
+            onPreparationStateChange?.("ready");
           } catch (error) {
             reply = { type: VITEST_WORKER_PREPARE_REPLY, error: String(error) };
           }
@@ -164,10 +172,12 @@ export function createVitestWorkerRun(
             });
           }
         })();
-        // Only accepted admission and verified readiness count as progress.
-        // Duplicate IPC and the compiler's intermediate output cannot renew it.
+        // Only accepted admission and verified readiness are reported. The compile
+        // between them is silent on this child's streams by design and is bounded by
+        // the preparation deadline instead, so neither edge may be renewed by
+        // duplicate IPC or by the compiler's intermediate output.
         if (!disposal) {
-          onPreparationProgress?.();
+          onPreparationStateChange?.("admitted");
         }
       };
       child.on("message", onMessage);

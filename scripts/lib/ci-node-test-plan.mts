@@ -300,8 +300,15 @@ const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
 // Keep enough CPU here to avoid spending minutes in Vitest imports on 4 vCPU.
 const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
 // Fail the known warm-cache startup stall at its existing scoped deadline.
+// A cold worker cache compiles a whole runtime generation before the first test
+// file runs: run 36776931046 spent 55460ms in `[vitest-workers] prepared` with
+// nothing on the streams the watchdog counts, so the 60s scoped deadline killed
+// the shard (exit 143, no assertion) while it was still preparing. The admitted
+// preparation therefore gets the repo's long-running window; 60000ms still bounds
+// the test phase this override exists to fail (#162136).
 const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
+  OPENCLAW_VITEST_NO_OUTPUT_PREPARATION_TIMEOUT_MS: "300000",
 };
 // The first embedded-agent file owns 157 serial tests and can stay quiet for
 // more than five minutes on a cold GitHub-hosted fork runner. Keep the outer
