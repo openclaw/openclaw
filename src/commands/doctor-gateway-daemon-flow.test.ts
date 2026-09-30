@@ -4,6 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { ExtraGatewayService } from "../daemon/inspect.js";
 import * as launchd from "../daemon/launchd.js";
 import type { GatewayRestartHandoff } from "../infra/restart-handoff.js";
+import type { SupervisorDisplayGuidance } from "../plugins/supervisor-guidance.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import {
@@ -13,12 +14,20 @@ import {
   registerRunningBunFallbackTest,
   setPlatform,
 } from "./doctor-gateway-daemon-flow.test-support.js";
+import { registerDoctorExternalSupervisorTests } from "./doctor-gateway-external-supervision.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
   formatServiceRepairDeferredNote,
   SERVICE_REPAIR_POLICY_ENV,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
+
+const resolveSupervisorGuidance = vi.hoisted(() =>
+  vi.fn<() => Promise<SupervisorDisplayGuidance | undefined>>(),
+);
+vi.mock("../plugins/supervisor-guidance-runtime.js", () => ({
+  resolveExternalSupervisorGuidance: resolveSupervisorGuidance,
+}));
 
 const readPin = vi.hoisted(() => vi.fn());
 vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
@@ -195,6 +204,7 @@ describe("maybeRepairGatewayDaemon", () => {
   });
 
   beforeEach(() => {
+    resolveSupervisorGuidance.mockReset().mockResolvedValue(undefined);
     vi.clearAllMocks();
     mockDoctorRuntimeFacts(runExec);
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
@@ -335,42 +345,16 @@ describe("maybeRepairGatewayDaemon", () => {
     );
   });
 
-  it.each([
-    { environment: "container without an OpenClaw service", detected: true },
-    { environment: "Kubernetes pod without container markers", kubernetes: true },
-  ])(
-    "keeps port diagnostics but never probes host services in a $environment",
-    async (scenario) => {
-      setPlatform("linux");
-      isContainerEnvironment.mockReturnValue(scenario.detected === true);
-      inspectPortUsage.mockResolvedValueOnce({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 1234, command: "other-process" }],
-        hints: [],
-      });
-
-      await withEnvAsync(
-        {
-          KUBERNETES_SERVICE_HOST: scenario.kubernetes ? "10.96.0.1" : undefined,
-          KUBERNETES_SERVICE_PORT: scenario.kubernetes ? "443" : undefined,
-          OPENCLAW_SUPERVISOR_MODE: undefined,
-        },
-        runNonInteractiveRepair,
-      );
-
-      expect(inspectPortUsage).toHaveBeenCalledOnce();
-      expect(note).toHaveBeenCalledWith("Port 18789 is already in use.", "Gateway port");
-      expect(note).toHaveBeenCalledWith(formatServiceRepairDeferredNote("external"), "Gateway");
-      expect(findInstalledSystemdGatewayScope).toHaveBeenCalledTimes(scenario.detected ? 1 : 0);
-      expect(service.isLoaded).not.toHaveBeenCalled();
-      expect(service.readRuntime).not.toHaveBeenCalled();
-      expect(service.readCommand).not.toHaveBeenCalled();
-      expect(service.install).not.toHaveBeenCalled();
-      expect(service.restart).not.toHaveBeenCalled();
-      expect(findSystemGatewayServices).not.toHaveBeenCalled();
-    },
-  );
+  registerDoctorExternalSupervisorTests({
+    resolveSupervisorGuidance,
+    runNonInteractiveRepair,
+    note,
+    service,
+    isContainerEnvironment,
+    inspectPortUsage,
+    findInstalledSystemdGatewayScope,
+    findSystemGatewayServices,
+  });
 
   it("recovers an installed local service through a reachable Docker systemd manager", async () => {
     setPlatform("linux");

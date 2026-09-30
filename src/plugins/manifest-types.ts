@@ -10,6 +10,7 @@ import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type { SupervisorGuidanceV1 } from "./supervisor-guidance.js";
 
 /** UI hint metadata for plugin config schema fields. */
 export type PluginConfigUiHint = Pick<
@@ -506,6 +507,8 @@ export type PluginManifest = {
   controlUi?: PluginManifestControlUi;
   /** Static UI contributions; omission is unspecified and an empty list declares none. */
   uiCapabilities?: PluginUiCapability[];
+  /** Package-owned deployment copy available before plugin runtime activation. */
+  supervisorGuidance?: SupervisorGuidanceV1;
   themes?: PluginManifestTheme[];
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;

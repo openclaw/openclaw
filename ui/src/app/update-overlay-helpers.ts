@@ -6,7 +6,11 @@ import {
 import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
-import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type {
+  ExternalSupervisorGuidance,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
@@ -87,6 +91,7 @@ type UpdateSentinelStep = {
 };
 
 export type UpdateRestartStatusResponse = {
+  externalSupervisorGuidance?: ExternalSupervisorGuidance;
   activeRun?: UpdateRunRecord;
   lastRun?: UpdateRunRecord;
   sentinel?: {
@@ -190,6 +195,7 @@ function readUpdateFailureCause(
 }
 
 export type UpdateRunResponse = {
+  externalSupervisorGuidance?: ExternalSupervisorGuidance;
   runId?: string;
   ok?: boolean;
   result?: {
@@ -211,7 +217,7 @@ export function createUpdateStatusRefresher(params: {
   isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
   onRefreshing: (refreshing: boolean) => void;
   onStatus: (response: UpdateRestartStatusResponse) => void;
-  onError: (error: unknown, mode: "manual" | "completion") => void;
+  onError: (error: unknown, mode: "manual" | "background" | "completion") => void;
 }) {
   const refresh = async (
     mode: "manual" | "background" | "completion" = "manual",
@@ -239,7 +245,7 @@ export function createUpdateStatusRefresher(params: {
           refreshCheckout ? undefined : { timeoutMs: 5_000 },
         )
         .catch((error: unknown) => {
-          if (mode !== "background" && isCurrent()) {
+          if (isCurrent()) {
             params.onError(error, mode);
           }
           return null;
@@ -287,6 +293,7 @@ export function projectUpdateStatusResponse(
   const result = projectUpdateSentinel(response.sentinel);
   return {
     failure: result?.failure ?? null,
+    externalSupervisorGuidance: response.externalSupervisorGuidance ?? null,
     updateStatusBanner: result ? result.banner : current.updateStatusBanner,
     recordedUpdateAttempt: result ? result.attempt : current.recordedUpdateAttempt,
     ...projectUpdateCheckoutResponse(response, current),

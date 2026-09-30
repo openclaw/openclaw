@@ -230,7 +230,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved final-delivery capture ownership predicate for channel transcript mirrors.
       // +7: approved GitHub publication V2 requester/action contracts: five types and two preparers.
       // +3: approved async skill-command preparation pairs on two existing entrypoints.
-      3672,
+      // +4: versioned supervisor guidance contracts and bounded display-copy parser.
+      3676,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -251,7 +252,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same final-delivery capture ownership predicate.
       // +2: prepareGitHubPublicationRequesterV2 and preparePersonalGitHubSessionActionV2.
       // +3: the same skill-command preparation replacements.
-      2133,
+      // +1: bounded supervisor guidance parser for plugin manifests.
+      2134,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

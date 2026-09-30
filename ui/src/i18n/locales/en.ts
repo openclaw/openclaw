@@ -663,6 +663,11 @@ export const en: TranslationMap & {
         "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     },
     report: {},
+    externalSupervisor: {
+      managedBy: "Managed by {name}.",
+      runFrom: "Run from: {location}",
+      copyCommand: "Copy update command",
+    },
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",

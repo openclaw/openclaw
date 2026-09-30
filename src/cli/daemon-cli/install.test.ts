@@ -1,13 +1,18 @@
 import "./install.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { nodeProbeOutput } from "./install.test-helpers.js";
 import type { DaemonInstallOptions } from "./types.js";
+
+const resolveSupervisorGuidance = vi.hoisted(() => vi.fn());
+vi.mock("../../plugins/supervisor-guidance-runtime.js", () => ({
+  resolveExternalSupervisorGuidance: resolveSupervisorGuidance,
+}));
 
 const {
   actionState,
@@ -34,6 +39,9 @@ const {
 describe("runDaemonInstall", () => {
   setupInstallTests();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  beforeEach(() => {
+    resolveSupervisorGuidance.mockReset().mockResolvedValue(undefined);
+  });
 
   it.each([true, false])(
     "attests pre-write service holds only from native refusal facts (%s)",
@@ -287,6 +295,33 @@ describe("runDaemonInstall", () => {
     expect(committed).toBe(false);
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "blocks external-supervisor installs before mutation (guidance=%s)",
+    async (withGuidance) => {
+      if (withGuidance) {
+        resolveSupervisorGuidance.mockResolvedValue({
+          version: 1,
+          action: "install",
+          name: "Example host",
+          command: "examplectl install",
+        });
+      }
+      process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+
+      await runDaemonInstall({ json: true });
+
+      expect(actionState.failed[0]?.message).toContain(
+        withGuidance
+          ? "examplectl install"
+          : "gateway lifecycle is managed by an external supervisor",
+      );
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(service.isLoaded).not.toHaveBeenCalled();
+      expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("blocks managed install when explicit no-auth would bind to LAN", async () => {
     const config = {
