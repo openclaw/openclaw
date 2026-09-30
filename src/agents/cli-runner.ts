@@ -38,7 +38,7 @@ import {
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
   buildCliRunResult,
-  cliRunSettlementDeps,
+  cliRunSettlementDeps as cliRunnerDeps,
   formatCliTerminalInterruption,
   isClaudeCliBackend,
   resolveCliSourceReplyMirror,
@@ -82,7 +82,6 @@ import {
 import { resolveReplyExpectation } from "./reply-completion.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
-const cliRunnerDeps = cliRunSettlementDeps;
 const defaultCliRunnerDeps = { ...cliRunnerDeps };
 
 /** Overrides top-level CLI runner dependencies for tests. */
@@ -225,28 +224,33 @@ async function runCliAgentInternal(
     params.mapOperatorAuthorizationError,
   );
   const assertCallerCurrent = params.assertCurrent;
+  const generationAbortController = new AbortController();
   let generation: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
   try {
     const target = params.sessionTarget;
     generation =
       target && !params.sessionManager && !params.isolatedCompletion
-        ? await prepareCronRootSessionGeneration({
-            ...target,
-            sessionKey: params.sessionKey ?? target.sessionKey,
-            sessionId: params.sessionId,
-            lifecycleRevision:
-              params.expectedLifecycleRevision ?? params.sessionEntry?.lifecycleRevision,
-          })
+        ? await prepareCronRootSessionGeneration(
+            {
+              ...target,
+              sessionKey: params.sessionKey ?? target.sessionKey,
+              sessionId: params.sessionId,
+              lifecycleRevision:
+                params.expectedLifecycleRevision ?? params.sessionEntry?.lifecycleRevision,
+            },
+            (reason) => generationAbortController.abort(reason),
+          )
         : undefined;
+    const abortSignals = [
+      params.abortSignal,
+      modelExecution?.signal,
+      generation ? generationAbortController.signal : undefined,
+    ].filter((signal) => signal !== undefined);
     const runParams =
       modelExecution || generation
         ? {
             ...params,
-            abortSignal: modelExecution
-              ? params.abortSignal
-                ? AbortSignal.any([params.abortSignal, modelExecution.signal])
-                : modelExecution.signal
-              : params.abortSignal,
+            abortSignal: abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0],
             assertCurrent: () => {
               assertCallerCurrent?.();
               modelExecution?.assertCurrent();
