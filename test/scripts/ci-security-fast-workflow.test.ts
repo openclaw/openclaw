@@ -4,6 +4,7 @@ import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -246,30 +247,69 @@ describe("security-fast workflow", () => {
     },
   );
 
-  it.each([0, 1, 130])("propagates audit exit %s in ordinary and scheduled CI", (auditExit) => {
-    const repo = tempDirs.make("openclaw-audit-ci-");
-    mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
-    writeFileSync(
-      join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
-      `process.exit(${auditExit});\n`,
-    );
-    const result = runStep(securityStep("Audit production dependencies"), repo, {});
-    expect(result.status).toBe(auditExit);
-    expect(result.stdout).toBe("");
-    const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
-      jobs: { audit: { steps: WorkflowStep[] } };
-    };
-    const strictStep = scheduled.jobs.audit.steps.find(
-      (step) => step.name === "Audit production dependencies",
-    );
-    if (!strictStep) {
-      throw new Error("scheduled production audit step is missing");
-    }
-    const summary = join(repo, "summary.md");
-    const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
-    expect(strict.status).toBe(auditExit);
-    expect(readFileSync(summary, "utf8")).toContain("Triage owner: @steipete");
-  });
+  it.each([0, 1, 130])(
+    "propagates audit exit %s in ordinary and scheduled CI but not release validation",
+    (auditExit) => {
+      const repo = tempDirs.make("openclaw-audit-ci-");
+      mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
+      writeFileSync(
+        join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
+        `process.exit(${auditExit});\n`,
+      );
+      const audit = securityStep("Audit production dependencies");
+      const result = runStep(audit, repo, { RELEASE_ADVISORIES_NON_BLOCKING: "false" });
+      expect(result.status).toBe(auditExit);
+      expect(result.stdout).toBe("");
+      const release = runStep(audit, repo, { RELEASE_ADVISORIES_NON_BLOCKING: "true" });
+      expect(release.status).toBe(0);
+      expect(release.stdout).toBe(
+        auditExit === 0
+          ? ""
+          : `::warning title=Dependency advisories do not block releases::Production dependency audit exited ${auditExit}. Release validation records this without failing; queue the dependency bump on main after publication.\n`,
+      );
+      const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
+        jobs: { audit: { steps: WorkflowStep[] } };
+      };
+      const strictStep = scheduled.jobs.audit.steps.find(
+        (step) => step.name === "Audit production dependencies",
+      );
+      if (!strictStep) {
+        throw new Error("scheduled production audit step is missing");
+      }
+      const summary = join(repo, "summary.md");
+      const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
+      expect(strict.status).toBe(auditExit);
+      expect(readFileSync(summary, "utf8")).toContain("Triage owner: @steipete");
+    },
+  );
+
+  it.each([
+    {
+      eventName: "workflow_dispatch",
+      dispatchId: "full-release-validation-1-1-ci",
+      expected: true,
+    },
+    {
+      eventName: "workflow_dispatch",
+      dispatchId: "release-native-android-1-1-abc",
+      expected: true,
+    },
+    { eventName: "workflow_dispatch", dispatchId: "", expected: false },
+    { eventName: "pull_request", dispatchId: "full-release-validation-1-1-ci", expected: false },
+  ] as const)(
+    "treats audit findings as non-blocking only in release-owned CI ($eventName $dispatchId)",
+    ({ eventName, dispatchId, expected }) => {
+      const env = securityStep("Audit production dependencies").env ?? {};
+      expect(
+        evaluateWorkflowExpression(env.RELEASE_ADVISORIES_NON_BLOCKING, {
+          eventName,
+          dispatchId,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("generates the exact local-only scanner contract from trusted policy", () => {
     const job = securityJob();

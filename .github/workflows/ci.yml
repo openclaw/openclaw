@@ -2935,7 +2935,16 @@ jobs:
             pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
+        env:
+          # Advisories never block a release; npm preflight dependency evidence records them.
+          RELEASE_ADVISORIES_NON_BLOCKING: ${{ github.event_name == 'workflow_dispatch' && (startsWith(inputs.dispatch_id, 'full-release-validation-') || startsWith(inputs.dispatch_id, 'release-native-android-')) }}
+        run: |
+          node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high && exit 0
+          audit_exit=$?
+          if [[ "${RELEASE_ADVISORIES_NON_BLOCKING:-false}" != "true" ]]; then
+            exit "$audit_exit"
+          fi
+          echo "::warning title=Dependency advisories do not block releases::Production dependency audit exited ${audit_exit}. Release validation records this without failing; queue the dependency bump on main after publication."
 
       - name: Setup differential guard dependencies
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true'
