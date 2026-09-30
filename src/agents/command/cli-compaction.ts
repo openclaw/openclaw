@@ -457,7 +457,8 @@ export async function runCliTurnCompactionLifecycle(
       return params.sessionEntry;
     }
 
-    const resolvedBackend = resolveCliBackendConfig(params.provider, params.cfg);
+    const cliBackendId = params.cliBackendId?.trim() || params.provider;
+    const resolvedBackend = resolveCliBackendConfig(cliBackendId, params.cfg);
     const lockedHarnessRuntime = normalizeOptionalAgentRuntimeId(
       params.sessionEntry?.agentHarnessId,
     );
@@ -472,7 +473,7 @@ export async function runCliTurnCompactionLifecycle(
       resolvedBackend?.ownsNativeCompaction &&
       !isNativeHarnessCompactionSession(params.sessionEntry, params.provider)
     ) {
-      log.info(`CLI backend "${params.provider}" owns native compaction — deferring to backend`);
+      log.info(`CLI backend "${cliBackendId}" owns native compaction — deferring to backend`);
       return params.sessionEntry;
     }
 

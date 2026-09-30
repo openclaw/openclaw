@@ -9,8 +9,11 @@ export type CliCompactionContext = {
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
+  /** Selected model provider (for example "anthropic"). */
   provider: string;
   model: string;
+  /** CLI backend that ran the turn (for example "claude-cli"); owns native compaction policy. */
+  cliBackendId?: string;
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   agentAccountId?: string;
