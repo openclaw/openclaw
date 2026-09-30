@@ -421,7 +421,7 @@ describe("AppSidebar session attention", () => {
       createGateway({} as GatewayBrowserClient),
       createSessionsHarness("main", [mainKey]).sessions,
       "panel",
-      null,
+      TWO_AGENTS,
       [approval],
     );
 

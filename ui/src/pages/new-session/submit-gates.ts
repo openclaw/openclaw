@@ -119,7 +119,7 @@ export function requiresNewSessionModelSetup(options: {
       place.remotePlacement ||
       Boolean(pendingPlacement.sessionKey),
     connected: gateway.connected,
-    agentsLoaded: Boolean(agents?.agentsList && !agents.agentsListCached),
+    agentsLoaded: Boolean(agents?.agentsList),
     selectedAgentFound: selectedAgent !== undefined,
     agentModel: selectedAgent?.model?.primary,
   });
@@ -251,11 +251,11 @@ export function resolveNewSessionSubmitBlock(
       ? emptyDraftBlock(host, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
-  if (snapshot.context?.agents.state.agentsListCached) {
+  if (!snapshot.context?.agents.state.agentsList) {
     return {
       gate: "agents",
       reason: t(
-        snapshot.context.agents.state.agentsError
+        snapshot.context?.agents.state.agentsError
           ? "newSession.agentDefaultsUnavailable"
           : "newSession.loadingAgentDefaults",
       ),

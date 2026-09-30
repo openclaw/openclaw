@@ -275,7 +275,6 @@ export class NewSessionDraftController {
       this.gateway.client &&
       agents?.connected &&
       agents.client === this.gateway.client &&
-      !agents.agentsListCached &&
       this.place.agents().length > 0,
     );
   }

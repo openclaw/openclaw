@@ -41,7 +41,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("refreshes the cached agent roster when hello lands", async () => {
+  it("loads current agent discovery when hello lands", async () => {
     const { context, host, owner, snapshot } = createProfileAppearanceGateway(null);
     const agentsList = {
       defaultId: "main",
@@ -51,7 +51,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     };
     const ensureList = vi.fn(async () => agentsList);
     Object.assign(context, {
-      agents: { state: { agentsList, agentsListCached: true }, ensureList },
+      agents: { state: { agentsList: null }, ensureList },
     });
     host.routeState.routeId = "chat";
 

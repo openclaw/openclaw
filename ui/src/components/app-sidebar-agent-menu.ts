@@ -388,16 +388,20 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           ? html`
               ${renderSidebarMenuAction("command:all-agents", t("agentChip.allAgents"), "bot")}
               ${renderSidebarMenuAction("command:new-agent", t("custodian.newAgent"), "users")}
-              ${renderSidebarMenuAction(
-                "command:capabilities",
-                t("agentChip.whatCanAgentDo", { name: activeName }),
-                "bot",
-                { disabled: !params.connected },
-              )}
+              ${
+                activeId
+                  ? renderSidebarMenuAction(
+                      "command:capabilities",
+                      t("agentChip.whatCanAgentDo", { name: activeName }),
+                      "bot",
+                      { disabled: !params.connected },
+                    )
+                  : nothing
+              }
             `
           : nothing
       }
-      ${renderSidebarMenuAction("command:agent-settings", t("agentChip.agentSettings"), "settings")}
+      ${renderSidebarMenuAction("command:agent-settings", t("agentChip.agentSettings"), "settings", { disabled: !activeId })}
       ${params.rosterMode ? renderSidebarHelpMenu() : nothing}
     </wa-dropdown>
   `;
