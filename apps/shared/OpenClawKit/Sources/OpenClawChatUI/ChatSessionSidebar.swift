@@ -41,7 +41,8 @@ struct ChatSessionSidebar: View {
     @AppStorage("openclaw.chat.sidebar.status") var sessionStatus = OpenClawChatSidebarStatus.active
     @AppStorage("openclaw.chat.sidebar.ownerFilter") var sessionOwnerFilter = ""
     @AppStorage("openclaw.chat.sidebar.emptyGroups") var emptyGroups = ChatSessionSidebarModel.EmptyGroups.filtering
-    @State private var observedOrder = ChatSessionSidebarModel.ObservedOrder()
+    @State var observedOrder = ChatSessionSidebarModel.ObservedOrder()
+    @State var batch = ChatSessionSidebarBatch()
     @State private var lastSnoozeWake = Date.distantPast
 
     var body: some View {
@@ -62,7 +63,7 @@ struct ChatSessionSidebar: View {
         let hydration = self.hydrationRequest(sections)
         let selectedTreeSession = self.selectedTreeSession
         let selectedTreeID = ChatSessionSidebarChildren.key(for: selectedTreeSession)
-        return List(selection: Self.selectionBinding(model: self.viewModel)) {
+        return List(selection: self.batchSelectionBinding) {
             self.newThreadButton
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 16, trailing: 0))
                 .listRowBackground(Color.clear)
@@ -113,7 +114,15 @@ struct ChatSessionSidebar: View {
             text: self.$query,
             placement: .sidebar,
             prompt: String(localized: "Search threads"))
-        .safeAreaInset(edge: .bottom, spacing: 0) { self.connectionFooter }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                self.batchBar
+                self.connectionFooter
+            }
+        }
+        .onChange(of: self.viewModel.sidebarData?.scopeRevision) { _, _ in self.batch.reset() }
+        .onChange(of: self.rosterData?.query) { _, _ in self.batch.reset(clearConnection: false) }
+        .onChange(of: self.viewModel.sessionKey) { _, _ in self.batch.selection = .init() }
         .onChange(of: (self.rosterData?.rows ?? self.viewModel.sessions).map(\.key), initial: true) { _, keys in
             self.observedOrder.observe(keys)
         }
@@ -181,6 +190,18 @@ struct ChatSessionSidebar: View {
             if !previous, current {
                 self.viewModel.refreshSessions(limit: 200)
             }
+        }
+        .confirmationDialog(
+            String(format: String(localized: "Delete %lld threads?"), self.batch.pendingDelete.count),
+            isPresented: Binding(
+                get: { !self.batch.pendingDelete.isEmpty },
+                set: { if !$0 { self.batch.pendingDelete = [] } }))
+        {
+            Button(String(localized: "Delete"), role: .destructive) {
+                self.runSidebarBatch(.delete, rows: self.batch.pendingDelete)
+            }
+        } message: {
+            Text("The threads and their transcripts are removed from the gateway.")
         }
         .sheet(item: self.$menuPresentation) { self.menuSheet($0) }
         .sheet(item: self.$agentSessionsTarget) { ChatSessionsSheet(viewModel: self.viewModel, agentID: $0.id) }
