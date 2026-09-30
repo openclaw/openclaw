@@ -1063,7 +1063,7 @@ describe("sidebar snooze menu", () => {
         "In 1 hour · 10:00 AM",
         "In 3 hours · 12:00 PM",
         "This evening · 6:00 PM",
-        "Tomorrow · tomorrow 9:00 AM",
+        "Tomorrow · 9:00 AM",
         "Next week · Mon 9:00 AM",
       ]);
       const value = menuItem(menu, "This evening · 6:00 PM").getAttribute("value")!;

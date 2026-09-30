@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
+import { formatTimeMs } from "../lib/format.ts";
 import {
   formatSessionSnoozeWakeTime,
   isSessionSnoozed,
@@ -73,19 +74,22 @@ export class SessionMenuSnooze {
       tomorrow: "sessionsView.snoozeTomorrow",
       "next-week": "sessionsView.snoozeNextWeek",
     } as const;
-    return html`${resolveSessionSnoozePresets(now).map(
-      ({ id, snoozedUntil }) => html`
+    return html`${resolveSessionSnoozePresets(now).map(({ id, snoozedUntil }) => {
+      // The preset label already names the day; the time column only adds the clock time.
+      const when =
+        id === "next-week"
+          ? formatSessionSnoozeWakeTime(snoozedUntil, now)
+          : formatTimeMs(snoozedUntil);
+      return html`
         <wa-dropdown-item
           slot=${inline ? nothing : "submenu"}
           class="session-menu__item"
           value=${`snooze:${snoozedUntil}`}
           ?disabled=${this.host.disabled("snooze")}
           title=${this.host.disabledReason("snooze") ?? nothing}
-          ><span class="session-menu__text"
-            >${t(labels[id])} · ${formatSessionSnoozeWakeTime(snoozedUntil, now)}</span
-          ></wa-dropdown-item
+          ><span class="session-menu__text">${t(labels[id])} · ${when}</span></wa-dropdown-item
         >
-      `,
-    )}`;
+      `;
+    })}`;
   }
 }
