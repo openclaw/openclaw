@@ -971,7 +971,6 @@ export async function createGatewaySession(
           ...(existingEntry === undefined ? spawnToolPolicy : {}),
           ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };
-        const initialized = { ...patched, entry: initializedEntry };
         const explicitParentSessionKey =
           canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
         const storedParentSessionKey = explicitParentSessionKey ?? dashboardParentSessionKey;
@@ -1055,7 +1054,7 @@ export async function createGatewaySession(
         }
         validateRuntimeSelection = runtimeSelection.validate;
         if (params.fork !== true) {
-          return { ...initialized, entry };
+          return { ...patched, entry };
         }
         const forkParentSessionKey = canonicalParentSessionKey;
         if (!forkParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
@@ -1114,7 +1113,7 @@ export async function createGatewaySession(
           };
         }
         return {
-          ...initialized,
+          ...patched,
           transcriptEvents: forkResult.events,
           entry: buildForkedGatewaySessionEntry(
             entry,

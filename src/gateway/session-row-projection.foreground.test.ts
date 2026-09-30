@@ -2,6 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import {
   addSessionMember,
@@ -389,7 +390,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
         label: "Current label",
         activitySummary: {
           version: 1,
-          formatRevision: 2,
+          formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
           text: "Current summary",
           updatedAt: 3,
           sessionId: scope.sessionId,

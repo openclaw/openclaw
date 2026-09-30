@@ -107,20 +107,13 @@ export async function getNetworkRequestsViaPlaywright(opts: {
 }
 
 function consolePriority(level: string) {
-  switch (level) {
-    case "error":
-      return 3;
-    case "warn":
-    case "warning":
-      return 2;
-    case "info":
-    case "log":
-      return 1;
-    case "debug":
-      return 0;
-    default:
-      return 1;
+  if (level === "error") {
+    return 3;
   }
+  if (level === "warn" || level === "warning") {
+    return 2;
+  }
+  return level === "debug" ? 0 : 1;
 }
 
 /** Returns captured console messages at or above the requested priority level. */

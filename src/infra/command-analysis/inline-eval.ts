@@ -28,7 +28,6 @@ type InterpreterFlagSpec = {
   rawPrefixFlags?: readonly PrefixFlagSpec[];
   abbreviatedFlags?: readonly AbbreviatedFlagSpec[];
   joinedExactFlags?: ReadonlySet<string>;
-  joinedRawExactFlags?: ReadonlyMap<string, string>;
   joinedFlagDenyExact?: ReadonlySet<string>;
   joinedFlagDenyPrefixes?: readonly string[];
   prefixFlags?: readonly PrefixFlagSpec[];
@@ -451,7 +450,7 @@ function matchJoinedExactFlag(
 }
 
 function matchJoinedRawExactFlag(spec: InterpreterFlagSpec, token: string): string | null {
-  for (const [flag, label] of spec.joinedRawExactFlags ?? spec.rawExactFlags ?? []) {
+  for (const [flag, label] of spec.rawExactFlags ?? []) {
     if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
       return label;
     }

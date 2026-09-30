@@ -26,6 +26,7 @@ type ControlTarget = {
   key: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string | null;
+  operation: "archive" | "restore" | "stop";
   restricted: boolean;
 };
 
@@ -40,6 +41,7 @@ export async function prepareSessionToolControlTarget(target: ControlTarget) {
     sessionKey: target.key,
     expectedSessionId: target.expectedSessionId,
     expectedLifecycleRevision: target.expectedLifecycleRevision,
+    operation: target.operation,
     authority,
   });
 }

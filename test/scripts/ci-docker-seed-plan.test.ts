@@ -27,7 +27,7 @@ it.each([
   ["scripts/e2e/lib/fleet-cache/assertions.mjs", ["fleet-cache"]],
   ["scripts/e2e/mcp-channels-seed.ts", ["mcp-channels"]],
   ["scripts/e2e/lib/update-channel-switch/assertions.mjs", ["update-channel-switch"]],
-  ["src/state/openclaw-state-schema.ts", ["published-upgrade-survivor"]],
+  ["src/state/openclaw-state-schema.ts", []],
   ["src/state/openclaw-state-schema.test.ts", []],
 ] as const)("selects only Docker owner lanes for %s", (file, expected) => {
   expect(resolveChangedDockerSeedLanes([file])).toEqual(expected);
@@ -40,11 +40,5 @@ it("deduplicates owner lanes in the canonical execution order", () => {
       ".github/workflows/ci.yml",
       "scripts/e2e/lib/fleet-cache/assertions.mjs",
     ]),
-  ).toEqual([
-    "published-upgrade-survivor",
-    "mcp-channels",
-    "cron-mcp-cleanup",
-    "mcp-code-mode-gateway",
-    "fleet-cache",
-  ]);
+  ).toEqual(["mcp-channels", "cron-mcp-cleanup", "mcp-code-mode-gateway", "fleet-cache"]);
 });

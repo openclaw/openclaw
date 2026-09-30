@@ -1,4 +1,3 @@
-// Gateway methods expose session files and workspace browsing.
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -16,7 +15,6 @@ import {
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { sqliteMessageEventWithSeq } from "../session-transcript-entry-message.js";
 import {
@@ -56,14 +54,11 @@ import {
   type TouchedFile,
 } from "./workspace-files.js";
 
-type FileKind = TouchedFile["kind"];
-
 type TouchedFilesCacheEntry = {
   cursor: string;
   files: Map<string, TouchedFile>;
 };
 
-const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 // Control UI requests fan out per visible session; keep enough folds to avoid
 // eviction and full-transcript reparsing across realistic concurrent viewers.
 const TOUCHED_FILES_CACHE_LIMIT = 256;
@@ -111,7 +106,7 @@ function readPathArg(args: Record<string, unknown>): string | undefined {
 function addTouchedFile(
   files: Map<string, TouchedFile>,
   filePath: string | undefined,
-  kind: FileKind,
+  kind: TouchedFile["kind"],
 ) {
   if (!filePath) {
     return;
@@ -153,11 +148,6 @@ function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unkno
   }
 }
 
-function addPatchFiles(files: Map<string, TouchedFile>, args: Record<string, unknown>) {
-  addRawPatchFiles(files, args.input);
-  addStructuredPatchFiles(files, args.changes);
-}
-
 function isToolCallBlockType(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
@@ -189,7 +179,8 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
     } else if (toolName === "write" || toolName === "edit") {
       addTouchedFile(files, readPathArg(args), "modified");
     } else if (toolName === "apply_patch") {
-      addPatchFiles(files, args);
+      addRawPatchFiles(files, args.input);
+      addStructuredPatchFiles(files, args.changes);
     }
   }
 }
@@ -263,23 +254,16 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }
-  const agentId = normalizeAgentId(
-    loaded.agentId ??
-      parseAgentSessionKey(loaded.canonicalKey)?.agentId ??
-      params.agentId ??
-      parseAgentSessionKey(params.sessionKey)?.agentId,
-  );
   if (loaded.entry.repositoryWorkspaceId) {
-    return { ...loaded, agentId, root: undefined, fileRoot: undefined, diffCwd: undefined };
+    return { ...loaded, root: undefined, fileRoot: undefined, diffCwd: undefined };
   }
   const { spawnedCwd, root, diffCwd } = resolveSessionWorkspaceRoots(
     loaded.cfg,
-    agentId,
+    loaded.agentId,
     loaded.entry,
   );
   return {
     ...loaded,
-    agentId,
     root,
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
     diffCwd,
@@ -311,7 +295,7 @@ async function loadSessionFiles(params: {
   agentId?: string;
   context: GatewayRequestContext;
 }): Promise<
-  LoadedSessionFiles & { repository?: ReturnType<typeof resolveRepositoryWorkspaceAccess> }
+  LoadedSessionFiles & { repository?: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>> }
 > {
   const loaded = loadSessionFileRoot(params);
   const { storePath, entry, canonicalKey, agentId } = loaded;
@@ -338,7 +322,7 @@ async function loadSessionFiles(params: {
       async () => {},
     );
   }
-  const repository = resolveRepositoryWorkspaceAccess(loaded, params.context);
+  const repository = await resolveRepositoryWorkspaceAccess(loaded, params.context);
   const scope = {
     agentId,
     sessionEntry: entry,
@@ -380,19 +364,9 @@ function respondSessionFileTooLarge(respond: RespondFn, file: SessionFileEntry, 
     false,
     undefined,
     sessionFilesError("session_file_too_large", "session file is too large to preview", {
-      maxPreviewBytes: MAX_PREVIEW_BYTES,
+      maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
       path: file.path || filePath,
       size: file.size,
-    }),
-  );
-}
-
-function respondSessionFileUnsafe(respond: RespondFn, filePath: string) {
-  respond(
-    false,
-    undefined,
-    sessionFilesError("session_file_unsafe", "session file could not be written safely", {
-      path: filePath,
     }),
   );
 }
@@ -492,7 +466,6 @@ async function handleSessionFilesRead(
   }
 }
 
-/** Gateway handlers for session files and workspace browsing. */
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
   "sessions.files.list": defineValidatedGatewayHandler(
     "sessions.files.list",
@@ -522,7 +495,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileNotFound(respond, params.path);
       return;
     }
-    const repository = resolveRepositoryWorkspaceAccess(loaded, context);
+    const repository = await resolveRepositoryWorkspaceAccess(loaded, context);
     if (repository?.kind === "stored") {
       throw new Error("Start this cloud session before editing its repository files.");
     }
@@ -548,7 +521,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         sessionFilesError("session_file_too_large", "session file content is too large", {
-          maxPreviewBytes: MAX_PREVIEW_BYTES,
+          maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
           path: params.path,
           size: update.size,
         }),
@@ -567,7 +540,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     if (update.status === "unsafe") {
-      respondSessionFileUnsafe(respond, params.path);
+      respond(
+        false,
+        undefined,
+        sessionFilesError("session_file_unsafe", "session file could not be written safely", {
+          path: params.path,
+        }),
+      );
       return;
     }
     respond(true, {

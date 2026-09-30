@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { groupMessages } from "../chat-thread-grouping.ts";
-import { renderMessageGroup } from "./chat-message.ts";
+import { renderMessageGroup } from "./chat-message-group.ts";
 
 it("keeps MCP App raw details reachable from its widget menu", async () => {
   const container = document.createElement("div");

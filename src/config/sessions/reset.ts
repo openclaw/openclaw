@@ -1,4 +1,3 @@
-// Reset helpers classify session keys and route reset config by session/channel type.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

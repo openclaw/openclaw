@@ -1,4 +1,3 @@
-// Doctor health flow renders interactive health check output.
 import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
@@ -31,6 +30,7 @@ import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
+import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
@@ -57,46 +57,50 @@ export async function runDoctorHealthFlow(
   writeAuthority?: UpdateDoctorWriteAuthority,
   databasePreflight?: DoctorDatabasePreflight,
 ) {
-  let preparedPreflight = databasePreflight;
-  if (process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && !writeAuthority?.postCoreSchemaRepair) {
-    const { guardUpdateDoctorSchemaUpgrade, rehearseDeferredUpdateDoctorSchema } =
-      await import("../commands/doctor-update-schema-guard.js");
-    preparedPreflight =
-      (await guardUpdateDoctorSchemaUpgrade({
-        schemas: preparedPreflight,
-        runtime,
-        json: options.json,
-      })) ?? preparedPreflight;
-    if (preparedPreflight?.updateSchemaRehearsal) {
-      await rehearseDeferredUpdateDoctorSchema(preparedPreflight, runtime);
-      return;
-    }
-  }
-  const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
-  return withPluginLoadDiagnostics((diagnostics) =>
-    resultPath
-      ? captureUpdateDoctorConfigWrites(
-          resolveConfigPath(),
-          (capture) =>
-            runDoctorHealthFlowWithResult(
-              runtime,
-              options,
-              preparedPreflight,
-              diagnostics,
-              { resultPath, capture },
-              writeAuthority,
-            ),
-          writeAuthority,
-        )
-      : runDoctorHealthFlowWithResult(
+  return withDeferredDebugProxyCapture(async (resumeCapture) => {
+    let preparedPreflight = databasePreflight;
+    if (process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && !writeAuthority?.postCoreSchemaRepair) {
+      const { guardUpdateDoctorSchemaUpgrade, rehearseDeferredUpdateDoctorSchema } =
+        await import("../commands/doctor-update-schema-guard.js");
+      preparedPreflight =
+        (await guardUpdateDoctorSchemaUpgrade({
+          schemas: preparedPreflight,
           runtime,
-          options,
-          preparedPreflight,
-          diagnostics,
-          undefined,
-          writeAuthority,
-        ),
-  );
+          json: options.json,
+        })) ?? preparedPreflight;
+      if (preparedPreflight?.updateSchemaRehearsal) {
+        await rehearseDeferredUpdateDoctorSchema(preparedPreflight, runtime);
+        return;
+      }
+    }
+    const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
+    return withPluginLoadDiagnostics((diagnostics) =>
+      resultPath
+        ? captureUpdateDoctorConfigWrites(
+            resolveConfigPath(),
+            (capture) =>
+              runDoctorHealthFlowWithResult(
+                runtime,
+                options,
+                preparedPreflight,
+                diagnostics,
+                { resultPath, capture },
+                writeAuthority,
+                resumeCapture,
+              ),
+            writeAuthority,
+          )
+        : runDoctorHealthFlowWithResult(
+            runtime,
+            options,
+            preparedPreflight,
+            diagnostics,
+            undefined,
+            writeAuthority,
+            resumeCapture,
+          ),
+    );
+  });
 }
 
 async function runDoctorHealthFlowWithResult(
@@ -106,6 +110,7 @@ async function runDoctorHealthFlowWithResult(
   diagnostics: readonly PluginDiagnostic[],
   updateResult?: { resultPath: string; capture: DoctorConfigCapture },
   writeAuthority?: UpdateDoctorWriteAuthority,
+  resumeCapture?: () => void,
 ) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   const repairRuntime: RuntimeEnv = {
@@ -169,6 +174,25 @@ async function runDoctorHealthFlowWithResult(
       runtime: repairRuntime,
       assertCurrent: writeAuthority?.assertCurrent,
       databaseGenerations: writeAuthority?.databaseGenerations,
+      beforeStateMutation: async ({ env, signal }) => {
+        const [{ preserveDoctorOriginalState }, { getOpenClawDatabaseMaintenanceScope }] =
+          await Promise.all([
+            import("../commands/doctor-original-capture.js"),
+            import("../state/openclaw-state-db-async-lifecycle.js"),
+          ]);
+        const scope = getOpenClawDatabaseMaintenanceScope();
+        if (!scope) {
+          throw new Error("Original state capture requires Doctor's admitted maintenance scope.");
+        }
+        await preserveDoctorOriginalState({
+          root,
+          env,
+          runtime: repairRuntime,
+          signal,
+          assertCurrent: () => scope.assertOwnerCurrent(),
+          writeAuthority,
+        });
+      },
     });
     const runChecks = async () => {
       const doctorRuntime = maintenance ? repairRuntime : effectiveRuntime;
@@ -306,7 +330,7 @@ async function runDoctorHealthFlowWithResult(
         await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
       const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
       await maybeRepairUiProtocolFreshness(doctorRuntime, prompter);
-      noteSourceInstallIssues(root);
+      await noteSourceInstallIssues(root);
       await noteStalePluginRuntimeSymlinks(root);
       noteStartupOptimizationHints();
 
@@ -372,7 +396,20 @@ async function runDoctorHealthFlowWithResult(
       if (options.repair === true || options.yes === true) {
         const { assertDoctorMaintenanceReady } =
           await import("../commands/doctor-maintenance-inspection.js");
-        await assertDoctorMaintenanceReady(ctx.cfg, process.env, effectiveRuntime.log);
+        const readiness = await assertDoctorMaintenanceReady(
+          ctx.cfg,
+          process.env,
+          effectiveRuntime.log,
+        );
+        if (!readiness.schemaPublicationDeferred) {
+          resumeCapture?.();
+          const { isTruthyEnvValue } = await import("../infra/env.js");
+          if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_PROXY_ENABLED)) {
+            const { initializeDebugProxyCaptureAsync } =
+              await import("../proxy-capture/runtime.js");
+            await initializeDebugProxyCaptureAsync("cli");
+          }
+        }
         const { repairGatewayMaintenanceStartupFailures } =
           await import("../infra/gateway-boot-lifecycle.js");
         repairGatewayMaintenanceStartupFailures();

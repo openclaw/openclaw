@@ -242,6 +242,7 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
         };
       } finally {
         session.kill();
+        await session.wait().catch(() => undefined);
       }
     } finally {
       try {

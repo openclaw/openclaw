@@ -17,6 +17,7 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import { registerReplyOperationCompletionCases } from "./reply-run-registry.completion.cases.js";
 import { REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS } from "./reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
@@ -261,44 +262,7 @@ describe("reply run registry", () => {
     }
   });
 
-  it("runs completeThen callbacks after active state clears", () => {
-    const operation = createTestReplyOperation({
-      sessionId: "session-complete",
-    });
-    const afterClear = vi.fn(() => {
-      expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
-      expect(isReplyRunActiveForSessionId("session-complete")).toBe(false);
-    });
-
-    operation.completeThen(afterClear);
-
-    expect(operation.result).toEqual({ kind: "completed" });
-    expect(afterClear).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps owner settlement pending after stale expiry through its completion barrier", async () => {
-    const operation = createTestReplyOperation({ sessionId: "session-stale-owner" });
-    operation.setPhase("running");
-
-    expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
-    expect(replyRunRegistry.isActive("agent:main:main")).toBe(true);
-
-    const settlement = waitForReplyOperationOwnerSettlement(operation, 1_000);
-    let settled = false;
-    void settlement.then((value) => {
-      settled = value;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    const { promise: completionBarrier, resolve: releaseCompletion } = createDeferred();
-    operation.completeWithAfterClearBarrier(completionBarrier);
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    releaseCompletion();
-    await expect(settlement).resolves.toBe(true);
-  });
+  registerReplyOperationCompletionCases();
 
   it.each(["finalization expiry", "forced clear", "terminal expiry"] as const)(
     "keeps late delivery ownership pending after %s reclaims the slot",

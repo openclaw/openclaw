@@ -28,15 +28,7 @@ const FALLBACK_SKIP_TTL_MIN_MS = 1_000;
 const FALLBACK_SKIP_TTL_MAX_MS = 10 * 60_000;
 
 function resolveConfiguredSkipTtlMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[FALLBACK_SKIP_TTL_ENV];
-  if (!raw) {
-    return DEFAULT_FALLBACK_SKIP_TTL_MS;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return DEFAULT_FALLBACK_SKIP_TTL_MS;
-  }
-  const parsed = parseStrictNonNegativeInteger(trimmed);
+  const parsed = parseStrictNonNegativeInteger(env[FALLBACK_SKIP_TTL_ENV]);
   if (parsed === undefined) {
     return DEFAULT_FALLBACK_SKIP_TTL_MS;
   }

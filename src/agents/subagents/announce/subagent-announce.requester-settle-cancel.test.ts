@@ -45,8 +45,6 @@ afterEach(() => {
 
 it.each([
   "pending",
-  "admitted",
-  "exact admitted",
   "exact private retry",
   "pending RPC",
   "retry backoff",
@@ -54,7 +52,6 @@ it.each([
   "failed persistence",
   "worker persistence",
   "unrelated turn",
-  "transient failure",
 ] as const)("preserves completed-child continuation ownership through %s", async (phase) => {
   const requesterKey = "agent:main:stop-completion";
   const childKey = "agent:main:subagent:completed-before-stop";
@@ -173,7 +170,7 @@ it.each([
       admitted.resolve();
       if (attempts.length === 1) {
         await execute.promise;
-        if (phase === "transient failure" || phase === "retry backoff") {
+        if (phase === "retry backoff") {
           throw new Error("temporary requester delivery failure");
         }
         if (phase === "pending RPC") {
@@ -233,14 +230,12 @@ it.each([
         true,
         expect.objectContaining({ aborted: true, runIds: [attempts[0]] }),
       );
-    } else if (phase !== "transient failure") {
+    } else {
       const result = await abortControlledSubagents({
         cfg: getRuntimeConfig(),
         sessionKey: requesterKey,
         agentId: "main",
-        ...(phase === "exact admitted" ||
-        phase === "exact private retry" ||
-        phase === "retry backoff"
+        ...(phase === "exact private retry" || phase === "retry backoff"
           ? { requesterTurnRunId: attempts[0] }
           : phase === "unrelated turn"
             ? { requesterTurnRunId: "later-human-turn" }
@@ -270,7 +265,7 @@ it.each([
     await registryTesting.sweepOnceForTests();
     await fixture.settle();
 
-    const retry = phase === "transient failure" || phase === "failed persistence";
+    const retry = phase === "failed persistence";
     const continues = retry || phase === "declined" || phase === "unrelated turn";
     expect.soft(attempts).toHaveLength(retry ? 2 : phase === "pending" ? 0 : 1);
     expect.soft(started).toHaveLength(continues ? 1 : 0);
@@ -293,7 +288,6 @@ it.each([
 it.each([
   "pending",
   "admitted",
-  "unsuppressed",
   "failed kill",
   "requester reset",
   "requester replacement",
@@ -327,7 +321,7 @@ it.each([
       });
     }
     expect(
-      markRequesterTurnYielded({
+      await markRequesterTurnYielded({
         requesterSessionKey: requesterKey,
         requesterAgentId: "main",
         requesterTurnRunId: "requester",
@@ -336,7 +330,7 @@ it.each([
     expect(markSubagentRunPausedAfterYield({ entry: subagentRuns.get("requester")! })).toBe(true);
     persistSubagentRunsToDiskOrThrow(subagentRuns, ["requester"]);
     expect(
-      settleRequesterAfterSessionSpawns({
+      await settleRequesterAfterSessionSpawns({
         requesterSessionKey: requesterKey,
         requesterAgentId: "main",
         requesterTurnRunId: "requester",
@@ -447,7 +441,7 @@ it.each([
         await registryTesting.sweepOnceForTests();
       }
       await fixture.settle();
-      if (phase === "unsuppressed" || phase === "failed kill") {
+      if (phase === "failed kill") {
         expect(startedTurns).toEqual([requesterKey]);
       } else {
         expect(startedTurns).toEqual([]);

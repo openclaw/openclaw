@@ -3,10 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
-import {
-  acquireGatewayOwnerLease,
-  type GatewayOwnerSupervisor,
-} from "../../infra/gateway-owner-lease.js";
+import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.types.js";
 import {
   acquireGatewayStateOwner,
   tryAcquireGatewayStateOwner,

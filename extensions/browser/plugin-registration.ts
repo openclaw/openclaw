@@ -302,10 +302,13 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       maxEntries: 1,
     }),
   );
-  api.registerTool((ctx: OpenClawPluginToolContext) => {
-    const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
-    return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
-  });
+  api.registerTool(
+    (ctx: OpenClawPluginToolContext) => {
+      const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+      return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
+    },
+    { name: "browser" },
+  );
   registerBrowserCliMetadata(api);
   api.registerGatewayMethod(
     BROWSER_REQUEST_GATEWAY_METHOD,

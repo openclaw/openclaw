@@ -13,6 +13,7 @@ import { preserveQaGatewayDebugArtifacts } from "./gateway-child-artifacts.js";
 import { resolveQaGatewayChildCommand, runQaGatewayCliCommand } from "./gateway-child-command.js";
 import {
   readJsonLines,
+  registerSourceGatewayHostLifelineTest,
   writePackagedGatewayFixture,
 } from "./gateway-child-command.test-support.js";
 import {
@@ -537,13 +538,17 @@ describe("buildQaRuntimeEnv", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({}),
       providerMode: "mock-openai",
-      runtimeEnvPatch: { OPENCLAW_BUILD_PRIVATE_QA: "0", OPENCLAW_ENABLE_PRIVATE_QA_CLI: "0" },
+      runtimeEnvPatch: {
+        OPENCLAW_BUILD_PRIVATE_QA: "0",
+        OPENCLAW_ENABLE_PRIVATE_QA_CLI: "0",
+        OPENCLAW_GATEWAY_HOST_LIFELINE: undefined,
+      },
     });
 
     expect(env.OPENCLAW_TEST_FAST).toBe("1");
     expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
     expect(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).toBe("2000");
-    expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
+    expect(env.OPENCLAW_GATEWAY_HOST_LIFELINE).toBe("stdin");
     expect(env.OPENCLAW_QA_TEMP_ROOT).toBe("/tmp/openclaw-qa");
     expect(env.OPENCLAW_QA_STAGED_RUNTIME_ROOT).toBe(
       "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
@@ -901,38 +906,7 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readFile(observedEnvPath, "utf8")).resolves.toBe("");
   });
 
-  it("binds a spawned source gateway to the candidate repo root", async () => {
-    const tempParent = await tempDirs.makeTempDir("qa-gateway-source-root-");
-    qaTempPathState.preferredTmpDir = tempParent;
-    const observedEnvPath = path.join(tempParent, "observed-source-root");
-    const candidateRepoRoot = process.cwd();
-    const captureScript = [
-      'const fs = require("node:fs");',
-      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
-    ].join("\n");
-
-    const owner = ownGateway();
-    await expect(
-      owner.start({
-        repoRoot: candidateRepoRoot,
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: ["--eval", captureScript],
-        },
-        runtimeEnvPatch: {
-          OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
-        },
-        transport: {
-          requiredPluginIds: [],
-          createGatewayConfig: () => ({}),
-        },
-        transportBaseUrl: "http://127.0.0.1:43123",
-      }),
-    ).rejects.toThrow("gateway exited before listening");
-    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
-
-    await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(candidateRepoRoot);
-  });
+  registerSourceGatewayHostLifelineTest({ tempDirs, qaTempPathState, ownGateway });
 
   it("requires an Anthropic key for live Claude CLI API-key mode", async () => {
     const hostHome = await tempDirs.makeTempDir("qa-host-home-");

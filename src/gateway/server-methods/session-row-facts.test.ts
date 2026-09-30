@@ -1,6 +1,7 @@
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
+import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../../config/sessions/activity-summary.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -426,7 +427,7 @@ it("prepares board membership and recap freshness from the physical target and r
       updatedAt: 1,
       activitySummary: {
         version: 1,
-        formatRevision: 2,
+        formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
         text: "Prepared recap.",
         updatedAt: 1,
         sessionId: scope.sessionId,

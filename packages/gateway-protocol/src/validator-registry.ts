@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { lazyCompile as compile } from "./protocol-validator.js";
 import * as S from "./schema-modules.js";
 import type {
@@ -11,7 +12,7 @@ import type {
   WebPushVapidPublicKeyParams,
 } from "./schema-modules.js";
 import { WorkerComputerParamsSchema } from "./schema/worker-computer.js";
-import { checkProtocolJson } from "./validation-errors.js";
+import { checkWorkerProtocolJson } from "./schema/worker-protocol-primitives.js";
 export { validateApprovalPresentation } from "./approval-result-validators.js";
 export {
   validateDecisionReceiptV1,
@@ -37,10 +38,6 @@ export const validateWorkerSessionsSendParams = compile(S.WorkerSessionsSendPara
 export const validateWorkerPortalParams = compile(S.WorkerPortalParamsSchema);
 export const validateWorkerPresenceParams = compile(S.WorkerPresenceParamsSchema);
 export const validateWorkerComputerParams = compile(WorkerComputerParamsSchema);
-
-function checkWorkerProtocolJson(data: unknown) {
-  return checkProtocolJson(data, S.WORKER_TRANSCRIPT_MAX_JSON_DEPTH);
-}
 
 export const validateWorkerTranscriptCommitParams = compile(
   S.WorkerTranscriptCommitParamsSchema,
@@ -252,7 +249,20 @@ export const validateSecretsStoreListResult = compile(S.SecretsStoreListResultSc
 export const validateSecretsStoreSetParams = compile(S.SecretsStoreSetParamsSchema);
 export const validateSecretsStoreDeleteParams = compile(S.SecretsStoreDeleteParamsSchema);
 export const validateSecretsStoreMutationResult = compile(S.SecretsStoreMutationResultSchema);
-export const validateSessionsListParams = compile(S.SessionsListParamsSchema);
+// Runs before the schema: compare only numeric boundaries and leave type errors to the schema.
+function checkPulseBoundaries(data: unknown) {
+  const boundaries = asNullableRecord(data)?.activityPulseBoundaries;
+  return Array.isArray(boundaries) &&
+    boundaries.every((boundary): boundary is number => typeof boundary === "number") &&
+    boundaries.some((boundary, index) => boundary <= (boundaries[index - 1] ?? -Infinity))
+    ? {
+        keyword: "ascending",
+        instancePath: "/activityPulseBoundaries",
+        message: "must be strictly ascending",
+      }
+    : undefined;
+}
+export const validateSessionsListParams = compile(S.SessionsListParamsSchema, checkPulseBoundaries);
 export const validateSessionCatalogShareRoute = compile(S.SessionCatalogShareRouteSchema);
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
@@ -292,6 +302,9 @@ export const validateSessionSuggestionsResolveParams = compile(
   S.SessionSuggestionsResolveParamsSchema,
 );
 export const validateSessionTypingParams = compile(S.SessionTypingParamsSchema);
+export const validateSessionReactionsSetParams = compile(S.SessionReactionsSetParamsSchema);
+export const validateSessionReactionsListParams = compile(S.SessionReactionsListParamsSchema);
+export const validateSessionReactionEvent = compile(S.SessionReactionEventSchema);
 export const validateSessionsCreateParams = compile(S.SessionsCreateParamsSchema);
 export const validateSessionsTitlePrepareParams = compile(S.SessionsTitlePrepareParamsSchema);
 export const validateSessionsRecoverParams = compile(S.SessionsRecoverParamsSchema);

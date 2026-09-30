@@ -1,7 +1,10 @@
+import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
 // @vitest-environment node
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  areUiSessionKeysEquivalent,
+  normalizeDefaultMainSessionAliasForUi,
   canArchiveSessionRow,
   canDeleteSessionRows,
   canonicalUiSessionKeyForPersistence,
@@ -121,7 +124,39 @@ describe("parseSessionKeyParts", () => {
 });
 
 describe("UI session identity", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([undefined, null, "", " \t\n", "main", " Agent:OPS:Work "])(
+    "preserves nonblank equivalence for identical %j inputs",
+    (key) => expect(areUiSessionKeysEquivalent(key, key)).toBe(Boolean(key?.trim())),
+  );
+
+  it.each([" Agent:Cache:Matrix:Channel:!Room:Example.Org ", " MAIN \t"])(
+    "normalizes a repeated comparison key only once: %j",
+    (key) => {
+      const normalize = vi.spyOn(stringCoerce, "normalizeOptionalString");
+      const expected = normalizeDefaultMainSessionAliasForUi(key);
+      for (let i = 0; i < 10; i++) {
+        expect(normalizeDefaultMainSessionAliasForUi(key)).toBe(expected);
+        expect(areUiSessionKeysEquivalent(key, expected)).toBe(true);
+      }
+      expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(1);
+    },
+  );
+
+  it("bounds retained comparison keys without changing evicted results", () => {
+    const normalize = vi.spyOn(stringCoerce, "normalizeOptionalString");
+    const key = "Agent:MemoEviction:Signal:Group:AbC=";
+    const expected = normalizeSessionKeyForUiComparison(key);
+    for (let i = 0; i < 4096; i++) {
+      normalizeSessionKeyForUiComparison(`Agent:MemoEviction:Dashboard:${i}`);
+    }
+    expect(normalizeSessionKeyForUiComparison(key)).toBe(expected);
+    expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(2);
+  });
   it.each([
+    [" Agent:OPS:Telegram:Direct:ABC ", "agent:ops:telegram:direct:abc"],
+    [" \t\n", ""],
     [
       "Agent:Ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
       "agent:ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
@@ -177,6 +212,8 @@ describe("UI session identity", () => {
         sessionKey: selectedKey,
       };
 
+      expect(areUiSessionKeysEquivalent(selectedKey, structuralAlias)).toBe(true);
+      expect(areUiSessionKeysEquivalent(selectedKey, distinctKey)).toBe(false);
       expect(uiSessionEventMatches(host, structuralAlias)).toBe(true);
       expect(uiSessionEventMatches(host, distinctKey)).toBe(false);
       expect(canonicalUiSessionKeyForPersistence(host, structuralAlias)).toBe(selectedKey);

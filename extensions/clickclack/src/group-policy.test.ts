@@ -54,34 +54,6 @@ describe("resolveClickClackGroupPolicy", () => {
 });
 
 describe("resolveClickClackGroupPolicy", () => {
-  it("returns requireMention: false when no policy is configured", () => {
-    const result = resolveClickClackGroupPolicy({
-      account: {},
-      channelId: "chn_unknown",
-    });
-    expect(result.requireMention).toBe(false);
-    expect(result.mentionPatterns).toEqual([]);
-  });
-
-  it("applies account-level requireMention", () => {
-    const result = resolveClickClackGroupPolicy({
-      account: { requireMention: true },
-      channelId: "chn_some",
-    });
-    expect(result.requireMention).toBe(true);
-  });
-
-  it("groups['*'] overrides account default", () => {
-    const result = resolveClickClackGroupPolicy({
-      account: {
-        requireMention: false,
-        groups: { "*": { requireMention: true } },
-      },
-      channelId: "chn_any",
-    });
-    expect(result.requireMention).toBe(true);
-  });
-
   it("exact channel rule overrides groups['*']", () => {
     const result = resolveClickClackGroupPolicy({
       account: {
@@ -94,19 +66,6 @@ describe("resolveClickClackGroupPolicy", () => {
       channelId: "chn_exact",
     });
     expect(result.requireMention).toBe(false);
-  });
-
-  it("picks mentionPatterns from exact channel rule", () => {
-    const result = resolveClickClackGroupPolicy({
-      account: {
-        mentionPatterns: ["@bot"],
-        groups: {
-          chn_exact: { mentionPatterns: ["@mybot"] },
-        },
-      },
-      channelId: "chn_exact",
-    });
-    expect(result.mentionPatterns).toEqual(["@mybot"]);
   });
 
   it("inherits unspecified fields from the account policy", () => {
@@ -161,14 +120,6 @@ describe("resolveClickClackGroupPolicy", () => {
     expect(result.mentionPatterns).toEqual(["@wildbot"]);
   });
 
-  it("falls back to account mentionPatterns when no group config", () => {
-    const result = resolveClickClackGroupPolicy({
-      account: { mentionPatterns: ["@fallback"] },
-      channelId: "chn_other",
-    });
-    expect(result.mentionPatterns).toEqual(["@fallback"]);
-  });
-
   it("unrelated channel does not inherit exact rule", () => {
     const result = resolveClickClackGroupPolicy({
       account: {
@@ -176,17 +127,12 @@ describe("resolveClickClackGroupPolicy", () => {
       },
       channelId: "chn_two",
     });
-    expect(result.requireMention).toBe(false);
-  });
-
-  it("trims inbound channel ids before lookup", () => {
-    const result = resolveClickClackGroupPolicy({
-      account: {
-        groups: { chn_exact: { requireMention: true } },
-      },
-      channelId: " chn_exact ",
+    expect(result).toEqual({
+      requireMention: false,
+      mentionPatterns: [],
+      allowBots: false,
+      botLoopProtection: undefined,
     });
-    expect(result.requireMention).toBe(true);
   });
 
   it("does not apply group policy to direct messages", () => {

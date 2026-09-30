@@ -147,6 +147,7 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
               );
             });
           },
+          undefined,
           {
             timeout: 10_000,
           },

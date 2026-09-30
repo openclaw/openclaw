@@ -104,20 +104,6 @@ function managedInspection(
   };
 }
 
-function securityLabel(probe: Extract<RfbProbeResult, { kind: "rfb" }>): string {
-  const auth = classifyRfbSecurity(probe.securityTypes);
-  if (auth === "vnc-password") {
-    return "VncAuth";
-  }
-  if (auth === "ard-account") {
-    return "ARD";
-  }
-  if (auth === "none") {
-    return "None";
-  }
-  return probe.securityTypes.includes(19) ? "VeNCrypt" : "unsupported";
-}
-
 type HostDesktopInspectionParams = {
   config?: DesktopHostConfig;
   platform?: NodeJS.Platform;
@@ -193,8 +179,13 @@ async function inspectConfiguredHostDesktop(
       unavailableReason: "not-rfb",
     };
   }
-  const security = securityLabel(probe);
   const auth = classifyRfbSecurity(probe.securityTypes);
+  const security =
+    auth === "unsupported"
+      ? probe.securityTypes.includes(19)
+        ? "VeNCrypt"
+        : "unsupported"
+      : { "vnc-password": "VncAuth", "ard-account": "ARD", none: "None" }[auth];
   if (auth === "vnc-password" || auth === "ard-account") {
     return {
       status: { enabled: true, state: "attached", port, security },

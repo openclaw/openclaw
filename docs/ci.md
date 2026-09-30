@@ -35,7 +35,9 @@ fail-fast. Main and manual runs retain complete matrices. See
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
-self-upgrade job allows 130 minutes for two waves of six source versions plus setup.
+self-upgrade job gives first-hop lanes weight two at npm limit five, admitting at
+most two concurrently. It allows 210 minutes for three waves of six source versions,
+the survivor, and setup.
 Authenticated update restart uses a 2,280-second container budget, a 43-minute lane
 budget, and a lane-specific 1,500-second command timeout. Its OpenAI/recovery chunk
 allows 160 minutes for the npm-serialized lanes plus setup; see
@@ -58,9 +60,16 @@ output contract. Missing or invalid inputs still reject current PR Node planning
 
 The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Blacksmith 32-class for dispatched proof and defaults to a four-hour outer job budget. PR hydration checks stay on hosted Ubuntu; individual test deadlines remain unchanged.
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
-Additional checks start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+Additional checks and narrow-PR dependency scans start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+
+The extension package boundary row has a 30-minute job budget for SDK preparation,
+all selected plugin compiles, input-receipt validation, the required negative
+canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
+command alone; one completed compile and canary but exceeded the former
+20-minute whole-job deadline. Other additional-check rows retain 20 minutes.
+This changes no compiler concurrency, coverage, runner routing, or cache guards.
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
@@ -68,7 +77,7 @@ Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proo
 
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
-Android phone tests use up to two isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows keep third-party phone lint with its unit tests so they reuse compilation and build metadata. Wear owns Wear tests and lint, and Kotlin lint owns Play/shared lint. Normal same-repository Blacksmith runs overlap all four rows; other routes retain two. All test and lint tasks remain selected.
+Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Normal same-repository Blacksmith runs overlap all four rows; other routes retain two. All test and lint tasks remain selected.
 
 macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency and timeout limits.
 
@@ -210,9 +219,9 @@ jobs or Blacksmith registrations and falls back to fresh work on a miss.
 
 Auto-reply reply tests run files in parallel with two workers per compact group. Their planner uses separate parallel timing identities; until those have measurements, serial group costs are divided by the effective worker count, with single-file groups retaining their full cost.
 
-The measured Gateway isolated/database-worker cohort uses at most eight workers
-on those hosts with at least 28 GiB total memory; other packed groups retain
-their existing caps.
+The Gateway isolated/database-worker cohort keeps its two-worker budget, including
+roomy serial Blacksmith and hybrid jobs, to leave cold startup headroom within
+existing test deadlines. Other packed groups retain their existing caps.
 
 Commands tests share the existing worker budget across independent files. The
 Doctor session SQLite cases are split by operation while preserving the complete

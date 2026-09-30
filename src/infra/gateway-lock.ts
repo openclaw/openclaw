@@ -29,11 +29,8 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
-import {
-  acquireGatewayOwnerLease,
-  type GatewayOwnerLease,
-  type GatewayOwnerSupervisor,
-} from "./gateway-owner-lease.js";
+import { acquireGatewayOwnerLease, type GatewayOwnerLease } from "./gateway-owner-lease.js";
+import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import {
   acquireGatewayStateOwner,
@@ -47,7 +44,7 @@ import {
 export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
 const log = createSubsystemLogger("gateway");
 
-type GatewayLockHandle = {
+export type GatewayLockHandle = {
   lockPath: string;
   stateLockPath: string;
   stateDir: string;

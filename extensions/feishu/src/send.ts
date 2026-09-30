@@ -67,21 +67,6 @@ function isWithdrawnReplyError(err: unknown): boolean {
   return false;
 }
 
-type FeishuCreateMessageClient = {
-  im: {
-    message: {
-      reply: (opts: {
-        path: { message_id: string };
-        data: { content: string; msg_type: string; reply_in_thread?: true };
-      }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
-      create: (opts: {
-        params: { receive_id_type: "chat_id" | "email" | "open_id" | "union_id" | "user_id" };
-        data: { receive_id: string; content: string; msg_type: string };
-      }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
-    };
-  };
-};
-
 type FeishuMessageSender = {
   id?: string;
   id_type?: string;
@@ -111,7 +96,7 @@ type FeishuGetMessageResponse = {
 
 /** Send a direct message as a fallback when a reply target is unavailable. */
 async function sendFallbackDirect(
-  client: FeishuCreateMessageClient,
+  client: ReturnType<typeof createFeishuClient>,
   params: {
     receiveId: string;
     receiveIdType: "chat_id" | "email" | "open_id" | "union_id" | "user_id";

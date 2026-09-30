@@ -637,9 +637,6 @@ internal class NotificationNodeEventOutbox(
   }
 }
 
-/**
- * Process runtime that owns gateway sessions, node command handlers, capture managers, and UI-facing state.
- */
 data class GatewayConnectionProblem(
   val code: String?,
   val message: String,
@@ -1185,31 +1182,6 @@ class NodeRuntime private constructor(
 
   private var activeGatewayConnection: GatewayConnectionContext? = null
 
-  private val cameraHandler: CameraHandler =
-    CameraHandler(
-      appContext = appContext,
-      camera = camera,
-      setCameraAudioCaptureActive = ::setCameraAudioCaptureActive,
-      invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
-    )
-
-  private val debugHandler: DebugHandler =
-    DebugHandler(
-      appContext = appContext,
-      identityStore = identityStore,
-    )
-
-  private val locationHandler: LocationHandler =
-    LocationHandler(
-      appContext = appContext,
-      location = location,
-      json = json,
-      isForeground = { _isForeground.value },
-      locationMode = { locationMode.value },
-      backgroundLocationEnabled = { SensitiveFeatureConfig.backgroundLocationEnabled },
-      locationPreciseEnabled = { locationPreciseEnabled.value },
-    )
-
   private val permissionSnapshot = {
     readAndroidPermissionSnapshot(
       context = appContext,
@@ -1220,53 +1192,9 @@ class NodeRuntime private constructor(
     )
   }
 
-  private val deviceHandler: DeviceHandler =
-    DeviceHandler(
-      appContext = appContext,
-      smsEnabled = SensitiveFeatureConfig.smsEnabled,
-      callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
-      photosEnabled = SensitiveFeatureConfig.photosEnabled,
-      permissionSnapshot = permissionSnapshot,
-    )
-
-  private val notificationsHandler: NotificationsHandler =
-    NotificationsHandler(
-      appContext = appContext,
-    )
-
-  private val systemHandler: SystemHandler =
-    SystemHandler(
-      appContext = appContext,
-    )
-
-  private val photosHandler: PhotosHandler =
-    PhotosHandler(
-      appContext = appContext,
-    )
-
-  private val contactsHandler: ContactsHandler =
-    ContactsHandler(
-      appContext = appContext,
-    )
-
-  private val calendarHandler: CalendarHandler =
-    CalendarHandler(
-      appContext = appContext,
-    )
-
-  private val callLogHandler: CallLogHandler =
-    CallLogHandler(
-      appContext = appContext,
-    )
-
   private val motionHandler: MotionHandler =
     MotionHandler(
       appContext = appContext,
-    )
-
-  private val smsHandlerImpl: SmsHandler =
-    SmsHandler(
-      sms = sms,
     )
 
   private val mobileUiHandler = MobileUiHandler()
@@ -1274,11 +1202,41 @@ class NodeRuntime private constructor(
 
   private val invokeDispatcher: InvokeDispatcher =
     InvokeDispatcher(
-      cameraHandler = cameraHandler,
-      locationHandler = locationHandler,
-      deviceHandler = deviceHandler,
-      notificationsHandler = notificationsHandler,
-      systemHandler = systemHandler,
+      cameraHandler =
+        CameraHandler(
+          appContext = appContext,
+          camera = camera,
+          setCameraAudioCaptureActive = ::setCameraAudioCaptureActive,
+          invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
+        ),
+      debugHandler = DebugHandler(appContext = appContext, identityStore = identityStore),
+      locationHandler =
+        LocationHandler(
+          appContext = appContext,
+          location = location,
+          json = json,
+          isForeground = { _isForeground.value },
+          locationMode = { locationMode.value },
+          backgroundLocationEnabled = { SensitiveFeatureConfig.backgroundLocationEnabled },
+          locationPreciseEnabled = { locationPreciseEnabled.value },
+        ),
+      deviceHandler =
+        DeviceHandler(
+          appContext = appContext,
+          smsEnabled = SensitiveFeatureConfig.smsEnabled,
+          callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
+          photosEnabled = SensitiveFeatureConfig.photosEnabled,
+          permissionSnapshot = permissionSnapshot,
+        ),
+      notificationsHandler = NotificationsHandler(appContext = appContext),
+      systemHandler = SystemHandler(appContext = appContext),
+      photosHandler = PhotosHandler(appContext = appContext),
+      contactsHandler = ContactsHandler(appContext = appContext),
+      calendarHandler = CalendarHandler(appContext = appContext),
+      callLogHandler = CallLogHandler(appContext = appContext),
+      motionHandler = motionHandler,
+      smsHandler = SmsHandler(sms = sms),
+      mobileUiHandler = mobileUiHandler,
       talkHandler =
         object : TalkHandler {
           override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStart()
@@ -1289,14 +1247,6 @@ class NodeRuntime private constructor(
 
           override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttOnce()
         },
-      photosHandler = photosHandler,
-      contactsHandler = contactsHandler,
-      calendarHandler = calendarHandler,
-      motionHandler = motionHandler,
-      smsHandler = smsHandlerImpl,
-      debugHandler = debugHandler,
-      callLogHandler = callLogHandler,
-      mobileUiHandler = mobileUiHandler,
       isForeground = { _isForeground.value },
       cameraEnabled = { cameraEnabled.value },
       locationEnabled = { locationMode.value != LocationMode.Off },
@@ -2264,7 +2214,7 @@ class NodeRuntime private constructor(
     lazy {
       MessageSpeechController(
         scope = scope,
-        synthesizer = MessageSpeechClient(session = operatorSession, json = json),
+        synthesizer = MessageSpeechClient(requestDetailed = operatorSession::requestDetailed, json = json),
         player = TalkAudioPlayer(appContext),
         localSpeech = SystemSpeechSpeaker(appContext),
       ).also { controller ->
@@ -3119,7 +3069,6 @@ class NodeRuntime private constructor(
   val locationMode: StateFlow<LocationMode> = prefs.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = prefs.preventSleep
-  val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
@@ -3200,7 +3149,6 @@ class NodeRuntime private constructor(
   val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
-  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   private var didAutoConnect = false
 
@@ -3869,20 +3817,6 @@ class NodeRuntime private constructor(
         end = normalizedEnd,
       )
     }
-  }
-
-  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    val normalized = value.coerceAtLeast(1)
-    if (prefs.notificationForwardingMaxEventsPerMinute.value == normalized) return
-    notificationOutbox.updatePolicy {
-      prefs.setNotificationForwardingMaxEventsPerMinute(normalized)
-    }
-  }
-
-  fun setNotificationForwardingSessionKey(value: String?) {
-    val normalized = value?.trim()?.takeIf(String::isNotEmpty)
-    if (prefs.notificationForwardingSessionKey.value == normalized) return
-    notificationOutbox.updatePolicy { prefs.setNotificationForwardingSessionKey(normalized) }
   }
 
   fun setVoiceScreenActive(active: Boolean) {
@@ -9678,30 +9612,19 @@ internal fun manualGatewayEndpoint(entry: GatewayRegistryEntry): GatewayEndpoint
 internal fun gatewayRegistryEntry(
   endpoint: GatewayEndpoint,
   existing: GatewayRegistryEntry?,
-): GatewayRegistryEntry =
-  if (endpoint.stableId.startsWith("manual|")) {
-    GatewayRegistryEntry(
-      stableId = endpoint.stableId,
-      kind = GatewayRegistryEntryKind.MANUAL,
-      name = endpoint.name,
-      host = endpoint.host,
-      port = endpoint.port,
-      tls = endpoint.tlsEnabled,
-      contextPath = endpoint.contextPath,
-      lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
-    )
-  } else {
-    GatewayRegistryEntry(
-      stableId = endpoint.stableId,
-      kind = GatewayRegistryEntryKind.DISCOVERED,
-      name = endpoint.name,
-      host = endpoint.host,
-      port = endpoint.port,
-      contextPath = endpoint.contextPath,
-      tls = true,
-      lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
-    )
-  }
+): GatewayRegistryEntry {
+  val manual = endpoint.stableId.startsWith("manual|")
+  return GatewayRegistryEntry(
+    stableId = endpoint.stableId,
+    kind = if (manual) GatewayRegistryEntryKind.MANUAL else GatewayRegistryEntryKind.DISCOVERED,
+    name = endpoint.name,
+    host = endpoint.host,
+    port = endpoint.port,
+    tls = !manual || endpoint.tlsEnabled,
+    contextPath = endpoint.contextPath,
+    lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
+  )
+}
 
 /** HTTP(S) base URL serving the connected gateway's Control UI pages. */
 internal fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String {
@@ -10115,12 +10038,7 @@ fun providerDisplayName(provider: String): String =
     }
 
     else -> {
-      provider
-        .replace('-', ' ')
-        .replace('_', ' ')
-        .split(' ')
-        .filter { it.isNotBlank() }
-        .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
+      gatewayIdentifierDisplayName(provider)
         .replace(" Ai", " AI")
         .ifBlank { "Provider" }
     }
@@ -10141,15 +10059,18 @@ fun channelDisplayLabel(channel: String): String =
     }
 
     else -> {
-      channel
-        .replace('-', ' ')
-        .replace('_', ' ')
-        .split(' ')
-        .filter { it.isNotBlank() }
-        .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
+      gatewayIdentifierDisplayName(channel)
         .ifBlank { "Channel" }
     }
   }
+
+private fun gatewayIdentifierDisplayName(value: String): String =
+  value
+    .replace('-', ' ')
+    .replace('_', ' ')
+    .split(' ')
+    .filter { it.isNotBlank() }
+    .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
 
 private fun gatewayControlPageTlsFingerprint(
   prefs: SecurePrefs,

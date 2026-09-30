@@ -19,6 +19,7 @@ import {
   readSessionEntriesFromStoreInWorker,
   loadSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { preserveSqliteSameKeySessionRolloverLineage } from "../../config/sessions/session-entry-lineage.js";
 import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -299,10 +300,26 @@ export function resolveCronSession(
     sessionEntry.agentHarnessId = undefined;
     sessionEntry.compactionCount = 0;
   }
+  if (sourceSessionDiffers) {
+    delete sessionEntry.usageFamilyKey;
+    delete sessionEntry.usageFamilySessionIds;
+  }
+  if (targetEntry) {
+    copySessionFields(sessionEntry, targetEntry, ["usageFamilyKey", "usageFamilySessionIds"]);
+  }
   return {
     storePath,
     store,
-    sessionEntry: preserveCreationStamp(sessionEntry, targetEntry),
+    sessionEntry: preserveCreationStamp(
+      targetEntry?.sessionId
+        ? preserveSqliteSameKeySessionRolloverLineage({
+            next: sessionEntry,
+            previous: targetEntry,
+            sessionKey: params.sessionKey,
+          })
+        : sessionEntry,
+      targetEntry,
+    ),
     lifecycleRevision,
     systemSent,
     isNewSession,

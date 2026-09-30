@@ -9,7 +9,12 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type GatewaySuspendAdmissionPhase = GatewaySuspension["phase"];
 
-export type GatewayShutdownTrigger = "SIGTERM" | "SIGINT" | "SIGUSR2" | "hosted Gateway stop";
+export type GatewayShutdownTrigger =
+  | "SIGTERM"
+  | "SIGINT"
+  | "SIGUSR2"
+  | "hosted Gateway stop"
+  | "host lifeline closed";
 export type GatewayDrainReason =
   | "restart"
   | `${"stop" | "restart"} (${GatewayShutdownTrigger}${"" | `: ${string}`})`;

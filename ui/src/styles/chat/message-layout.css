@@ -270,6 +270,7 @@
 }
 
 .chat-message-image-button {
+  position: relative;
   display: inline-flex;
   max-width: 100%;
   padding: 0;
@@ -277,6 +278,18 @@
   border-radius: var(--radius-xl);
   background: transparent;
   cursor: zoom-in;
+}
+
+/* Keep the edge above hover-zoomed pixels without changing image layout. */
+.chat-message-image-button:not(.chat-attachment-image-button)::before {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 4%, transparent);
+  border-radius: inherit;
+  corner-shape: inherit;
+  content: "";
+  pointer-events: none;
 }
 
 .chat-image-frame {
@@ -405,12 +418,14 @@
   background: transparent;
 }
 
-.chat-image-action:focus-visible {
+.chat-image-action:focus-visible,
+.chat-assistant-attachment-card__action:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
-.chat-image-action svg {
+.chat-image-action svg,
+.chat-assistant-attachment-card__action svg {
   width: 15px;
   height: 15px;
 }
@@ -881,16 +896,6 @@
 .chat-assistant-attachment-card__action:hover {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--media-foreground) 8%, transparent);
-}
-
-.chat-assistant-attachment-card__action:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-.chat-assistant-attachment-card__action svg {
-  width: 15px;
-  height: 15px;
 }
 
 .chat-assistant-attachment-card__expand--icon svg {

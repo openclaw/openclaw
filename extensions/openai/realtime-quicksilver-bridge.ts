@@ -3,6 +3,7 @@ import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
   rawDataToString,
   RealtimeVoiceSessionLifecycle,
+  type RealtimeVoiceAgentConsultTranscriptEntry,
   type RealtimeVoiceAudioOutputPort,
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeCreateRequest,
@@ -14,7 +15,6 @@ import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { OpenAILiveDelegationQueue } from "./realtime-live-delegation-queue.js";
 import { assertOpenAIQuicksilverPcmOutput } from "./realtime-quicksilver-audio-buffer.js";
 import { dispatchOpenAIQuicksilverBridgeDelegation } from "./realtime-quicksilver-bridge-delegation.js";
-import type { OpenAIQuicksilverTranscriptEntry } from "./realtime-quicksilver-instructions.js";
 import {
   captureOpenAIQuicksilverTransportEvent,
   buildOpenAIQuicksilverContextAppend,
@@ -195,28 +195,23 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       resolveReady = resolve;
       rejectReady = reject;
     });
-    const settleReady = (providerReady = true) => {
+    const settleReady = (providerReady = true, error?: Error) => {
       if (readySettled) {
         return;
       }
       readySettled = true;
-      reachedReady = providerReady;
+      if (!error) {
+        reachedReady = providerReady;
+      }
       if (readyTimeout) {
         clearTimeout(readyTimeout);
       }
       removeAbortListener();
-      resolveReady();
-    };
-    const failReady = (error: Error) => {
-      if (readySettled) {
-        return;
+      if (error) {
+        rejectReady(error);
+      } else {
+        resolveReady();
       }
-      readySettled = true;
-      if (readyTimeout) {
-        clearTimeout(readyTimeout);
-      }
-      removeAbortListener();
-      rejectReady(error);
     };
     const failStartup = (reason: string) => {
       if (this.lifecycle.terminalOutcome(connection) === "completed") {
@@ -227,7 +222,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       this.failLifecycle(connection);
-      failReady(new Error(projectOpenAIQuicksilverErrorMessage("transport")));
+      settleReady(false, new Error(projectOpenAIQuicksilverErrorMessage("transport")));
       this.closeSocket(reason, connected.socket);
     };
     const readyTimeout = setTimeout(() => {
@@ -299,7 +294,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         }
         const error = new Error("GPT-Live WebSocket closed before session.started");
         this.failLifecycle(connection);
-        failReady(error);
+        settleReady(false, error);
         this.lifecycle.close(connection, "error");
         return;
       }
@@ -667,7 +662,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private publishTranscriptSnapshots(
-    publication: readonly OpenAIQuicksilverTranscriptEntry[],
+    publication: readonly RealtimeVoiceAgentConsultTranscriptEntry[],
     connection = this.lifecycle.currentConnection(),
   ): void {
     this.transcript.publish(publication, {

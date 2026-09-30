@@ -344,10 +344,16 @@ export function startGatewayEventSubscriptions(params: {
                 key,
                 options?.agentId,
               );
+              const read = options?.sessionRows;
+              const prepared = scope?.[1] ? read?.describe({ key, agentId: scope[1] }) : undefined;
               const snapshot = scope?.[1]
-                ? (params.getSessionRowProjection?.()?.snapshot({ key, agentId: scope[1] }) ?? {
-                    row: null,
-                  })
+                ? read
+                  ? prepared
+                    ? { row: read.present(prepared), lifecycleRunId: prepared.entry.lifecycleRunId }
+                    : { row: null }
+                  : (params.getSessionRowProjection?.()?.snapshot({ key, agentId: scope[1] }) ?? {
+                      row: null,
+                    })
                 : { row: null };
               return options?.ownerEvent?.sessionId &&
                 snapshot.row?.sessionId !== options.ownerEvent.sessionId
@@ -356,7 +362,7 @@ export function startGatewayEventSubscriptions(params: {
             },
             persistGatewaySessionLifecycleEventForEvent: sessionLifecyclePersistence.persist,
             updateRunToolErrorSummary: ({ runId, clientRunId, summary }) => {
-              for (const candidateRunId of new Set([runId, clientRunId])) {
+              for (const candidateRunId of trackedRunIds(runId, clientRunId)) {
                 const entry = params.chatAbortControllers.get(candidateRunId);
                 if (entry) {
                   entry.toolErrorSummary = summary;
@@ -440,7 +446,7 @@ export function startGatewayEventSubscriptions(params: {
         ? undefined
         : params.chatRunState.registry.peek(evt.runId);
       const clientRunId = chatLink?.clientRunId ?? evt.runId;
-      const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
+      const candidateRunIds = trackedRunIds(evt.runId, clientRunId);
       const observedAt =
         typeof evt.data.endedAt === "number" && Number.isFinite(evt.data.endedAt)
           ? evt.data.endedAt
@@ -554,7 +560,7 @@ export function startGatewayEventSubscriptions(params: {
         ? undefined
         : params.chatRunState.registry.peek(evt.runId);
       const clientRunId = chatLink?.clientRunId ?? evt.runId;
-      const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
+      const candidateRunIds = trackedRunIds(evt.runId, clientRunId);
       const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
       for (const candidateRunId of candidateRunIds) {
         const entry = params.chatAbortControllers.get(candidateRunId);

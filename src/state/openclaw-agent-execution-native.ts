@@ -265,6 +265,13 @@ export function createAgentDatabaseNativeGeneration(
           quickCheckPending = true;
           return undefined;
         }
+        if (request.stage === "prepare" && isRecord(facts) && facts.kind === "agent-open-resume") {
+          assertSourceCurrent();
+          if (!lease || !isDeepStrictEqual(facts.lease, lease)) {
+            throw new Error("Agent open resume differs from its captured native lease");
+          }
+          return undefined;
+        }
         if (request.stage === "open") {
           if (!isDeepStrictEqual(facts, input)) {
             throw new Error("Agent database open differs from its captured owner");

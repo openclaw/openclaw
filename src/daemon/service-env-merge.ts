@@ -13,7 +13,7 @@ export function resolveWindowsServiceCommandProfile(
   if (!command.programArguments[0]?.trim()) {
     return { kind: "unavailable" };
   }
-  const position = resolveRuntimeScriptPosition(command.programArguments);
+  const { position } = resolveRuntimeScriptPosition(command.programArguments);
   if (typeof position !== "number" && position.kind !== "not-runtime") {
     return { kind: "unavailable" };
   }

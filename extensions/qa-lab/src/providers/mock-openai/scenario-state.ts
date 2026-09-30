@@ -12,6 +12,7 @@ export function createQaMockScenarioStateStore() {
       subagentFanoutPhase: 0,
       subagentHandoffSpawned: false,
       repeatedRequestRecoveryAttempts: 0,
+      stalledTurnRecoveryAttempts: 0,
       toolLoopReadAttempts: 0,
     };
     scenarioStates.set(sessionId, state);

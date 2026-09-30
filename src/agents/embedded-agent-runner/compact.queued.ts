@@ -1,6 +1,3 @@
-/**
- * Queues embedded-agent session compaction onto the correct command lane.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   loadSessionEntryReadOnly,
@@ -354,7 +351,7 @@ async function compactEmbeddedAgentSessionImpl(
     };
     const run = async () => {
       owner.captureContext();
-      ensureContextEnginesInitialized();
+      await ensureContextEnginesInitialized();
       const contextEngine = await owner.resolveEngine(() =>
         resolveContextEngine(preparedParams.config, {
           agentDir: preparedParams.agentDir,
@@ -442,8 +439,7 @@ async function compactResolvedContextEngine(
     preparedModelRuntime,
   });
   assertQueuedCompactionPreparationActive(params, host);
-  const { model: ceModel, authStorage, modelRegistry } = modelResolution;
-  const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
+  const { model: ceRuntimeModel, authStorage, modelRegistry } = modelResolution;
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth).
   const preparedAuth = await prepareCompactionHarnessAuth({
@@ -504,7 +500,7 @@ async function compactResolvedContextEngine(
         authProfileMode,
       });
       assertQueuedCompactionPreparationActive(params, host);
-      return { ...resolved, model: resolved.model as ProviderRuntimeModel | undefined };
+      return resolved;
     },
   });
   assertQueuedCompactionPreparationActive(params, host);
@@ -536,7 +532,6 @@ async function compactResolvedContextEngine(
     provider: ceContextConfigProvider,
     modelId: ceModelId,
     model: effectiveRuntimeModel,
-    agentId: runtimeTarget.agentId,
     requestedTokenBudget: params.contextTokenBudget,
   });
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({

@@ -1,4 +1,3 @@
-// Bundles language-server metadata exposed by plugins.
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,7 +17,7 @@ import type { PluginBundleFormat } from "./manifest-types.js";
 import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 
 /** LSP server config block loaded from plugin bundle metadata. */
-export type BundleLspServerConfig = Record<string, unknown>;
+type BundleLspServerConfig = Record<string, unknown>;
 
 /** Merged LSP config contributed by enabled plugin bundles. */
 type BundleLspConfig = {

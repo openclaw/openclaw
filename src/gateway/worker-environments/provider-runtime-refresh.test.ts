@@ -175,7 +175,7 @@ describe("worker environment runtime upgrades", () => {
           database: support.testState.stateDb,
           now: () => support.testState.nowMs,
         });
-        restarted.recoverWorkerSessionToolOperationsAfterRestart();
+        await restarted.recoverWorkerSessionToolOperationsAfterRestart();
         restarted.clearLocalTurnClaimsAfterRestart();
         return { placements: restarted, ...bindService(restarted, true) };
       },

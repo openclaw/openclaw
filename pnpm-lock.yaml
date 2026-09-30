@@ -292,9 +292,6 @@ importers:
       chalk:
         specifier: 6.0.0
         version: 6.0.0
-      chokidar:
-        specifier: 5.0.0
-        version: 5.0.0
       chrome-devtools-mcp:
         specifier: 1.9.0
         version: 1.9.0(patch_hash=832ce1d2ff002b44edb93bae88858d6edd8bc833acc87dd0fe82454d8834e340)
@@ -699,9 +696,6 @@ importers:
       '@smithy/node-http-handler':
         specifier: 4.12.1
         version: 4.12.1
-      '@smithy/shared-ini-file-loader':
-        specifier: 4.7.2
-        version: 4.7.2
       '@smithy/types':
         specifier: 4.18.0
         version: 4.18.0
@@ -1247,9 +1241,6 @@ importers:
       typebox:
         specifier: 1.3.34
         version: 1.3.34
-      zod:
-        specifier: 4.6.5
-        version: 4.6.5
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1576,9 +1567,6 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.21.2
         version: 0.21.2
-      chokidar:
-        specifier: 5.0.0
-        version: 5.0.0
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -2169,10 +2157,6 @@ importers:
         version: link:../..
 
   extensions/slack-huddles:
-    dependencies:
-      typebox:
-        specifier: 1.3.34
-        version: 1.3.34
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2237,10 +2221,6 @@ importers:
         version: link:../..
 
   extensions/teams-meetings:
-    dependencies:
-      typebox:
-        specifier: 1.3.34
-        version: 1.3.34
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2554,10 +2534,6 @@ importers:
         version: link:../..
 
   extensions/zoom-meetings:
-    dependencies:
-      typebox:
-        specifier: 1.3.34
-        version: 1.3.34
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -5592,10 +5568,6 @@ packages:
     resolution: {integrity: sha512-Asd04MaxODN6FNY8EPTeCAM4kPNi3jDUAjZU0Y4F9rHvpLUrrUo7KLcxFgSthywFr6dZfIyDLIJda6jxmVTk5w==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/shared-ini-file-loader@4.7.2':
-    resolution: {integrity: sha512-XsIDj5gVG4YRxGS4n4TiBDAogPWRHXKZyor6JW/sEuaa/7BvKADe9j45jI2dPYCnYbKkLBmbZ4qN9ns0sH+kMQ==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/signature-v4@5.7.3':
     resolution: {integrity: sha512-7ImGm+FkHRLcBaRttIAMZ6bzJZWb2cJGoYjq46F2UjycujWzrL9GEN9h4w7eQyXJYnltrUhxbbieBAIRrdqpow==}
     engines: {node: '>=18.0.0'}
@@ -6692,10 +6664,6 @@ packages:
 
   charenc@0.0.2:
     resolution: {integrity: sha512-yrLQ/yVUFXkzg7EDQsPieE/53+0RlaWTs+wBrvW36cyilJ2SaDWfl4Yj7MtLTXleV9uEKefbAGUPv2/iWSooRA==}
-
-  chokidar@5.0.0:
-    resolution: {integrity: sha512-TQMmc3w+5AxjpL8iIiwebF73dRDF4fBIieAqGn9RGCWaEVwQ6Fb2cGe31Yns0RRIzii5goJ1Y7xbMwo1TxMplw==}
-    engines: {node: '>= 20.19.0'}
 
   chownr@3.0.0:
     resolution: {integrity: sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g==}
@@ -9231,10 +9199,6 @@ packages:
 
   readable-stream@2.3.8:
     resolution: {integrity: sha512-8p0AUk4XODgIewSi0l8Epjs+EVnWiK7NoDIEGU0HhE7+ZyY8D1IMY7odu5lRrFXGg71L15KG8QrPmum45RTtdA==}
-
-  readdirp@5.1.1:
-    resolution: {integrity: sha512-Kko+Y5XQ6fM+Ce3dq3m9YGxnacYZYl9cA1wZjaF3Vbry2L3i1qVg8+CAgNPsXRArPMUMCaOR7oa9Nqntc43JKA==}
-    engines: {node: '>= 20.19.0'}
 
   real-require@0.2.0:
     resolution: {integrity: sha512-57frrGM/OCTLqLOAh0mhVA9VBMHd+9U7Zb2THMGdBUoZVOtGbJzjxsYGDJ3A9AYYCP4hn6y1TVbaOfzWtm5GFg==}
@@ -13180,11 +13144,6 @@ snapshots:
       '@smithy/core': 3.34.1
       tslib: 2.8.1
 
-  '@smithy/shared-ini-file-loader@4.7.2':
-    dependencies:
-      '@smithy/core': 3.34.1
-      tslib: 2.8.1
-
   '@smithy/signature-v4@5.7.3':
     dependencies:
       '@smithy/core': 3.34.1
@@ -14291,10 +14250,6 @@ snapshots:
 
   charenc@0.0.2:
     optional: true
-
-  chokidar@5.0.0:
-    dependencies:
-      readdirp: 5.1.1
 
   chownr@3.0.0: {}
 
@@ -17120,8 +17075,6 @@ snapshots:
       safe-buffer: 5.1.2
       string_decoder: 1.1.1
       util-deprecate: 1.0.2
-
-  readdirp@5.1.1: {}
 
   real-require@0.2.0: {}
 

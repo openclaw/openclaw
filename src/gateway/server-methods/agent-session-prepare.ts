@@ -157,27 +157,16 @@ export function prepareAgentSession(params: {
     params.preAttachmentSession?.canonicalKey === canonicalKey
       ? params.preAttachmentSession
       : undefined;
-  if (sessionExistedBeforeAttachmentSetup && !entry) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Session "${canonicalKey}" was deleted while starting work. Retry.`,
-      ),
-    );
-    return undefined;
-  }
   if (
     sessionExistedBeforeAttachmentSetup &&
-    entry?.sessionId !== sessionExistedBeforeAttachmentSetup.sessionId
+    (!entry || entry.sessionId !== sessionExistedBeforeAttachmentSetup.sessionId)
   ) {
     params.respond(
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        `Session "${canonicalKey}" changed while starting work. Retry.`,
+        `Session "${canonicalKey}" ${entry ? "changed" : "was deleted"} while starting work. Retry.`,
       ),
     );
     return undefined;

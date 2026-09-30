@@ -1,74 +1,41 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  PluginHookSkillChangedEvent,
-  PluginHookSkillContext,
   PluginHookSkillProposalEvaluateEvent,
   PluginHookSkillProposalChangedEvent,
 } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 
-const ctx: PluginHookSkillContext = {
-  workspaceDir: "/tmp/openclaw-workspace",
-  agentId: "main",
-};
-
-const evaluationEvent: PluginHookSkillProposalEvaluateEvent = {
-  proposal: {
-    id: "proposal-1",
-    kind: "update",
-    revision: "v2",
-    revisionSha256: "sha256:revision",
-    targetCurrentSha256: "sha256:current",
-  },
-  skill: {
-    name: "Demo Skill",
-    skillKey: "demo-skill",
-    description: "Demonstrates proposal evaluation.",
-    source: "openclaw-workspace",
-  },
+const ctx = { workspaceDir: "/tmp/openclaw-workspace", agentId: "main" };
+const event: PluginHookSkillProposalEvaluateEvent = {
+  proposal: { id: "proposal-1", kind: "update", revision: "v2", revisionSha256: "sha256:revision" },
+  skill: { name: "Demo", skillKey: "demo", description: "Proposal evaluation" },
   candidate: {
     skillMd: {
       path: "SKILL.md",
-      content: "---\nname: demo-skill\n---\n",
+      content: "demo",
       encoding: "utf8",
       sha256: "sha256:candidate",
-      sizeBytes: 30,
+      sizeBytes: 4,
     },
     files: [],
-    treeSha256: "sha256:candidate-tree",
-  },
-  baseline: {
-    skillMd: {
-      path: "SKILL.md",
-      content: "---\nname: demo-skill\n---\nold\n",
-      encoding: "utf8",
-      sha256: "sha256:baseline",
-      sizeBytes: 34,
-    },
-    files: [],
-    treeSha256: "sha256:baseline-tree",
+    treeSha256: "sha256:tree",
   },
   reason: "revised",
 };
 
 describe("skill lifecycle hooks", () => {
-  it("collects every proposal evaluator with stable priority and plugin attribution", async () => {
-    const high = vi.fn(() => ({
+  it("collects every evaluator in priority order with package and registration attribution", async () => {
+    const result = {
       summary: "candidate regressed",
-      metrics: { score: 0.4 },
-      evaluatorVersion: "rules-3",
       decision: "block" as const,
       decisionReason: "score below baseline",
-    }));
-    const low = vi.fn(() => undefined);
+    };
+    const high = vi.fn(() => result);
+    const low = vi.fn();
     const registry = createMockPluginRegistry([
-      {
-        hookName: "skill_proposal_evaluate",
-        pluginId: "low",
-        priority: 10,
-        handler: low,
-      },
+      { hookName: "skill_proposal_evaluate", pluginId: "low", priority: 10, handler: low },
       {
         hookName: "skill_proposal_evaluate",
         pluginId: "high",
@@ -77,264 +44,138 @@ describe("skill lifecycle hooks", () => {
         handler: high,
       },
     ]);
-    const highPlugin = registry.plugins.find((plugin) => plugin.id === "high")!;
-    highPlugin.packageVersion = "2.1.0";
-    highPlugin.version = "runtime-override";
-
-    const outcomes = await createHookRunner(registry).runSkillProposalEvaluate(
-      evaluationEvent,
-      ctx,
-    );
-
-    expect(outcomes).toEqual([
+    const plugin = registry.plugins.find((entry) => entry.id === "high")!;
+    plugin.packageVersion = "2.1.0";
+    plugin.version = "runtime-override";
+    await expect(createHookRunner(registry).runSkillProposalEvaluate(event, ctx)).resolves.toEqual([
       {
         evaluatorId: "regression-score",
         pluginId: "high",
         pluginVersion: "2.1.0",
         status: "completed",
-        result: {
-          summary: "candidate regressed",
-          metrics: { score: 0.4 },
-          evaluatorVersion: "rules-3",
-          decision: "block",
-          decisionReason: "score below baseline",
-        },
+        result,
       },
-      {
-        evaluatorId: "low",
-        pluginId: "low",
-        status: "skipped",
-      },
+      { evaluatorId: "low", pluginId: "low", status: "skipped" },
     ]);
-    expect(high).toHaveBeenCalledTimes(1);
-    expect(low).toHaveBeenCalledTimes(1);
-  });
-
-  it("runs evaluators concurrently while retaining priority order", async () => {
-    let releaseHigh: (() => void) | undefined;
-    let releaseLow: (() => void) | undefined;
-    const highGate = new Promise<void>((resolve) => {
-      releaseHigh = resolve;
-    });
-    const lowGate = new Promise<void>((resolve) => {
-      releaseLow = resolve;
-    });
-    const high = vi.fn(async () => {
-      await highGate;
-      return { summary: "high" };
-    });
-    const low = vi.fn(async () => {
-      await lowGate;
-      return { summary: "low" };
-    });
-    const registry = createMockPluginRegistry([
-      {
-        hookName: "skill_proposal_evaluate",
-        pluginId: "low",
-        priority: 10,
-        handler: low,
-      },
-      {
-        hookName: "skill_proposal_evaluate",
-        pluginId: "high",
-        priority: 100,
-        handler: high,
-      },
-    ]);
-
-    const evaluation = createHookRunner(registry).runSkillProposalEvaluate(evaluationEvent, ctx);
-    await vi.waitFor(() => {
-      expect(high).toHaveBeenCalledTimes(1);
-      expect(low).toHaveBeenCalledTimes(1);
-    });
-    releaseLow?.();
-    releaseHigh?.();
-
-    await expect(evaluation).resolves.toEqual([
-      {
-        evaluatorId: "high",
-        pluginId: "high",
-        status: "completed",
-        result: { summary: "high" },
-      },
-      {
-        evaluatorId: "low",
-        pluginId: "low",
-        status: "completed",
-        result: { summary: "low" },
-      },
-    ]);
+    expect(high).toHaveBeenCalledOnce();
+    expect(low).toHaveBeenCalledOnce();
   });
 
   it("passes a frozen candidate snapshot to every evaluator", async () => {
-    const first = vi.fn((...args: unknown[]) => {
-      const event = args[0] as PluginHookSkillProposalEvaluateEvent;
-      expect(event).not.toBe(evaluationEvent);
-      expect(Object.isFrozen(event)).toBe(true);
-      expect(Object.isFrozen(event.candidate)).toBe(true);
-      expect(Object.isFrozen(event.candidate.skillMd)).toBe(true);
+    const first = vi.fn((observed: PluginHookSkillProposalEvaluateEvent) => {
+      expect(observed).not.toBe(event);
+      expect(Object.isFrozen(observed)).toBe(true);
+      expect(Object.isFrozen(observed.candidate)).toBe(true);
+      expect(Object.isFrozen(observed.candidate.skillMd)).toBe(true);
       expect(() => {
-        event.candidate.skillMd.content = "mutated";
+        observed.candidate.skillMd.content = "mutated";
       }).toThrow();
       return { summary: "first" };
     });
-    const second = vi.fn((...args: unknown[]) => {
-      const event = args[0] as PluginHookSkillProposalEvaluateEvent;
-      expect(event.candidate.skillMd.content).toBe(evaluationEvent.candidate.skillMd.content);
+    const second = vi.fn((observed: PluginHookSkillProposalEvaluateEvent) => {
+      expect(observed.candidate.skillMd.content).toBe("demo");
       return { summary: "second" };
     });
-    const registry = createMockPluginRegistry([
-      { hookName: "skill_proposal_evaluate", pluginId: "first", handler: first },
-      { hookName: "skill_proposal_evaluate", pluginId: "second", handler: second },
-    ]);
-
-    await expect(
-      createHookRunner(registry).runSkillProposalEvaluate(evaluationEvent, ctx),
-    ).resolves.toHaveLength(2);
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns evaluator failures and timeouts as attributed outcomes", async () => {
-    const logger = { warn: vi.fn(), error: vi.fn() };
-    const registry = createMockPluginRegistry([
-      {
-        hookName: "skill_proposal_evaluate",
-        pluginId: "throws",
-        priority: 100,
-        handler: () => {
-          throw new Error("scanner unavailable\nprivate detail");
-        },
-      },
-      {
-        hookName: "skill_proposal_evaluate",
-        pluginId: "hangs",
-        priority: 50,
-        timeoutMs: 1,
-        handler: () =>
-          new Promise<void>(() => {
-            // Intentionally never resolves so the hook timeout owns the outcome.
-          }),
-      },
-    ]);
-
-    const outcomes = await createHookRunner(registry, { logger }).runSkillProposalEvaluate(
-      evaluationEvent,
-      ctx,
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push(
+      ...[first, second].map((handler) => ({
+        pluginId: "test",
+        hookName: "skill_proposal_evaluate" as const,
+        source: "test",
+        handler,
+      })),
     );
-
-    expect(outcomes).toEqual([
-      {
-        evaluatorId: "throws",
-        pluginId: "throws",
-        status: "error",
-        error: "scanner unavailable",
-      },
-      {
-        evaluatorId: "hangs",
-        pluginId: "hangs",
-        status: "error",
-        error: "timed out after 1ms",
-      },
+    await expect(createHookRunner(registry).runSkillProposalEvaluate(event, ctx)).resolves.toEqual([
+      { evaluatorId: "test", pluginId: "test", status: "completed", result: { summary: "first" } },
+      { evaluatorId: "test", pluginId: "test", status: "completed", result: { summary: "second" } },
     ]);
-    expect(logger.error).toHaveBeenCalledTimes(2);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
   });
 
-  it("dispatches committed skill changes as observation hooks", async () => {
-    const first = vi.fn();
-    const second = vi.fn();
-    const registry = createMockPluginRegistry([
-      { hookName: "skill_changed", pluginId: "first", handler: first },
-      { hookName: "skill_changed", pluginId: "second", handler: second },
-    ]);
-    const event: PluginHookSkillChangedEvent = {
-      action: "removed",
-      source: "clawhub",
-      occurredAt: "2026-07-29T00:00:00.000Z",
-      before: {
-        name: "Demo Skill",
-        skillKey: "demo-skill",
-        skillFile: "/workspace/skills/demo-skill/SKILL.md",
-        skillDir: "/workspace/skills/demo-skill",
-        source: "clawhub",
-        revision: {
-          contentSha256: "sha256:content",
-          treeSha256: "sha256:tree",
-          sourceVersion: "1.2.3",
+  it("returns failures and timeouts as sanitized, attributed outcomes", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { error: vi.fn(), warn: vi.fn() };
+      const registry = createMockPluginRegistry([
+        {
+          hookName: "skill_proposal_evaluate",
+          pluginId: "throws",
+          priority: 100,
+          handler: () => {
+            throw new Error("scanner unavailable\nprivate detail");
+          },
         },
-      },
-    };
-
-    await createHookRunner(registry).runSkillChanged(event, ctx);
-
-    const observed = first.mock.calls[0]?.[0] as PluginHookSkillChangedEvent;
-    expect(observed).not.toBe(event);
-    expect(Object.isFrozen(observed)).toBe(true);
-    expect(Object.isFrozen(observed.before)).toBe(true);
-    expect(first).toHaveBeenCalledWith(observed, ctx);
-    expect(second).toHaveBeenCalledWith(observed, ctx);
+        {
+          hookName: "skill_proposal_evaluate",
+          pluginId: "hangs",
+          priority: 50,
+          timeoutMs: 1,
+          handler: () => new Promise<void>(() => {}),
+        },
+      ]);
+      const run = createHookRunner(registry, { logger }).runSkillProposalEvaluate(event, ctx);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(run).resolves.toEqual([
+        {
+          evaluatorId: "throws",
+          pluginId: "throws",
+          status: "error",
+          error: "scanner unavailable",
+        },
+        { evaluatorId: "hangs", pluginId: "hangs", status: "error", error: "timed out after 1ms" },
+      ]);
+      expect(logger.error).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("freezes proposal observations so handlers cannot erase blocking outcomes", async () => {
-    const event: PluginHookSkillProposalChangedEvent = {
+    const changed: PluginHookSkillProposalChangedEvent = {
       eventId: "event-1",
       sequence: 1,
       action: "evaluation_completed",
       occurredAt: "2026-07-29T00:00:00.000Z",
       proposal: {
-        id: "proposal-1",
-        kind: "update",
+        ...event.proposal,
         status: "pending",
-        revision: "v2",
-        revisionSha256: "sha256:revision",
-        skillName: "Demo Skill",
-        skillKey: "demo-skill",
-        skillFile: "/workspace/skills/demo-skill/SKILL.md",
+        skillName: "Demo",
+        skillKey: "demo",
+        skillFile: "/workspace/skills/demo/SKILL.md",
       },
       evaluations: [
         {
           evaluatorId: "policy",
           pluginId: "policy-plugin",
           status: "completed",
-          result: {
-            decision: "block",
-            decisionReason: "Policy denied the candidate.",
-          },
+          result: { decision: "block", decisionReason: "Policy denied the candidate." },
         },
       ],
     };
     const first = vi.fn((observed: PluginHookSkillProposalChangedEvent) => {
-      expect(observed).not.toBe(event);
+      expect(observed).not.toBe(changed);
       expect(Object.isFrozen(observed)).toBe(true);
       expect(Object.isFrozen(observed.evaluations)).toBe(true);
       expect(Object.isFrozen(observed.evaluations?.[0])).toBe(true);
       expect(() => {
-        (observed.evaluations as unknown[]).pop();
+        Array.prototype.pop.call(observed.evaluations);
       }).toThrow();
     });
     const second = vi.fn((observed: PluginHookSkillProposalChangedEvent) => {
-      expect(observed.evaluations).toHaveLength(1);
-      expect(observed.evaluations?.[0]).toMatchObject({
-        status: "completed",
-        result: { decision: "block" },
-      });
+      expect(observed.evaluations).toEqual(changed.evaluations);
     });
-    const registry = createMockPluginRegistry([
-      {
-        hookName: "skill_proposal_changed",
-        pluginId: "first",
-        handler: (...args: unknown[]) => first(args[0] as PluginHookSkillProposalChangedEvent),
-      },
-      {
-        hookName: "skill_proposal_changed",
-        pluginId: "second",
-        handler: (...args: unknown[]) => second(args[0] as PluginHookSkillProposalChangedEvent),
-      },
-    ]);
-
-    await createHookRunner(registry).runSkillProposalChanged(event, ctx);
-
-    expect(event.evaluations).toHaveLength(1);
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push(
+      ...[first, second].map((handler) => ({
+        pluginId: "test",
+        hookName: "skill_proposal_changed" as const,
+        source: "test",
+        handler,
+      })),
+    );
+    await createHookRunner(registry, { catchErrors: false }).runSkillProposalChanged(changed, ctx);
+    expect(changed.evaluations).toHaveLength(1);
     expect(first).toHaveBeenCalledOnce();
     expect(second).toHaveBeenCalledOnce();
   });

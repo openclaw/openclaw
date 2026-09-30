@@ -550,6 +550,10 @@ export function registerLogsCli(program: Command) {
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false && !opts.plain;
     const localTime = !opts.utc;
+    const emitConnectionNotice = (message: string, style: (value: string) => string) =>
+      jsonMode
+        ? emitJsonLine({ type: "notice", message }, true)
+        : errorLine(colorize(rich, style, message));
 
     const startGatewayRecoveryProbe = () => {
       if (!preferJournal || gatewayRecovery.kind !== "idle") {
@@ -636,11 +640,7 @@ export function registerLogsCli(program: Command) {
           followRetryAttempt += 1;
           const backoffMs = computeBackoff(FOLLOW_BACKOFF_POLICY, followRetryAttempt);
           const message = `[logs] gateway disconnected, reconnecting in ${Math.round(backoffMs / 1_000)}s...`;
-          if (jsonMode) {
-            if (!emitJsonLine({ type: "notice", message }, true)) {
-              return;
-            }
-          } else if (!errorLine(colorize(rich, theme.warn, message))) {
+          if (!emitConnectionNotice(message, theme.warn)) {
             return;
           }
           await delay(backoffMs);
@@ -661,15 +661,11 @@ export function registerLogsCli(program: Command) {
         });
         return;
       }
-      if (followRetryAttempt > 0) {
-        const message = "[logs] gateway reconnected";
-        if (jsonMode) {
-          if (!emitJsonLine({ type: "notice", message }, true)) {
-            return;
-          }
-        } else if (!errorLine(colorize(rich, theme.muted, message))) {
-          return;
-        }
+      if (
+        followRetryAttempt > 0 &&
+        !emitConnectionNotice("[logs] gateway reconnected", theme.muted)
+      ) {
+        return;
       }
       followRetryAttempt = 0;
       payload = normalizeLogTailPayloadSource(payload);

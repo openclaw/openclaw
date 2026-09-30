@@ -1,9 +1,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  mockSessionReplacementForStore,
-  replaceCanonicalSessionEntries,
-} from "./subagent-control.leaf-mocks.test-support.js";
+import { mockSessionReplacementForStore } from "./subagent-control.leaf-mocks.test-support.js";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -27,13 +24,14 @@ import {
   beginSessionWorkAdmission,
   consumeSessionWorkAdmissionHandoff,
   getActiveSessionLifecycleMutationCount,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import * as killSession from "./subagent-control-session.js";
+import { registerAdmissionDrainControlTests } from "./subagent-control.admission-drain.test-support.js";
 import {
   buildControlledSubagentRunsReadContext,
   killAllControlledSubagentRuns,
@@ -170,10 +168,10 @@ beforeEach(() => {
   setSubagentControlDepsForTest();
   resetRegistryLeafMocks();
   vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockResolvedValue(undefined);
-  vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
+  vi.mocked(ensureContextEnginesInitialized).mockResolvedValue(undefined);
   vi.mocked(registryState.persistSubagentRunsToDisk).mockImplementation(() => {});
   vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
-  vi.mocked(registryState.restoreSubagentRunsFromDisk).mockReturnValue(0);
+  vi.mocked(registryState.restoreSubagentRunsFromDisk).mockResolvedValue(0);
   vi.mocked(resolveContextEngine).mockImplementation(async () => ({
     info: { id: "test", name: "Test" },
     assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
@@ -530,7 +528,7 @@ describe("killSubagentRunAdmin", () => {
     });
 
     expect(result).toMatchObject({ found: true, killed: true });
-    expect(abortedLastRunWrites).toEqual([]);
+    expect(abortedLastRunWrites).toEqual([true]);
   });
 
   it("reports when completion wins while the kill path awaits persistence", async () => {
@@ -1114,14 +1112,8 @@ describe("controlled subagent cancellation races", () => {
     });
     addSubagentRunForTests(oldRun);
 
-    let releasePersistence!: () => void;
-    let markPersistenceStarted!: () => void;
-    const persistenceStarted = new Promise<void>((resolve) => {
-      markPersistenceStarted = resolve;
-    });
-    const persistenceRelease = new Promise<void>((resolve) => {
-      releasePersistence = resolve;
-    });
+    const persistenceStarted = createDeferred();
+    const persistenceRelease = createDeferred();
     const abort = vi.fn(() => false);
     const clearQueues = vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
     setSubagentControlDepsForTest({
@@ -1129,10 +1121,14 @@ describe("controlled subagent cancellation races", () => {
       abortEmbeddedAgentRun: abort,
       clearSessionQueues: clearQueues,
     });
-    mockSessionReplacementForStore(storePath, async (params) => {
-      markPersistenceStarted();
-      await persistenceRelease;
-      return replaceCanonicalSessionEntries(params);
+    const persistMarker = killSession.persistSubagentAbortedLastRun;
+    using markerSpy = vi.spyOn(killSession, "persistSubagentAbortedLastRun");
+    markerSpy.mockImplementation(async (params) => {
+      if (params.childSessionKey === childSessionKey && params.abortedLastRun) {
+        persistenceStarted.resolve();
+        await persistenceRelease.promise;
+      }
+      return persistMarker(params);
     });
 
     const pendingKill = killAllControlledSubagentRuns({
@@ -1140,31 +1136,35 @@ describe("controlled subagent cancellation races", () => {
       controller: controllerFor(controllerSessionKey),
       runs: [oldRun],
     });
-    await persistenceStarted;
+    try {
+      await persistenceStarted.promise;
 
-    addSubagentRunForTests({
-      ...oldRun,
-      runId: "run-persist-successor",
-      controllerSessionKey: "agent:foreign:controller",
-      requesterSessionKey: "agent:foreign:controller",
-      requesterDisplayKey: "agent:foreign:controller",
-      task: "successor persisted task",
-      generation: 2,
-      createdAt: Date.now(),
-      execution: { status: "running", startedAt: Date.now() },
-    });
-    addSubagentRunForTests({
-      ...oldRun,
-      runId: "run-persist-successor-leaf",
-      childSessionKey: descendantSessionKey,
-      controllerSessionKey: childSessionKey,
-      requesterSessionKey: childSessionKey,
-      requesterDisplayKey: childSessionKey,
-      task: "successor persisted leaf",
-      createdAt: Date.now(),
-      execution: { status: "running", startedAt: Date.now() },
-    });
-    releasePersistence();
+      addSubagentRunForTests({
+        ...oldRun,
+        runId: "run-persist-successor",
+        controllerSessionKey: "agent:foreign:controller",
+        requesterSessionKey: "agent:foreign:controller",
+        requesterDisplayKey: "agent:foreign:controller",
+        task: "successor persisted task",
+        generation: 2,
+        createdAt: Date.now(),
+        execution: { status: "running", startedAt: Date.now() },
+      });
+      addSubagentRunForTests({
+        ...oldRun,
+        runId: "run-persist-successor-leaf",
+        childSessionKey: descendantSessionKey,
+        controllerSessionKey: childSessionKey,
+        requesterSessionKey: childSessionKey,
+        requesterDisplayKey: childSessionKey,
+        task: "successor persisted leaf",
+        createdAt: Date.now(),
+        execution: { status: "running", startedAt: Date.now() },
+      });
+    } finally {
+      persistenceRelease.resolve();
+      await pendingKill;
+    }
 
     await expect(pendingKill).resolves.toMatchObject({
       status: "ok",
@@ -1173,18 +1173,14 @@ describe("controlled subagent cancellation races", () => {
     });
     expect(abort).toHaveBeenCalledOnce();
     expect(clearQueues).toHaveBeenCalledOnce();
-    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
-      runId: "run-persist-successor",
-      execution: { status: "running" },
-    });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
-    expect(getSubagentRunByChildSessionKey(descendantSessionKey)).toMatchObject({
-      runId: "run-persist-successor-leaf",
-      execution: { status: "running" },
-    });
-    expect(
-      getSubagentRunByChildSessionKey(descendantSessionKey)?.execution.endedAt,
-    ).toBeUndefined();
+    for (const [sessionKey, runId] of [
+      [childSessionKey, "run-persist-successor"],
+      [descendantSessionKey, "run-persist-successor-leaf"],
+    ] as const) {
+      const successor = getSubagentRunByChildSessionKey(sessionKey);
+      expect(successor).toMatchObject({ runId, execution: { status: "running" } });
+      expect(successor?.execution.endedAt).toBeUndefined();
+    }
   });
 
   it("does not abort or clear queues after the child session incarnation resets", async () => {
@@ -1491,82 +1487,12 @@ describe("controlled subagent cancellation races", () => {
     }
   });
 
-  it.each([false, true])(
-    "releases queued=%s work when interrupted admission does not drain",
-    async (queued) => {
-      const controllerSessionKey = "agent:main:main";
-      const childSessionKey = "agent:main:subagent:kill-admission-timeout";
-      const sessionId = "sess-kill-admission-timeout";
-      const entry = createSubagentRunRecord({
-        runId: "run-kill-admission-timeout",
-        childSessionKey,
-        controllerSessionKey,
-        requesterSessionKey: controllerSessionKey,
-        task: "hold admission during kill",
-        createdAt: Date.now() - 2_000,
-        collect: queued,
-        execution: queued
-          ? { status: "queued" }
-          : { status: "running", startedAt: Date.now() - 1_000 },
-      });
-      addSubagentRunForTests(entry);
-      const storePath = await writeSessionStoreFixture("kill-admission-timeout", {
-        [childSessionKey]: { sessionId, updatedAt: Date.now() },
-      });
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [childSessionKey, sessionId],
-        assertAllowed: () => {},
-      });
-      setSubagentControlDepsForTest({
-        isEmbeddedAgentRunActive: () => false,
-        abortEmbeddedAgentRun: () => false,
-        clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
-      });
-
-      const dispatch = vi.fn(async () => {});
-      if (queued) {
-        enqueueSwarmRun({
-          groupId: "drain",
-          runId: entry.runId,
-          maxConcurrent: 1,
-          activeRunIds: ["holder"],
-          start: dispatch,
-          onStartFailure: () => true,
-        });
-      }
-      vi.useFakeTimers();
-      try {
-        const pendingKill = killAllControlledSubagentRuns({
-          cfg: cfgWithSessionStore(storePath),
-          controller: controllerFor(controllerSessionKey),
-          runs: [entry],
-        });
-        await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0));
-        if (queued) {
-          releaseSwarmRun("holder");
-        }
-        await Promise.resolve();
-        expect(dispatch).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
-
-        await expect(pendingKill).resolves.toMatchObject({
-          status: "error",
-          error:
-            "hold admission during kill: Subagent is still active; try the kill again in a moment.",
-        });
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.killIntent).toBeUndefined();
-        if (queued) {
-          await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
-        }
-      } finally {
-        admission.release();
-        swarmSchedulerTesting.reset();
-        vi.useRealTimers();
-      }
-    },
-  );
+  registerAdmissionDrainControlTests({
+    cfgWithSessionStore,
+    controllerFor,
+    setSubagentControlDepsForTest,
+    writeSessionStoreFixture,
+  });
 
   it("leaves restart recovery disabled when the kill tombstone cannot persist", async () => {
     const controllerSessionKey = "agent:main:main";

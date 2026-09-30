@@ -1,4 +1,3 @@
-/** Doctor gateway daemon repair flow for service install, bootstrap, restart, and port hints. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -16,6 +15,7 @@ import {
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
 import { formatRuntimeStatus } from "../daemon/runtime-format.js";
+import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceLoadState } from "../daemon/service-types.js";
 import {
@@ -28,6 +28,8 @@ import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../gateway/net.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { formatPortDiagnostics, isExpectedGatewayListeners } from "../infra/ports-format.js";
 import { inspectPortConnections, inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortConnection } from "../infra/ports-types.js";
@@ -241,6 +243,17 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
 
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+  });
+  const installOwner = await readInstallOwner(root);
+  if (installOwner) {
+    await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
+    note(formatInstallOwnerMessage(installOwner), "Gateway");
+    return;
+  }
+
   if (!(await shouldManageGatewayService())) {
     await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
     note(formatServiceRepairDeferredNote(), "Gateway");
@@ -261,6 +274,15 @@ export async function maybeRepairGatewayDaemon(params: {
   };
   const isLocalDarwinGateway = process.platform === "darwin";
   const serviceState = await readGatewayServiceState(service, { env: process.env });
+  const serviceLayout = await summarizeGatewayServiceLayout(serviceState.command);
+  const serviceOwner = await readInstallOwner(
+    serviceLayout?.packageRootReal ?? serviceLayout?.packageRoot ?? null,
+  );
+  if (serviceOwner) {
+    await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
+    note(formatInstallOwnerMessage(serviceOwner), "Gateway");
+    return;
+  }
   if (serviceState.loadState.status === "unknown") {
     if (service.unsupportedReason) {
       note(service.unsupportedReason, "Gateway");

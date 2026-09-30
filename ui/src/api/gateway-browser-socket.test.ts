@@ -47,10 +47,20 @@ function createHandlers() {
 }
 
 describe("createBrowserGatewaySocket", () => {
+  let socket: MockWebSocket;
+  let handlers: ReturnType<typeof createHandlers>;
+  let socketAdapter: ReturnType<typeof createBrowserGatewaySocket>;
   beforeEach(() => {
     vi.useFakeTimers();
     sockets.length = 0;
     vi.stubGlobal("WebSocket", MockWebSocket);
+    handlers = createHandlers();
+    socketAdapter = createBrowserGatewaySocket("wss://gateway.example", handlers);
+    const created = sockets[0];
+    if (!created) {
+      throw new Error("expected a websocket instance");
+    }
+    socket = created;
   });
 
   afterEach(() => {
@@ -59,10 +69,6 @@ describe("createBrowserGatewaySocket", () => {
   });
 
   it("closes a websocket that never finishes opening", async () => {
-    const handlers = createHandlers();
-    createBrowserGatewaySocket("wss://gateway.example", handlers);
-    const socket = sockets[0];
-
     await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
 
     expect(handlers.error).toHaveBeenCalledOnce();
@@ -71,10 +77,10 @@ describe("createBrowserGatewaySocket", () => {
         `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`,
       ),
     );
-    expect(socket?.close).toHaveBeenCalledOnce();
+    expect(socket.close).toHaveBeenCalledOnce();
 
-    socket?.emit("error");
-    socket?.emit("close", { code: 1006, reason: "" });
+    socket.emit("error");
+    socket.emit("close", { code: 1006, reason: "" });
     expect(handlers.error).toHaveBeenCalledOnce();
     expect(handlers.close).toHaveBeenCalledWith(
       1006,
@@ -83,88 +89,54 @@ describe("createBrowserGatewaySocket", () => {
   });
 
   it("preserves a real close reason when an opening timeout also occurred", async () => {
-    const handlers = createHandlers();
-    createBrowserGatewaySocket("wss://gateway.example", handlers);
-
     await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
-    sockets[0]?.emit("close", { code: 1006, reason: "gateway supplied a close reason" });
+    socket.emit("close", { code: 1006, reason: "gateway supplied a close reason" });
 
     expect(handlers.close).toHaveBeenCalledWith(1006, "gateway supplied a close reason");
   });
 
   it("clears the opening deadline after the socket opens", async () => {
-    const handlers = createHandlers();
-    createBrowserGatewaySocket("wss://gateway.example", handlers);
-    const socket = sockets[0];
-
-    if (socket) {
-      socket.readyState = MockWebSocket.OPEN;
-      socket.emit("open");
-    }
+    socket.readyState = MockWebSocket.OPEN;
+    socket.emit("open");
     await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
 
     expect(handlers.open).toHaveBeenCalledOnce();
     expect(handlers.error).not.toHaveBeenCalled();
-    expect(socket?.close).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
   });
 
   it("clears the opening deadline after a native transport failure", async () => {
-    const handlers = createHandlers();
-    createBrowserGatewaySocket("wss://gateway.example", handlers);
-    const socket = sockets[0];
-
-    socket?.emit("error");
-    socket?.emit("close", { code: 1006, reason: "" });
+    socket.emit("error");
+    socket.emit("close", { code: 1006, reason: "" });
     await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
 
     expect(handlers.error).toHaveBeenCalledOnce();
     expect(handlers.error).toHaveBeenCalledWith(new Error("websocket error"));
     expect(handlers.close).toHaveBeenCalledWith(1006, "");
-    expect(socket?.close).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
   });
 
   it("clears the opening deadline when the client closes the socket", async () => {
-    const handlers = createHandlers();
-    const socketAdapter = createBrowserGatewaySocket("wss://gateway.example", handlers);
-    const socket = sockets[0];
-
     socketAdapter.close(1000, "stopped");
     await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
 
-    expect(socket?.close).toHaveBeenCalledWith(1000, "stopped");
+    expect(socket.close).toHaveBeenCalledWith(1000, "stopped");
     expect(handlers.error).not.toHaveBeenCalled();
   });
 
   it("maps protocol policy-violation closes to the browser-safe connect failure code", () => {
-    const handlers = createHandlers();
-    const socketAdapter = createBrowserGatewaySocket("wss://gateway.example", handlers);
-
     expect(() => socketAdapter.close(1008, "connect failed")).not.toThrow();
-    expect(sockets[0]?.close).toHaveBeenCalledWith(4008, "connect failed");
-  });
-
-  it.each([1000, 3000, 4000, 4008, 4013, 4999])("preserves browser-valid close code %i", (code) => {
-    const handlers = createHandlers();
-    const socketAdapter = createBrowserGatewaySocket("wss://gateway.example", handlers);
-
-    expect(() => socketAdapter.close(code, "valid close")).not.toThrow();
-    expect(sockets[0]?.close).toHaveBeenCalledWith(code, "valid close");
+    expect(socket.close).toHaveBeenCalledWith(4008, "connect failed");
   });
 
   it("does not normalize other invalid browser close codes", () => {
-    const handlers = createHandlers();
-    const socketAdapter = createBrowserGatewaySocket("wss://gateway.example", handlers);
-
     expect(() => socketAdapter.close(1009, "invalid client close")).toThrow(
       expect.objectContaining({ name: "InvalidAccessError" }),
     );
   });
 
   it("preserves policy-violation closes received from the gateway", () => {
-    const handlers = createHandlers();
-    createBrowserGatewaySocket("wss://gateway.example", handlers);
-
-    sockets[0]?.emit("close", { code: 1008, reason: "pairing required" });
+    socket.emit("close", { code: 1008, reason: "pairing required" });
 
     expect(handlers.close).toHaveBeenCalledWith(1008, "pairing required");
   });

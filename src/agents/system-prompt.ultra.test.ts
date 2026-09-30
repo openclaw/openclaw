@@ -8,32 +8,17 @@ describe("Ultra system prompt capability", () => {
       toolNames: ["sessions_spawn"],
       subagentDelegationMode: "prefer",
     } satisfies Parameters<typeof buildAgentSystemPrompt>[0];
+    const ultra = (params: Partial<Parameters<typeof buildAgentSystemPrompt>[0]> = {}) =>
+      buildAgentSystemPrompt({ ...base, ...params, proactiveSubagentOrchestration: true });
     const maxPrompt = buildAgentSystemPrompt(base);
-    const ultraPrompt = buildAgentSystemPrompt({
-      ...base,
-      proactiveSubagentOrchestration: true,
-    });
-    const deferredUltraPrompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+    const ultraPrompt = ultra();
+    const deferredUltraPrompt = ultra({
       toolNames: ["tool_search"],
       capabilityToolNames: ["sessions_spawn"],
-      proactiveSubagentOrchestration: true,
     });
-    const minimalUltraPrompt = buildAgentSystemPrompt({
-      ...base,
-      promptMode: "minimal",
-      proactiveSubagentOrchestration: true,
-    });
-    const unavailablePrompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["subagents"],
-      proactiveSubagentOrchestration: true,
-    });
-    const rawPrompt = buildAgentSystemPrompt({
-      ...base,
-      promptMode: "none",
-      proactiveSubagentOrchestration: true,
-    });
+    const minimalUltraPrompt = ultra({ promptMode: "minimal" });
+    const unavailablePrompt = ultra({ toolNames: ["subagents"] });
+    const rawPrompt = ultra({ promptMode: "none" });
 
     expect(maxPrompt).not.toContain("## Proactive Sub-Agent Orchestration");
     expect(ultraPrompt).toContain("## Proactive Sub-Agent Orchestration");

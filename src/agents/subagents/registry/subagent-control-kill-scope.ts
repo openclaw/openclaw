@@ -61,10 +61,7 @@ export type KillScope = {
   stateContext: OpenClawStateWorkerContext;
 };
 
-export type KillPublicationPreparation = {
-  prepare: () => Promise<void>;
-  needsPreparation: () => boolean;
-};
+export type KillPublicationPreparation = (publish: () => void) => Promise<void>;
 
 export async function withSubagentKillScope<T>(
   params: KillSelection,
@@ -85,7 +82,7 @@ export async function withSubagentKillScope<T>(
     },
   };
   const selected = new Set<string>();
-  const releaseSessions: Array<() => void> = [];
+  const releaseSessions: Array<SubagentKillSession["release"]> = [];
   const releaseRetirements: Array<() => void> = [];
   const completeRetirementPublications: Array<() => void> = [];
   const holds: Array<NonNullable<ReturnType<typeof holdQueuedSwarmRun>>> = [];
@@ -303,6 +300,7 @@ export async function withSubagentKillScope<T>(
           }),
           (_selection, runs) =>
             listRunsForControllerFromRuns(new Map(runs), controller.controllerSessionKey),
+          { sessionKeys: [controller.controllerSessionKey], descendants: false },
         );
         assertCurrent();
         await select(candidates, tree.children, controller, () => tree.canTraverse());
@@ -335,15 +333,27 @@ export async function withSubagentKillScope<T>(
     };
     await scope.refresh();
     const result = await run(scope, trees);
+    let published: T = result;
+    let publicationConsumed = false;
+    const publishResult = () => {
+      if (publicationConsumed) {
+        throw new Error("Subagent cancellation result was already published");
+      }
+      publicationConsumed = true;
+      if (publish) {
+        assertCurrent();
+        published = publish(result, trees);
+      }
+    };
     if (preparePublication) {
-      do {
-        await preparePublication.prepare();
-      } while (preparePublication.needsPreparation());
+      await preparePublication(publishResult);
+    } else {
+      publishResult();
     }
-    if (publish) {
-      assertCurrent();
+    if (!publicationConsumed) {
+      throw new Error("Subagent cancellation publication did not consume its prepared scope");
     }
-    outcome = { ok: true, value: publish ? publish(result, trees) : result };
+    outcome = { ok: true, value: published };
   } catch (error) {
     outcome = { ok: false, error };
   }
@@ -353,11 +363,13 @@ export async function withSubagentKillScope<T>(
   completeRetirementPublications.forEach((complete) => complete());
   const released = await Promise.allSettled(holds.map((reservation) => reservation.release()));
   const retired = await Promise.allSettled(releaseRetirements.map(async (release) => release()));
-  releaseSessions.forEach((release) => release());
+  const releasedSessions = await Promise.allSettled(
+    releaseSessions.map(async (release) => release()),
+  );
   if (!outcome.ok) {
     throw outcome.error;
   }
-  for (const result of [...released, ...retired]) {
+  for (const result of [...released, ...retired, ...releasedSessions]) {
     if (result.status === "rejected") {
       throw result.reason;
     }

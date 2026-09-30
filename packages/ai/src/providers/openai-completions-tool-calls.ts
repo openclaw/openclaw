@@ -101,15 +101,6 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
     pendingFollowingDeltas.push(delta);
   };
 
-  const withoutToolCalls = (
-    delta: ChatCompletionChunk.Choice.Delta,
-  ): ChatCompletionChunk.Choice.Delta => {
-    const ordinaryDelta = { ...delta };
-    delete ordinaryDelta.function_call;
-    delete ordinaryDelta.tool_calls;
-    return ordinaryDelta;
-  };
-
   const hasObservableContent = (value: unknown): boolean => {
     if (typeof value === "string") {
       return value.length > 0;
@@ -129,11 +120,10 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
     return false;
   };
 
-  const hasOrdinaryContent = (delta: ChatCompletionChunk.Choice.Delta): boolean =>
-    Object.entries(delta).some(([field, value]) => field !== "role" && hasObservableContent(value));
-
   return (delta, finishReason) => {
-    const ordinaryDelta = withoutToolCalls(delta);
+    const ordinaryDelta = { ...delta };
+    delete ordinaryDelta.function_call;
+    delete ordinaryDelta.tool_calls;
     if (delta.tool_calls && delta.tool_calls.length > 0) {
       for (const toolCall of delta.tool_calls) {
         const index = typeof toolCall.index === "number" ? toolCall.index : undefined;
@@ -172,7 +162,11 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
 
     const hadPendingLegacyCall = pendingLegacyToolCall !== undefined;
     const leadingDeltas: NormalizedOpenAICompletionsDelta[] = [];
-    if (hasOrdinaryContent(ordinaryDelta)) {
+    if (
+      Object.entries(ordinaryDelta).some(
+        ([field, value]) => field !== "role" && hasObservableContent(value),
+      )
+    ) {
       if (hadPendingLegacyCall) {
         // Keep every lane behind its provisional call; publishing text early
         // permanently reverses the assistant's original tool/content order.

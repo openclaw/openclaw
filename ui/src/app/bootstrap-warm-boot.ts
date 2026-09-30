@@ -1,5 +1,6 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { clearCachedBootState } from "../lib/sessions/session-roster-cache.runtime.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import {
@@ -26,15 +27,14 @@ export function prewarmBootChat(record: BootRecord, sessionKey: string): void {
   }
 }
 
-export function clearWarmBootState(): void {
+export function clearWarmBootState(): Promise<void> {
   // The boot record gates the next warm boot, so it must be gone before any
-  // await: a reload during the lazy IndexedDB cleanup must fail closed.
+  // await: a reload during storage cleanup must fail closed.
   clearBootRecords();
+  const rosterCleared = clearCachedBootState();
   // Invalidate visible history and its cursor before pane subscribers resume startup.
-  void clearStoredChatSnapshots();
-  void import("../lib/sessions/session-roster-cache.runtime.ts").then(({ clearCachedBootState }) =>
-    clearCachedBootState(),
-  );
+  const snapshotsCleared = clearStoredChatSnapshots();
+  return Promise.all([rosterCleared, snapshotsCleared]).then(() => undefined);
 }
 
 export function subscribeWarmBootConnection(
@@ -56,7 +56,7 @@ export function subscribeWarmBootConnection(
     const profileMismatch = pendingBootProfileId !== (snapshot.selfUser?.id ?? null);
     pendingBootProfileId = undefined;
     if (profileMismatch) {
-      clearWarmBootState();
+      void clearWarmBootState();
     }
   });
 }

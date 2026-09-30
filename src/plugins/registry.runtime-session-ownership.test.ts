@@ -216,10 +216,8 @@ describe("plugin registry runtime session ownership", () => {
       runEmbeddedAgent: { configurable: true, value: runEmbeddedAgent },
     });
     const gatewayRequest = vi.fn(async () => ({ ok: true }));
-    runtime.gateway = {
-      isAvailable: vi.fn(async () => true),
-      request: gatewayRequest as unknown as PluginRuntime["gateway"]["request"],
-    };
+    runtime.gateway.isAvailable = vi.fn(async () => true);
+    runtime.gateway.request = gatewayRequest as unknown as PluginRuntime["gateway"]["request"];
 
     const pluginRegistry = createRuntimeTestRegistry(runtime);
     const ownerRecord = createPluginRecord({

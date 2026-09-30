@@ -1,7 +1,6 @@
 // OC Path tests cover edit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { appendJsonlOcPath, setJsonlOcPath } from "../../jsonl/edit.js";
-import { emitJsonl } from "../../jsonl/emit.js";
 import { parseJsonl } from "../../jsonl/parse.js";
 import { resolveJsonlOcPath } from "../../jsonl/resolve.js";
 import { parseOcPath } from "../../oc-path.js";
@@ -17,7 +16,7 @@ describe("setJsonlOcPath — value replacement", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const lines = emitJsonl(r.ast).split("\n");
+      const lines = r.ast.raw.split("\n");
       expect(JSON.parse(lines[1] ?? "")).toEqual({ event: "step", n: 42 });
     }
   });
@@ -30,7 +29,7 @@ describe("setJsonlOcPath — value replacement", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const lines = emitJsonl(r.ast).split("\n");
+      const lines = r.ast.raw.split("\n");
       expect(JSON.parse(lines[1] ?? "")).toEqual({ event: "replaced" });
     }
   });
@@ -43,13 +42,15 @@ describe("setJsonlOcPath — value replacement", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const lines = emitJsonl(r.ast).split("\n");
+      const lines = r.ast.raw.split("\n");
       expect(JSON.parse(lines[2] ?? "")).toEqual({ event: "final" });
     }
   });
 
-  it("reads and edits $first after blank and malformed lines", () => {
-    const { ast } = parseJsonl('\nbroken\n{"event":"start"}\n{"event":"end"}\n');
+  it("reads and edits $first while preserving blank and sentinel-bearing malformed lines", () => {
+    const { ast } = parseJsonl(
+      '\nbroken __OPENCLAW_REDACTED__\n{"event":"start"}\n{"event":"end"}\n',
+    );
     const path = parseOcPath("oc://session-events/$first/event");
     expect(resolveJsonlOcPath(ast, path)).toMatchObject({
       kind: "object-entry",
@@ -59,7 +60,9 @@ describe("setJsonlOcPath — value replacement", () => {
     const r = setJsonlOcPath(ast, path, { kind: "string", value: "replaced" });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(emitJsonl(r.ast)).toBe('\nbroken\n{"event":"replaced"}\n{"event":"end"}');
+      expect(r.ast.raw).toBe(
+        '\nbroken __OPENCLAW_REDACTED__\n{"event":"replaced"}\n{"event":"end"}',
+      );
     }
   });
 
@@ -97,7 +100,7 @@ describe("appendJsonlOcPath — session checkpointing primitive", () => {
       kind: "object",
       entries: [{ key: "event", line: 0, value: { kind: "string", value: "start" } }],
     });
-    expect(emitJsonl(next)).toBe('{"event":"start"}');
+    expect(next.raw).toBe('{"event":"start"}');
   });
 
   it("appends to an existing log preserving prior lines", () => {
@@ -106,7 +109,7 @@ describe("appendJsonlOcPath — session checkpointing primitive", () => {
       kind: "object",
       entries: [{ key: "b", line: 0, value: { kind: "number", value: 2 } }],
     });
-    const out = emitJsonl(next).split("\n");
+    const out = next.raw.split("\n");
     expect(out).toHaveLength(2);
     expect(JSON.parse(out[1] ?? "")).toEqual({ b: 2 });
   });
@@ -117,7 +120,7 @@ describe("appendJsonlOcPath — session checkpointing primitive", () => {
       kind: "object",
       entries: [{ key: "b", line: 0, value: { kind: "number", value: 2 } }],
     });
-    expect(emitJsonl(next)).toBe('{"a":1}\r\n{"b":2}');
+    expect(next.raw).toBe('{"a":1}\r\n{"b":2}');
   });
 });
 
@@ -132,7 +135,7 @@ describe("setJsonlOcPath — $last line address", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const lines = emitJsonl(r.ast).split("\n");
+      const lines = r.ast.raw.split("\n");
       expect(JSON.parse(lines[2] ?? "")).toEqual({ event: "end", n: 99 });
     }
   });
@@ -158,10 +161,7 @@ describe("setJsonlOcPath — $last positional field tokens", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const firstLine =
-        emitJsonl(r.ast)
-          .split("\n")
-          .find((l) => l.length > 0) ?? "";
+      const firstLine = r.ast.raw.split("\n").find((l) => l.length > 0) ?? "";
       expect(JSON.parse(firstLine)).toEqual({
         items: [10, 20, 99],
         events: { a: 1, b: 2 },
@@ -180,9 +180,7 @@ describe("setJsonlOcPath — quoted field segments", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const lines = emitJsonl(r.ast)
-        .split("\n")
-        .filter((l) => l.length > 0);
+      const lines = r.ast.raw.split("\n").filter((l) => l.length > 0);
       expect(lines).toHaveLength(1);
       expect(JSON.parse(lines[0] ?? "")).toEqual({
         event: "start",

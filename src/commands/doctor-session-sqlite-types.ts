@@ -1,5 +1,4 @@
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
-/** Shared type contracts for doctor-owned session SQLite migration reports. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import {

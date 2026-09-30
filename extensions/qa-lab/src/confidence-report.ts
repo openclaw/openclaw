@@ -158,7 +158,7 @@ function collectGatewayLogSentinels(value: unknown): GatewayLogSentinelFinding[]
 }
 
 function isQaConfidenceVerdict(value: string): value is QaConfidenceVerdict {
-  return QA_CONFIDENCE_VERDICTS.includes(value as QaConfidenceVerdict);
+  return QA_CONFIDENCE_VERDICTS.some((verdict) => verdict === value);
 }
 
 function readRequiredString(record: Record<string, unknown>, key: string): string {
@@ -570,13 +570,8 @@ function evaluateLaneArtifact(
       return evaluateTokenEfficiencySummary(payload, lane.expectedTokenUsageSource);
     case "jsonl-replay-summary":
       return evaluateJsonlReplaySummary(payload);
-    case "self-test-summary":
-      return evaluateSelfTestSummary(payload);
     default:
-      return {
-        passed: false,
-        details: `unknown confidence lane kind: ${(lane as { kind?: string }).kind ?? "missing"}`,
-      };
+      return evaluateSelfTestSummary(payload);
   }
 }
 
@@ -697,14 +692,10 @@ function failuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): strin
 
 function globalFailuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): string[] {
   return lanes.flatMap((lane) => {
-    if (lane.status === "blocked") {
-      return [`${lane.id} is blocked: ${lane.details}`];
-    }
-    if (lane.status === "missing") {
-      return [`${lane.id} is missing: ${lane.details}`];
-    }
-    if (lane.status === "unknown") {
-      return [`${lane.id} is unclassified: ${lane.details}`];
+    if (lane.status === "blocked" || lane.status === "missing" || lane.status === "unknown") {
+      return [
+        `${lane.id} is ${lane.status === "unknown" ? "unclassified" : lane.status}: ${lane.details}`,
+      ];
     }
     if (lane.status === "fail") {
       return [`${lane.id} is classified ${lane.verdict ?? "unclassified"}: ${lane.details}`];
@@ -741,11 +732,7 @@ export async function buildQaConfidenceReport(params: {
     profile: params.manifest.profile,
     strictZeroUnknowns,
     strictGlobalPass,
-    pass: strictGlobalPass
-      ? globalPass
-      : strictZeroUnknowns
-        ? zeroUnknowns
-        : unclassifiedFailures.length === 0,
+    pass: strictGlobalPass ? globalPass : zeroUnknowns,
     zeroUnknowns,
     globalPass,
     counts,

@@ -11,9 +11,8 @@ export function renderSessionActivitySummary(
   const state =
     summary?.state === "current" && !summary.text ? "missing" : (summary?.state ?? "missing");
   const updating = state === "updating";
-  const feedback = updating
-    ? ""
-    : state === "stale"
+  const feedback =
+    state === "stale"
       ? t(summary?.text ? "activityFeed.recapStale" : "activityFeed.recapMissing")
       : state === "unavailable"
         ? t(summary?.text ? "activityFeed.recapRefreshFailed" : "activityFeed.recapUnavailable")

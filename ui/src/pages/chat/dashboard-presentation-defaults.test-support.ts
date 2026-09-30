@@ -10,11 +10,11 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
+  createPaneHeaderWorkspaceFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { isSidebarSlotVisible, type SidebarLayout } from "./sidebar-layout.ts";
 
 type DashboardPane = TestChatPane & {
@@ -144,7 +144,7 @@ export function createDashboardHarness(
   const header = async () => {
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         state.sessionsResult?.sessions[0],
         false,
         undefined,

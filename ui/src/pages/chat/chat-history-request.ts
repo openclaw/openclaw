@@ -128,17 +128,13 @@ async function requestChatHistory<T extends ChatHistoryResponse>(
     try {
       return await attempt();
     } catch (err) {
+      if (!shouldContinue() || !shouldRetry() || !isRetryableStartupUnavailable(err, method)) {
+        throw err;
+      }
+      await sleep(resolveStartupRetryDelayMs(err));
       if (!shouldContinue()) {
         throw err;
       }
-      if (shouldRetry() && isRetryableStartupUnavailable(err, method)) {
-        await sleep(resolveStartupRetryDelayMs(err));
-        if (!shouldContinue()) {
-          throw err;
-        }
-        continue;
-      }
-      throw err;
     }
   }
 }

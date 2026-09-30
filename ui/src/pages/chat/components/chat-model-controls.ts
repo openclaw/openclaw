@@ -27,7 +27,11 @@ import {
   canonicalModelAuthProviderId,
   listEffectiveModelAuthProviders,
 } from "../../../lib/model-auth.ts";
-import { describeModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
+import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
+import {
+  describeModelProviderAuth,
+  type ModelProviderAuthLabel,
+} from "../../../lib/model-provider-auth-label.ts";
 import {
   isSessionRuntimePinned,
   resolveModelRuntimeEntry,
@@ -41,15 +45,9 @@ import {
   type ChatModelPickerOption,
   type ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
-import {
-  renderChatModelPicker,
-  type ChatModelCatalogState,
-  type ChatModelProviderAuth,
-} from "./chat-model-picker.ts";
+import { renderChatModelPicker } from "./chat-model-picker.ts";
 
 registerModelControlsEnglish();
-
-export type { ChatModelCatalogState } from "./chat-model-picker.ts";
 
 type ChatContextWindowTarget = Pick<
   SessionsListResult["defaults"],
@@ -236,7 +234,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const retired = props.modelCatalogState?.retired === true;
   const uninitialized = props.modelCatalogState?.initialized === false;
   const catalogOwnsChoices = retired || uninitialized || policy?.restricted === true;
-  const providerAuth = new Map<string, ChatModelProviderAuth>();
+  const providerAuth = new Map<string, ModelProviderAuthLabel>();
   const headingKey = (id: string) =>
     normalizeChatModelProviderGroupId(
       canonicalModelAuthProviderId(normalizeChatModelProviderId(id)),

@@ -96,19 +96,13 @@ function getScopeFormatter(scope: string, theme: HighlightTheme): HighlightForma
     return exact;
   }
 
-  const dotIndex = scope.indexOf(".");
-  if (dotIndex !== -1) {
-    const prefixFormatter = theme[scope.slice(0, dotIndex)];
-    if (prefixFormatter) {
-      return prefixFormatter;
-    }
-  }
-
-  const dashIndex = scope.indexOf("-");
-  if (dashIndex !== -1) {
-    const prefixFormatter = theme[scope.slice(0, dashIndex)];
-    if (prefixFormatter) {
-      return prefixFormatter;
+  for (const separator of [".", "-"]) {
+    const index = scope.indexOf(separator);
+    if (index !== -1) {
+      const prefixFormatter = theme[scope.slice(0, index)];
+      if (prefixFormatter) {
+        return prefixFormatter;
+      }
     }
   }
 
@@ -179,9 +173,7 @@ function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string
 
     if (html.startsWith(SPAN_CLOSE, index)) {
       flushText();
-      if (scopes.length > 0) {
-        scopes.pop();
-      }
+      scopes.pop();
       index += SPAN_CLOSE.length;
       continue;
     }

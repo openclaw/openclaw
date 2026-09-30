@@ -210,17 +210,14 @@ function migrateChannelAliases(raw: Record<string, unknown>, changes: string[]):
     if (!Object.hasOwn(entry, "serviceAccountRef")) {
       return;
     }
-    if (entry.serviceAccount !== undefined) {
-      changes.push(
-        `Moved ${path}.serviceAccountRef → ${path}.serviceAccount (SecretRef precedence preserved).`,
-      );
-      entry.serviceAccount = entry.serviceAccountRef;
-      delete entry.serviceAccountRef;
-      return;
-    }
+    const hadServiceAccount = entry.serviceAccount !== undefined;
     entry.serviceAccount = entry.serviceAccountRef;
     delete entry.serviceAccountRef;
-    changes.push(`Moved ${path}.serviceAccountRef → ${path}.serviceAccount.`);
+    changes.push(
+      hadServiceAccount
+        ? `Moved ${path}.serviceAccountRef → ${path}.serviceAccount (SecretRef precedence preserved).`
+        : `Moved ${path}.serviceAccountRef → ${path}.serviceAccount.`,
+    );
   });
 }
 

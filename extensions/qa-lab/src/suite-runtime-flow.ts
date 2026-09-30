@@ -6,7 +6,7 @@ import { resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import { formatErrorMessage as formatQaErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import * as browserRuntime from "./browser-runtime.js";
@@ -75,6 +75,7 @@ const qaSuiteScenarioIdentityDeps = {
   formatMemoryDreamingDay,
   resolveSessionTranscriptsDirForAgent,
   buildAgentSessionKey,
+  resolveAgentRoute,
   normalizeLowercaseStringOrEmpty,
 };
 
@@ -167,18 +168,6 @@ function createQaSuiteScenarioDeps(
     }
     return params.env.gateway.logs?.() ?? "";
   };
-  const readGatewayLogsForSentinels = (options?: Parameters<typeof scanGatewayLogSentinels>[1]) => {
-    if (monotonicGatewayLogs && isValidGatewayLogMark(options?.since)) {
-      return {
-        logs: monotonicGatewayLogs.readSince(options.since),
-        options: { ...options, since: 0 },
-      };
-    }
-    return {
-      logs: params.env.gateway.logs?.(),
-      options: { ...options, since: 0 },
-    };
-  };
   return {
     ...qaSuiteScenarioIdentityDeps,
     runScenario: params.runScenario,
@@ -205,14 +194,10 @@ function createQaSuiteScenarioDeps(
       }
       return fullLegacyGatewayLogSnapshotMark;
     },
-    scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) => {
-      const input = readGatewayLogsForSentinels(options);
-      return scanGatewayLogSentinels(input.logs, input.options);
-    },
-    assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) => {
-      const input = readGatewayLogsForSentinels(options);
-      return assertNoGatewayLogSentinels(input.logs, input.options);
-    },
+    scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>
+      scanGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
+    assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) =>
+      assertNoGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
     runRuntimeToolFixture: async (
       envArg: QaSuiteScenarioFlowEnv,
       configArg: Record<string, unknown>,
@@ -246,7 +231,7 @@ function createQaSuiteScenarioFlowApi(
 ) {
   const createWebPageOpener = (signal?: AbortSignal) => {
     const open = webRuntime.createQaWebPageOpener(params.env.webSessionIds, signal);
-    return (webParams: Parameters<typeof webRuntime.qaWebOpenPage>[0]) =>
+    return (webParams: webRuntime.QaWebOpenPageParams) =>
       open({ ...webParams, repoRoot: params.env.repoRoot });
   };
   const api = {

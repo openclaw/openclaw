@@ -1,13 +1,23 @@
+import { setImmediate as scheduleImmediate } from "node:timers";
 import { setImmediate } from "node:timers/promises";
 
 declare const Bun: { gc(force: boolean): void };
 
 export async function collectGarbageForTest(collectInNode?: () => void): Promise<void> {
   // WeakRef targets stay alive for the current job, even without a strong owner.
-  await setImmediate();
   if (process.versions.bun) {
-    Bun.gc(true);
-  } else if (collectInNode) {
+    // Collect outside JavaScriptCore's promise-microtask drain, whose stack
+    // can otherwise keep settled async values alive.
+    await new Promise<void>((resolve) => {
+      scheduleImmediate(() => {
+        Bun.gc(true);
+        resolve();
+      });
+    });
+    return;
+  }
+  await setImmediate();
+  if (collectInNode) {
     collectInNode();
   } else {
     const { Session } = await import("node:inspector");

@@ -1,6 +1,3 @@
-/**
- * Tracks prompt-cache snapshot changes for observability diagnostics.
- */
 import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
@@ -88,11 +85,7 @@ function buildTrackerKey(params: {
   sessionKey?: string;
   sessionId: string;
 }): string {
-  const promptCacheKey = params.promptCacheKey?.trim();
-  if (promptCacheKey) {
-    return promptCacheKey;
-  }
-  return params.sessionKey?.trim() || params.sessionId;
+  return params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId;
 }
 
 function normalizeToolSchemaFingerprint(
@@ -163,11 +156,8 @@ function normalizeToolSchemaFingerprint(
 }
 
 function setTracker(key: string, tracker: PromptCacheTracker): void {
-  if (trackers.has(key)) {
-    trackers.delete(key);
-  } else if (trackers.size >= MAX_TRACKERS) {
-    pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
-  }
+  trackers.delete(key);
+  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
   trackers.set(key, tracker);
 }
 
@@ -187,17 +177,13 @@ function diffSnapshots(
       detail: `${previous.modelApi ?? "unknown"} -> ${next.modelApi ?? "unknown"}`,
     });
   }
-  if (previous.cacheRetention !== next.cacheRetention) {
-    changes.push({
-      code: "cacheRetention",
-      detail: `${previous.cacheRetention ?? "default"} -> ${next.cacheRetention ?? "default"}`,
-    });
-  }
-  if (previous.transport !== next.transport) {
-    changes.push({
-      code: "transport",
-      detail: `${previous.transport ?? "default"} -> ${next.transport ?? "default"}`,
-    });
+  for (const code of ["cacheRetention", "transport"] as const) {
+    if (previous[code] !== next[code]) {
+      changes.push({
+        code,
+        detail: `${previous[code] ?? "default"} -> ${next[code] ?? "default"}`,
+      });
+    }
   }
   if (previous.streamStrategy !== next.streamStrategy) {
     changes.push({

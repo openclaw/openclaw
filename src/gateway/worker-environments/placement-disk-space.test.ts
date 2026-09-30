@@ -5,7 +5,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
-import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
+import type { WorkerTunnelRequest, WorkerWorkspaceCommand } from "./tunnel-contract.js";
 
 const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
@@ -56,14 +56,37 @@ function createHarness(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
 ) {
   let placement: WorkerSessionPlacementRecord = activePlacement();
-  const startTunnel = vi.fn(async () => ({ runWorkspaceCommand }));
+  const unexpected = async () => {
+    throw new Error("unexpected workspace mutation during a disk probe");
+  };
+  const startTunnel = vi.fn(async ({ environmentId, ownerEpoch }: WorkerTunnelRequest) => ({
+    environmentId,
+    ownerEpoch,
+    runWorkspaceCommand,
+    quiesceWorkspace: unexpected,
+    syncWorkspace: unexpected,
+    reconcileWorkspace: unexpected,
+    stop: async () => {},
+  }));
   const warn = vi.fn();
   const monitor = createWorkerPlacementDiskSpaceMonitor({
     placements: {
       get: () => placement,
-      list: () => [placement],
+      readChangeSnapshot: async () => {
+        const { sessionId, sessionKey, agentId, state, generation, updatedAtMs } = placement;
+        return [{ sessionId, sessionKey, agentId, state, generation, updatedAtMs }];
+      },
+      readProjection: async () => ({
+        placements: new Map([[placement.sessionId, placement]]),
+        moves: new Map(),
+        pendingResults: new Map(),
+        workspaceJournalOwnerSessionIds: new Set(),
+        workspaceResultReconcilingSessionIds: new Set(),
+        workspaceRecoveryPendingSessionIds: new Set(),
+        environments: new Map(),
+      }),
     },
-    environments: { startTunnel: startTunnel as never },
+    environments: { startTunnel },
     warn,
     now: () => 1_000,
   });

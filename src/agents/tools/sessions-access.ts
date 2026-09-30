@@ -133,27 +133,6 @@ function recordAdmittedSessionDecision(params: {
   });
 }
 
-function recordAdmittedSessionAccessDenial(params: {
-  action: SessionVisibilityDecisionPresentationAction;
-  targetAgentId: string;
-  targetSessionKey: string;
-  denial: SessionToolAccessDenied;
-}): boolean {
-  return recordAdmittedSessionDecision({
-    action: params.action,
-    targetAgentId: params.targetAgentId,
-    targetSessionKey: params.targetSessionKey,
-    outcome: "denied",
-    reasonCode: params.denial.reasonCode,
-    coverageState: params.denial.missingEvidence.length > 0 ? "unknown" : "enforced",
-    policyRefs: params.denial.policyRefs,
-    contextFieldsUsed: params.denial.contextFieldsUsed,
-    missingEvidence: params.denial.missingEvidence,
-    owner: "session-access",
-    decisionBoundary: "session-tool.access",
-  });
-}
-
 /** Queue an owner-native model-mediated session result after its final await. */
 export function recordSessionToolActionFact(params: {
   operation: SessionToolActionOperation;
@@ -225,11 +204,18 @@ export async function resolveSessionToolAccess(params: {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {
-    recordAdmittedSessionAccessDenial({
+    recordAdmittedSessionDecision({
       action: params.displayAction ?? params.action,
       targetAgentId: params.targetAgentId,
       targetSessionKey: authorizationTargetSessionKey,
-      denial,
+      outcome: "denied",
+      reasonCode: denial.reasonCode,
+      coverageState: denial.missingEvidence.length > 0 ? "unknown" : "enforced",
+      policyRefs: denial.policyRefs,
+      contextFieldsUsed: denial.contextFieldsUsed,
+      missingEvidence: denial.missingEvidence,
+      owner: "session-access",
+      decisionBoundary: "session-tool.access",
     });
     return denial;
   };
@@ -280,10 +266,7 @@ export async function resolveSessionToolAccess(params: {
   }
   const requesterOwnedAccess = check(true);
   if (params.requesterOwned) {
-    if (requesterOwnedAccess.allowed) {
-      return requesterOwnedAccess;
-    }
-    return deny(requesterOwnedAccess);
+    return requesterOwnedAccess.allowed ? requesterOwnedAccess : deny(requesterOwnedAccess);
   }
   // Ownership proof can only widen tree visibility; do not let an operational
   // lookup failure replace a deterministic self/A2A policy denial.

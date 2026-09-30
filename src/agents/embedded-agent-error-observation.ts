@@ -4,6 +4,7 @@ import { stableStringify } from "@openclaw/normalization-core";
  */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readLoggingConfig } from "../logging/config.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
@@ -31,14 +32,6 @@ const RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS = new Set<ProviderRuntimeFailur
   "auth_scope",
   "upstream_html",
 ]);
-
-function resolveConfiguredRedactPatterns(): string[] {
-  const configured = readLoggingConfig()?.redactPatterns;
-  if (!Array.isArray(configured)) {
-    return [];
-  }
-  return configured.filter((pattern): pattern is string => typeof pattern === "string");
-}
 
 function truncateForObservation(text: string | undefined, maxChars: number): string | undefined {
   const trimmed = text?.trim();
@@ -73,8 +66,9 @@ function redactObservationText(text: string | undefined): string | undefined {
     return text;
   }
   // Observation logs must stay redacted even when operators disable general-purpose
-  // log redaction, otherwise raw provider payloads leak back into always-on logs.
-  const configuredPatterns = resolveConfiguredRedactPatterns();
+  // log redaction, otherwise raw provider payloads leak back into always-on logs. The default
+  // policy includes its programmatic matchers, not only the configurable string sources.
+  const configuredPatterns = filterStringEntries(readLoggingConfig()?.redactPatterns);
   return redactSensitiveText(text, {
     mode: "tools",
     patterns: [

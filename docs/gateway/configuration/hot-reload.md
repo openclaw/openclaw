@@ -43,6 +43,12 @@ Invalid edits leave the last good runtime active. Restart reads the same config
 files through the normal startup validation and recovery path; source revision
 numbers are local to the running Gateway.
 
+If an external edit leaves the config missing or invalid during a Gateway write's
+final reread, a `config.patch` or `config.apply` waiting for runtime application
+returns `UNAVAILABLE` with the committed config details. It does not wait for
+another file event. Repair the file, run `config.get`, then reapply the intended
+config. The Gateway does not overwrite the external edit.
+
 If you see `config reload skipped (invalid config)` or startup reports `Invalid
 config`, inspect the config, run `openclaw config validate`, then run `openclaw
 doctor --fix` for repair. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config)
@@ -194,6 +200,8 @@ pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and
 `dangerouslyAllowHostHeaderOriginFallback` also hot-apply: pending handshakes
 recheck the new policy, and browser connections it no longer allows close.
+Removing an admitted browser origin also revokes its accepted runs and delegated
+work, even after the connection has closed; removing an unrelated origin does not.
 Disabling the Control UI stops serving dashboard pages and assets and cancels
 pending asset preparation. Existing Gateway connections and agent runs continue.
 Re-enabling prepares missing dashboard assets in the background; requests return
@@ -229,14 +237,18 @@ Title edits apply to future captures and preserve existing transcript titles.
 Disabling transcript storage stops capture writers without ending their meetings.
 
 Role definitions, proxy trust, identity scopes, Tailscale authentication, and
-trusted-proxy policies apply live. Connections and pending handshakes that retain
-old policy lose authority and reconnect. For WebSocket connections with a verified
-login identity, identity-scope edits only retire authority when that login’s
-resolved grants change. Editing another login or reordering the same scopes keeps
-the connection and its accepted runs active. Removing or changing the original
-grant still revokes retained and delegated work, even if it is restored afterward.
-Accepted policy writes can finish their response; other work must pass the current
-authority checks before writing.
+trusted-proxy policies apply live. Transport policy changes can require a new
+handshake without cancelling accepted runs. Proxy headers, OIDC mapping, device
+auto-approval, and proxy-address changes fence connections but preserve accepted
+work when the owner's grant is unchanged. This includes a requested initial turn
+after `sessions.create` commits its new session. Editing another login's identity scopes
+or reordering the same scopes keeps the connection and its accepted runs active.
+Changing the owner's identity-scope grant, removing that identity from the proxy
+allowlist, or disabling its authentication method revokes retained and delegated
+work, even if the grant is restored afterward. Shared-secret rotation also revokes
+work admitted with the old credential. Role restrictions remain enforced by each
+run's authority. Accepted policy writes can finish their response; subsequent
+requests must reauthenticate under the current transport policy.
 Changing authentication mode or listener topology still requires a Gateway restart.
 
 Node command policy updates connected nodes immediately. Disabling node-published

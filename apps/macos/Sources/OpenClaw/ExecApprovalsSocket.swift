@@ -271,9 +271,7 @@ final class ExecApprovalsPromptServer {
         self.retryTask = Task { @MainActor [weak self] in
             // A canceled startup may still be unwinding socket-path cleanup.
             // Never let a replacement generation race that cleanup.
-            if let previousStartupTask {
-                await previousStartupTask.value
-            }
+            await previousStartupTask?.value
             guard !Task.isCancelled, self?.startupGeneration == generation else { return }
 
             var isFirstAttempt = true

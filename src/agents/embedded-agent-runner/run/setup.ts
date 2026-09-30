@@ -1,6 +1,9 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { withGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
+import { readClaimingHookAdmission } from "../../../plugins/hook-claim-admission.js";
+import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type {
   PluginHookBeforeModelResolveAttachment,
@@ -27,23 +30,11 @@ import { FailoverError } from "../../failover-error.js";
 import { resolveModelContextWindowProfile } from "../../model-context-window.js";
 import { log } from "../logger.js";
 
-type HookContext = {
-  agentId?: string;
-  sessionKey?: string;
-  sessionId: string;
-  workspaceDir: string;
-  messageProvider?: string;
-  trigger?: string;
-  channelId?: string;
-};
-
-type HookRunnerLike = {
-  hasHooks(hookName: string): boolean;
-  runBeforeModelResolve(
-    input: PluginHookBeforeModelResolveEvent,
-    context: HookContext,
-  ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
-};
+type HookRunnerLike = Pick<
+  NonNullable<ReturnType<typeof getGlobalHookRunner>>,
+  "hasHooks" | "runBeforeModelResolve"
+>;
+type HookContext = Parameters<HookRunnerLike["runBeforeModelResolve"]>[1];
 
 /** Durable harness sessions run only with their exact persisted identity and runtime lock. */
 export function resolveAgentHarnessRunAdmissionError(params: {
@@ -104,20 +95,26 @@ export async function resolveHookModelSelection(params: {
   if (params.modelSelectionLocked === true) {
     return { provider, modelId };
   }
-  let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+  let modelResolveOverride: Awaited<ReturnType<HookRunnerLike["runBeforeModelResolve"]>>;
   const hookRunner = params.hookRunner;
 
   // Run before_model_resolve hooks early so plugins can override the
   // provider/model before resolveModel().
   if (hookRunner?.hasHooks("before_model_resolve")) {
+    const assertCurrent = readClaimingHookAdmission(params.hookContext)?.assertCurrent;
+    assertCurrent?.();
     try {
       const event: PluginHookBeforeModelResolveEvent = params.attachments
         ? { prompt: params.prompt, attachments: params.attachments }
         : { prompt: params.prompt };
-      modelResolveOverride = await hookRunner.runBeforeModelResolve(event, params.hookContext);
+      const run = () => hookRunner.runBeforeModelResolve(event, params.hookContext);
+      modelResolveOverride = assertCurrent
+        ? await withGuardedFetchRequestAuthority(assertCurrent, run)
+        : await run();
     } catch (hookErr) {
       log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
     }
+    assertCurrent?.();
   }
 
   if (modelResolveOverride?.providerOverride) {

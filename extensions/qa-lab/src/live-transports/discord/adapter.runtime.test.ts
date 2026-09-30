@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as credentialLease from "../shared/credential-lease.runtime.js";
 import { createDiscordQaTransportAdapter } from "./adapter.runtime.js";
 import * as channelE2e from "./channel-e2e.js";
-import { discordQaScenarioSupport } from "./discord-live.runtime.js";
+import * as testing from "./discord-live.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -34,11 +34,11 @@ function mockAdapterIo() {
     whenFailed: new Promise<Error>(() => {}),
   });
   const identity = vi
-    .spyOn(discordQaScenarioSupport.testing, "getCurrentDiscordUser")
+    .spyOn(testing, "getCurrentDiscordUser")
     .mockResolvedValueOnce({ id: "423456789012345678", bot: true })
     .mockResolvedValueOnce({ id: "323456789012345678", bot: true });
   const poll = vi
-    .spyOn(discordQaScenarioSupport.testing, "pollChannelMessages")
+    .spyOn(testing, "pollChannelMessages")
     .mockRejectedValue(new Error("observer stopped"));
   const context = {
     channelId: "discord",

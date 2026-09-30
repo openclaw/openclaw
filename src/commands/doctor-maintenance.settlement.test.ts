@@ -1,7 +1,9 @@
 import "./doctor-maintenance.settlement.test-support.js";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { GatewayServiceStopUnsafeError } from "../daemon/service-inspection-error.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
@@ -13,11 +15,31 @@ import { readUpdateDatabaseGenerations } from "../infra/update-database-generati
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import * as nocow from "./doctor-sqlite-nocow.js";
 
 const settlement = await import("./doctor-maintenance.settlement.test-support.js");
 const { begin, boundary, cleanupBarrier, root } = settlement;
+const capturedExecFile = promisify(execFile);
+const capturedSpawnSync = spawnSync;
+
+it("blocks captured native calls and the real broker while settlement controls are active", async () => {
+  try {
+    expect(() => capturedSpawnSync("/synthetic/forbidden")).toThrow(
+      "Doctor settlement controls cannot start or inspect native processes",
+    );
+    await expect(async () => capturedExecFile("/synthetic/forbidden")).rejects.toThrow(
+      "Doctor settlement controls cannot start or inspect native processes",
+    );
+    expect(() =>
+      createSpawnBrokerHost({ workerUrl: new URL("file:///synthetic/forbidden.mjs") }),
+    ).toThrow("Doctor settlement controls cannot start or inspect native processes");
+    expect(boundary.native).toHaveBeenCalledTimes(3);
+  } finally {
+    boundary.native.mockClear();
+  }
+});
 
 it.each([false, true])(
   "captures settled Doctor writes without attributing earlier writes (changed=%s)",

@@ -335,27 +335,6 @@ const APP_RESOURCE_PATH_PREFIXES = [
 ];
 const markdownCache = new Map<string, string>();
 
-function getCachedMarkdown(key: string): string | null {
-  const cached = markdownCache.get(key);
-  if (cached === undefined) {
-    return null;
-  }
-  markdownCache.delete(key);
-  markdownCache.set(key, cached);
-  return cached;
-}
-
-function setCachedMarkdown(key: string, value: string) {
-  markdownCache.set(key, value);
-  if (markdownCache.size <= MARKDOWN_CACHE_LIMIT) {
-    return;
-  }
-  const oldest = markdownCache.keys().next().value;
-  if (oldest) {
-    markdownCache.delete(oldest);
-  }
-}
-
 function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
   const source = stripUnsupportedCitationControlMarkers(markdownLocal);
   const state = streamingMarkdownState(streamKey);
@@ -414,10 +393,6 @@ function stripCurrentControlUiBasePath(pathname: string): string[] {
   return segments.slice(baseSegments.length);
 }
 
-function segmentsStartWith(segments: string[], prefix: string[]): boolean {
-  return prefix.every((segment, index) => segments[index] === segment);
-}
-
 function isControlUiResourcePath(segments: string[]): boolean {
   if (segments.includes("__openclaw__") || segments.includes("__openclaw")) {
     return true;
@@ -426,7 +401,9 @@ function isControlUiResourcePath(segments: string[]): boolean {
   if (!segment || APP_RESOURCE_ROOT_SEGMENTS.has(segment)) {
     return true;
   }
-  return APP_RESOURCE_PATH_PREFIXES.some((prefix) => segmentsStartWith(segments, prefix));
+  return APP_RESOURCE_PATH_PREFIXES.some((prefix) =>
+    prefix.every((prefixSegment, index) => segments[index] === prefixSegment),
+  );
 }
 
 function isDocsRootPath(normalizedPath: string, segments: string[]): boolean {
@@ -456,10 +433,7 @@ function normalizeDocsRootHref(href: string): string {
     if (isControlUiResourcePath(resourceSegments)) {
       return href;
     }
-    if (isDocsRootPath(normalizedPath, segments)) {
-      return url.href;
-    }
-    return href;
+    return isDocsRootPath(normalizedPath, segments) ? url.href : href;
   } catch {
     return href;
   }
@@ -653,12 +627,16 @@ export function toSanitizedMarkdownHtml(
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
   const cacheKey = `${markdownRenderKey(renderOptions)}\0${renderInput}`;
-  const cached = getCachedMarkdown(cacheKey);
-  if (cached !== null) {
-    return cached;
+  const sanitized =
+    markdownCache.get(cacheKey) ?? renderSanitizedMarkdown(renderInput, renderOptions);
+  markdownCache.delete(cacheKey);
+  markdownCache.set(cacheKey, sanitized);
+  if (markdownCache.size > MARKDOWN_CACHE_LIMIT) {
+    const oldest = markdownCache.keys().next().value;
+    if (oldest) {
+      markdownCache.delete(oldest);
+    }
   }
-  const sanitized = renderSanitizedMarkdown(renderInput, renderOptions);
-  setCachedMarkdown(cacheKey, sanitized);
   return sanitized;
 }
 

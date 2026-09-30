@@ -106,6 +106,9 @@ hovercard, and GitHub links open externally.
   up to 100 results. Incomplete or unavailable checks retain a link to GitHub.
 - Long text and patches are bounded. Incomplete content is labeled rather than
   presented as a complete conversation or diff.
+- Uncached hover previews share a two-second upstream request budget. Slow avatars
+  or co-author lookups are omitted; slow required metadata returns a retryable
+  unavailable error. The full reader keeps its longer request timeout.
 - **Refresh** requests the current item again. Rate limits, deleted items, and
   unavailable services show their specific explanation in the reader and hovercards,
   including GitHub's retry delay when available. Cached preview details stay visible

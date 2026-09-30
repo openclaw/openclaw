@@ -5,7 +5,6 @@ import {
   UPDATE_ENVIRONMENT_FAILURE_REASONS,
 } from "../shared/update-outcome.js";
 
-/** Report unfinished or failed update work during Doctor diagnostics. */
 export async function noteStaleUpdateRuns(
   options: {
     migrateState?: boolean;

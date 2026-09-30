@@ -241,9 +241,8 @@ export class NewSessionDraftController {
         () => this.read().context,
         () => this.protectPrivateDraftFromReload(),
       )
-      .watch(
+      .watchStore(
         () => this.read().context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.gateway.synchronize(gateway),
       )
       .effect(

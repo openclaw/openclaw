@@ -72,6 +72,10 @@
               {
                 "const": "auto",
                 "type": "string"
+              },
+              {
+                "const": "ultrafast",
+                "type": "string"
               }
             ]
           },
@@ -154,7 +158,7 @@
             "type": "string"
           },
           "runTimeoutSeconds": {
-            "description": "Per-run timeout in seconds; overrides the configured subagent default. Zero disables the timeout.",
+            "description": "Child run timeout in seconds; overrides the configured subagent default and is preserved on native continuations. Zero disables the timeout; requester wake turns use their own budget.",
             "minimum": 0,
             "type": "integer"
           },

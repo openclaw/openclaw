@@ -55,19 +55,14 @@ export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   }
 
   const id = extractConversationId(ctx.From);
-  if (!id) {
-    return base;
-  }
-  if (!shouldAppendId(id)) {
-    return base;
-  }
-  if (base.includes(id)) {
-    return base;
-  }
-  if (normalizeLowercaseStringOrEmpty(base).includes(" id:")) {
-    return base;
-  }
-  if (base.startsWith("#") || base.startsWith("@")) {
+  if (
+    !id ||
+    !shouldAppendId(id) ||
+    base.includes(id) ||
+    normalizeLowercaseStringOrEmpty(base).includes(" id:") ||
+    base.startsWith("#") ||
+    base.startsWith("@")
+  ) {
     return base;
   }
   return `${base} id:${id}`;

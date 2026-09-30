@@ -168,8 +168,20 @@ describe("lazy protocol validators", () => {
       { boardFace: "dashboard" },
       { hasBoard: true },
       { hasBoard: false },
+      { activityPulseBoundaries: [1, 2] },
     ]);
     expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
+    expectRejected(validateSessionsListParams, [
+      { activityPulseBoundaries: [1, 1] },
+      { activityPulseBoundaries: [0, 2, 1] },
+    ]);
+    expect(formatValidationErrors(validateSessionsListParams.errors)).toContain(
+      "activityPulseBoundaries: must be strictly ascending",
+    );
+    // Hostile elements must reach the schema's type error instead of throwing during comparison.
+    expectRejected(validateSessionsListParams, [
+      { activityPulseBoundaries: [0, { toString: 1 }, 2] },
+    ]);
     expectRejected(validateSessionsListParams, [{ sortBy: "recent" }]);
     expectRejected(validateSessionsListParams, [{ boardFace: "grid" }, { hasBoard: "yes" }]);
   });
@@ -220,6 +232,7 @@ describe("lazy protocol validators", () => {
     } as const;
     expectAccepted(validateSessionsPatchManyParams, [
       { targets: [target], patch: fullPatch },
+      { targets: [target], patch: { fastMode: "ultrafast" } },
       {
         targets: Array.from({ length: 100 }, (_, index) => ({
           key: `agent:main:patch-${index}`,
@@ -914,6 +927,7 @@ describe("validateChatSendParams", () => {
 
     expectAccepted(validateChatSendParams, [
       base,
+      { ...base, fastMode: "ultrafast" },
       {
         ...base,
         expectedSessionRoutingContract: "per-sender|main|main",

@@ -160,28 +160,6 @@ function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: str
   }
 }
 
-function resolveGroupRequireMention(params: {
-  groupId: string;
-  groupName?: string | null;
-  groups: Record<string, { enabled?: boolean; requireMention?: boolean }>;
-  allowNameMatching?: boolean;
-}): boolean {
-  const entry = findZalouserGroupEntry(
-    params.groups ?? {},
-    buildZalouserGroupCandidates({
-      groupId: params.groupId,
-      groupName: params.groupName,
-      includeGroupIdAlias: true,
-      includeWildcard: true,
-      allowNameMatching: params.allowNameMatching,
-    }),
-  );
-  if (typeof entry?.requireMention === "boolean") {
-    return entry.requireMention;
-  }
-  return true;
-}
-
 async function sendZalouserDeliveryAcks(params: {
   profile: string;
   isGroup: boolean;
@@ -265,6 +243,7 @@ async function processMessage(
   const groups = account.config.groups ?? {};
   const routeAllowlistConfigured = Object.keys(groups).length > 0;
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
+  let requireMention = false;
   if (isGroup) {
     const groupEntry = findZalouserGroupEntry(
       groups,
@@ -276,6 +255,8 @@ async function processMessage(
         allowNameMatching,
       }),
     );
+    requireMention =
+      typeof groupEntry?.requireMention === "boolean" ? groupEntry.requireMention : true;
     const routeAccess = resolveZalouserRouteAccess({
       groupPolicy,
       configured: routeAllowlistConfigured,
@@ -451,14 +432,6 @@ async function processMessage(
     historyMap: historyState.groupHistories,
   });
 
-  const requireMention = isGroup
-    ? resolveGroupRequireMention({
-        groupId: chatId,
-        groupName,
-        groups,
-        allowNameMatching,
-      })
-    : false;
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config, route.agentId);
   const explicitMention = {
     hasAnyMention: message.hasAnyMention === true,

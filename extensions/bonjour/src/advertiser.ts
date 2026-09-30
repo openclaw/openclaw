@@ -1,4 +1,3 @@
-/** Publishes gateway/SSH records through one ciao-owned advertisement lifecycle. */
 import fs from "node:fs";
 import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
@@ -12,7 +11,6 @@ type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
 };
 
-/** Input data used to publish OpenClaw gateway Bonjour records. */
 type GatewayBonjourAdvertiseOpts = {
   instanceName?: string;
   gatewayPort: number;
@@ -129,32 +127,26 @@ function serviceSummary(label: string, svc: CiaoService): string {
   return `${label} fqdn=${svc.getFQDN()} host=${svc.getHostname()} port=${svc.getPort()} state=${svc.serviceState}`;
 }
 
-function shouldSuppressCiaoConsoleLog(args: unknown[]): boolean {
-  return args.some(
-    (arg) => typeof arg === "string" && arg.includes(CIAO_SELF_PROBE_RETRY_FRAGMENT),
-  );
-}
-
-function shouldSuppressCiaoConsoleWarn(args: unknown[]): boolean {
-  return args.some(
-    (arg) =>
-      typeof arg === "string" &&
-      arg.includes(CIAO_MDNS_SOCKET_ERROR_FRAGMENT) &&
-      arg.includes(CIAO_ENODEV_SOCKET_ERROR_FRAGMENT),
-  );
-}
-
 function installCiaoConsoleNoiseFilter(): () => void {
   const previousConsoleLog = console.log;
   const previousConsoleWarn = console.warn;
   const logWrapper = (...args: unknown[]) => {
-    if (shouldSuppressCiaoConsoleLog(args)) {
+    if (
+      args.some((arg) => typeof arg === "string" && arg.includes(CIAO_SELF_PROBE_RETRY_FRAGMENT))
+    ) {
       return;
     }
     previousConsoleLog(...args);
   };
   const warnWrapper = (...args: unknown[]) => {
-    if (shouldSuppressCiaoConsoleWarn(args)) {
+    if (
+      args.some(
+        (arg) =>
+          typeof arg === "string" &&
+          arg.includes(CIAO_MDNS_SOCKET_ERROR_FRAGMENT) &&
+          arg.includes(CIAO_ENODEV_SOCKET_ERROR_FRAGMENT),
+      )
+    ) {
       return;
     }
     previousConsoleWarn(...args);
@@ -171,7 +163,6 @@ function installCiaoConsoleNoiseFilter(): () => void {
   };
 }
 
-/** Start Bonjour advertisements for the local gateway services. */
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
   deps: BonjourAdvertiserDeps,

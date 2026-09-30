@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
@@ -95,7 +96,7 @@ describe("agent database admission", () => {
         reason: expect.stringContaining("no agent owner"),
       });
       expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
-      expect(fs.readFileSync(pathname)).toEqual(before);
+      deepStrictEqual(fs.readFileSync(pathname), before);
     });
   });
 
@@ -240,7 +241,7 @@ describe("agent database admission", () => {
           code: "agent-database-ownership-mismatch",
         }),
       );
-      expect(fs.readFileSync(target)).toEqual(copyBytes);
+      deepStrictEqual(fs.readFileSync(target), copyBytes);
       const startup = () =>
         assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config });
       if (!isolate) {
@@ -255,7 +256,7 @@ describe("agent database admission", () => {
           },
         });
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
-        expect(fs.readFileSync(target)).toEqual(copyBytes);
+        deepStrictEqual(fs.readFileSync(target), copyBytes);
         return;
       }
       await expect(startup()).resolves.toBeUndefined();
@@ -300,7 +301,7 @@ describe("agent database admission", () => {
         await import("../agents/workspace-state-dirs.js");
       await assertConfiguredWorkspaceStateReady({ cfg: config, env });
       await runStartupSessionMigration({ cfg: config, env, log: { info: vi.fn(), warn: vi.fn() } });
-      expect(fs.readFileSync(target)).toEqual(copyBytes);
+      deepStrictEqual(fs.readFileSync(target), copyBytes);
       expect(() => openOpenClawAgentDatabase({ agentId, env })).toThrow(refusal?.reason);
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
@@ -316,7 +317,7 @@ describe("agent database admission", () => {
         agentId,
       });
       expect(openOpenClawAgentDatabase({ agentId, env }).agentId).toBe(agentId);
-      expect(fs.readFileSync(`${target}.operator-backup`)).toEqual(copyBytes);
+      deepStrictEqual(fs.readFileSync(`${target}.operator-backup`), copyBytes);
     },
   );
 });

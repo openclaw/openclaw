@@ -6,8 +6,14 @@ import type {
   SandboxBrowserRegistryEntry,
   SandboxRegistryEntry,
 } from "../agents/sandbox/registry.types.js";
-import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import type {
+  SubagentRunReadRecord,
+  SubagentRunsDurableBasis,
+} from "../agents/subagents/registry/subagent-registry-read.types.js";
+import type {
+  SubagentRunMaintenanceRecord,
+  SubagentRunRecord,
+} from "../agents/subagents/registry/subagent-registry.types.js";
 import type { WorkspaceStateSnapshot } from "../agents/workspace-state-store.kernel.js";
 import type { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lease-owner.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
@@ -21,7 +27,12 @@ import type {
 } from "../channels/message/ingress-queue-read-contract.js";
 import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CronRunReceiptOwnerObservation } from "../cron/store/run-receipt.types.js";
+import type { CronScratchReadCommand, CronScratchSnapshot } from "../cron/scratch-contract.js";
+import type {
+  CronRunReceiptCurrentFacts,
+  CronRunReceiptCurrentReadCommand,
+  CronRunReceiptOwnerObservation,
+} from "../cron/store/run-receipt.types.js";
 import type {
   CronRunRecoveryReadCommand,
   CronRunRecoveryObservation,
@@ -42,6 +53,10 @@ import type {
 } from "../gateway/worker-environments/placement-read-projection.types.js";
 import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-environments/placement-record.js";
 import type {
+  WorkspaceJournalReadCommand,
+  WorkspaceJournalReadResult,
+} from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+import type {
   WorkerEnvironmentFacts,
   WorkerEnvironmentPrunePage,
   WorkerEnvironmentPruneReadInput,
@@ -51,6 +66,7 @@ import type {
   DevicePairingReadReply,
 } from "../infra/device-pairing-read.types.js";
 import type { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import type { OutboundDeliveryStorageEntry } from "../infra/outbound/delivery-queue-storage.types.js";
 import type {
   ConversationRef,
@@ -82,6 +98,7 @@ import type {
   AgentDeletionJournalStatus,
 } from "./agent-deletion-journal.types.js";
 import type {
+  SharedGitHubPublicationReadInput,
   GitHubPublicationReceiptTarget,
   GitHubPublicationRow,
   RepositoryGitHubPublicationReceiptTarget,
@@ -130,6 +147,7 @@ export type OpenClawStateReadCommand =
   | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
+  | { type: "doctor.gatewayOwnerLease.read" }
   | { type: "acpSessions.list" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
@@ -148,9 +166,20 @@ export type OpenClawStateReadCommand =
   | { type: "subagents.sessionList" }
   | {
       type: "subagents.runs";
-      scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] };
+      scope:
+        | { kind: "all" }
+        | { kind: "maintenance" }
+        | { kind: "session"; sessionKey: string }
+        | { kind: "ids"; runIds: readonly string[] }
+        | {
+            kind: "descendants";
+            sessionKeys: readonly string[];
+            liveTopology: SubagentRunsDurableBasis["liveTopology"];
+          };
     }
   | CronRunRecoveryReadCommand
+  | CronRunReceiptCurrentReadCommand
+  | CronScratchReadCommand
   | { type: "cron.activeReceiptOwners"; agentId: string }
   | { type: "cron.jobNames"; jobIds: string[]; storePath?: string }
   | { type: "subagents.forChildSession"; childSessionKey: string }
@@ -184,6 +213,7 @@ export type OpenClawStateReadCommand =
       publicationKind: "shared" | "personal";
       requestId: string;
     }
+  | { type: "githubPublication.sharedObservation"; input: SharedGitHubPublicationReadInput }
   | { type: "githubPublication.request"; requestId: string }
   | { type: "githubRepository.request"; requestId: string }
   | { type: "githubPublication.knownPullRequestUrls"; input: GitHubPublicationReceiptTarget }
@@ -214,6 +244,7 @@ export type OpenClawStateReadCommand =
   | { type: "sandboxRegistry.get"; containerName: string }
   | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
   | { type: "sandboxRegistry.browsers" }
+  | WorkspaceJournalReadCommand
   | { type: "workers.placementRecoveryCandidates" }
   | {
       type: "workers.placementProjection";
@@ -232,6 +263,7 @@ export type OpenClawStateReadRequest = {
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
 export type OpenClawStateReadResult =
+  | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | {
       type: "tui.lastSession.read";
       row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
@@ -306,6 +338,10 @@ export type OpenClawStateReadResult =
       lifecycle: GitHubPublicationSessionLifecycle | undefined;
     }
   | {
+      type: "githubPublication.sharedObservation";
+      row: GitHubPublicationRow | RepositoryGitHubPublicationRow | undefined;
+    }
+  | {
       type: "githubPublication.request";
       row: GitHubPublicationRow | undefined;
     }
@@ -325,6 +361,8 @@ export type OpenClawStateReadResult =
       type: "cron.observeRunRecovery";
       observation: CronRunRecoveryObservation;
     }
+  | { type: "cron.currentReceipt"; facts: CronRunReceiptCurrentFacts }
+  | { type: "cron.scratch"; snapshot: CronScratchSnapshot | undefined }
   | {
       type: "cron.jobNames";
       names: Map<string, string | undefined>;
@@ -341,7 +379,18 @@ export type OpenClawStateReadResult =
       type: "subagents.sessionList";
       unavailable: { message: string; error: OpenClawStateWorkerErrorPayload | undefined };
     }
-  | { type: "subagents.runs"; runs: Map<string, SubagentRunRecord> }
+  | {
+      type: "subagents.runs";
+      projection?: never;
+      runs: Map<string, SubagentRunRecord>;
+      descendantBasis?: { digest: string; sessionKeys: Set<string>; runIds: readonly string[] };
+    }
+  | {
+      type: "subagents.runs";
+      projection: "maintenance";
+      runs: Map<string, SubagentRunMaintenanceRecord>;
+      maintenanceDigest: string;
+    }
   | {
       type: "agentDatabaseDeletion.snapshot";
       snapshot: AgentDatabaseDeletionSnapshot;
@@ -460,6 +509,7 @@ export type OpenClawStateReadResult =
       type: "sandboxRegistry.browsers";
       entries: SandboxBrowserRegistryEntry[];
     }
+  | WorkspaceJournalReadResult
   | { type: "workers.placementRecoveryCandidates"; candidates: WorkerPlacementRecoveryCandidate[] }
   | {
       type: "workers.placementProjection";
@@ -482,7 +532,7 @@ export type OpenClawStateReadReply = (
       error: OpenClawStateWorkerErrorPayload | undefined;
     }
 ) & {
-  /** A best-effort admission read completed without confirmed native cleanup. */
+  /** Native cleanup requires worker exit, possibly after a successful read. */
   nativeCleanupFailure?: { error: OpenClawStateWorkerErrorPayload | undefined };
 };
 

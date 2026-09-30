@@ -34,6 +34,8 @@ describe("node worker environment stop after failed initialization", () => {
   it.runIf(process.platform === "linux" || process.platform === "darwin")(
     "settles native recovery without publishing capacity until the unrelated container recovers",
     async () => {
+      const cleanupMode =
+        process.platform === "linux" && !process.versions.bun ? "linux-subreaper" : "owned-anchor";
       const capacities: Array<{ total: number; available: number }> = [];
       const root = tempDirs.make("node-worker-stop-initialization-");
       const fixture = createNodeWorkerContainerFixture(root, fileLockModule, {
@@ -55,8 +57,8 @@ describe("node worker environment stop after failed initialization", () => {
       let bodyFailure: { error: unknown } | undefined;
       await (async () => {
         const receipt = JSON.parse(await waitForChildLine(owner)) as NodeWorkerLaunchReceipt;
-        expect(receipt.workerCleanupMode).toBe("owned-anchor");
         anchor = receipt.worker!;
+        expect(receipt.workerCleanupMode).toBe(cleanupMode);
         process.kill(anchor.pid, "SIGSTOP");
         owner.kill("SIGKILL");
         await waitForChildExit(owner);
@@ -101,6 +103,7 @@ describe("node worker environment stop after failed initialization", () => {
         expect(await store.get(native.launchId)).toMatchObject({
           state: "running",
           workerLineageSettled: false,
+          ...(cleanupMode === "linux-subreaper" ? { workerDescendantsReaped: false } : {}),
         });
         expect(capacities).toEqual([{ total: 3, available: 0 }]);
 
@@ -121,7 +124,11 @@ describe("node worker environment stop after failed initialization", () => {
         });
         expect(inspectOwnedNodeWorkerTree(anchor)).toBe("dead");
         const cancelled = await store.get(native.launchId);
-        expect(cancelled).toMatchObject({ state: "cancelled", workerLineageSettled: true });
+        expect(cancelled).toMatchObject({
+          state: "cancelled",
+          workerLineageSettled: cleanupMode === "owned-anchor",
+          ...(cleanupMode === "linux-subreaper" ? { workerDescendantsReaped: true } : {}),
+        });
         expect([await store.get(live.launchId), await store.get(blocked.launchId)]).toEqual(
           preserved,
         );

@@ -262,7 +262,7 @@ export async function runSearxngSearch(params: {
   }
 
   const startedAt = Date.now();
-  let results = await fetchSearxngResults({
+  const request = {
     baseUrl,
     query: params.query,
     categories,
@@ -271,18 +271,13 @@ export async function runSearxngSearch(params: {
     count,
     endpointMode,
     signal: params.signal,
-  });
+  };
+  let results = await fetchSearxngResults(request);
   params.signal?.throwIfAborted();
   if (results.length === 0 && shouldRetryEmptyCategorySearchWithGeneral(categories)) {
     results = await fetchSearxngResults({
-      baseUrl,
-      query: params.query,
+      ...request,
       categories: "general",
-      language,
-      timeoutSeconds,
-      count,
-      endpointMode,
-      signal: params.signal,
     });
     params.signal?.throwIfAborted();
   }

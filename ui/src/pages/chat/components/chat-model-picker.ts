@@ -11,14 +11,14 @@ import {
 } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
-import type { ModelProviderAuthLabel as ChatModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
+import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
+import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import {
   type ChatContextWindowControlParams,
   renderContextWindowControl,
 } from "./chat-context-window-control.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
-  type ChatModelCatalogState,
   renderChatModelCatalogRefresh,
   renderChatModelCatalogState,
 } from "./chat-model-catalog-state.ts";
@@ -43,12 +43,8 @@ import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-p
 
 registerModelControlsEnglish();
 
-export type { ChatModelCatalogState } from "./chat-model-catalog-state.ts";
-
-export type { ModelProviderAuthLabel as ChatModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
-
 type ChatModelPickerParams = {
-  providerAuth?: ReadonlyMap<string, ChatModelProviderAuth>;
+  providerAuth?: ReadonlyMap<string, ModelProviderAuthLabel>;
   accountSection?: ChatModelAccountSection;
   contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;

@@ -1,4 +1,3 @@
-// Session transcript hit helpers describe and load matched transcript snippets for plugins.
 import path from "node:path";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";

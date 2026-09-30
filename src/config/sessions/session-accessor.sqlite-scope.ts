@@ -66,6 +66,7 @@ type SessionSqliteDatabase = Pick<
   | "session_pending_inputs"
   | "session_input_completions"
   | "session_progress_cards"
+  | "session_reactions"
   | "session_suggestions"
   | "session_transcript_archives"
   | "session_transcript_cold_archives"
@@ -447,10 +448,12 @@ export function resolveSqliteAgentId(params: ResolveSqliteAgentIdParams): string
 }
 
 export function resolveSqliteTranscriptArchiveDirectory(
-  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "ownerStorePath" | "path">,
 ): string {
-  const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
-  return resolveSessionArtifactDirectory(databasePath);
+  // Pinning the native database must not move artifacts away from its configured selector.
+  const storePath =
+    scope.ownerStorePath ?? resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
+  return resolveSessionArtifactDirectory(storePath);
 }
 
 /** Validate prepared write identity without resolving or reopening its physical target. */

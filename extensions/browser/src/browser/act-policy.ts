@@ -117,10 +117,6 @@ function addNavigationGraceMs(durationMs: number, count = 1): number {
   );
 }
 
-function isActionObject(value: unknown): value is BrowserActRequest {
-  return isRecord(value);
-}
-
 function resolveLeafExecutionBudgetMs(
   request: Exclude<BrowserActRequest, { kind: "batch" | "wait" }>,
 ): number {
@@ -184,7 +180,7 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
   if (request.kind === "batch") {
     // Model-facing schemas keep child actions permissive for provider compatibility.
     // Budget valid entries only; the browser route remains the validation owner.
-    const actions = Array.isArray(request.actions) ? request.actions.filter(isActionObject) : [];
+    const actions = Array.isArray(request.actions) ? request.actions.filter(isRecord) : [];
     return actions.reduce(
       (totalMs, action) => addExecutionBudgetMs(totalMs, resolveExecutionBudgetMs(action)),
       0,

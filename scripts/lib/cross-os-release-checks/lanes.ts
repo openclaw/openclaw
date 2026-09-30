@@ -22,7 +22,7 @@ import type {
   ProviderConfig,
 } from "./config.ts";
 import {
-  buildPackagedUpgradeUpdateArgs,
+  buildPackagedUpgradeUpdateCommand,
   buildRealUpdateEnv,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
@@ -31,6 +31,7 @@ import {
   parsePackagedUpgradeUpdateTimings,
   resolveDevUpdateVerificationRef,
   resolveExpectedDevUpdateRef,
+  resolvePackagedUpgradeTimeouts,
   shouldRunMainChannelDevUpdate,
   shouldRunPackagedUpgradeStatusProbe,
   shouldUseManagedGatewayService,
@@ -292,9 +293,25 @@ export async function runUpgradeLane(
       });
     }
 
-    const updateEnv = buildRealUpdateEnv(env);
-    const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);
+    const baselineInstallDurationMs = lane.phaseTimings.find(
+      (phase) => phase.name === "install-baseline",
+    )!.durationMs;
+    const updateTimeouts = resolvePackagedUpgradeTimeouts(baselineInstallDurationMs);
+    result.updateTimeouts = { baselineInstallDurationMs, ...updateTimeouts };
+    const updateCommand = buildPackagedUpgradeUpdateCommand({
+      env,
+      candidateUrl: params.candidateUrl,
+      candidateVersion: params.build.candidateVersion,
+      timeoutSeconds: updateTimeouts.stepTimeoutSeconds,
+      baselineVersion: baseline.version,
+    });
+    const updateEnv = updateCommand.env;
+    const updateArgs = updateCommand.args;
     const updateLogPath = join(params.logsDir, "upgrade-update.log");
+    appendFileSync(
+      updateLogPath,
+      `[release-checks] update-timeouts ${JSON.stringify(result.updateTimeouts)}\n`,
+    );
     const runUpdate = () =>
       withNpmDiagnostics(lane.homeDir, updateLogPath, updateEnv, () =>
         runOpenClaw({
@@ -302,7 +319,7 @@ export async function runUpgradeLane(
           env: updateEnv,
           args: updateArgs,
           logPath: updateLogPath,
-          timeoutMs: updateTimeoutMs(),
+          timeoutMs: updateTimeouts.wrapperTimeoutMs,
           check: false,
         }),
       );
@@ -318,7 +335,7 @@ export async function runUpgradeLane(
         usedWindowsPackagedUpgradeTimeoutFallback = true;
         appendFileSync(
           updateLogPath,
-          `\n[release-checks] Windows baseline updater timed out after fetching candidate; falling back to direct candidate install: ${formatError(error)}\n`,
+          `\n[release-checks] Windows baseline updater timed out with process tree terminated; falling back to direct candidate install: ${formatError(error)}\n`,
         );
         updateResult = {
           exitCode: 124,
@@ -379,6 +396,7 @@ export async function runUpgradeLane(
           packageSpec: params.candidateUrl,
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
           ignoreScripts: true,
+          retryWindowsRemoval: true,
         });
         const fallbackInstalledVersion = readInstalledVersion(lane.prefixDir);
         verifyWindowsPackagedUpgradeFallbackInstall({

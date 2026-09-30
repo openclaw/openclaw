@@ -37,10 +37,6 @@ type DangerousConfigFlagContractInputs = {
   collectPluginConfigContractMatches?: CollectPluginConfigContractMatches;
 };
 
-function formatDangerousConfigFlagValue(value: DangerousFlagValue): string {
-  return value === null ? "null" : String(value);
-}
-
 function getAgentDangerousFlagPathSegment(listed: ListedAgentEntry): string {
   if (listed.source.kind === "entries") {
     return `agents.entries.${listed.source.key}`;
@@ -96,15 +92,13 @@ export function collectEnabledInsecureOrDangerousFlagsFromContracts(
     enabledFlags.push("tools.fs.workspaceOnly=false");
   }
   collectSandboxDockerDangerousFlags(
-    isRecord(cfg.agents?.defaults?.sandbox?.docker)
-      ? cfg.agents?.defaults?.sandbox?.docker
-      : undefined,
+    cfg.agents?.defaults?.sandbox?.docker,
     "agents.defaults.sandbox.docker",
   );
   for (const listed of listAgentEntriesWithSource(cfg)) {
     const agent = listed.entry;
     collectSandboxDockerDangerousFlags(
-      isRecord(agent?.sandbox?.docker) ? agent.sandbox.docker : undefined,
+      agent?.sandbox?.docker,
       `${getAgentDangerousFlagPathSegment(listed)}.sandbox.docker`,
     );
   }
@@ -135,9 +129,7 @@ export function collectEnabledInsecureOrDangerousFlagsFromContracts(
         if (!Object.is(match.value, flag.equals)) {
           continue;
         }
-        const rendered =
-          `plugins.entries.${pluginId}.config.${match.path}` +
-          `=${formatDangerousConfigFlagValue(flag.equals)}`;
+        const rendered = `plugins.entries.${pluginId}.config.${match.path}=${String(flag.equals)}`;
         if (seenFlags.has(rendered)) {
           continue;
         }

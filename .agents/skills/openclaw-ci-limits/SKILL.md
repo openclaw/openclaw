@@ -305,6 +305,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   class-vCPU-minutes (1.17% of that broad run). Include that allowance with
   Node packing costs until native proof measures the new duration. No jobs,
   registrations, permissions, compiler checks, or hosted eligibility are added.
+  The package-boundary row has a 30-minute whole-job budget: three hosted
+  four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
+  SDK preparation and 126 compiles before final validation/canary/cleanup.
+  One completed both compile and canary but still exceeded the job deadline.
+  Other additional-check groups retain 20 minutes; compiler concurrency,
+  complete inventory, receipt guards, canary, and routing remain unchanged.
 - Current fast plugin/channel contract families each share one checkout/setup.
   Their two weighted process envelopes run sequentially with unchanged include
   lists and package commands; channel invocations retain four project slots and
@@ -505,11 +511,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   at least eight actual CPUs and 28 GiB memory, with the existing two-worker
   fallback elsewhere. Keep its worker-specific timing identity and require
   three original-shard replays plus sampled memory evidence when changing it.
-  The measured Gateway server-isolated/database-worker family uses at most eight
-  workers only in a serial, non-frozen self-hosted job with at least eight actual
-  CPUs and 28 GiB memory. Its 20.70 GiB observed aggregate RSS leaves the existing
-  25% reserve at that floor. Preserve its two-worker fallback, other groups' pins,
-  hosted planning, complete inventory, and old timing generations until refit.
+  The Gateway server-isolated/database-worker family keeps two workers, including
+  roomy serial self-hosted jobs, to leave cold-startup headroom within its existing
+  test deadlines. Preserve host admission and fallback rules, other groups' pins,
+  hosted planning, complete inventory, cleanup, and old timing generations until
+  refit. The historical eight-worker qualification does not establish headroom
+  for the current fixture cohort.
   The primary GitHub profile remains serial at 210s. Failed-job-only hybrid
   retries retain the original wider matrix on hosted Ubuntu, clamp to one child,
   and keep two workers per child; they can exceed the eight-minute normal-run

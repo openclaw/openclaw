@@ -28,15 +28,10 @@
 
   .chat-controls__model {
     grid-area: model;
-  }
-
-  .chat-controls__session,
-  .chat-controls__model {
     min-width: 0;
     max-width: none;
   }
 
-  .chat-controls__session select,
   .chat-controls__inline-select-trigger {
     width: 100%;
     max-width: none;
@@ -307,50 +302,12 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   /* Topbar */
   .shell--mobile-nav .topbar {
-    display: flex;
     padding: 10px 12px;
     min-height: auto;
   }
 
-  .shell--mobile-nav .topnav-shell {
-    gap: 10px;
-  }
-
-  .shell--mobile-nav .topnav-shell__actions {
-    min-width: 0;
-    justify-content: flex-end;
-  }
-
-  .shell--mobile-nav .topnav-shell__content {
-    display: flex;
-    justify-content: center;
-  }
-
-  .shell--mobile-nav .topbar-brand {
-    display: flex;
-  }
-
-  .shell--mobile-nav .topbar .topbar-nav-toggle {
-    display: inline-flex;
-  }
-
-  .shell--mobile-nav .topbar-search {
-    display: inline-flex;
-    justify-content: center;
-    width: 38px;
-    min-width: 38px;
-    height: 38px;
-    min-height: 38px;
-    padding: 0;
-  }
-
   .shell--mobile-nav .sidebar-mode-switch {
     display: block;
-  }
-
-  .shell--mobile-nav .shell-nav,
-  .shell--mobile-nav.shell--nav-collapsed .shell-nav {
-    box-shadow: var(--shadow-xl);
   }
 
   .shell--mobile-nav .sidebar-shell {
@@ -430,11 +387,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   /* Chat */
-  .chat-session {
-    min-width: unset;
-    width: 100%;
-  }
-
   .chat-thread {
     margin-top: 0;
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding

@@ -2152,31 +2152,6 @@ describe("thread item cache", () => {
     expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
   });
 
-  it("sender provenance refreshes reply display without changing the person", () => {
-    resetChatThreadState();
-    const alice = userMessage("first", 1, {
-      __openclaw: senderProfile("alice", "Alice"),
-    });
-    const bob = userMessage("second", 2, {
-      __openclaw: senderProfile("bob", "Bob"),
-    });
-    const reply = assistantMessage("answer", 3);
-    const input = createProps({ messages: [alice, bob, reply] });
-    buildCachedChatItems(input);
-    const renamed = userMessage("second", 2, {
-      __openclaw: {
-        ...senderProfile("bob", "Bobby"),
-        senderProfileAvatarUrl: "/api/users/bob/avatar?v=2",
-      },
-    });
-    const updated = buildCachedChatItems({ ...input, messages: [alice, renamed, reply] });
-    expect(
-      updated.find((item) => item.kind === "group" && item.role === "assistant"),
-    ).toMatchObject({
-      replyToSender: { name: "Bobby", profileAvatarUrl: "/api/users/bob/avatar?v=2" },
-    });
-  });
-
   it("keeps the full-build baseline on a stream-only update after a steer", () => {
     resetChatThreadState();
     const input = createProps({

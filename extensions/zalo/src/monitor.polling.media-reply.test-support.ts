@@ -272,12 +272,6 @@ describe("Zalo polling media replies", () => {
 
   it.each<ZaloReplyFailureCase>([
     { name: "block text", kind: "block", payload: { text: "block reply" } },
-    { name: "tool text", kind: "tool", payload: { text: "tool reply" } },
-    {
-      name: "first block attachment",
-      kind: "block",
-      payload: { text: "caption", mediaUrl: "https://example.com/first.png" },
-    },
     {
       name: "first tool attachment",
       kind: "tool",

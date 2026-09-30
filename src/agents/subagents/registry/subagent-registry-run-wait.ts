@@ -345,6 +345,10 @@ export class SubagentWaitManager {
           ) {
             this.options.persist(entry.runId);
           }
+          if (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake?.pauseNotice) {
+            this.options.resumedRuns.delete(runId);
+            this.options.resumeSubagentRun(runId);
+          }
           return;
         }
         // A collector result is read by an explicit wait and never delivered by a

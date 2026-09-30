@@ -1,4 +1,3 @@
-// Memory Core plugin module owns ranked search-window filtering and diagnostics.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveMemoryIndexIdentityDiagnostic,
@@ -240,10 +239,8 @@ async function finalizeMemorySearchToolQuery(params: {
     const allowedSources = new Set(searchSources);
     filtered = filtered.filter((hit) => allowedSources.has(hit.source));
   }
-  if (query.requestedCorpus === "sessions") {
-    filtered = filtered.filter((hit) => hit.source === "sessions");
-  } else if (query.requestedCorpus === "memory") {
-    filtered = filtered.filter((hit) => hit.source === "memory");
+  if (query.requestedCorpus === "sessions" || query.requestedCorpus === "memory") {
+    filtered = filtered.filter((hit) => hit.source === query.requestedCorpus);
   }
 
   const rawResults = filtered.slice(0, query.resultLimit);

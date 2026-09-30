@@ -75,10 +75,6 @@ function mantleEndpoint(region: string): string {
   return `https://bedrock-mantle.${region}.api.aws`;
 }
 
-function isSupportedRegion(region: string): boolean {
-  return (MANTLE_SUPPORTED_REGIONS as readonly string[]).includes(region);
-}
-
 type MantleBearerTokenProvider = () => Promise<string>;
 type MantleBearerTokenProviderFactory = (opts?: {
   region?: string;
@@ -231,16 +227,8 @@ export async function resolveMantleRuntimeBearerToken(params: {
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
-interface OpenAIModelEntry {
-  id: string;
-  object?: string;
-  owned_by?: string;
-  created?: number;
-}
-
 interface OpenAIModelsResponse {
-  data: OpenAIModelEntry[];
-  object?: string;
+  data: Array<{ id: string }>;
 }
 
 /** Model ID substrings that indicate reasoning/thinking support. */
@@ -381,7 +369,7 @@ export async function resolveImplicitMantleProvider(params: {
   const region = resolveMantleRegion(env);
   const explicitBearerToken = resolveMantleBearerToken(env);
 
-  if (!isSupportedRegion(region)) {
+  if (!MANTLE_SUPPORTED_REGIONS.some((supported) => supported === region)) {
     log.debug?.("Mantle not available in region", { region });
     return null;
   }
@@ -413,76 +401,65 @@ export async function resolveImplicitMantleProvider(params: {
   // Opus 4.7 currently needs the provider-owned bearer-auth path here, but we
   // keep reasoning off until the underlying Anthropic transport learns Opus 4.7
   // adaptive thinking semantics.
-  const claudeModels: ModelDefinitionConfig[] = [
-    {
-      id: "anthropic.claude-opus-5",
-      name: "Claude Opus 5",
-      api: "anthropic-messages" as const,
-      reasoning: true,
-      params: { canonicalModelId: "claude-opus-5" },
-      input: ["text", "image"],
-      mediaInput: {
-        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+  const claudeModels = (
+    [
+      {
+        id: "anthropic.claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        params: { canonicalModelId: "claude-opus-5" },
+        mediaInput: {
+          image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        },
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
       },
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    },
-    {
-      id: "anthropic.claude-sonnet-5",
-      name: "Claude Sonnet 5",
-      api: "anthropic-messages" as const,
-      reasoning: true,
-      params: { canonicalModelId: "claude-sonnet-5" },
-      input: ["text", "image"],
-      mediaInput: {
-        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      {
+        id: "anthropic.claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        reasoning: true,
+        params: { canonicalModelId: "claude-sonnet-5" },
+        mediaInput: {
+          image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        },
+        cost: resolveMantleSonnet5Cost(),
+        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
       },
-      cost: resolveMantleSonnet5Cost(),
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-    },
-    {
-      id: "anthropic.claude-opus-4-7",
-      name: "Claude Opus 4.7",
-      api: "anthropic-messages" as const,
-      reasoning: false,
-      input: ["text", "image"],
-      cost: {
-        input: 5,
-        output: 25,
-        cacheRead: 0.5,
-        cacheWrite: 6.25,
+      {
+        id: "anthropic.claude-opus-4-7",
+        name: "Claude Opus 4.7",
+        reasoning: false,
+        cost: {
+          input: 5,
+          output: 25,
+          cacheRead: 0.5,
+          cacheWrite: 6.25,
+        },
       },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    },
-    {
-      id: "anthropic.claude-mythos-5",
-      name: "Claude Mythos 5",
-      api: "anthropic-messages" as const,
-      reasoning: true,
-      params: { canonicalModelId: "claude-mythos-5" },
+      {
+        id: "anthropic.claude-mythos-5",
+        name: "Claude Mythos 5",
+        reasoning: true,
+        params: { canonicalModelId: "claude-mythos-5" },
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+      },
+      {
+        id: "anthropic.claude-mythos-preview",
+        name: "Claude Mythos Preview",
+        reasoning: true,
+        params: { canonicalModelId: "claude-mythos-preview" },
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ] satisfies Array<Omit<ModelDefinitionConfig, "api" | "input" | "contextWindow" | "maxTokens">>
+  ).map((model): ModelDefinitionConfig =>
+    Object.assign(model, {
+      api: "anthropic-messages",
       input: ["text", "image"],
-      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
       contextWindow: 1_000_000,
       maxTokens: 128_000,
-      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-    },
-    {
-      id: "anthropic.claude-mythos-preview",
-      name: "Claude Mythos Preview",
-      api: "anthropic-messages" as const,
-      reasoning: true,
-      params: { canonicalModelId: "claude-mythos-preview" },
-      input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    },
-  ];
+    } satisfies Partial<ModelDefinitionConfig>),
+  );
   // Replace generic discovery rows so first-match lookup sees exact Claude metadata.
   const exactClaudeModelIds = new Set(claudeModels.map((model) => model.id));
   const allModels = [
@@ -496,24 +473,5 @@ export async function resolveImplicitMantleProvider(params: {
     auth: "api-key",
     apiKey: explicitBearerToken ? "env:AWS_BEARER_TOKEN_BEDROCK" : MANTLE_IAM_TOKEN_MARKER,
     models: models.length === 0 ? [] : allModels,
-  };
-}
-
-/** Merge an implicit Mantle provider catalog with explicit user config. */
-export function mergeImplicitMantleProvider(params: {
-  existing: ModelProviderConfig | undefined;
-  implicit: ModelProviderConfig;
-}): ModelProviderConfig {
-  const { existing, implicit } = params;
-  if (!existing) {
-    return implicit;
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
   };
 }

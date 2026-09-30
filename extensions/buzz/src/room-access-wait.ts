@@ -1,4 +1,4 @@
-import type { Event, Relay } from "nostr-tools";
+import type { Event } from "nostr-tools";
 import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "./relay-auth.js";
 import { openBuzzRelaySubscription } from "./relay-subscription.js";
 import { discoverBuzzRoomsOnRelay, type BuzzDiscoveredRoom } from "./room-discovery.js";
@@ -73,7 +73,6 @@ export async function waitForBuzzRoomAccess(params: {
       let settled = false;
       let checking = false;
       let queuedRetry = false;
-      const subscriptionRef: { current?: ReturnType<Relay["prepareSubscription"]> } = {};
       let pollTimer: ReturnType<typeof setInterval> | undefined;
       const seenEvents = new Set<string>();
 
@@ -143,7 +142,7 @@ export async function waitForBuzzRoomAccess(params: {
       };
 
       signal.addEventListener("abort", onAbort, { once: true });
-      subscriptionRef.current = openBuzzRelaySubscription(
+      openBuzzRelaySubscription(
         relay,
         [
           {

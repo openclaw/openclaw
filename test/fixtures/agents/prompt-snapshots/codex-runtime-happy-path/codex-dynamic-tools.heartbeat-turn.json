@@ -45,11 +45,11 @@
           "type": "function"
         },
         {
-          "description": "End this turn for pending child completion events; this is not a final-result submission. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:\"message\". Collector runs require agents_wait instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.",
+          "description": "End this turn for pending child completion events; this is not a final-result submission. Not for tool results or background tool runs (image/video/music generation, async tools): those arrive automatically once you end your response. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:\"message\". Collector runs require agents_wait instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.",
           "inputSchema": {
             "properties": {
               "acknowledgment": {
-                "description": "Optional waiting reply for an otherwise-silent interactive parent turn.",
+                "description": "Optional waiting reply for an otherwise-silent interactive parent turn; with waitFor, the pause notice for the requester.",
                 "type": "string"
               },
               "message": {
@@ -58,7 +58,7 @@
               },
               "waitFor": {
                 "const": "message",
-                "description": "Explicitly pause an unfinished subagent until an incoming continuation message. Does not schedule a message or submit the final result.",
+                "description": "Explicitly pause an unfinished subagent until an incoming continuation message; its requester is notified once. Does not schedule a message or submit the final result.",
                 "type": "string"
               }
             },

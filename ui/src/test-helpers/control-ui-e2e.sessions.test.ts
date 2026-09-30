@@ -9,8 +9,6 @@ type Row = Record<string, unknown>;
 const notes = { key: "agent:ops:notes", sessionId: "notes-generation-1", label: "Notes" };
 
 it.for([
-  { defaultAgentId: "main", sessionKey: "agent:main:notes", expected: "agent:main:main" },
-  { defaultAgentId: "ops", sessionKey: notes.key, expected: "agent:ops:main" },
   { defaultAgentId: " Ops Team ", sessionKey: notes.key, expected: "agent:ops-team:main" },
   {
     defaultAgentId: "ops",

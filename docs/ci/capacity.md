@@ -279,12 +279,13 @@ siblings sharing its serial bin retain their two-worker group caps. The CLI
 inventory, split policies, timing weights, and admission budgets are unchanged.
 
 The `agentic-gateway-server-isolated` family, including its database-worker
-config, is capped at eight workers on Blacksmith and hybrid profiles and
-additionally requires 28 GiB total memory. Its historical 20.70 GiB peak fits
-within 75% of that floor, leaving at
-least 7.30 GiB for the runner, operating system, and variation. Smaller hosts,
-hosted retries, frozen targets, and overlapping plans retain its two-worker
-fallback; the independently planned GitHub profile is unchanged.
+config, keeps two workers on Blacksmith and hybrid profiles. Current-source
+first-sign-in CI exceeded its unchanged 90-second deadline under the eight-worker
+allocation; an eight-worker baseline control completed in 85.4 seconds, leaving
+little margin. The two-worker budget restores cold-startup headroom without
+changing test deadlines, assertions, inventory, or cleanup. Existing host admission
+and fallback rules, the independently planned GitHub profile, and the separate
+four-worker Gateway methods policy remain unchanged.
 
 The historical [September 20 paired probe](https://github.com/openclaw/openclaw/actions/runs/35543209292)
 at source `39b3aa10677c99af54e3bffb43cadf3bb6c89eb8` used the same eight-CPU,
@@ -517,6 +518,12 @@ Oversized CLI and Blacksmith agent-support families use the existing file
 splitter, preserving complete inventories and their serial resource policy.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.
+Hybrid packing keeps descending-cost initial placement when the completed plan
+fits its row cap, preserving existing serial Gateway recipients for runtime work.
+Only an over-cap plan is rebuilt once with serial Gateway groups before flexible
+parallel groups, preserving space for repeated stripe families before the final
+parallel repack. The alternate reruns all admission and runtime-placement checks
+with the same family, time, and worker constraints; it still fails if over cap.
 The final 70/130 push/PR caps remain unchanged. Native compact admission allows 90 rows, while hosted admission allows 96. Native tooling bins retain separate
 two-worker child processes and a 300-second test budget. Rows containing the
 partitioned changed-Node planner proof use 150 seconds in both initial packing

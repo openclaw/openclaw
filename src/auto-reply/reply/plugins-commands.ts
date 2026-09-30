@@ -1,4 +1,3 @@
-// Provides plugin command discovery and handler registration helpers.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

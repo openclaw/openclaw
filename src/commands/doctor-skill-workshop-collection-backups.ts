@@ -1,13 +1,16 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
 import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sha256File } from "../infra/directory-durability.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { isPathStrictlyInside } from "../infra/path-guards.js";
 import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
@@ -67,19 +70,35 @@ export async function listPendingLegacyCollectionBackupRoots(
   env: NodeJS.ProcessEnv,
 ): Promise<LegacyCollectionBackupRoot[]> {
   const roots: LegacyCollectionBackupRoot[] = [];
+  const archiveRoots = listAgentIds(config)
+    .map((agentId) => resolveSkillCollectionBackupRoot(config, agentId, env))
+    .filter((root) => !isUpdateRehearsalReadOnlyPath(root, env));
   for (const legacyRoot of await listLegacyCollectionBackupRoots(env)) {
     if (isUpdateRehearsalReadOnlyPath(legacyRoot, env)) {
       continue;
     }
     try {
-      const backups = await readLegacyCollectionBackups(legacyRoot);
-      if (
-        backups.length === 0 ||
-        backups.some((backup) => isReadOnlyRehearsalBackup(backup, env))
-      ) {
+      const retainedBackups = await readLegacyCollectionBackups(legacyRoot);
+      if (retainedBackups.some((backup) => isReadOnlyRehearsalBackup(backup, env))) {
         continue;
       }
-      const workspaceDirs = new Set(backups.map((backup) => backup.workspaceDir));
+      const backups: LegacyCollectionBackup[] = [];
+      for (const backup of retainedBackups) {
+        const archived = await Promise.all(
+          archiveRoots.map((root) =>
+            isHistoryOnlyBackup(backup, path.join(root, backup.manifest.id)),
+          ),
+        );
+        // History-only copies retain their source; completed copies no longer
+        // depend on the retired workspace's current owner or result hashes.
+        if (!archived.some(Boolean)) {
+          backups.push(backup);
+        }
+      }
+      if (backups.length === 0) {
+        continue;
+      }
+      const workspaceDirs = new Set(retainedBackups.map((backup) => backup.workspaceDir));
       const workspaceDir = [...workspaceDirs][0];
       const candidateAgentIds = [
         ...new Set(
@@ -92,7 +111,7 @@ export async function listPendingLegacyCollectionBackupRoots(
         workspaceDirs.size === 1 && workspaceDir && candidateAgentIds.length === 1
           ? candidateAgentIds[0]
           : undefined;
-      // Keep workspace admission for existing archive and same-pass relocation recovery.
+      // Keep workspace admission for same-pass relocation recovery.
       if (workspaceDirs.size === 1 && candidateAgentIds.length === 0) {
         const verifiedAgents = await verifyLegacyCollectionBackupOwners(backups, config, env);
         const candidates = verifiedAgents.filter((agent) => agent.verified);
@@ -124,17 +143,7 @@ export async function listPendingLegacyCollectionBackupRoots(
       if (isUpdateRehearsalReadOnlyPath(destinationRoot, env)) {
         continue;
       }
-      const alreadyArchived = await Promise.all(
-        backups.map((backup) =>
-          isHistoryOnlyBackup(path.join(destinationRoot, backup.manifest.id)),
-        ),
-      );
-      // History-only archives retain their source. Exclude each completed copy
-      // so an interrupted root can resume its remaining backups.
-      const pendingBackups = backups.filter((_, index) => !alreadyArchived[index]);
-      if (pendingBackups.length > 0) {
-        roots.push({ legacyRoot, backups: pendingBackups, ownerAgentId, destinationRoot });
-      }
+      roots.push({ legacyRoot, backups, ownerAgentId, destinationRoot });
     } catch (error) {
       roots.push({
         legacyRoot,
@@ -316,16 +325,69 @@ async function hasNewerUnrelatedCollectionBackup(
   return newerBackups.some(Boolean);
 }
 
-async function isHistoryOnlyBackup(backupDir: string): Promise<boolean> {
+async function isHistoryOnlyBackup(
+  backup: LegacyCollectionBackup,
+  backupDir: string,
+): Promise<boolean> {
   try {
     const record = asNullableRecord(
       JSON.parse(await fs.readFile(path.join(backupDir, "manifest.json"), "utf8")),
     );
-    return (
-      record?.schema === "openclaw.skill-collection-backup.v2" &&
-      record.id === path.basename(backupDir) &&
-      typeof record.restoreUnavailableReason === "string"
+    if (
+      typeof record?.restoreUnavailableReason !== "string" ||
+      !isDeepStrictEqual(record, {
+        ...backup.manifest,
+        skillDirs: [],
+        resultSkillDirs: [],
+        resultSkillHashes: {},
+        restoreUnavailableReason: record.restoreUnavailableReason,
+      })
+    ) {
+      return false;
+    }
+    const source = path.join(backup.backupDir, "workspace");
+    const copied = path.join(backupDir, "history", "workspace");
+    const [sourceStat, copiedStat] = await Promise.all([
+      fs.stat(source, { bigint: true }),
+      fs.lstat(copied, { bigint: true }),
+    ]);
+    // The archived tree must be independent of the retained source.
+    if (!copiedStat.isDirectory() || sameFileIdentity(sourceStat, copiedStat)) {
+      return false;
+    }
+    const [sourceHash, copiedHash] = await Promise.all(
+      [source, copied].map(async (directory) => {
+        const scoped = await fsSafeRoot(directory);
+        const hash = createHash("sha256");
+        // Archives can exceed skill-evaluation budgets; stream every saved file,
+        // including metadata and empty directories, without following links.
+        for await (const entry of scoped.walk("", { symlinkPolicy: "include", order: "sorted" })) {
+          if (entry.kind !== "file" && entry.kind !== "directory" && entry.kind !== "symlink") {
+            throw new Error(`Unsupported backup entry: ${entry.relativePath}`);
+          }
+          hash.update(JSON.stringify([entry.kind, entry.relativePath]));
+          if (entry.kind === "file") {
+            const opened = await scoped.open(entry.relativePath, {
+              symlinks: "reject",
+              // The publisher copies hard-linked files as independent files.
+              hardlinks: "allow",
+            });
+            try {
+              hash.update((await sha256File(opened.handle, { maxBytes: opened.stat.size })).digest);
+            } finally {
+              await opened.handle.close();
+            }
+          } else if (entry.kind === "symlink") {
+            // fs.cp resolves relative links; compare destinations without following them.
+            const linkPath = path.join(directory, entry.relativePath);
+            const target = path.resolve(path.dirname(linkPath), await fs.readlink(linkPath));
+            hash.update(JSON.stringify(path.toNamespacedPath(target)));
+          }
+        }
+        return hash.digest("hex");
+      }),
     );
+    return sourceHash === copiedHash;
   } catch {
     return false;
   }

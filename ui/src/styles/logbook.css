@@ -16,7 +16,8 @@
   flex-wrap: wrap;
 }
 
-.logbook__daynav {
+.logbook__daynav,
+.logbook__actions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -76,12 +77,6 @@
 
 .logbook__chip--error {
   color: var(--danger);
-}
-
-.logbook__actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .logbook__layout {

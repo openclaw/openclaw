@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildGatewayStatusJsonPayload,
   buildStatusOverviewSurfaceRows,
+  buildStatusUpdateSurface,
 } from "./status-all/format.js";
 import {
   buildStatusOverviewSurfaceFromOverview,
@@ -19,6 +20,27 @@ import {
 } from "./status.test-support.ts";
 
 describe("status-overview-surface", () => {
+  it("shows the app owner and its update hint without offering a package update", () => {
+    const update = buildStatusUpdateSurface({
+      update: {
+        root: "/Applications/OpenClaw.app/Contents/Resources/openclaw",
+        installKind: "host",
+        packageManager: "unknown",
+        installOwner: {
+          schemaVersion: 1,
+          owner: "macos-app",
+          displayName: "OpenClaw.app",
+          updateHint: "Update OpenClaw.app to update this Gateway.",
+        },
+      },
+    });
+
+    expect(update.updateLine).toBe(
+      "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+    );
+    expect(update.updateAvailable).toBe(false);
+    expect(update.gitLabel).toBeNull();
+  });
   it("builds the shared overview surface from a status scan result", () => {
     expect(
       buildStatusOverviewSurfaceFromScan({

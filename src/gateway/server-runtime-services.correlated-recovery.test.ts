@@ -128,17 +128,17 @@ describe("registered correlated completion recovery custody", () => {
       };
       const database = persist(state.stateDir);
       if (change === "hydration pending") {
-        const store =
-          await import("../agents/subagents/registry/subagent-registry.store.sqlite.js");
+        const store = await import("../state/openclaw-state-db-readonly.js");
         const unavailable = vi
-          .spyOn(store, "loadSubagentRegistryFromSqlite")
-          .mockImplementationOnce(() => {
+          .spyOn(store, "executeExistingOpenClawStateRead")
+          .mockImplementationOnce(async (_options, command) => {
+            expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
             throw new Error("registry hydration read unavailable");
           });
         try {
-          expect(() =>
+          await expect(
             restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true }),
-          ).toThrow("registry hydration read unavailable");
+          ).rejects.toThrow("registry hydration read unavailable");
         } finally {
           unavailable.mockRestore();
         }
@@ -271,7 +271,9 @@ describe("registered correlated completion recovery custody", () => {
               settlementOutcome: "recovered",
             });
             expect(resume).not.toHaveBeenCalled();
-            expect(restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true })).toBe(1);
+            expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true })).toBe(
+              1,
+            );
             services.heartbeatRunner.stop();
             services = startServices();
             await clock.advanceBy(1_250);
@@ -310,7 +312,7 @@ describe("registered correlated completion recovery custody", () => {
             if (change === "default after commit") {
               vi.unstubAllEnvs();
               // Reconstitute the live owner through canonical restoration, without a receipt closure.
-              expect(restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
+              expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
             }
             services.heartbeatRunner.stop();
             services = startServices();

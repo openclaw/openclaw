@@ -4,15 +4,13 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import { invalidatePairedCardRendererCache } from "./device-pairing-card-renderer.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
 import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import { listDevicePairingStoreRecordsReadOnly } from "./device-pairing-store-readonly.js";
-import type {
-  DevicePairingAdmissionFacts,
-  DevicePairingWorkerOperations,
-} from "./device-pairing-worker-contract.js";
+import type { DevicePairingWorkerOperations } from "./device-pairing-worker-contract.js";
 import type { PairedDevice } from "./device-pairing.types.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -36,6 +34,20 @@ function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
     !value.every((entry) => isRecord(entry) && typeof entry.kind === "string")
   ) {
     throw new Error("Invalid pairing admission facts");
+  }
+  for (const entry of value) {
+    if (
+      (entry.kind === "bootstrap.cloudWorkerSetup" &&
+        (typeof entry.environmentId !== "string" ||
+          typeof entry.setupId !== "string" ||
+          typeof entry.credentialDigest !== "string" ||
+          typeof entry.provisionOperationId !== "string" ||
+          typeof entry.ownerEpoch !== "number")) ||
+      ((entry.kind === "bootstrap.consume" || entry.kind === "bootstrap.token") &&
+        typeof entry.expiresAtMs !== "number")
+    ) {
+      throw new Error("Invalid pairing admission facts");
+    }
   }
   // SAFETY: This private broker port only accepts the admitted backend's typed pairing facts.
   return value as DevicePairingAdmissionFacts[];

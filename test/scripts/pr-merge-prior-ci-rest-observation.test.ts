@@ -20,6 +20,100 @@ function expectNoDispatch(f: Candidate) {
 }
 
 describePosix("prior-CI whole REST observation fallback", () => {
+  it("does not reopen REST observation after final authority when main keeps advancing", () => {
+    const f = unknownGraphqlCandidate();
+    f.save({
+      ...f.state(),
+      restObservations: [{}, {}, {}, { advanceMain: true }, { advanceMain: true }],
+    });
+
+    const result = f.adminPriorCi(f.path);
+
+    expect(result.status, result.output).toBe(0);
+    expect(f.state().mutations).toBe(1);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+    expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(f.state().mainAdvances[0]);
+  });
+
+  it.each([1, 4])(
+    "preserves prior-CI admission when GraphQL quota expires after %s known observations",
+    (observations) => {
+      const f = preExistingCandidate();
+      f.save({ ...f.state(), quotaAt: "observe", quotaAfterObservations: observations });
+
+      const result = f.adminPriorCi(f.path);
+
+      const state = f.state();
+      expect(
+        result.status,
+        result.output +
+          JSON.stringify({
+            mutations: state.mutations,
+            posts: state.posts,
+            calls: state.calls.slice(-12),
+          }),
+      ).toBe(0);
+      expect(state).toMatchObject({
+        observationReads: observations,
+        mutations: 1,
+        posts: 1,
+        gates: "fail",
+        restMergePayload: { sha: f.head, merge_method: "squash" },
+      });
+      expect(f.record()).toMatchObject({
+        phase: "complete",
+        transport: "rest",
+        route: "admin",
+        head: f.head,
+        priorCiAdmin: { head: f.head, dispatchTransport: "rest" },
+      });
+      const dispatch = state.calls.findIndex(
+        (call) => call.includes("repos/fixture/repo/pulls/123/merge") && call.includes("PUT"),
+      );
+      const reads = state.calls.slice(0, dispatch);
+      const finalRestRead = reads.findLastIndex((call) =>
+        call.includes("repos/fixture/repo/git/ref/heads/main"),
+      );
+      expect(finalRestRead).toBeGreaterThan(0);
+      expect(
+        reads.findLastIndex((call) => call.includes("orgs/fixture/memberships/fixture-operator")),
+      ).toBeGreaterThan(finalRestRead);
+    },
+  );
+
+  it.each([
+    ["admin", "active organization admin"],
+    ["review", "current enforced reviews must be satisfied"],
+    ["security", "unsuccessful openclaw/security-sensitive-review"],
+  ] as const)(
+    "rechecks %s revoked during the first REST read after final GraphQL quota expiry",
+    (fault, diagnostic) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      f.save({
+        ...state,
+        quotaAt: "observe",
+        quotaAfterObservations: 4,
+        restObservation: {
+          priorCi:
+            fault === "admin"
+              ? { membership: "member" }
+              : fault === "review"
+                ? { reviewDecision: "REVIEW_REQUIRED" }
+                : { security: { ...state.priorCi.security, fault: "failed-guard" } },
+        },
+      });
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.status, result.output).toBe(1);
+      expect(result.output).toContain(diagnostic);
+      expect(f.state().observationReads).toBe(4);
+      expect(f.state().restObservationAppliedAt).toBeGreaterThan(0);
+      expectNoDispatch(f);
+    },
+  );
+
   it.each(["stability", "final authority"])(
     "settles a recalculated projection after forward main during %s",
     (stage) => {
@@ -28,7 +122,7 @@ describePosix("prior-CI whole REST observation fallback", () => {
       f.save({
         ...f.state(),
         restObservations: [
-          ...Array.from({ length: stage === "stability" ? 1 : 4 }, () => ({})),
+          ...Array.from({ length: stage === "stability" ? 1 : 3 }, () => ({})),
           { main, pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
           { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
         ],
@@ -149,14 +243,13 @@ describePosix("prior-CI whole REST observation fallback", () => {
   );
 
   it.each(["remote-only main", "revoked admin"])(
-    "refuses %s while recalculating in the final authority window",
+    "rechecks authority after %s during the final REST materialization",
     (fault) => {
       const f = unknownGraphqlCandidate();
       const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
       const state = f.state();
       state.priorCi.revokeAdminOnMainFetch = true;
       state.restObservations = [
-        {},
         {},
         {},
         {},
@@ -171,12 +264,8 @@ describePosix("prior-CI whole REST observation fallback", () => {
       f.save(state);
       const result = f.adminPriorCi(f.path);
       expect(result.status, result.output).not.toBe(0);
-      expect(result.output).toContain(
-        fault === "remote-only main"
-          ? "final prior-CI main cannot be verified with local-only Git"
-          : "writer must be an active organization admin",
-      );
-      expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(false);
+      expect(result.output).toContain("writer must be an active organization admin");
+      expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(fault === "remote-only main");
       expectNoDispatch(f);
     },
   );
@@ -204,7 +293,10 @@ describePosix("prior-CI whole REST observation fallback", () => {
     expect(finalRestRead).toBeGreaterThan(0);
     expect(
       reads.filter((call) => call.includes("repos/fixture/repo/git/ref/heads/main")),
-    ).toHaveLength(10);
+    ).toHaveLength(8);
+    expect(
+      reads.filter((call) => call.includes("orgs/fixture/memberships/fixture-operator")),
+    ).toHaveLength(2);
     expect(
       reads.findLastIndex((call) => call.includes("orgs/fixture/memberships/fixture-operator")),
     ).toBeGreaterThan(finalRestRead);
@@ -300,25 +392,27 @@ describePosix("prior-CI whole REST observation fallback", () => {
   );
 
   it.each(["start", "end"] as const)(
-    "refuses a missing final REST %s without fetching",
+    "requires final REST %s materialization before authority",
     (endpoint) => {
       const f = unknownGraphqlCandidate();
       const state = f.state();
       state.priorCi.revokeAdminOnMainFetch = true;
       if (endpoint === "start") {
         state.restMainFault = "unavailable-sha-once";
-        state.restMainFaultAfterReads = 8;
+        state.restMainFaultAfterReads = 6;
       } else {
-        state.restObservation = { advanceMain: true, postAuthorityRestBoundary: "start" };
+        state.restObservation = { advanceMain: true, afterRestMainReads: 7 };
       }
       f.save(state);
 
       const result = f.adminPriorCi(f.path);
 
       expect(result.status, result.output).not.toBe(0);
-      expect(result.output).toContain("final prior-CI main cannot be verified with local-only Git");
-      expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(false);
-      expect(f.state().restMainReads).toBe(10);
+      expect(result.output).toContain(
+        endpoint === "start" ? "cannot fetch authoritative main" : "active organization admin",
+      );
+      expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(endpoint === "end");
+      expect(f.state().restMainReads).toBe(8);
       expectNoDispatch(f);
     },
   );
@@ -421,14 +515,14 @@ describePosix("prior-CI whole REST observation fallback", () => {
     f.save({
       ...f.state(),
       restObservation: {
-        postAuthorityRestBoundary: "start",
+        afterRestMainReads: 7,
         pr: fault === "head" ? { headRefOid: f.base } : { mergeStateStatus: "UNKNOWN" },
       },
     });
     const result = f.adminPriorCi(f.path);
     expect(result.status, result.output).toBe(1);
     expect(result.output).toContain("PR or main changed during observation");
-    expect(f.state().restObservationAppliedAt).toBe(9);
+    expect(f.state().restObservationAppliedAt).toBe(7);
     expectNoDispatch(f);
   });
 
@@ -442,8 +536,8 @@ describePosix("prior-CI whole REST observation fallback", () => {
       const f = unknownGraphqlCandidate();
       const state = f.state();
       state.restObservation = {
-        // Revoke after the complete observation that follows the existing final authority check.
-        postAuthorityRestBoundary: "complete",
+        // Revoke at the last observation boundary, before final authority verification.
+        afterRestMainReads: 8,
         priorCi:
           fault === "admin"
             ? { membership: "member" }
@@ -456,7 +550,7 @@ describePosix("prior-CI whole REST observation fallback", () => {
       expect(result.status, result.output).toBe(1);
       expect(result.output).toContain(diagnostic);
       const finalState = f.state();
-      expect(finalState.restObservationAppliedAt).toBe(10);
+      expect(finalState.restObservationAppliedAt).toBe(8);
       expect(finalState.restMainReads).toBe(finalState.restObservationAppliedAt);
       expect(
         finalState.calls.findLastIndex((call) =>

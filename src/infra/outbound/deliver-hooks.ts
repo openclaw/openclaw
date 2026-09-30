@@ -150,13 +150,11 @@ export async function applyMessageSendingHook(params: {
   hookMetadata?: Record<string, unknown>;
   contentRewritten: boolean;
   payload: ReplyPayload;
-  payloadSummary: NormalizedOutboundPayload;
 }> {
   const unchanged = () => ({
     cancelled: false,
     contentRewritten: false,
     payload: params.payload,
-    payloadSummary: params.payloadSummary,
   });
   if (!params.enabled) {
     return unchanged();
@@ -185,12 +183,10 @@ export async function applyMessageSendingHook(params: {
     );
     if (sendingResult?.cancel) {
       return {
+        ...unchanged(),
         cancelled: true,
         ...(sendingResult.cancelReason ? { cancelReason: sendingResult.cancelReason } : {}),
         ...(sendingResult.metadata ? { hookMetadata: sendingResult.metadata } : {}),
-        contentRewritten: false,
-        payload: params.payload,
-        payloadSummary: params.payloadSummary,
       };
     }
     if (sendingResult?.content == null) {
@@ -205,10 +201,6 @@ export async function applyMessageSendingHook(params: {
       cancelled: false,
       contentRewritten: true,
       payload,
-      payloadSummary: {
-        ...params.payloadSummary,
-        [spokenOnly ? "hookContent" : "text"]: sendingResult.content,
-      },
     };
   } catch {
     // Don't block delivery on hook failure.
@@ -283,5 +275,3 @@ export function suppressedPayloadOutcome(params: {
     ...(params.hookEffect ? { hookEffect: params.hookEffect } : {}),
   };
 }
-
-/** Adds directive-derived media to the queue copy before spool custody. */

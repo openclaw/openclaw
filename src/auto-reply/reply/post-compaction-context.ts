@@ -1,4 +1,3 @@
-// Loads post-compaction context summaries for continuation prompts.
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -38,12 +37,6 @@ function matchesSectionSet(sectionNames: string[], expectedSections: string[]): 
   return actual.every((name, index) => name === expected[index]);
 }
 
-/**
- * Read critical sections from workspace AGENTS.md for post-compaction injection.
- * Returns formatted system event text, or null if no AGENTS.md or no relevant sections.
- * Substitutes YYYY-MM-DD placeholders with the real date so agents read the correct
- * daily memory files instead of guessing based on training cutoff.
- */
 type PostCompactionContextOptions = {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -54,9 +47,7 @@ export async function readPostCompactionContext(
   workspaceDir: string,
   options?: PostCompactionContextOptions,
 ): Promise<string | null> {
-  const cfg = options?.cfg;
-  const agentId = options?.agentId;
-  const effectiveNowMs = options?.nowMs;
+  const { cfg, agentId, nowMs } = options ?? {};
   const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
   if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
     return null;
@@ -99,10 +90,8 @@ export async function readPostCompactionContext(
       }
     }
 
-    const sectionNames = configuredSections;
-
     const foundSectionNames: string[] = [];
-    let sections = extractSections(content, sectionNames, foundSectionNames);
+    let sections = extractSections(content, configuredSections, foundSectionNames);
 
     // Legacy "Every Session" / "Safety" fallback is preserved only for users
     // who explicitly opt in to the documented default section pair.
@@ -118,10 +107,7 @@ export async function readPostCompactionContext(
       return null;
     }
 
-    // Only reference section names that were actually found and injected.
-    const displayNames = foundSectionNames.length > 0 ? foundSectionNames : sectionNames;
-
-    const resolvedNowMs = effectiveNowMs ?? Date.now();
+    const resolvedNowMs = nowMs ?? Date.now();
     const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
     const dateStamp = formatDateStamp(resolvedNowMs, timezone);
     const maxContextChars =
@@ -136,25 +122,18 @@ export async function readPostCompactionContext(
         ? truncateUtf16Safe(combined, maxContextChars) + "\n...[truncated]..."
         : combined;
 
-    // When using the default section set, use precise prose that names the
-    // "Session Startup" sequence explicitly. When custom sections are configured,
-    // use generic prose — referencing a hardcoded "Session Startup" sequence
-    // would be misleading for deployments that use different section names.
+    // Custom configurations name only the sections actually injected.
     const prose = isDefaultSections
       ? "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
         "Run your Session Startup sequence - read the required files before responding to the user."
       : `Session was just compacted. The conversation summary above is a hint, NOT a substitute for your full startup sequence. ` +
-        `Re-read the sections injected below (${displayNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
+        `Re-read the sections injected below (${foundSectionNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
 
     const sectionLabel = isDefaultSections
       ? "Critical rules from AGENTS.md:"
-      : `Injected sections from AGENTS.md (${displayNames.join(", ")}):`;
+      : `Injected sections from AGENTS.md (${foundSectionNames.join(", ")}):`;
 
-    return (
-      "[Post-compaction context refresh]\n\n" +
-      `${prose}\n\n` +
-      `${sectionLabel}\n\n${safeContent}\n\n${timeLine}`
-    );
+    return `[Post-compaction context refresh]\n\n${prose}\n\n${sectionLabel}\n\n${safeContent}\n\n${timeLine}`;
   } catch {
     return null;
   }

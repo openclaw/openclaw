@@ -1,7 +1,3 @@
-/**
- * Executes compaction while owning the transcript lock, session lifecycle,
- * hooks and optional successor transcript rotation.
- */
 import {
   preserveCompactionReplayWindow,
   resolveCompactionReplayEligibility,
@@ -141,6 +137,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.sessionManager ??
       (await SessionManager.openAsync(sessionTarget, undefined, undefined, params.abortSignal));
     assertActive();
+    const responsesApi =
+      effectiveModel.api === "openai-responses" ||
+      effectiveModel.api === "azure-openai-responses" ||
+      effectiveModel.api === "openai-chatgpt-responses";
     const sessionManager = guardSessionManager(preparedSessionManager, {
       agentId: sessionAgentId,
       runId: params.runId,
@@ -148,12 +148,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       config: params.config,
       contextWindowTokens: contextTokenBudget,
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-      missingToolResultText:
-        effectiveModel.api === "openai-responses" ||
-        effectiveModel.api === "azure-openai-responses" ||
-        effectiveModel.api === "openai-chatgpt-responses"
-          ? "aborted"
-          : undefined,
+      missingToolResultText: responsesApi ? "aborted" : undefined,
       allowedToolNames,
       withCompactionPersistence: params.transcriptByteCompactionPersistence,
     });
@@ -328,13 +323,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           runId: diagnosticCompactionRunId,
           workKey: diagnosticCompactionRunId,
         });
-        markDiagnosticEmbeddedRunStarted({
-          sessionId: params.sessionId,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          runId: diagnosticCompactionRunId,
-          workKey: diagnosticCompactionRunId,
-          owner: diagnosticOwner,
-        });
+        markDiagnosticEmbeddedRunStarted({ ...diagnosticOwner, owner: diagnosticOwner });
         session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
           config: params.config,
           runId: diagnosticCompactionRunId,
@@ -413,12 +402,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         // limitHistoryTurns can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairingForModel(
-              truncated,
-              effectiveModel.api === "openai-responses" ||
-                effectiveModel.api === "azure-openai-responses" ||
-                effectiveModel.api === "openai-chatgpt-responses",
-            )
+          ? sanitizeToolUseResultPairingForModel(truncated, responsesApi)
           : truncated;
         if (limited.length > 0) {
           session.agent.state.messages = limited;

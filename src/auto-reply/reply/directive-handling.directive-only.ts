@@ -1,7 +1,7 @@
 /** Detects directive-only turns that should skip the model. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
-import type { InlineDirectives } from "./directive-handling.parse.js";
+import { hasSessionDirectives, type InlineDirectives } from "./directive-handling.parse.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
 /** True when a message only changes directive state and has no agent body. */
@@ -14,17 +14,7 @@ export function isDirectiveOnly(params: {
   isGroup: boolean;
 }): boolean {
   const { directives, cleanedBody, ctx, cfg, agentId, isGroup } = params;
-  if (
-    !directives.hasThinkDirective &&
-    !directives.hasVerboseDirective &&
-    !directives.hasTraceDirective &&
-    !directives.hasFastDirective &&
-    !directives.hasReasoningDirective &&
-    !directives.hasElevatedDirective &&
-    !directives.hasExecDirective &&
-    !directives.hasModelDirective &&
-    !directives.hasQueueDirective
-  ) {
+  if (!hasSessionDirectives(directives)) {
     return false;
   }
   // Command-owned arguments stay out of the agent prompt even when parsing leaves invalid prose.

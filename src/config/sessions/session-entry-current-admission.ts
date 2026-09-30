@@ -18,6 +18,10 @@ function decodeSessionEntryCurrentFacts(value: unknown): SessionEntryCurrentFact
   }
   return {
     sessionId: value.sessionId,
+    ...(value.archivedAt === undefined ? {} : { archivedAt: value.archivedAt }),
+    ...(value.repositoryWorkspaceId === undefined
+      ? {}
+      : { repositoryWorkspaceId: value.repositoryWorkspaceId }),
     lifecycleRevision: value.lifecycleRevision,
     lifecycleRunId: value.lifecycleRunId,
     activeWriterRunId: value.activeWriterRunId,

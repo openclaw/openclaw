@@ -214,15 +214,10 @@ export async function resolveEmbeddedModelSelection(params: {
         assertCommitAllowed: operatorAuthority?.assertCurrent,
       });
       const adoptedModelOverrideSource = sessionEntry?.modelOverrideSource;
-      const adoptedHasStoredOverride = Boolean(
+      const adoptedHasStoredOverride =
         adoptedModelOverrideSource !== "default" &&
-        (sessionEntry?.modelOverride || sessionEntry?.providerOverride),
-      );
-      storedModelOverrideSource = adoptedHasStoredOverride
-        ? adoptedModelOverrideSource === "default"
-          ? undefined
-          : adoptedModelOverrideSource
-        : undefined;
+        Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
+      storedModelOverrideSource = adoptedHasStoredOverride ? adoptedModelOverrideSource : undefined;
       hasStoredAutoFallbackProvenance =
         adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
       hasLegacyAutoFallbackOverrideWithoutOrigin =
@@ -354,26 +349,19 @@ export async function resolveEmbeddedModelSelection(params: {
   }
 
   if (hasExplicitRunOverride) {
-    const explicitRef = explicitModelOverride
-      ? explicitProviderOverride
-        ? normalizeAgentCommandModelRef(
-            params.cfg,
-            explicitProviderOverride,
-            explicitModelOverride,
-            params.modelManifestContext,
-          )
-        : parseAgentCommandModelRef(
+    const explicitRef = explicitProviderOverride
+      ? normalizeAgentCommandModelRef(
+          params.cfg,
+          explicitProviderOverride,
+          explicitModelOverride ?? model,
+          params.modelManifestContext,
+        )
+      : explicitModelOverride
+        ? parseAgentCommandModelRef(
             params.cfg,
             params.sessionAgentId,
             explicitModelOverride,
             provider,
-            params.modelManifestContext,
-          )
-      : explicitProviderOverride
-        ? normalizeAgentCommandModelRef(
-            params.cfg,
-            explicitProviderOverride,
-            model,
             params.modelManifestContext,
           )
         : null;

@@ -141,9 +141,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 function createLoopbackRuntime(): PluginRuntime {
   return {
     channel: {
-      line: {
-        resolveLineAccount: resolveLineAccountMock,
-      },
       text: {
         chunkMarkdownText,
         resolveTextChunkLimit: () => 5000,

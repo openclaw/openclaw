@@ -35,6 +35,7 @@ import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
+import { AssistantDock } from "./assistant-dock.ts";
 import { readBootRecord } from "./boot-record.ts";
 import {
   createInitialApplicationLocationResolver,
@@ -103,7 +104,6 @@ export type ApplicationRuntime = {
 };
 
 type PendingRouterStartNavigation = {
-  routeId: RouteId;
   location: RouteLocation;
   mode: "push" | "replace";
 };
@@ -464,7 +464,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     const location = routeLocation(routeId, options);
     // Preserve pre-start navigation exactly as the fire-and-forget entry point does.
     if (!routerStarted) {
-      pendingRouterStartNavigation = { routeId, location, mode: requested };
+      pendingRouterStartNavigation = { location, mode: requested };
     }
     // Re-clicking the active nav item must not stack identical history
     // entries: Back would appear dead until every duplicate is popped.
@@ -499,6 +499,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     sessions,
     placementStartup,
     plugins,
+    assistantDock: new AssistantDock(),
     overlays,
     navigation,
     theme,

@@ -1,4 +1,3 @@
-// Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
@@ -16,9 +15,6 @@ import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 export const FIELD_LABELS: Record<string, string> = {
   worktreeRoot: "Worktree Root",
   worktreeAcceleration: "Worktree Acceleration",
-  "channels.discord.activities": "Discord Activities",
-  "channels.discord.activities.clientSecret": "Discord Activities Client Secret",
-  "channels.discord.activities.applicationId": "Discord Activities Application ID",
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
   env: "Environment",
@@ -749,15 +745,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.defaults.botLoopProtection.maxEventsPerWindow": "Default Bot Loop Events per Window",
   "channels.defaults.botLoopProtection.windowSeconds": "Default Bot Loop Window Seconds",
   "channels.defaults.botLoopProtection.cooldownSeconds": "Default Bot Loop Cooldown Seconds",
-  "channels.mattermost": "Mattermost",
   "channels.modelByChannel": "Channel Model Overrides",
-  "channels.googlechat.botLoopProtection": "Google Chat Bot Loop Protection",
-  "channels.mattermost.botToken": "Mattermost Bot Token",
-  "channels.mattermost.baseUrl": "Mattermost Base URL",
-  "channels.mattermost.configWrites": "Mattermost Config Writes",
-  "channels.mattermost.chatmode": "Mattermost Chat Mode",
-  "channels.mattermost.oncharPrefixes": "Mattermost Onchar Prefixes",
-  "channels.mattermost.requireMention": "Mattermost Require Mention",
   "discovery.mdns.mode": "mDNS Discovery Mode",
   plugins: "Plugins",
   "plugins.enabled": "Enable Plugins",

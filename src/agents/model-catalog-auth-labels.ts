@@ -10,7 +10,6 @@ import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
-  resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
@@ -171,6 +170,7 @@ export type ModelCatalogAuthLabels = ReadonlyMap<
 export function prepareModelCatalogAuthLabels(params: {
   config: OpenClawConfig;
   agentDir: string;
+  authStorePath: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   store: AuthProfileStore;
@@ -202,7 +202,7 @@ export function prepareModelCatalogAuthLabels(params: {
             : label,
         ]),
       ),
-      source: `auth profile store: ${shortenHomePath(resolveAuthStorePathForDisplay(params.agentDir))}`,
+      source: `auth profile store: ${shortenHomePath(params.authStorePath)}`,
       fallback: captureFallbackLabel(
         provider,
         params.config,

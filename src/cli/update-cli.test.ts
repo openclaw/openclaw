@@ -425,20 +425,27 @@ describe("update-cli", () => {
     },
   ])("$name in non-interactive mode", async ({ options, shouldExit, shouldRunPackageUpdate }) => {
     const root = await setupNonInteractiveDowngrade();
+    const runsBefore = listUpdateRuns();
     if (shouldRunPackageUpdate) {
       mockCurrentProcessFreshDoctor({ packageRoot: root, postCoreResumeAttempt: false });
     }
-    await updateCommand(options);
-
-    const downgradeMessageSeen = vi
-      .mocked(defaultRuntime.error)
-      .mock.calls.some((call) => String(call[0]).includes("Downgrade confirmation required."));
-    expect(downgradeMessageSeen).toBe(shouldExit);
     if (shouldExit) {
-      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      await expect(updateCommand(options)).rejects.toEqual(new ExitError(1));
+      expect(listUpdateRuns()).toEqual(runsBefore);
+      await expect(fs.stat(`${profileStateDir()}.update-captures`)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expectNoSideEffects(
+        replaceConfigFile,
+        mutateConfigFileWithRetry,
+        runDaemonInstall,
+        runDaemonRestart,
+      );
     } else {
-      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      await updateCommand(options);
     }
+    expect(getLogOutput().includes("Downgrade confirmation required.")).toBe(shouldExit);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(updateGitCheckout).not.toHaveBeenCalled();
     expect(
       vi
@@ -507,9 +514,23 @@ describe("update-cli", () => {
             after: { sha, version: "2026.8.1" },
           });
         });
-        vi.mocked(runExec).mockResolvedValueOnce({
-          stdout: new Command("update").option("--accept-capabilities").helpInformation(),
-          stderr: "",
+        const runFixtureExec = requireValue(
+          vi.mocked(runExec).getMockImplementation(),
+          "exec fixture",
+        );
+        vi.mocked(runExec).mockImplementation((file, args, options) => {
+          if (
+            args.length === 3 &&
+            args[0] === path.join(tempDir, "dist", "entry.js") &&
+            args[1] === "update" &&
+            args[2] === "--help"
+          ) {
+            return Promise.resolve({
+              stdout: new Command("update").option("--accept-capabilities").helpInformation(),
+              stderr: "",
+            });
+          }
+          return runFixtureExec(file, args, options);
         });
 
         const program = new Command();
@@ -586,10 +607,11 @@ describe("update-cli", () => {
       });
 
       expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith(diagnostic);
-      expect(getLogOutput()).not.toContain(diagnostic);
+      if (!inferred) {
+        expect(getLogOutput()).not.toContain(diagnostic);
+      }
       expect(vi.mocked(defaultRuntime.exit).mock.calls).toEqual(inferred ? [] : [[1]]);
       expectNoSideEffects(
-        defaultRuntime.writeJson,
         runUpdateFailureTriage,
         cleanupStaleManagedServiceUpdateHandoffs,
         updateGitCheckout,
@@ -603,6 +625,31 @@ describe("update-cli", () => {
       );
       const runs = listUpdateRuns();
       expect(runs).toHaveLength(inferred ? 1 : 0);
+      if (inferred && json) {
+        expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            status: "error",
+            reason: "invalid-dev-target",
+            runId: runs[0]?.runId,
+            failedStep: expect.objectContaining({
+              name: "invalid-dev-target",
+              exitCode: 1,
+              stderrTail: diagnostic,
+              failureFacts: [
+                { check: "invalid-dev-target", code: "invalid-dev-target", message: diagnostic },
+              ],
+            }),
+            run: expect.objectContaining({
+              runId: runs[0]?.runId,
+              status: "failed",
+              phase: "finished",
+              reason: "invalid-dev-target",
+            }),
+          }),
+        );
+      } else {
+        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+      }
       if (inferred) {
         expect(runs[0]).toMatchObject({
           status: "failed",

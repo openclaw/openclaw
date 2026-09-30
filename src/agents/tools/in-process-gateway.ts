@@ -4,7 +4,6 @@ import {
   type CronMutationCompletion,
 } from "../../cron/mutation-completion.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
-/** In-process Gateway calls for built-in agent tools. */
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { withInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 import { readInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
@@ -446,12 +445,7 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
   method: string,
   params: Record<string, unknown>,
   creation: TrustedSessionCreation,
-  options: {
-    resolveGatewayContext?: GatewayContextResolver;
-    sessionMutationCommitGuard?: () => void;
-    signal?: AbortSignal;
-    timeoutMs?: number | null;
-  } = {},
+  options: Omit<InProcessGatewayCallOptions, "onExecution"> = {},
 ): Promise<T> {
   const requesterProfileId = resolveGatewayToolOperatorSelection().operatorAuthority?.profileId;
   const trustedCreation =
@@ -461,13 +455,13 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
     params,
     { ...options, sessionCreation: trustedCreation },
     async (scopes) => {
+      const gatewayOptions = options.timeoutMs == null ? {} : { timeoutMs: options.timeoutMs };
       // The fallback is a real local Gateway request. Carry spawn policy only in
       // the signed agent-runtime identity token, never in model-authored params.
       if (trustedCreation.via !== "spawn" || !trustedCreation.inheritedToolPolicy) {
-        return await callGatewayTool<T>(method, {}, params, {
+        return await callGatewayTool<T>(method, gatewayOptions, params, {
           scopes,
           ...(options.signal ? { signal: options.signal } : {}),
-          ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
         });
       }
       return await runWithGatewaySessionSpawnContext(
@@ -490,11 +484,10 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
             : {}),
         },
         () =>
-          callGatewayTool<T>(method, {}, params, {
+          callGatewayTool<T>(method, gatewayOptions, params, {
             scopes,
             requireAgentRuntimeIdentity: true,
             ...(options.signal ? { signal: options.signal } : {}),
-            ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
           }),
       );
     },

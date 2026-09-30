@@ -1,21 +1,43 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  ARTIFACT_CACHE_VERSION,
   acquireBuildArtifactLock,
   portableRelativePath,
   readArtifactRecord,
   writeArtifactRecord,
 } from "../../scripts/lib/build-artifact-cache.mts";
+import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
 import { BoundaryInputSnapshot } from "../../scripts/lib/extension-boundary-inputs.mts";
+import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
+import { nativeTypeScriptToolchainFiles } from "../../scripts/lib/native-typescript-toolchain.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const compileWorker = path.resolve("scripts/compile-extension-boundary.mts");
 
-function fixture(noEmit = false, outputRoot = "dist", tempRoots = roots) {
+function compilerSnapshot(root: string) {
+  const boundary = createDeclarationInputBoundary(root);
+  const assertInput = (file: string) => boundary.assert(file);
+  const require = createRequire(path.join(boundary.root, "package.json"));
+  const nativePackage = assertInput(require.resolve("typescript/package.json"));
+  return new CompilerInputSnapshot(boundary.root, {
+    toolchainFiles: nativeTypeScriptToolchainFiles(nativePackage, assertInput),
+    generatorInputs: ["package.json", "pnpm-lock.yaml"],
+    assertInput,
+  });
+}
+
+function fixture(
+  noEmit = false,
+  outputRoot = "dist",
+  tempRoots = roots,
+  owner: "boundary" | "compiler" = "boundary",
+) {
   const root = fs.realpathSync.native(tempRoots.make("native-boundary-cache-"));
   materializeNativeCompiler(root);
   const write = (file: string, bytes: string) => {
@@ -70,6 +92,8 @@ function fixture(noEmit = false, outputRoot = "dist", tempRoots = roots) {
     fs.mkdirSync(path.join(root, outputRoot), { recursive: true });
     const before = new BoundaryInputSnapshot(root);
     before.signature(config, args, [], ownedOutputRoot);
+    const namespaceBefore = owner === "compiler" ? compilerSnapshot(root) : undefined;
+    namespaceBefore?.signature(config, args, [], ownedOutputRoot);
     fs.rmSync(path.join(root, inputReceipt), { force: true });
     const startedAt = Date.now();
     const result = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
@@ -79,10 +103,21 @@ function fixture(noEmit = false, outputRoot = "dist", tempRoots = roots) {
       .filter((line) => line.startsWith("TSFILE: "))
       .map((line) => portableRelativePath(root, line.slice(8).trim()))
       .toSorted();
-    return { before, startedAt, files };
+    return { before, namespaceBefore, startedAt, files };
   };
-  const seal = (run: ReturnType<typeof prepare>) =>
-    new BoundaryInputSnapshot(root).record(
+  const seal = (run: ReturnType<typeof prepare>) => {
+    if (run.namespaceBefore) {
+      const snapshot = compilerSnapshot(root);
+      const { inputs }: { inputs: string[] } = JSON.parse(
+        fs.readFileSync(path.join(root, inputReceipt), "utf8"),
+      );
+      return {
+        version: ARTIFACT_CACHE_VERSION,
+        ...snapshot.seal(config, args, inputs, run.namespaceBefore, run.startedAt, ownedOutputRoot),
+        outputs: Object.fromEntries(run.files.map((file) => [file, snapshot.hash(file)])),
+      };
+    }
+    return new BoundaryInputSnapshot(root).record(
       config,
       args,
       inputReceipt,
@@ -91,20 +126,31 @@ function fixture(noEmit = false, outputRoot = "dist", tempRoots = roots) {
       run.startedAt,
       ownedOutputRoot,
     );
+  };
   const matches = (record: ReturnType<typeof seal>) =>
-    new BoundaryInputSnapshot(root).matches(
-      record,
-      config,
-      args,
-      Object.keys(record.outputs),
-      ownedOutputRoot,
-    );
+    owner === "compiler"
+      ? compilerSnapshot(root).matches(
+          record,
+          config,
+          args,
+          Object.keys(record.outputs),
+          ownedOutputRoot,
+        )
+      : new BoundaryInputSnapshot(root).matchesReceipt(
+          record,
+          config,
+          args,
+          Object.keys(record.outputs),
+          inputReceipt,
+          ownedOutputRoot,
+        );
   return {
     root,
     write,
     config,
     args,
     compilerArgs,
+    inputReceipt,
     prepare,
     seal,
     matches,
@@ -132,7 +178,7 @@ describe("native owner content records", () => {
     });
     let first: string;
     try {
-      const snapshot = new BoundaryInputSnapshot(f.root);
+      const snapshot = compilerSnapshot(f.root);
       first = snapshot.signature(f.config, f.args, []);
       expect(snapshot.signature(f.config, f.args, [])).toBe(first);
     } finally {
@@ -140,11 +186,11 @@ describe("native owner content records", () => {
     }
     expect(resolutions).toBeLessThan(depth);
     f.write(`${nested}added.ts`, "export {};");
-    expect(new BoundaryInputSnapshot(f.root).signature(f.config, f.args, [])).not.toBe(first);
+    expect(compilerSnapshot(f.root).signature(f.config, f.args, [])).not.toBe(first);
   });
 
   it("seals a cold producer reached through its own workspace package alias", () => {
-    const f = fixture(false, "packages/sdk/dist");
+    const f = fixture(false, "packages/sdk/dist", roots, "compiler");
     f.write("packages/sdk/package.json", '{"name":"fixture-sdk","type":"module"}');
     fs.mkdirSync(path.join(f.root, "node_modules"), { recursive: true });
     fs.symlinkSync("../packages/sdk", path.join(f.root, "node_modules/fixture-sdk"), "dir");
@@ -194,7 +240,7 @@ describe("native owner content records", () => {
       startedAt,
     );
     const matches = () =>
-      new BoundaryInputSnapshot(f.root).matches(record, config, args, [metadata]);
+      new BoundaryInputSnapshot(f.root).matchesReceipt(record, config, args, [metadata], metadata);
     expect(matches()).toBe(true);
     f.write("packages/sdk/dist/nested/value.ts", 'export const value = "changed";');
     expect(matches()).toBe(false);
@@ -269,11 +315,12 @@ describe("native owner content records", () => {
       const record = f.seal(f.prepare());
       expect(record.inputs?.some((file) => file.endsWith("/value.d.ts"))).toBe(true);
       const matches = () =>
-        new BoundaryInputSnapshot(f.root).matches(
+        new BoundaryInputSnapshot(f.root).matchesReceipt(
           record,
           f.config,
           f.args,
           Object.keys(record.outputs),
+          f.inputReceipt,
         );
       expect(matches()).toBe(true);
       fs.writeFileSync(path.join(packageRoot, "unrelated.ts"), "export const unrelated = 2;");
@@ -291,7 +338,7 @@ describe("native owner content records", () => {
   );
 
   it.each(["file", "directory"])("tracks dangling link %s existence and link identity", (kind) => {
-    const f = fixture(true);
+    const f = fixture(true, "dist", roots, "compiler");
     const dependency = path.join(f.root, "fixture-dependencies");
     fs.mkdirSync(dependency);
     const target = path.join(dependency, "missing");
@@ -313,7 +360,7 @@ describe("native owner content records", () => {
   });
 
   it("ignores tool scratch churn under installed roots", () => {
-    const f = fixture(true);
+    const f = fixture(true, "dist", roots, "compiler");
     fs.mkdirSync(path.join(f.root, "node_modules"), { recursive: true });
     const run = f.prepare();
     // Sibling config loads mint these between the before and seal walks.
@@ -328,7 +375,7 @@ describe("native owner content records", () => {
   });
 
   it("ignores native PR checkout churn while retaining aliased resolution candidates", () => {
-    const f = fixture(true);
+    const f = fixture(true, "dist", roots, "compiler");
     const dependency = ".worktrees/pr-source/package";
     f.write(`${dependency}/package.json`, '{"type":"module"}');
     f.write(`${dependency}/value.d.ts`, "export declare const value: 1;");
@@ -386,7 +433,7 @@ describe("native owner content records", () => {
         "dir",
       );
       const signature = () =>
-        new BoundaryInputSnapshot(f.root).signature(f.config, f.args, [
+        compilerSnapshot(f.root).signature(f.config, f.args, [
           declaredInput,
           installedInput,
           aliasedInput,
@@ -423,16 +470,9 @@ describe("native owner content records", () => {
   );
 
   it("keeps a compiled generation warm across native app scratch creation and removal", () => {
-    const f = fixture();
+    const f = fixture(false, "dist", roots, "compiler");
     const record = f.seal(f.prepare());
-    const matches = () =>
-      new BoundaryInputSnapshot(f.root).matches(
-        record,
-        f.config,
-        f.args,
-        Object.keys(record.outputs),
-        f.outputRoot,
-      );
+    const matches = () => f.matches(record);
     expect(matches()).toBe(true);
     f.write("apps/macos/.build/arm64/release/description.json", "{}");
     f.write("apps/macos/.build/arm64/checkouts/library/package.json", "{}");
@@ -478,9 +518,15 @@ describe("native owner content records", () => {
     expect(refreshed.outputs["dist/nested/value.d.ts"]).toBe(
       producer.outputs["dist/nested/value.d.ts"],
     );
-    expect(new BoundaryInputSnapshot(f.root).matches(consumer, config, args, [metadata])).toBe(
-      true,
-    );
+    expect(
+      new BoundaryInputSnapshot(f.root).matchesReceipt(
+        consumer,
+        config,
+        args,
+        [metadata],
+        metadata,
+      ),
+    ).toBe(true);
   });
   it.each([false, true])(
     "preserves declaration/compile locality (noEmit=%s), with native membership and complete output bytes",
@@ -493,22 +539,24 @@ describe("native owner content records", () => {
       expect(record.inputs).not.toContain("src/api.test.ts");
       expect(record.inputs?.some((file) => file.endsWith("lib.es2023.d.ts"))).toBe(true);
       const matches = () =>
-        new BoundaryInputSnapshot(f.root).matches(
+        new BoundaryInputSnapshot(f.root).matchesReceipt(
           readArtifactRecord(stamp),
           f.config,
           f.args,
           Object.keys(record.outputs),
+          f.inputReceipt,
           f.outputRoot,
         );
       expect(matches()).toBe(true);
       const relocated = fs.realpathSync.native(roots.make("native-boundary-relocated-"));
       fs.cpSync(f.root, relocated, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
       expect(
-        new BoundaryInputSnapshot(relocated).matches(
+        new BoundaryInputSnapshot(relocated).matchesReceipt(
           record,
           f.config,
           f.args,
           Object.keys(record.outputs),
+          f.inputReceipt,
           noEmit ? undefined : "dist",
         ),
       ).toBe(true);
@@ -559,11 +607,12 @@ describe("native owner content records", () => {
       fs.rmSync(f.root, { recursive: true, force: true });
       fs.cpSync(baseline, f.root, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
       const matches = () =>
-        new BoundaryInputSnapshot(f.root).matches(
+        new BoundaryInputSnapshot(f.root).matchesReceipt(
           record,
           f.config,
           f.args,
-          ["dist/src/api.d.ts"],
+          ["dist/src/api.d.ts", f.inputReceipt],
+          f.inputReceipt,
           "dist",
         );
       expect(matches(), "pristine native generation").toBe(true);

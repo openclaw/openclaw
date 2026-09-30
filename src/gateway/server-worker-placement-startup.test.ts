@@ -35,8 +35,8 @@ function placementStoreDefaults(
     }),
     workspaceResultInstanceId: () => "gateway-test",
     retireSessionPlacement: vi.fn(),
-    pruneOrphanedWorkspaceReconciliations: () => [],
-    listWorkspaceReconciliationOwners: () => [],
+    pruneOrphanedWorkspaceReconciliations: async () => [],
+    listWorkspaceReconciliationOwners: async () => [],
     listPendingWorkspaceResults: () => [],
   };
 }
@@ -729,12 +729,19 @@ describe("worker placement startup recovery authority", () => {
       }),
     ).rejects.toThrow("placement changed");
 
-    moveDestinationMocks.resolveCanonicalSession.mockReturnValueOnce({
-      sessionId: "session-replaced",
-      worktree: { id: "worktree-recovery" },
-    });
-    await expect(
-      dispatchOptions.runRecoveryBarrier({ ...request, run: async () => {} }),
-    ).rejects.toThrow("changed before cloud worker recovery");
+    const recoverReplacedSession = vi.fn(async () => {});
+    // Keep the replacement installed through preparation and the final authority check.
+    await moveDestinationMocks.resolveCanonicalSession.withImplementation(
+      () => ({
+        sessionId: "session-replaced",
+        worktree: { id: "worktree-recovery" },
+      }),
+      async () => {
+        await expect(
+          dispatchOptions.runRecoveryBarrier({ ...request, run: recoverReplacedSession }),
+        ).rejects.toThrow("changed before cloud worker recovery");
+      },
+    );
+    expect(recoverReplacedSession).not.toHaveBeenCalled();
   });
 });

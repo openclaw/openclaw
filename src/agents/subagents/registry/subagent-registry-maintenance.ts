@@ -6,7 +6,10 @@
 import { registerSessionMaintenancePreserveKeysProvider } from "../../../config/sessions/store-maintenance-preserve.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { getSubagentMaintenanceRunsSnapshotForRead } from "./subagent-registry-state.js";
+import {
+  getSubagentMaintenanceRunsSnapshotForRead,
+  prepareSubagentMaintenanceRunsSnapshotForRead,
+} from "./subagent-registry-state.js";
 import type { SubagentRunMaintenanceRecord } from "./subagent-registry.types.js";
 
 function shouldPreserveForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
@@ -27,9 +30,9 @@ function shouldPreserveForMaintenance(entry: SubagentRunMaintenanceRecord): bool
 }
 
 /** Lists child session keys protected from session-store maintenance pruning. */
-function listSessionMaintenanceProtectedSubagentSessionKeys(): string[] {
+function protectedSubagentSessionKeys(runs: Iterable<SubagentRunMaintenanceRecord>): string[] {
   const keys = new Set<string>();
-  for (const entry of getSubagentMaintenanceRunsSnapshotForRead(subagentRuns).values()) {
+  for (const entry of runs) {
     if (!shouldPreserveForMaintenance(entry)) {
       continue;
     }
@@ -41,4 +44,15 @@ function listSessionMaintenanceProtectedSubagentSessionKeys(): string[] {
   return [...keys];
 }
 
-registerSessionMaintenancePreserveKeysProvider(listSessionMaintenanceProtectedSubagentSessionKeys);
+registerSessionMaintenancePreserveKeysProvider(
+  () =>
+    protectedSubagentSessionKeys(getSubagentMaintenanceRunsSnapshotForRead(subagentRuns).values()),
+  async () => {
+    const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(subagentRuns);
+    return {
+      capture: () => protectedSubagentSessionKeys(prepared.capture().values()),
+      dispose: () => prepared.dispose(),
+      subagentRunBasis: prepared.basis,
+    };
+  },
+);

@@ -48,6 +48,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       ? {
           ref: params.catalogRef,
           entries: [...(params.catalogEntries ?? currentCatalog.entries)],
+          directOnlyToolNames: params.catalogRef.baselineDirectOnlyToolNames,
           controlNames: params.codeModeControlsEnabled
             ? new Set([CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME])
             : TOOL_SEARCH_CONTROL_TOOL_NAMES,
@@ -86,6 +87,11 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
         const name = normalizeToolPolicyName(tool.name);
         return allowedNames.has(name) || (catalogCount > 0 && catalog.controlNames.has(name));
       });
+      catalog.ref.directOnlyToolNames = new Set(
+        tools
+          .filter((tool) => catalog.directOnlyToolNames?.has(tool.name))
+          .map((tool) => tool.name),
+      );
       const catalogReachable =
         catalogCount > 0 &&
         tools.some((tool) => catalog.controlNames.has(normalizeToolPolicyName(tool.name)));

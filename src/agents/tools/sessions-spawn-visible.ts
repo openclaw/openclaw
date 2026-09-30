@@ -13,6 +13,7 @@ import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
@@ -30,7 +31,8 @@ import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agen
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { resolveSpawnedWorkspaceInheritance, type SpawnedToolContext } from "../spawned-context.js";
+import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
+import type { SpawnedToolContext } from "../spawned-context.js";
 import {
   countActiveRunsForSession,
   registerSubagentRun,
@@ -63,31 +65,37 @@ import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
 import { SessionsSpawnPlacementSchema } from "./sessions-spawn-visible.schema.js";
 
-export type VisibleSessionsSpawnDeps = {
+export type SessionsSpawnToolOptions = {
   callGateway?: InProcessGatewayCaller;
   registerRun?: typeof registerSubagentRun;
   countActiveRuns?: typeof countActiveRunsForSession;
-};
+  agentSessionKey?: string;
+  requesterTurnRunId?: string;
+  /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
+  completionOwnerKey?: string;
+  agentChannel?: string;
+  agentAccountId?: string;
+  agentTo?: string;
+  agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  sandboxed?: boolean;
+  config?: OpenClawConfig;
+  /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
+  requesterAgentIdOverride?: string;
+  requesterRunId?: string;
+  swarmCollector?: boolean;
+  /** Backend-derived parent incarnation; never sourced from model arguments. */
+  expectedParentSessionId?: string;
+  signal?: AbortSignal;
+} & SpawnedToolContext;
 
-type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
-  SpawnedToolContext & {
-    onSpawnEffectsStart?: () => void;
-    assertActive?: () => void;
-    signal?: AbortSignal;
-    agentSessionKey?: string;
-    requesterTurnRunId?: string;
-    completionOwnerKey?: string;
-    agentChannel?: string;
-    agentAccountId?: string;
-    agentTo?: string;
-    agentThreadId?: string | number;
-    currentMessagingTarget?: string;
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    sandboxed?: boolean;
-    config?: OpenClawConfig;
-    requesterAgentIdOverride?: string;
-  };
+type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
+  onSpawnEffectsStart?: () => void;
+  assertActive?: () => void;
+};
 
 function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
@@ -428,13 +436,14 @@ export async function maybeSpawnVisibleSession(params: {
       maxSpawnDepth: maxDepth,
     });
     try {
+      const titleSource = placement && buildDashboardSessionTitleSource({ message: params.task });
       const createParams = {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
-        ...(placement ? { titleSource: params.task } : { task: taskMessage }),
+        ...(placement ? { titleSource } : { task: taskMessage }),
         timeoutMs:
           runTimeoutSeconds === 0
             ? 0
@@ -535,8 +544,7 @@ export async function maybeSpawnVisibleSession(params: {
             ).response;
           },
           terminateRun: (runId) => terminateCloudRun(childSessionKey, runId),
-          assertActive:
-            params.options?.assertActive ?? (() => params.options?.signal?.throwIfAborted()),
+          assertActive,
           signal: params.options?.signal,
         })),
       };

@@ -45,7 +45,87 @@ function matrixCandidate(workflow = matrixWorkflow) {
   return { ...f, evidence };
 }
 
+function mixedMatrixCandidate() {
+  const f = matrixCandidate();
+  const state = f.state();
+  state.priorCi.jobs!.push({
+    ...state.priorCi.jobs![0]!,
+    id: 606,
+    name: "checks-ui-e2e-real-gateway",
+  });
+  f.save(state);
+  f.evidence.failures.push({ ...f.evidence.failures[0]!, jobId: 606 });
+  f.evidence.aggregate.causedBy.push(606);
+  writeFileSync(f.path, JSON.stringify(f.evidence));
+  return f;
+}
+
 describePosix("explicit prior-CI admin landing", () => {
+  it("keeps independently attributed UI failure outside Node cancellation membership", () => {
+    const f = mixedMatrixCandidate();
+    const result = f.verifyPriorCi(f.path);
+    expect(result.status, result.output).toBe(0);
+    const proof = JSON.parse(result.stdout);
+    expect(f.state().mutations).toBe(0);
+    expect(proof.failures.map((entry: { jobId: number }) => entry.jobId)).toEqual([601, 606]);
+    expect(proof.cancellation.causedBy).toEqual([601]);
+    expect(proof.cancellation.members.map((entry: { jobId: number }) => entry.jobId)).toEqual([
+      601, 604,
+    ]);
+    expect(proof.cancelledJobIds).toEqual([604]);
+  });
+
+  it.each([
+    "empty causes",
+    "duplicate cause",
+    "unknown cause",
+    "nonfailed cause",
+    "cancelled cause",
+    "unrelated failure as cause",
+    "extra unrelated member",
+    "missing causal member",
+    "aggregate omits unrelated failure",
+    "missing cancellation qualification",
+  ])("refuses mixed matrix %s without dispatch", (fault) => {
+    const f = mixedMatrixCandidate();
+    const cancellation = f.evidence.cancellation;
+    if (fault === "empty causes") {
+      cancellation.causedBy = [];
+    }
+    if (fault === "duplicate cause") {
+      cancellation.causedBy = [601, 601];
+    }
+    if (fault === "unknown cause") {
+      cancellation.causedBy = [999];
+    }
+    if (fault === "nonfailed cause") {
+      cancellation.causedBy = [605];
+    }
+    if (fault === "cancelled cause") {
+      cancellation.causedBy = [604];
+    }
+    if (fault === "unrelated failure as cause") {
+      cancellation.causedBy = [606];
+    }
+    if (fault === "extra unrelated member") {
+      cancellation.members.push({ jobId: 606, name: "checks-ui-e2e-real-gateway" });
+    }
+    if (fault === "missing causal member") {
+      cancellation.members.shift();
+    }
+    if (fault === "aggregate omits unrelated failure") {
+      f.evidence.aggregate.causedBy = [601];
+    }
+    if (fault === "missing cancellation qualification") {
+      cancellation.evidence = [];
+    }
+    writeFileSync(f.path, JSON.stringify(f.evidence));
+    const result = f.verifyPriorCi(f.path);
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toMatch(/Prior-CI admin admission:/u);
+    expect(f.state().mutations).toBe(0);
+  });
+
   it.each(["success", "pending"])("revalidates a same-name %s security projection", (state) => {
     const f = preExistingCandidate();
     const server = f.state();
