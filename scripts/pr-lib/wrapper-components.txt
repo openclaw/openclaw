@@ -611,6 +611,8 @@ src/infra/backoff.ts
 src/infra/backup-scratch.ts
 src/infra/boundary-file-read.ts
 src/infra/boundary-path.ts
+src/infra/bun-sqlite-close-probe.ts
+src/infra/bun-sqlite-close-probe.worker.ts
 src/infra/bun-sqlite-library.ts
 src/infra/clawhub-integrity.ts
 src/infra/clawhub-spec.ts
