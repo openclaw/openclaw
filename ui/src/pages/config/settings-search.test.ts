@@ -491,6 +491,7 @@ describe("findSettingsSearchBlocks", () => {
     ["camera", "Chat", "#settings-appearance-chat"],
     ["links outside OpenClaw", "Chat", "#settings-appearance-chat"],
     ["show task progress cards", "Chat", "#settings-appearance-chat"],
+    ["task progress side panel", "Chat", "#settings-appearance-chat"],
   ])("finds the appearance control for %s", (query, label, hash) => {
     const matches = findSettingsSearchBlocks({
       query,

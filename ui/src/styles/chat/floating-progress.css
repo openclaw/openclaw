@@ -1,0 +1,151 @@
+/* The built-in and plugin transcript share one overlay boundary above the composer. */
+.chat-transcript-surface {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* One overlay stack belongs to the transcript viewport, never the composer or side panel. */
+.chat-gutter-stack {
+  position: absolute;
+  z-index: 24;
+  top: 10px;
+  right: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: min(450px, calc(100% - 28px));
+  max-height: calc(100% - 20px);
+  gap: var(--space-3);
+  pointer-events: none;
+}
+
+.chat-gutter-stack > * {
+  pointer-events: auto;
+  min-height: 0;
+}
+
+.session-progress-card--floating {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  width: 240px;
+  max-width: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--chat-composer-hairline);
+  border-radius: var(--chat-composer-radius);
+  corner-shape: var(--chat-composer-corner-shape);
+  background: var(--chat-composer-surface);
+  box-shadow: var(--shadow-lg);
+  transition: width 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.session-progress-card--floating[data-expanded="true"] {
+  width: 300px;
+}
+
+.session-progress-card__floating-heading {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 48px;
+  padding: 8px 10px;
+}
+
+.session-progress-card__toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  text-align: start;
+}
+
+.session-progress-card__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.session-progress-card__floating-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.session-progress-card__floating-count {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-progress-card--floating .session-progress-card__chevron {
+  transition: transform 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.session-progress-card--floating[data-expanded="true"] .session-progress-card__chevron {
+  transform: rotate(180deg);
+}
+
+.session-progress-card__floating-activity {
+  flex: 0 0 auto;
+  padding: 0 14px 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-progress-card--floating .session-progress-card__refresh-status {
+  flex: 0 0 auto;
+  margin: 0 14px 8px;
+}
+
+.session-progress-card__reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  min-height: 0;
+  opacity: 0;
+  transition:
+    grid-template-rows 380ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 200ms ease;
+}
+
+.session-progress-card--floating[data-expanded="true"] .session-progress-card__reveal {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.session-progress-card__clip {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.session-progress-card--floating .session-progress-card__body {
+  min-height: 0;
+  width: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 14px 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-progress-card--floating,
+  .session-progress-card--floating .session-progress-card__chevron,
+  .session-progress-card__reveal {
+    transition: none;
+  }
+}

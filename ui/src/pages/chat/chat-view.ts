@@ -112,6 +112,7 @@ export type ChatProps = Omit<
   ChatPlacementStartupNoticeProps & {
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
     transcript: ChatTranscriptController;
+    floatingTaskProgress?: TemplateResult | typeof nothing;
     asyncQuestionStorage?:
       | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
       | null;
@@ -271,6 +272,12 @@ export function renderChat(props: ChatProps) {
   }
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
+  const taskSuggestionTray = renderChatTaskSuggestionTray(props);
+  const floatingProgress = props.floatingTaskProgress ?? nothing;
+  const gutterStack =
+    taskSuggestionTray === nothing && floatingProgress === nothing
+      ? nothing
+      : html`<div class="chat-gutter-stack">${floatingProgress}${taskSuggestionTray}</div>`;
   const thread = renderPluginSurface(
     "transcript",
     {
@@ -499,11 +506,6 @@ export function renderChat(props: ChatProps) {
       }
     </div>`,
   );
-  const taskSuggestionTray = renderChatTaskSuggestionTray(props);
-  const gutterStack =
-    taskSuggestionTray === nothing
-      ? nothing
-      : html`<div class="chat-gutter-stack">${taskSuggestionTray}</div>`;
   // Keep the affordance mounted so visibility changes can finish their exit transition.
   const scrollToBottomButton = props.onScrollToBottom
     ? html`
@@ -636,8 +638,11 @@ export function renderChat(props: ChatProps) {
                     .onwheel=${(event: WheelEvent) =>
                       forwardChatWheelToTranscript(event, props.transcript.scrollElement)}
                   >
-                    ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
-                    ${scrollToBottomButton} ${gutterStack}
+                    ${historyRefreshNotice}
+                    <div class="chat-transcript-surface">
+                      ${historyError === nothing ? thread : historyError} ${gutterStack}
+                    </div>
+                    ${scrollToBottomButton}
                     <div class="chat-footer">${chatColumnFooter}</div>
                   </div>
                 </div>

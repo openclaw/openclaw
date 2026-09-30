@@ -73,6 +73,7 @@ describe("native chat view session identity", () => {
         currentAgentId: "writer",
       }),
       transcript: createTestTranscript(),
+      floatingTaskProgress: html`<div data-floating-proof>Task progress</div>`,
       error: null,
       approvalCanGrant: false,
       onRefresh: vi.fn(),
@@ -118,6 +119,9 @@ describe("native chat view session identity", () => {
         ]),
       ),
     ).toEqual({ transcript: "writer/global", "tool-result": "writer/global" });
+    const surface = provider.querySelector(".chat-transcript-surface");
+    expect(surface?.querySelector("[data-floating-proof]")).not.toBeNull();
+    expect(surface?.querySelector('[data-native-owner="transcript"]')).not.toBeNull();
     expect(reportError).not.toHaveBeenCalled();
   });
 });

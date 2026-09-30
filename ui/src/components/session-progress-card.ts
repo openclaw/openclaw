@@ -1,6 +1,6 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -15,8 +15,12 @@ import {
   composerDisclosure,
   type ComposerProgressDisclosureContext,
 } from "./session-progress-disclosure-controller.ts";
+import {
+  renderFloatingProgress,
+  type FloatingProgressDisclosure,
+} from "./session-progress-floating.ts";
 
-type SessionProgressCardPlacement = "board" | "composer";
+type SessionProgressCardPlacement = "board" | "composer" | "floating";
 
 const REFRESH_STATUS_LABEL_KEYS: Record<SessionProgressCardRefreshState, Parameters<typeof t>[0]> =
   {
@@ -312,6 +316,31 @@ function renderSteps(card: ProgressCard, hasActiveRun: boolean, sessionStatus?: 
 
 export function renderSessionProgressCard(
   card: ProgressCard | null | undefined,
+  placement: "board" | "composer",
+  onDismiss?: (card: ProgressCard) => void,
+  sessionStatus?: SessionRunStatus,
+  startedAt?: number,
+  endedAt?: number,
+  hasActiveRun?: boolean,
+  collapseComposerByDefault?: boolean,
+  composerDisclosureContext?: ComposerProgressDisclosureContext,
+  refreshAction?: SessionProgressCardRefreshAction,
+): TemplateResult | typeof nothing;
+export function renderSessionProgressCard(
+  card: ProgressCard | null | undefined,
+  placement: "floating",
+  onDismiss: undefined,
+  sessionStatus: SessionRunStatus | undefined,
+  startedAt: number | undefined,
+  endedAt: number | undefined,
+  hasActiveRun: boolean,
+  collapseComposerByDefault: boolean,
+  composerDisclosureContext: undefined,
+  refreshAction: SessionProgressCardRefreshAction | undefined,
+  floating: FloatingProgressDisclosure,
+): TemplateResult | typeof nothing;
+export function renderSessionProgressCard(
+  card: ProgressCard | null | undefined,
   placement: SessionProgressCardPlacement,
   onDismiss?: (card: ProgressCard) => void,
   sessionStatus?: SessionRunStatus,
@@ -321,6 +350,7 @@ export function renderSessionProgressCard(
   collapseComposerByDefault = false,
   composerDisclosureContext?: ComposerProgressDisclosureContext,
   refreshAction?: SessionProgressCardRefreshAction,
+  floating?: FloatingProgressDisclosure,
 ) {
   if (!card) {
     return nothing;
@@ -365,16 +395,21 @@ export function renderSessionProgressCard(
     ? (`sessionProgressCard.activity.${TERMINAL_RUN_OUTCOMES[sessionStatus!]!}` as const)
     : "sessionProgressCard.activity.updated";
   const lastActivity = progressActivityTime(activityTimestamp, activityKey);
-  const dismiss = onDismiss
+  const close =
+    placement === "floating" ? floating?.onHide : onDismiss ? () => onDismiss(card) : undefined;
+  const closeLabel = t(
+    placement === "floating" ? "sessionProgressCard.hide" : "sessionProgressCard.dismiss",
+  );
+  const dismiss = close
     ? html`<button
         class="rail-header__action session-progress-card__dismiss"
         type="button"
-        aria-label=${t("sessionProgressCard.dismiss")}
-        title=${t("sessionProgressCard.dismiss")}
+        aria-label=${closeLabel}
+        title=${closeLabel}
         @click=${(event: MouseEvent) => {
           event.preventDefault();
           event.stopPropagation();
-          onDismiss?.(card);
+          close();
         }}
       >
         ${icons.x}
@@ -485,22 +520,44 @@ export function renderSessionProgressCard(
       </div>
     </details>`;
   }
+  const refreshStatus = refreshAction?.state
+    ? html`<span
+        class="session-progress-card__refresh-status"
+        data-state=${refreshAction.state}
+        role="status"
+        >${t(REFRESH_STATUS_LABEL_KEYS[refreshAction.state])}</span
+      >`
+    : nothing;
+  const body = html`${renderProgressCardMarkdown(card.markdown)}${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}`;
+  if (placement === "floating") {
+    if (!floating) {
+      throw new Error("Floating progress requires disclosure state");
+    }
+    return renderFloatingProgress({
+      disclosure: floating,
+      countLabel,
+      count: counts ? `${counts.completed}/${counts.total}` : undefined,
+      activity: lastActivity,
+      controls: html`${renderRefresh(card, refreshAction)}${dismiss}`,
+      refreshStatus,
+      body,
+    });
+  }
   return html`<section
-    class="session-progress-card session-progress-card--${placement}"
-    data-progress-card-placement=${placement}
+    class="session-progress-card session-progress-card--board"
+    data-progress-card-placement="board"
     aria-label=${countLabel}
   >
     <div class="session-progress-card__heading">
       <span>${t("sessionProgressCard.title")}</span>
       <span class="session-progress-card__heading-actions">
-        <span
+        <span class="session-progress-card__activity"
           >${lastActivity}${counts ? html` · ${counts.completed}/${counts.total}` : nothing}</span
-        >${dismiss}
+        >
+        ${dismiss}
       </span>
     </div>
-    <div class="session-progress-card__body">
-      ${renderProgressCardMarkdown(card.markdown)}
-      ${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}
-    </div>
+    ${refreshStatus}
+    <div class="session-progress-card__body">${body}</div>
   </section>`;
 }

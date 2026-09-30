@@ -1414,7 +1414,10 @@ const enSettings = {
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
-        "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
+        "Show task progress in chat. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
+      floatTaskProgress: "Float task progress above the conversation",
+      floatTaskProgressHint:
+        "Float a collapsible card over the top-right of wide conversations without reserving space. Opening another panel collapses it; click to expand it again. Narrow layouts keep progress in the composer.",
       openLinksExternally: "Open links outside OpenClaw",
       openLinksExternallyHint: "Use your browser instead of the OpenClaw built-in browser.",
       openLinksExternallyStorage: "Saved in this browser only.",

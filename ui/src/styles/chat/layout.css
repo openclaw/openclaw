@@ -1514,28 +1514,6 @@ openclaw-chat-video-player {
   outline: none;
 }
 
-/* The conversation's top-right gutter, owned by one column so its members
-   stack instead of overlapping (the positioned ancestor is
-   .chat-main__conversation); content scrolls underneath it. The column is as
-   wide as its widest member — the suggestion tray, which deliberately overhangs
-   the transcript — and narrower members right-align inside it. */
-.chat-gutter-stack {
-  position: absolute;
-  z-index: 24;
-  top: calc(var(--chat-mobile-pane-header-height, 0px) + 10px);
-  right: 14px;
-  display: grid;
-  width: min(450px, calc(100% - 28px));
-  justify-items: end;
-  gap: var(--space-3);
-  /* The column spans the tray's width even when only a narrow member renders,
-     so it must not swallow clicks aimed at the transcript beneath it. */
-  pointer-events: none;
-}
-
-.chat-gutter-stack > * {
-  pointer-events: auto;
-}
 .task-suggestions {
   --task-suggestion-card-bg: color-mix(in srgb, var(--panel-strong) 72%, var(--panel-hover) 28%);
   --task-suggestion-path-bg: color-mix(in srgb, var(--panel-hover) 84%, var(--text) 16%);

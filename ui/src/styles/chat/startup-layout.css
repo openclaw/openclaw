@@ -32,14 +32,9 @@
   --chat-thread-max-width: 48rem;
   /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
   --chat-thread-gutter: 18px;
-  /* Composer box insets. The docked progress card derives its own edge from
-     both, so the two never overlap and their bottoms stay on one line. */
+  /* Composer box insets keep its controls clear of the pane edges. */
   --chat-composer-side-inset: 36px;
   --chat-composer-bottom-gap: 14px;
-  /* Docked progress-card width. Kept in step with PROGRESS_CARD_DOCK_MIN_GUTTER_PX
-     in chat-pane-rails.ts, which gates the placement on a gutter wide enough for
-     this card plus the gutter stack's insets. */
-  --chat-progress-dock-width: 250px;
   --chat-thread-side-inset: clamp(6px, 1vw, 12px);
 
   position: relative;

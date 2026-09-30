@@ -1,8 +1,13 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { patchSettings } from "../../app/settings.ts";
 import "../../components/modal-dialog.ts";
-import type { SessionProgressCardRefreshAction } from "../../components/session-progress-card.ts";
+import {
+  renderSessionProgressCard,
+  type SessionProgressCardRefreshAction,
+} from "../../components/session-progress-card.ts";
 import { t } from "../../i18n/index.ts";
 import { boardProviderCacheKey } from "../../lib/board/provider.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -14,7 +19,9 @@ import {
   areUiSessionKeysEquivalent,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
+import { ChatFloatingProgress } from "./chat-floating-progress.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import {
   chatHistoryRequests,
@@ -27,6 +34,10 @@ import { loadChatHistory } from "./chat-history.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import type { PaneSessionHandoff } from "./chat-pane-handoff-lifecycle.ts";
+import {
+  resolveChatProgressPlacement,
+  progressNeighborPanelKey,
+} from "./chat-pane-progress-placement.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
@@ -36,6 +47,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import type { ChatProps } from "./chat-view.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
@@ -45,6 +57,8 @@ import {
   resetTranscriptSession,
 } from "./components/chat-thread-interactions.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
+import { lockChatScroll } from "./scroll.ts";
+import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
@@ -74,6 +88,108 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           this.progressCard.refresh(card);
         }
       },
+    };
+  }
+
+  private readonly floatingProgress = new ChatFloatingProgress(() => this.requestUpdate());
+
+  protected createProgressCardView(params: {
+    state: ChatPageHost;
+    layout: SidebarLayout;
+    selectedSession: GatewaySessionRow | undefined;
+    runActive: boolean;
+    canDismiss: boolean;
+    canRefresh: boolean;
+  }): {
+    composer: Pick<
+      ChatProps,
+      | "progressCard"
+      | "progressCardIdentity"
+      | "progressCardLifetime"
+      | "gatewayScope"
+      | "progressCardInitialLoading"
+      | "progressCardRefresh"
+      | "collapseTaskProgress"
+      | "readingHistory"
+      | "onProgressManipulate"
+      | "onDismissProgressCard"
+    >;
+    floating: TemplateResult | typeof nothing;
+  } {
+    const { state, selectedSession, runActive } = params;
+    const presentation = this.progressCardPresentation;
+    const placement = resolveChatProgressPlacement({
+      showProgress: this.presented && state.settings.chatShowTaskProgress !== false,
+      preferFloating: state.settings.chatFloatTaskProgress === true,
+      layout: params.layout,
+      paneWidth: this.paneWidth,
+      compact: this.compact,
+    });
+    const gatewayScope = gatewayPresentationScope(this.context.gateway);
+    if (this.presented) {
+      this.floatingProgress.sync(
+        presentation
+          ? {
+              gateway: gatewayScope,
+              identity: presentation.identity,
+              sessionId: state.currentSessionId,
+              lifetime: presentation.lifetime,
+            }
+          : undefined,
+        progressNeighborPanelKey(params.layout),
+        state.settings.chatCollapseTaskProgress === true,
+      );
+    }
+    const refresh =
+      params.canDismiss && params.canRefresh && presentation
+        ? this.captureProgressCardRefreshAction()
+        : undefined;
+    return {
+      composer: {
+        progressCard: placement === "composer" ? (presentation?.card ?? null) : null,
+        progressCardIdentity: presentation?.identity,
+        progressCardLifetime: presentation?.lifetime,
+        gatewayScope,
+        // Keep the existing initial-read feedback until there is a card to float.
+        progressCardInitialLoading:
+          (placement === "composer" || (placement === "floating" && !presentation)) &&
+          this.progressCardInitialLoading,
+        progressCardRefresh: refresh,
+        collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
+        readingHistory: state.chatReadingHistory,
+        onProgressManipulate: () => {
+          lockChatScroll(state);
+          this.transcript.cancelScroll();
+        },
+        onDismissProgressCard: params.canDismiss
+          ? (card: ProgressCard) =>
+              void this.progressCard
+                .dismiss(card)
+                .catch(() => showToast({ message: t("sessionProgressCard.dismissFailed") }))
+          : undefined,
+      },
+      floating:
+        placement === "floating" && presentation
+          ? renderSessionProgressCard(
+              presentation.card,
+              "floating",
+              undefined,
+              selectedSession?.status,
+              selectedSession?.startedAt,
+              selectedSession?.endedAt,
+              runActive,
+              false,
+              undefined,
+              state.connected ? refresh : undefined,
+              this.floatingProgress.disclosure(
+                `floating-progress-${encodeURIComponent(this.presentationId)}`,
+                () => {
+                  state.settings = patchSettings({ chatShowTaskProgress: false });
+                  state.requestUpdate?.();
+                },
+              ),
+            )
+          : nothing,
     };
   }
 

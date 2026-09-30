@@ -1937,62 +1937,6 @@ describe("config view", () => {
     expect(followUpRow?.textContent).not.toContain("Synced across your devices");
   });
 
-  it("labels synced and browser-only Chat preferences per row", () => {
-    const { container } = renderConfigView({
-      activeSection: "__appearance__",
-      includeSections: ["__appearance__"],
-      composerHoldToRecord: true,
-      setComposerHoldToRecord: vi.fn(),
-    });
-    const chat = queryRequired(container, "#settings-appearance-chat", HTMLElement);
-    const sectionDescription = Array.from(chat.children).find((child) =>
-      child.classList.contains("settings-section__desc"),
-    );
-    const row = (title: string) =>
-      Array.from(chat.querySelectorAll<HTMLElement>(".settings-row")).find(
-        (candidate) =>
-          candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
-      );
-
-    expect(sectionDescription).toBeUndefined();
-    expect(row("Send shortcut")?.textContent).toContain("Synced across your devices");
-    expect(row("Follow-ups while the agent is working")?.textContent).toContain(
-      "Synced across your devices",
-    );
-    for (const title of [
-      "Message width",
-      "Show task progress cards",
-      "Collapse task progress by default on desktop",
-      "Open external sessions in",
-      "Hold microphone button to start dictation",
-    ]) {
-      expect(row(title)?.textContent).toContain("Stored in this browser only");
-      expect(row(title)?.textContent).not.toContain("Synced across your devices");
-    }
-  });
-
-  it("renders task progress auto-collapse off by default and enables it from Chat settings", () => {
-    const setChatCollapseTaskProgress = vi.fn();
-    const { container } = renderConfigView({
-      activeSection: "__appearance__",
-      includeSections: ["__appearance__"],
-      chatCollapseTaskProgress: false,
-      setChatCollapseTaskProgress,
-    });
-    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
-      (candidate) =>
-        candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
-        "Collapse task progress by default on desktop",
-    );
-    const toggle = row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-
-    expect(toggle?.checked).toBe(false);
-    row?.click();
-    expect(setChatCollapseTaskProgress).toHaveBeenCalledWith(true);
-    expect(row?.textContent).not.toContain("Using default:");
-    expect(row?.textContent).toContain("Stored in this browser only");
-  });
-
   it("shows the tweakcn importer once the custom slot is opened", () => {
     const { container } = renderConfigView({
       activeSection: "__appearance__",

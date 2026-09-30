@@ -3,6 +3,7 @@ import "./chat/startup-layout.css";
 // Keep shared sheets as module imports: CSS @import would inline a second copy
 // into Chat after New Session has already loaded the passive transcript styles.
 import "./chat/layout.css";
+import "./chat/floating-progress.css";
 import "./chat/message-layout.css";
 import "./chat/context-attachment.css";
 import "./chat/text.css";

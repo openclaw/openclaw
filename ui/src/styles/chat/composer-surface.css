@@ -103,6 +103,7 @@
    heavy shadow on top of each other. Every foreground step below is a mix
    toward that same surface, which keeps the ramp correct in light themes too,
    where --text-strong is dark rather than near-white. */
+.chat-gutter-stack,
 .chat-footer,
 .agent-chat__composer-shell,
 .agent-chat__input {

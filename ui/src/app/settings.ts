@@ -166,6 +166,7 @@ export const UI_APPEARANCE_DEFAULTS = {
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
   chatShowTaskProgress: true,
+  chatFloatTaskProgress: false,
   chatCollapseTaskProgress: false,
   chatSendShortcut: "enter",
   catalogOpenTarget: "viewer",
@@ -191,8 +192,10 @@ export type UiSettings = {
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
-  // Browser-local composer visibility; saved progress and other placements are unchanged.
+  // Browser-local chat visibility; saved progress and other placements are unchanged.
   chatShowTaskProgress?: boolean;
+  // Use the empty side region without changing the saved panel layout.
+  chatFloatTaskProgress?: boolean;
   // Browser-local presentation preference; false preserves active-card auto-expand.
   chatCollapseTaskProgress?: boolean;
   chatSendShortcut?: ChatSendShortcut;
@@ -463,6 +466,7 @@ export function loadUiPreferences(
     chatShowToolCalls: true,
     chatPersistCommentary: true,
     chatShowTaskProgress: UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
+    chatFloatTaskProgress: UI_APPEARANCE_DEFAULTS.chatFloatTaskProgress,
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
@@ -527,6 +531,10 @@ export function loadUiPreferences(
       chatShowTaskProgress: normalizeBooleanSetting(
         parsed.chatShowTaskProgress,
         defaults.chatShowTaskProgress,
+      ),
+      chatFloatTaskProgress: normalizeBooleanSetting(
+        parsed.chatFloatTaskProgress,
+        defaults.chatFloatTaskProgress,
       ),
       chatCollapseTaskProgress: normalizeBooleanSetting(
         parsed.chatCollapseTaskProgress,
@@ -679,6 +687,7 @@ export function saveSettings(next: UiSettings, options: { selectGateway?: boolea
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
+    chatFloatTaskProgress: next.chatFloatTaskProgress === true ? true : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
     chatSendShortcut: next.chatSendShortcut === "modifier-enter" ? "modifier-enter" : undefined,
     chatFollowUpMode: normalizeChatFollowUpModeOverride(next.chatFollowUpMode),

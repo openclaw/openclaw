@@ -237,6 +237,7 @@ describe("settings preference persistence", () => {
 
   it.each([
     { key: "chatShowTaskProgress", defaultValue: true },
+    { key: "chatFloatTaskProgress", defaultValue: false },
     { key: "chatCollapseTaskProgress", defaultValue: false },
   ] as const)("persists only the non-default $key preference", ({ key, defaultValue }) => {
     const gwUrl = expectedGatewayUrl("");

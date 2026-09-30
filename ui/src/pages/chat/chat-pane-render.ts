@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
@@ -25,7 +24,6 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
-import { showToast } from "../../lib/toast.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
@@ -64,7 +62,7 @@ import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
-import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
@@ -92,7 +90,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     const selectedSession = selectedChatSessionRow(state);
     const providerPaused = Boolean(selectedSession?.providerReview);
     const readTarget = this.resolveChatReadTarget();
-    const progressPresentation = this.progressCardPresentation;
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
@@ -360,14 +357,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       disabledBanner:
         sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
     };
-    const progressCardRefresh =
-      canDismissProgressCard &&
-      composerAvailability.canSend &&
-      !catalogKey &&
-      !suggestionViewer &&
-      progressPresentation
-        ? this.captureProgressCardRefreshAction()
-        : undefined;
+    const progress = this.createProgressCardView({
+      state,
+      layout: sidebarLayout,
+      selectedSession,
+      runActive,
+      canDismiss: canDismissProgressCard,
+      canRefresh: composerAvailability.canSend && !catalogKey && !suggestionViewer,
+    });
     const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
     const mentionsUnsupported = Boolean(
       catalogKey || suggestionViewer || selectedSession?.incognito || !selfProfileId,
@@ -410,24 +407,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       fallbackStatus: state.fallbackStatus,
       providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
       providerReviewNotice: this.providerReview.notice(),
-      progressCard: progressPresentation?.card ?? null,
-      progressCardIdentity: progressPresentation?.identity,
-      progressCardLifetime: progressPresentation?.lifetime,
-      gatewayScope: gatewayPresentationScope(this.context.gateway),
-      progressCardInitialLoading: this.progressCardInitialLoading,
-      progressCardRefresh,
-      collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
-      readingHistory: state.chatReadingHistory,
-      onProgressManipulate: () => {
-        lockChatScroll(state);
-        this.transcript.cancelScroll();
-      },
-      onDismissProgressCard: canDismissProgressCard
-        ? (card) =>
-            void this.progressCard
-              .dismiss(card)
-              .catch(() => showToast({ message: t("sessionProgressCard.dismissFailed") }))
-        : undefined,
+      ...progress.composer,
+      floatingTaskProgress: progress.floating,
       gatewayQuestionPrompts,
       asyncQuestionStorage:
         !catalogKey && !suggestionViewer ? this.chatState.composerPersistence.durableScope : null,

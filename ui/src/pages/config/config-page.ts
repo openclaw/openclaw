@@ -85,6 +85,7 @@ import {
 import "./session-storage.ts";
 import "./talk-page.ts";
 import { renderUpdatesPage } from "./updates-page.ts";
+import { taskProgressPreferenceProps } from "./view-appearance-preferences.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -1013,14 +1014,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.applySettings({ chatMessageMaxWidth: value }),
-      chatShowTaskProgress:
-        this.settings.chatShowTaskProgress ?? UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
-      setChatShowTaskProgress: (enabled) => this.applySettings({ chatShowTaskProgress: enabled }),
+      ...taskProgressPreferenceProps(this.settings, (patch) => this.applySettings(patch)),
       openLinksExternally: this.settings.openLinksExternally === true,
       setOpenLinksExternally: (enabled) => this.applySettings({ openLinksExternally: enabled }),
-      chatCollapseTaskProgress: this.settings.chatCollapseTaskProgress === true,
-      setChatCollapseTaskProgress: (enabled) =>
-        this.applySettings({ chatCollapseTaskProgress: enabled }),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
       setShowAdvancedSettings: (enabled) => this.applySettings({ showAdvancedSettings: enabled }),
       forceShowAdvanced: this.pageId === "advanced",

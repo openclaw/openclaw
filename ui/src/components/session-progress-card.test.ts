@@ -3,6 +3,7 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing, render } from "lit";
+import { createRef } from "lit/directives/ref.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./markdown.ts", async () => {
   const actual = await vi.importActual<typeof import("./markdown.ts")>("./markdown.ts");
@@ -109,6 +110,63 @@ describe("renderSessionProgressCard", () => {
     render(renderSessionProgressCard(progressCard, "composer", undefined, status), container);
 
     expect(container.querySelector("time")?.textContent).toBe(expected);
+  });
+
+  it("keeps floating refresh and local hide available while collapsed", () => {
+    const container = createContainer();
+    const onHide = vi.fn();
+    const onRefresh = vi.fn();
+    const draw = (state?: "pending" | "failed") =>
+      render(
+        renderSessionProgressCard(
+          progressCard,
+          "floating",
+          undefined,
+          "done",
+          RUN_STARTED_MS,
+          RUN_ENDED_MS,
+          false,
+          false,
+          undefined,
+          { state, onRefresh },
+          {
+            expanded: false,
+            bodyId: "floating-proof",
+            element: createRef<HTMLElement>(),
+            onHide,
+            onToggle: vi.fn(),
+            onKeydown: vi.fn(),
+          },
+        ),
+        container,
+      );
+    draw();
+    expect(container.querySelector("details")).toBeNull();
+    expect(container.querySelector("time")?.textContent).toBe("Completed just now");
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Refresh task progress"]')!
+      .click();
+    expect(onRefresh).toHaveBeenCalledWith(progressCard);
+    draw("pending");
+    expect(
+      container.querySelector<HTMLButtonElement>(".session-progress-card__refresh")?.disabled,
+    ).toBe(true);
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      "Refreshing task progress",
+    );
+    draw("failed");
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      "Previous update kept",
+    );
+    expect(container.querySelector('button[aria-label="Retry progress refresh"]')).not.toBeNull();
+    container.querySelector<HTMLButtonElement>('button[aria-label="Hide task progress"]')!.click();
+    expect(onHide).toHaveBeenCalledOnce();
+    expect(container.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    expect(container.querySelector(".session-progress-card__reveal")?.hasAttribute("inert")).toBe(
+      true,
+    );
   });
 
   it("uses endedAt for terminal wording and falls back to Updated without it", () => {

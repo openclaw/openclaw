@@ -635,6 +635,18 @@ Task progress cards are enabled by default. Toggle **Show task progress cards** 
 **Settings → Appearance → Chat** to hide or show the composer card in this browser.
 Hiding it does not stop agent work or clear saved progress.
 
+Enable **Float task progress above the conversation** in the same section for a
+collapsible card at the top-right of a wide conversation. It shares the composer’s
+corner radius and expands with an animation that respects reduced motion. The
+card overlays the transcript without reserving space; when expanded, it can
+cover messages beneath it, but never an adjacent side panel. Opening another
+panel collapses progress. Select the header to reopen it deliberately; closing
+the other panel does not reopen progress. Escape collapses the card. **Hide task
+progress** (×) turns off the local show preference without clearing shared progress.
+Turn **Show task progress cards** back on to restore it. Narrow or compact panes
+use the composer card instead. Floating mode is off by default and leaves saved
+panel arrangements unchanged.
+
 On mobile, the task progress card above the composer starts collapsed and stays
 collapsed when you send a new message or the run completes. You can still open it
 manually. The card also collapses after deliberate upward scrolling settles.

@@ -83,6 +83,8 @@ export const baseProps = () => ({
   chatMessageMaxWidth: undefined,
   setChatMessageMaxWidth: vi.fn(),
   chatShowTaskProgress: true,
+  chatFloatTaskProgress: false,
+  setChatFloatTaskProgress: vi.fn(),
   setChatShowTaskProgress: vi.fn(),
   chatCollapseTaskProgress: false,
   setChatCollapseTaskProgress: vi.fn(),
