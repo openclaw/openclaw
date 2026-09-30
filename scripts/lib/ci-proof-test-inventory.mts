@@ -4884,7 +4884,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/agents/tools/sessions-list-title.test.ts",
   "src/agents/tools/sessions-send-tool.admission.test.ts",
   "src/agents/tools/transcripts-tool-read.test.ts",
-  "src/agents/tools/transcripts-tool.import.test.ts",
   "src/agents/tools/transcripts-tool.lifecycle.test.ts",
   "src/agents/workspace-alias-rebind.test.ts",
   "src/agents/workspace-state-read.worker.test.ts",
