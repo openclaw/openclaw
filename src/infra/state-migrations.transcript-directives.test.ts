@@ -928,7 +928,7 @@ describe("historical transcript directive migration", () => {
         : expect.arrayContaining([expect.stringMatching(/maintenance lease.*was lost/u)]),
     );
     if (interruption === "deletion") {
-      expect(result.notices).toEqual([expect.stringContaining("Held retained database")]);
+      expect(result.notices.join("\n")).toContain("deletion of agent main is pending");
     }
     expect(fs.readFileSync(archivePath)).toEqual(archiveBytes);
     expect(readMigrationCursor(opened.path)).toEqual({
@@ -945,7 +945,6 @@ describe("historical transcript directive migration", () => {
     "preserves a published archive when %s interrupts before rename",
     expectArchivePreserved,
   );
-
   it("stops resumed transcript writes when agent deletion begins between batches", async () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-retained-resume-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -968,7 +967,6 @@ describe("historical transcript directive migration", () => {
     const finalSessionId = "session-32";
     const finalEventJson = readEventJson(opened.path, finalSessionId, 0);
     closeOpenClawAgentDatabasesForTest();
-
     const operationId = "retained-during-transcript-resume";
     vi.spyOn(globalThis, "setImmediate").mockImplementationOnce((callback) => {
       beginAgentDeletionJournal(
@@ -986,13 +984,9 @@ describe("historical transcript directive migration", () => {
       callback();
       return 0 as unknown as NodeJS.Immediate;
     });
-
     const result = await migrateHistoricalTranscriptDirectives({ env });
-
     expect(result.warnings).toEqual([]);
-    expect(result.notices).toEqual([
-      expect.stringContaining(`Held retained database ${opened.path} for deleted agent ${agentId}`),
-    ]);
+    expect(result.notices.join("\n")).toContain(`deletion of agent ${agentId} is pending`);
     expect(readEventJson(opened.path, finalSessionId, 0)).toBe(finalEventJson);
     expect(readMigrationCursor(opened.path)).toEqual({
       phase: "transcripts",

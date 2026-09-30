@@ -1985,6 +1985,39 @@ describe("state migrations", () => {
     ).toEqual([expect.objectContaining({ agentId, path: databasePath })]);
   });
 
+  it("reports pending deletion through the Doctor migration result", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const agentId = "deleting";
+    const databasePath = openOpenClawAgentDatabase({ agentId, env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    beginAgentDeletionJournal(
+      {
+        agentId,
+        operationId: "pending-deletion-doctor-notice",
+        agentDir: path.dirname(databasePath),
+        workspaceDir: path.join(stateDir, "workspaces", agentId),
+        sessionsDir: path.join(stateDir, "agents", agentId, "sessions"),
+        databasePaths: [databasePath],
+        deleteFiles: true,
+      },
+      { env },
+    );
+
+    const result = await autoMigrateLegacyState({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toContain(
+      `Held database ${databasePath} while deletion of agent ${agentId} is pending; finish or retry that agent deletion, then rerun openclaw doctor --fix.`,
+    );
+  });
+
   it("checks automatic migrations independently for each state directory", async () => {
     const root = await createTempDir();
     const stateDirs = [path.join(root, "state-a"), path.join(root, "state-b")];

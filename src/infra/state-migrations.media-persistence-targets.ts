@@ -108,6 +108,12 @@ function classifyRetainedAgentDatabaseHold(params: {
       ? { kind: "silent", message: "" }
       : undefined;
   }
+  if (deletion.state === "pending") {
+    return {
+      kind: "notice",
+      message: `Held database ${params.candidate.path} while deletion of agent ${deletion.agentId} is pending; finish or retry that agent deletion, then rerun ${formatCliCommand("openclaw doctor --fix", params.env)}.`,
+    };
+  }
   return {
     kind: "notice",
     message: `Held retained database ${params.candidate.path} for deleted agent ${deletion.agentId}; restore that agent from backup or move this database out of the active state directory, then rerun ${formatCliCommand("openclaw doctor --fix", params.env)}.`,

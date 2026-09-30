@@ -11,6 +11,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.gene
 type RetainedAgentDeletion = {
   agentId: string;
   databasePaths: readonly string[];
+  state: "pending" | "retained";
 };
 
 type RetainedAgentDeletionReadFailure = { status: "unavailable"; warning?: string };
@@ -64,7 +65,7 @@ export function readRetainedAgentDeletions(
               db,
               database
                 .selectFrom("agent_deletion_journal")
-                .select(["agent_id", "agent_dir", "database_paths_json"])
+                .select(["agent_id", "agent_dir", "database_paths_json", "cleanup_completed"])
                 .where((expression) =>
                   expression.or([
                     expression("cleanup_completed", "=", 0),
@@ -78,6 +79,7 @@ export function readRetainedAgentDeletions(
                 path.join(row.agent_dir, "openclaw-agent.sqlite"),
                 ...parseDatabasePaths(row.database_paths_json),
               ],
+              state: row.cleanup_completed === 0 ? ("pending" as const) : ("retained" as const),
             })),
           );
         },

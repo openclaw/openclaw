@@ -30,6 +30,8 @@ const tempDirs: string[] = [];
 const PREVIOUS_VERSION = 16;
 const RETAINED_NOTICE = (databasePath: string, agentId: string) =>
   `Held retained database ${databasePath} for deleted agent ${agentId}; restore that agent from backup or move this database out of the active state directory, then rerun openclaw doctor --fix.`;
+const PENDING_NOTICE = (databasePath: string, agentId: string) =>
+  `Held database ${databasePath} while deletion of agent ${agentId} is pending; finish or retry that agent deletion, then rerun openclaw doctor --fix.`;
 
 function createLegacyAgentDatabase(params: {
   agentId?: string;
@@ -107,6 +109,33 @@ describe("media persistence migration targets", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.notices).toEqual([RETAINED_NOTICE(databasePath, agentId)]);
+    expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
+  });
+
+  it("reports pending deletion separately from retained-store recovery", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-pending-deletion-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "deleting";
+    const databasePath = createLegacyAgentDatabase({ agentId, env });
+    beginAgentDeletionJournal(
+      {
+        agentId,
+        operationId: "pending-deletion",
+        agentDir: path.dirname(databasePath),
+        workspaceDir: path.join(stateDir, "workspaces", agentId),
+        sessionsDir: path.join(stateDir, "agents", agentId, "sessions"),
+        databasePaths: [databasePath],
+        deleteFiles: true,
+      },
+      { env },
+    );
+
+    const result = await migrateLegacyMediaPersistence({ env });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toEqual([PENDING_NOTICE(databasePath, agentId)]);
     expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
   });
 
