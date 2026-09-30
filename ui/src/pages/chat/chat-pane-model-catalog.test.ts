@@ -161,7 +161,7 @@ describe("chat pane composer controls", () => {
     };
     const scope = { agentId: "main", sessionKey: host.sessionKey };
     const release = subscribeChatMetadata(client, scope, () => {});
-    beginChatMetadataPublication(client, scope).publish({
+    await beginChatMetadataPublication(client, scope).publish({
       commands: [],
     });
     expect(

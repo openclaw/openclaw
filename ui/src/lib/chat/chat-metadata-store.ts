@@ -278,7 +278,7 @@ function preparePublication(
         isCurrent() && entry.validateCatalog && !catalog
           ? pendingModelCatalogResult(client, entry.scope, entry.validateCatalog)
           : undefined;
-      return pending ? pending.then(publish) : publish(catalog);
+      return pending ? pending.then(publish) : Promise.resolve(publish(catalog));
     },
     fail: (error: unknown) => {
       if (isCurrent()) {

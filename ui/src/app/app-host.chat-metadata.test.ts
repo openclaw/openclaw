@@ -76,7 +76,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
     await read();
     request.mockClear();
     for (let index = 0; index < 50; index++) {
-      beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [] });
+      await beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [] });
       current().opts.onEvent?.({
         type: "event",
         event: "chat.metadata.changed",
@@ -277,7 +277,7 @@ it.each(["automatic", "explicit", "remounted startup"])(
         const startup = refreshChatMetadata(state, { automatic: true, startup: true });
         await vi.advanceTimersByTimeAsync(2_500);
         await startup;
-        beginChatMetadataPublication(client, scope).publish({
+        await beginChatMetadataPublication(client, scope).publish({
           commands: [],
           models: [currentModel],
         });
@@ -395,7 +395,7 @@ it.each([
   },
 );
 
-it("retires chat metadata through config.changed and the Gateway close callback", () => {
+it("retires chat metadata through config.changed and the Gateway close callback", async () => {
   vi.useFakeTimers();
   const { gateway, current } = createGatewayStoreTestStore();
   gateway.start();
@@ -420,11 +420,17 @@ it("retires chat metadata through config.changed and the Gateway close callback"
   const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
   shell.runtime = { context };
 
-  beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
+  await beginChatMetadataPublication(client, { agentId: "main" }).publish({
+    commands: [],
+    models: [],
+  });
   shell.handleGatewayEvent({ event: "config.changed", payload: {} });
   expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
 
-  beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
+  await beginChatMetadataPublication(client, { agentId: "main" }).publish({
+    commands: [],
+    models: [],
+  });
   current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
   expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
   gateway.stop();

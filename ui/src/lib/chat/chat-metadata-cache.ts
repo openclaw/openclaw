@@ -27,10 +27,8 @@ export type ChatMetadataUpdate =
   | { type: "error"; error: unknown };
 export type ChatMetadataPublication = {
   isCurrent: () => boolean;
-  publish: (
-    result: ChatMetadataResponse,
-    settled?: () => void,
-  ) => ChatMetadataResult | Promise<ChatMetadataResult>;
+  /** Applies synchronously unless catalog validation must wait for a pending read. */
+  publish: (result: ChatMetadataResponse, settled?: () => void) => Promise<ChatMetadataResult>;
   fail: (error: unknown) => void;
 };
 export type ChatMetadataRequest = {
