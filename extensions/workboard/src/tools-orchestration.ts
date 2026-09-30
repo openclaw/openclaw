@@ -42,9 +42,15 @@ export function createWorkboardOrchestrationTools(params: {
     {
       name: "workboard_board_create",
       label: "Workboard Board Create",
-      description: "Create or update a Workboard board namespace with persisted SQLite metadata.",
+      description:
+        "Create or update a Workboard board with persisted SQLite metadata. Choose kind sessions on creation for utility-model categorized sessions with free-form columns; card tools do not apply to Sessions boards. Board kind cannot change after creation.",
       parameters: strictObject({
         id: Type.String({ description: "Board id." }),
+        kind: Type.Optional(
+          Type.Union([Type.Literal("cards"), Type.Literal("sessions")], {
+            description: "Board kind, set only at creation. Default cards.",
+          }),
+        ),
         name: Type.Optional(Type.String({ description: "Display name." })),
         description: Type.Optional(Type.String({ description: "Board description." })),
         icon: Type.Optional(Type.String({ description: "Short icon or label." })),

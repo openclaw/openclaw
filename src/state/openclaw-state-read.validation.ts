@@ -120,6 +120,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.publicKey === "string" &&
         typeof input.command.input.nowMs === "number") ||
       input.command.type === "admit" ||
+      input.command.type === "doctor.gatewayOwnerLease.read" ||
       input.command.type === "subagents.sessionList" ||
       (input.command.type === "subagents.forChildSession" &&
         typeof input.command.childSessionKey === "string") ||

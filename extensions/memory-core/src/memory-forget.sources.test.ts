@@ -21,12 +21,14 @@ import {
   recordMemoryEntryOrigins,
 } from "./memory-entry-origins.js";
 import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
+import { planMemoryIndex } from "./memory-forget-index-sources.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
   createMemoryForgetFixture,
   seedMemoryForgetSession,
 } from "./memory-forget.test-helpers.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
+import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
 
 describe("memory forget source removal", () => {
   let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
@@ -37,6 +39,65 @@ describe("memory forget source removal", () => {
 
   afterEach(async () => {
     await fixture.cleanup();
+  });
+
+  function indexSelection() {
+    return {
+      agentId: "main",
+      changedPaths: new Set<string>(),
+      removedPaths: new Set<string>(),
+      sessionIds: new Set(["target"]),
+      excludedSessionIds: new Set<string>(),
+      entryKeys: new Set<string>(),
+      corpusSnippets: new Set<string>(),
+    };
+  }
+
+  it("retains planning input and placement across dispatch without creating missing stores", async () => {
+    const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: fixture.stateDir } };
+    const db = openOpenClawAgentDatabase(options).db;
+    db.prepare(`INSERT INTO memory_index_chunks
+      (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+      VALUES ('selected', 'memory/selected.md', 'memory', 1, 1, 'hash', 'test', ?, x'', 1)`).run(
+      "A retained indexed amber detail.",
+    );
+    const selection = indexSelection();
+    selection.corpusSnippets.add("indexed amber detail");
+    const run = cpuRuntime.runMemoryForgetIndexPlan;
+    const release = createDeferred<void>();
+    const transport = vi
+      .spyOn(cpuRuntime, "runMemoryForgetIndexPlan")
+      .mockImplementationOnce(async (request) => {
+        await release.promise;
+        return run(request);
+      });
+    const reading = planMemoryIndex(selection, options);
+    const alternate = path.join(fixture.stateDir, "uncreated-alternate");
+    try {
+      selection.corpusSnippets.clear();
+      options.env.OPENCLAW_STATE_DIR = alternate;
+      vi.stubEnv("OPENCLAW_STATE_DIR", alternate);
+      release.resolve();
+      const plan = await reading;
+      expect(plan.chunks).toEqual([
+        { id: "selected", path: "memory/selected.md", source: "memory" },
+      ]);
+      expect(plan.embeddingCacheRows).toBe(0);
+      expect(await planMemoryIndex(indexSelection(), options)).toEqual({
+        chunks: [],
+        sources: [],
+        ftsRows: 0,
+        vectorRows: 0,
+        embeddingCacheRows: 0,
+        hasVectorTable: false,
+      });
+      await expect(fs.access(alternate)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      release.resolve();
+      await reading.catch(() => undefined);
+      transport.mockRestore();
+      vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
+    }
   });
 
   it.each([
@@ -80,6 +141,13 @@ describe("memory forget source removal", () => {
               })
             : listMemoryEntryOrigins({ agentId: "main" });
         await expect(reading()).rejects.toThrow(message);
+        await expect(
+          planMemoryIndex(indexSelection(), {
+            agentId: "main",
+            path: databasePath,
+            env: { OPENCLAW_STATE_DIR: fixture.stateDir },
+          }),
+        ).rejects.toThrow(message);
         expect(await fs.readFile(databasePath)).toEqual(beforeRead);
       } finally {
         await closeOpenClawAgentDatabasesAsync(fixture.stateDir);

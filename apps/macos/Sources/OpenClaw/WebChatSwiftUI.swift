@@ -476,32 +476,39 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         patch: OpenClawChatSessionSettingsPatch,
         serverLease: GatewayConnection.ServerLease?) async throws -> OpenClawChatModelPatchResult?
     {
+        var settingsLease = serverLease
+        if settingsLease == nil, patch.requiresSessionSettingsContract || patch.requiresSessionSettingsCAS {
+            guard let capturedLease = await self.connection.captureServerLease() else {
+                throw OpenClawChatTransportSendError.notDispatched
+            }
+            settingsLease = capturedLease
+        }
+        let supportsSettingsContract = if let settingsLease {
+            await self.connection.supportsServerCapability(
+                .sessionSettingsContract, ifCurrentServerLease: settingsLease) == true
+        } else {
+            false
+        }
+        let supportsSettingsCAS = if let settingsLease {
+            await self.connection.supportsServerCapability(
+                .sessionSettingsCAS, ifCurrentServerLease: settingsLease) == true
+        } else {
+            false
+        }
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
-        let request = Self.sessionSettingsRequest(
+        let request = try OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
-            patch: patch)
-        let data: Data = if let serverLease {
+            patch: patch,
+            supportsSessionSettingsContract: supportsSettingsContract,
+            supportsSessionSettingsCAS: supportsSettingsCAS)
+        let data: Data = if let settingsLease {
             try await self.connection.request(
-                request, ifCurrentServerLease: serverLease)
+                request, ifCurrentServerLease: settingsLease)
         } else {
             try await self.connection.request(request)
         }
         return try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
-    }
-
-    static func sessionSettingsRequest(
-        sessionKey: String,
-        agentID: String?,
-        patch: OpenClawChatSessionSettingsPatch) -> OpenClawChatGatewayRequest
-    {
-        OpenClawChatGatewayRequests.patchSessionSettings(
-            sessionKey: sessionKey,
-            agentID: agentID,
-            model: patch.model,
-            thinkingLevel: patch.thinkingLevel,
-            fastMode: patch.fastMode,
-            verboseLevel: patch.verboseLevel)
     }
 
     func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {

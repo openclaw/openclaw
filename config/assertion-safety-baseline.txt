@@ -1592,7 +1592,6 @@ src/agents/tool-search-transcript.ts	1
 src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agents-wait-tool.ts	1
-src/agents/tools/ask-user-tool-normalization.ts	1
 src/agents/tools/ask-user-tool.ts	3
 src/agents/tools/automations-tool-name.ts	1
 src/agents/tools/chat-history-text.ts	3
@@ -2036,7 +2035,7 @@ src/config/plugin-auto-enable.shared.ts	1
 src/config/plugin-install-record-map.ts	1
 src/config/plugins-allowlist.ts	1
 src/config/redact-snapshot.ts	4
-src/config/runtime-overrides.ts	2
+src/config/runtime-overrides.ts	1
 src/config/runtime-snapshot.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.ts	1

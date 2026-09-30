@@ -59,6 +59,7 @@ import {
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import { readGatewayOwnerLeaseFromDatabase } from "../infra/gateway-owner-lease.read.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
@@ -96,6 +97,7 @@ import { readGitHubPublicationSessionLifecycle } from "./github-publication-sess
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   readOpenClawStateReadOnlyLocation,
@@ -159,7 +161,9 @@ serveOwnedWorkerTasks(
         const locationArgs = [
           input.databasePath,
           input.location,
-          undefined,
+          command.type === "doctor.gatewayOwnerLease.read"
+            ? openDoctorStateSchemaReadAdmission
+            : undefined,
           input.expectedIdentity,
           input.snapshotRoot,
           true,
@@ -210,6 +214,9 @@ serveOwnedWorkerTasks(
         const result = withOpenClawStateReadOnlyLocation(
           ({ db }): OpenClawStateReadResult => {
             sourceAdmitted = true;
+            if (command.type === "doctor.gatewayOwnerLease.read") {
+              return { type: command.type, lease: readGatewayOwnerLeaseFromDatabase(db) };
+            }
             if (command.type === "agentDatabaseDeletion.snapshot") {
               return {
                 type: command.type,

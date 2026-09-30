@@ -106,6 +106,7 @@ describe("Workboard terminal hook automation ownership", () => {
           runtime: {
             ...api.runtime,
             gateway: {
+              ...api.runtime.gateway,
               isAvailable: async () => true,
               request: dispatchTrustedPluginGatewayMethod,
             },

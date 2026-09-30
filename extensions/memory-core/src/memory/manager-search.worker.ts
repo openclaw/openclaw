@@ -15,6 +15,8 @@ import type {
   MemoryOriginReadInput,
   MemoryOriginReadOutput,
 } from "../memory-entry-origins-task.js";
+import { readMemoryForgetIndexInWorker } from "../memory-forget-index-read.js";
+import type { ForgetIndexPlan, ForgetIndexReadInput } from "../memory-forget-index-task.js";
 import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
 import {
   readMemoryRetrievalIndexState,
@@ -39,6 +41,7 @@ export type MemoryVectorWorkerQuery = Omit<
   "db" | "signal"
 >;
 export type MemorySearchWorkerInput =
+  | ForgetIndexReadInput
   | MemoryOriginReadInput
   | { kind: "prewarm" }
   | { kind: "presence"; databasePath: string }
@@ -57,6 +60,7 @@ export type MemorySearchWorkerInput =
     ));
 type QueryResult<T> = { rows: T; error?: string };
 export type MemorySearchWorkerOutput =
+  | { kind: "forget-index-plan"; plan: ForgetIndexPlan }
   | MemoryOriginReadOutput
   | { kind: "prewarm" }
   | { kind: "presence"; present: boolean }
@@ -87,6 +91,9 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (request.kind === "presence") {
     // This pre-manager probe also recognizes shipped memory-only databases.
     return { kind: "presence", present: inspectMemoryIndexPresenceInWorker(request.databasePath) };
+  }
+  if (request.kind === "forget-index-plan") {
+    return { kind: request.kind, plan: await readMemoryForgetIndexInWorker(request) };
   }
   if (
     request.kind === "origin-rows" ||

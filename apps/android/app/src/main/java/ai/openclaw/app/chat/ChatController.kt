@@ -1110,7 +1110,7 @@ class ChatController internal constructor(
     val key = normalizeRequestedSessionKey(sessionKey)
     val owner = normalizeSessionSelectionOwner(key, ownerAgentId)
     if (key == _sessionKey.value && owner == _sessionOwnerAgentId.value) {
-      if (hasCurrentLiveHistory(key)) return
+      if (hasCurrentHistorySnapshot(key) && _healthOk.value) return
       refreshHistoryForRecovery(forceHealth = true)
       return
     }
@@ -1195,22 +1195,18 @@ class ChatController internal constructor(
   ) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
-    val nextState =
-      applyMainSessionKey(
-        currentSessionKey = normalizeRequestedSessionKey(_sessionKey.value),
-        appliedMainSessionKey = appliedMainSessionKey,
-        nextMainSessionKey = trimmed,
-      )
-    appliedMainSessionKey = nextState.appliedMainSessionKey
-    if (_sessionKey.value == nextState.currentSessionKey) return
+    val currentKey = normalizeRequestedSessionKey(_sessionKey.value)
+    val nextKey = if (currentKey == appliedMainSessionKey) trimmed else currentKey
+    appliedMainSessionKey = trimmed
+    if (_sessionKey.value == nextKey) return
     val generation =
       beginHistoryLoad(
-        nextState.currentSessionKey,
-        ownerAgentId = resolveAgentIdFromMainSessionKey(nextState.currentSessionKey),
+        nextKey,
+        ownerAgentId = resolveAgentIdFromMainSessionKey(nextKey),
         refreshHealth = loadHistory,
       )
     if (!loadHistory) return
-    bootstrap(sessionKey = nextState.currentSessionKey, generation = generation)
+    bootstrap(sessionKey = nextKey, generation = generation)
   }
 
   /** Refreshes chat history, sessions, and model choices without clearing optimistic messages first. */
@@ -3122,8 +3118,6 @@ class ChatController internal constructor(
     if (selectionChanged) refreshProgressCard()
     return generation
   }
-
-  private fun hasCurrentLiveHistory(sessionKey: String): Boolean = hasCurrentHistorySnapshot(sessionKey) && _healthOk.value
 
   private fun hasCurrentHistorySnapshot(sessionKey: String): Boolean {
     val marker = liveHistoryMarker ?: return false
@@ -7386,6 +7380,7 @@ class ChatController internal constructor(
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
     val sessionInfo = root["sessionInfo"].asObjectOrNull()?.let { parseSessionEntry(it, fallbackKey = sessionKey) }
+    val defaults = root["defaults"].asObjectOrNull()
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
 
     val activity = root["activity"]?.let { json.decodeFromJsonElement<List<ChatHistoryActivity>>(it) }?.associate { it.messageId to it.items }
@@ -7401,13 +7396,8 @@ class ChatController internal constructor(
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
       sessionInfo = sessionInfo,
       inFlightRun = parseInFlightRun(root),
-      defaultModelRef = parseDefaultModelRef(root),
+      defaultModelRef = providerQualifiedModelRef(defaults?.get("model").asStringOrNull(), defaults?.get("modelProvider").asStringOrNull()),
     )
-  }
-
-  private fun parseDefaultModelRef(root: JsonObject): String? {
-    val defaults = root["defaults"].asObjectOrNull() ?: return null
-    return providerQualifiedModelRef(defaults["model"].asStringOrNull(), defaults["modelProvider"].asStringOrNull())
   }
 
   private fun parseMessage(
@@ -8541,24 +8531,6 @@ private fun parseChatCommandEntry(obj: JsonObject?): ChatCommandEntry? {
   )
 }
 
-internal data class MainSessionState(
-  val currentSessionKey: String,
-  val appliedMainSessionKey: String,
-)
-
-/**
- * Rewrite only the active "main" alias when the gateway publishes a new canonical main session key.
- */
-internal fun applyMainSessionKey(
-  currentSessionKey: String,
-  appliedMainSessionKey: String,
-  nextMainSessionKey: String,
-): MainSessionState =
-  MainSessionState(
-    currentSessionKey = if (currentSessionKey == appliedMainSessionKey) nextMainSessionKey else currentSessionKey,
-    appliedMainSessionKey = nextMainSessionKey,
-  )
-
 /**
  * Keep Compose item identity stable across history refreshes by matching existing messages to incoming copies.
  */
@@ -9082,11 +9054,10 @@ private fun ChatSessionEntry.carriesSessionSettings(): Boolean =
     hasEffectiveFastModeMetadata
 
 private fun sameSessionSettings(
-  previous: ChatSessionEntry?,
+  previous: ChatSessionEntry,
   next: ChatSessionEntry,
 ): Boolean =
-  previous != null &&
-    previous.modelProvider == next.modelProvider &&
+  previous.modelProvider == next.modelProvider &&
     previous.model == next.model &&
     (previous.modelSelectionLocked == true) == (next.modelSelectionLocked == true) &&
     previous.agentRuntimeId == next.agentRuntimeId &&

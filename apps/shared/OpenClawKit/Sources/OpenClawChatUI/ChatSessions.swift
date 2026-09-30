@@ -296,6 +296,15 @@ public struct OpenClawChatSessionSettingsPatch: Sendable, Equatable {
     public let permissionMode: OpenClawChatPermissionMode??
     public let toolOverrides: OpenClawChatSessionToolOverrides??
 
+    public var requiresSessionSettingsContract: Bool {
+        self.expectedSessionID != nil || self.permissionMode != nil || self.toolOverrides != nil
+    }
+
+    public var requiresSessionSettingsCAS: Bool {
+        self.expectedPermissionMode != nil || self.expectedToolOverrides != nil ||
+            self.permissionMode != nil || self.toolOverrides != nil
+    }
+
     public init(
         expectedSessionID: String? = nil,
         expectedPermissionMode: OpenClawChatPermissionMode?? = nil,

@@ -124,24 +124,61 @@ it.each([
     const successorCompleted = createDeferred();
     const originalCompleted = createDeferred();
     const originalSettled = createDeferred();
-    fixture.persist.mockImplementation((...runIds) => {
-      persistSubagentRunsToDiskOrThrow(...runIds);
-      if (b0.execution.outcome) {
+    fixture.persist.mockImplementation((runs, runIds) => {
+      persistSubagentRunsToDiskOrThrow(runs, runIds);
+      const original = runs.get(b0.runId);
+      if (original?.execution.outcome) {
         originalSettled.resolve();
       }
-      if (b0.execution.outcome?.status === "ok") {
+      if (original?.execution.outcome?.status === "ok") {
         originalCompleted.resolve();
       }
-      if (subagentRuns.get("publication-b1")?.execution.outcome?.status === "ok") {
+      if (runs.get("publication-b1")?.execution.outcome?.status === "ok") {
         successorCompleted.resolve();
       }
     });
     const handoffOrder: string[] = [];
+    const originalTimingEntered = createDeferred();
+    const releaseOriginalTiming = createDeferred();
+    const firstChildCleanup = createDeferred();
+    const releaseFirstChildCleanup = createDeferred();
+    const persistTiming = registryHelpers.persistSubagentSessionTiming;
+    vi.spyOn(registryHelpers, "persistSubagentSessionTiming").mockImplementation(
+      async (entry, options) => {
+        if (entry === b0 && !completeDuringDrain && !provisional) {
+          originalTimingEntered.resolve();
+          await releaseOriginalTiming.promise;
+        }
+        if (priorChildKill && entry.runId === "publication-first") {
+          // The tombstone is committed; let successor admission overtake real cleanup.
+          firstChildCleanup.resolve();
+          await releaseFirstChildCleanup.promise;
+        }
+        await persistTiming(entry, options);
+      },
+    );
     if (!completeDuringDrain && !provisional) {
-      previousWait.resolve({ status: "error", error: "original run failed", endedAt: Date.now() });
-      await originalSettled.promise;
-      expect(b0.execution.status).toBe("terminal");
-      expect(b0.execution.outcome?.status).toBe("error");
+      const firstBoundary = Promise.race([
+        originalSettled.promise.then(() => "terminal-publication"),
+        originalTimingEntered.promise.then(() => "session-cleanup"),
+      ]);
+      try {
+        previousWait.resolve({
+          status: "error",
+          error: "original run failed",
+          endedAt: Date.now(),
+        });
+        await originalTimingEntered.promise;
+        expect(b0.execution.status).toBe("terminal");
+        expect(b0.execution.outcome?.status).toBe("error");
+        expect(
+          await firstBoundary,
+          "terminal publication must not wait for post-commit session cleanup",
+        ).toBe("terminal-publication");
+      } finally {
+        releaseOriginalTiming.resolve();
+      }
+      await fixture.settle();
     }
 
     const children: Array<readonly [string, string]> = [
@@ -171,19 +208,6 @@ it.each([
       });
     }
     const entered = createDeferred();
-    const firstChildCleanup = createDeferred();
-    const releaseFirstChildCleanup = createDeferred();
-    const persistTiming = registryHelpers.persistSubagentSessionTiming;
-    vi.spyOn(registryHelpers, "persistSubagentSessionTiming").mockImplementation(
-      async (entry, options) => {
-        if (priorChildKill && entry.runId === "publication-first") {
-          // The tombstone is committed; let successor admission overtake real cleanup.
-          firstChildCleanup.resolve();
-          await releaseFirstChildCleanup.promise;
-        }
-        await persistTiming(entry, options);
-      },
-    );
     const childAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [childKey, "publication-child-session"],

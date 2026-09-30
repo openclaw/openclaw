@@ -163,6 +163,11 @@ validation. Other runtime files remain hardlinked when supported.
 
 These lifecycle and copying changes apply when the installed updater supports
 them; installing a newer candidate cannot change the updater already running.
+
+On Windows, interruption before activation still lets the admitted recovery
+owner restore task autostart after pending task operations settle. Cancellation
+fences new update work; restoration still requires the original live installation
+owner and verified task ownership.
 After that updater exits, run the newer `openclaw doctor --fix` from the original
 checkout to locate its sibling runtime directories. Doctor also checks known
 temporary directories, including the managed service's `TMPDIR`, `TMP`, and `TEMP`.

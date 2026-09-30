@@ -2,7 +2,7 @@ import type { SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTaskScriptPath } from "./schtasks-layout.js";

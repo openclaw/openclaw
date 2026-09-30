@@ -16,12 +16,12 @@ import type {
   BootstrapPromptWarningMode,
   BootstrapTruncationCause,
 } from "./bootstrap-budget.types.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
   USER_BOOTSTRAP_MAX_CHARS,
 } from "./embedded-agent-helpers/bootstrap.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;

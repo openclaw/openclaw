@@ -7,7 +7,6 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyAssistantFailoverReason,
-  type FailoverReason,
   formatBillingErrorMessage,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
@@ -27,6 +26,7 @@ import {
   isRetryableProviderHttpStatus,
   shouldRetryFailoverSignal,
 } from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,

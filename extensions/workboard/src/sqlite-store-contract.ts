@@ -3,6 +3,7 @@ import type {
   PersistedWorkboardBoard,
   WorkboardCardStore,
   WorkboardKeyedStore,
+  WorkboardSessionsBoardStore,
   WorkboardSubscriptionStore,
 } from "./persistence-types.js";
 import type { WorkboardSqliteResult } from "./sqlite-store-errors.js";
@@ -18,6 +19,7 @@ type StoreMethods<Prefix extends string, Store> = {
 
 type WorkboardSqliteStoreMethods = StoreMethods<"cards", WorkboardCardStore> &
   StoreMethods<"boards", WorkboardKeyedStore<PersistedWorkboardBoard>> &
+  StoreMethods<"sessionsBoard", WorkboardSessionsBoardStore> &
   StoreMethods<"subscriptions", WorkboardSubscriptionStore> &
   StoreMethods<"attachments", WorkboardKeyedStore<PersistedWorkboardAttachment>>;
 

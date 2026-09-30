@@ -375,11 +375,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         patch: OpenClawChatSessionSettingsPatch,
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute?) async throws -> OpenClawChatModelPatchResult?
     {
-        let requiresSettingsContract = patch.expectedSessionID != nil ||
-            patch.permissionMode != nil || patch.toolOverrides != nil
-        let requiresSettingsCAS = patch.expectedPermissionMode != nil ||
-            patch.expectedToolOverrides != nil || patch.permissionMode != nil || patch.toolOverrides != nil
-        let fallbackRoute: GatewayNodeSessionRoute? = if requiresSettingsContract, expectedRoute == nil {
+        let fallbackRoute: GatewayNodeSessionRoute? = if patch.requiresSessionSettingsContract, expectedRoute == nil {
             await self.currentSessionMutationRoute()
         } else {
             nil
@@ -390,25 +386,11 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         } else {
             (settingsContract: false, settingsCAS: false)
         }
-        guard !requiresSettingsContract || settingsSupport.settingsContract else {
-            throw OpenClawChatTransportSendError.notDispatched
-        }
-        guard !requiresSettingsCAS || settingsSupport.settingsCAS else {
-            throw OpenClawChatTransportSendError.notDispatched
-        }
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
-        let request = OpenClawChatGatewayRequests.patchSessionSettings(
+        let request = try OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
-            expectedSessionID: patch.expectedSessionID,
-            expectedPermissionMode: patch.expectedPermissionMode,
-            expectedToolOverrides: patch.expectedToolOverrides,
-            model: patch.model,
-            thinkingLevel: patch.thinkingLevel,
-            fastMode: patch.fastMode,
-            verboseLevel: patch.verboseLevel,
-            permissionMode: patch.permissionMode,
-            toolOverrides: patch.toolOverrides,
+            patch: patch,
             supportsSessionSettingsContract: settingsSupport.settingsContract,
             supportsSessionSettingsCAS: settingsSupport.settingsCAS)
         let response = if let settingsRoute {
