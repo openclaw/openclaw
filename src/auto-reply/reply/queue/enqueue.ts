@@ -341,10 +341,37 @@ function consumeParkedFollowupRun(
   return true;
 }
 
+/**
+ * Where a parked steer candidate ended up after it fell back to the followup queue.
+ * Releasing the park reapplies overflow, so a fallback is not always a retained followup.
+ */
+export type ParkedSteerFallbackOutcome = "queued" | "at-cap" | "summarized" | "dropped";
+
+function resolveParkedFallbackOutcome(key: string, run: FollowupRun): ParkedSteerFallbackOutcome {
+  const queue = getExistingFollowupQueue(key);
+  if (queue?.items.includes(run)) {
+    // Overflow stays deferred while a sibling steer is parked; once it settles,
+    // "old" and "summarize" may still evict this item, so it is not yet final.
+    const overflowPending =
+      queue.dropPolicy !== "new" && countPendingQueueItems(queue.items, queue.inFlight) > queue.cap;
+    return overflowPending ? "at-cap" : "queued";
+  }
+  if (queue?.summarySources.includes(run)) {
+    return "summarized";
+  }
+  // Summary-line overflow moves a source into an elision as a compact copy; it is
+  // still delivered by the summary turn until the elision cap evicts that copy.
+  const elided = queue?.summaryElisions.some((entry) => {
+    const compact = entry.sourceRefs.get(run);
+    return compact !== undefined && entry.sources.includes(compact);
+  });
+  return elided ? "summarized" : "dropped";
+}
+
 type ParkedSteerReservation = {
   admit: () => Promise<"steer" | "fallback" | "cancelled">;
   accepted: (accepted: boolean) => void;
-  fallback: () => void;
+  fallback: () => ParkedSteerFallbackOutcome;
   consume: (disposition?: "consumed") => void;
 };
 
@@ -393,7 +420,10 @@ export function parkSteerCandidate(
       return "steer";
     },
     accepted: (accepted) => settleParkedSteerAcceptance(key, run, accepted),
-    fallback: () => settleParkedSteerAcceptance(key, run, false),
+    fallback: () => {
+      settleParkedSteerAcceptance(key, run, false);
+      return resolveParkedFallbackOutcome(key, run);
+    },
     consume: (disposition) => consumeParkedFollowupRun(key, run, disposition),
   };
 }

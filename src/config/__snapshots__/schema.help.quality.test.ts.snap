@@ -244,6 +244,7 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "messages.queue.byChannel.whatsapp",
   "messages.queue.drop",
   "messages.queue.mode",
+  "messages.queue.steerReceipts",
   "messages.responsePrefix",
   "messages.responseUsage",
   "messages.responseUsage.*",

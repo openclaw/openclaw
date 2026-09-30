@@ -3,6 +3,7 @@ import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
+import { MESSAGES_FIELD_LABELS } from "./schema.labels.messages.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -675,29 +676,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   "talk.consultThinkingLevel": "Talk Consult Thinking Level",
   "talk.consultFastMode": "Talk Consult Fast Mode",
-  messages: "Messages",
-  "messages.visibleReplies": "Visible Replies",
-  "messages.responsePrefix": "Outbound Response Prefix",
-  "messages.usageTemplate": "Usage Footer Template",
-  "messages.responseUsage": "Default Usage Footer Mode",
-  "messages.groupChat": "Group Chat Rules",
-  "messages.groupChat.mentionPatterns": "Group Mention Patterns",
-  "messages.groupChat.historyLimit": "Group History Limit",
-  "messages.groupChat.unmentionedInbound": "Group Unmentioned Inbound",
-  "messages.groupChat.visibleReplies": "Group Visible Replies",
-  "messages.queue": "Inbound Queue",
-  "messages.queue.mode": "Queue Mode",
-  "messages.queue.byChannel": "Queue Mode by Channel",
-  "messages.queue.debounceMsByChannel": "Queue Fallback Debounce by Channel (ms)",
-  "messages.queue.cap": "Queue Capacity",
-  "messages.queue.drop": "Queue Drop Strategy",
-  "messages.inbound": "Inbound Debounce",
-  "messages.ackReaction": "Ack Reaction Emoji",
-  "messages.ackReactionScope": "Ack Reaction Scope",
-  "messages.statusReactions": "Status Reactions",
-  "messages.statusReactions.enabled": "Enable Status Reactions",
-  "messages.inbound.debounceMs": "Inbound Message Debounce (ms)",
-  "messages.inbound.byChannel": "Inbound Debounce by Channel (ms)",
+  ...MESSAGES_FIELD_LABELS,
   tts: "Text-to-Speech",
   "tts.persona": "TTS Persona",
   "tts.personas": "TTS Personas",

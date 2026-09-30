@@ -131,6 +131,36 @@ there across reconnects until consumed or canceled, without being sent again.
 
 Use `followup` or `collect` when you want messages to queue by default instead of steering the active run. Use `interrupt` when the newest prompt should replace the active run.
 
+## Steer receipts in chat channels
+
+Chat channels show nothing by default, so a sender cannot tell whether a message
+sent during a run joined it or is waiting. Set `messages.queue.steerReceipts: true`
+to reply to each such message in steer mode:
+
+- `🦞🛞 Current run steered with your new message.` once the active runtime has
+  taken the message into the running turn. For runtimes that steer at tool
+  boundaries, this arrives when the current tool call finishes, not when the
+  message is sent.
+- `⏳ Couldn't steer the current run; your message is queued behind it.` when the
+  message falls back to a followup turn and the queue keeps it.
+- When the fallback overflows `messages.queue.cap`, the receipt follows the
+  `messages.queue.drop` outcome: a queue-summary notice for `summarize`, or a
+  "dropped, please send it again" notice for `old` and `new`. If other steered
+  messages are still pending and the queue is over its cap, the outcome is not
+  final yet, and the receipt says the message may still be summarized or dropped.
+
+Fallback receipts describe where the message is at that moment and do not
+promise an answer, because the queue can still change. With `drop: old`, a later
+overflow can evict a message that was reported as queued; the sender then gets a
+second reply to the same message saying it was dropped and should be sent again.
+Summary entries are bounded too, so the summary notice says older entries can be
+trimmed; trimming a summary entry does not send a second notice.
+
+Receipts are standalone replies to the steered message. They are not added to
+the session transcript and do not count as that message's reply, so the queued
+message still gets its real answer from the followup turn. Ambient room events
+never get a receipt. A failed receipt does not affect the run.
+
 ## Canceling a pending steer
 
 An authorized Gateway client can withdraw a message still waiting in the OpenClaw

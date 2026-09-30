@@ -135,13 +135,13 @@ describe("parked steering admission", () => {
       try {
         const firstReservation = parkSteerCandidate(key, first, settings, runFollowup)!;
         await expect(firstReservation.admit()).resolves.toBe("steer");
-        firstReservation.fallback();
+        expect(firstReservation.fallback()).toBe("queued");
         const newerReservation = parkSteerCandidate(key, newer, settings, runFollowup)!;
         await expect(newerReservation.admit()).resolves.toBe("steer");
         expect(getExistingFollowupQueue(key)?.items).toEqual([active, first, newer]);
         expect(disposition).not.toHaveBeenCalled();
         firstCurrent = false;
-        newerReservation.fallback();
+        expect(newerReservation.fallback()).toBe(dropPolicy === "new" ? "dropped" : "queued");
         expect(getExistingFollowupQueue(key)?.items).toEqual([
           active,
           dropPolicy === "new" ? first : newer,
@@ -161,4 +161,108 @@ describe("parked steering admission", () => {
       }
     },
   );
+
+  it.each(["summarize", "old", "new"] as const)(
+    "reports a non-final fallback while a sibling steer keeps overflow deferred (drop:%s)",
+    async (dropPolicy) => {
+      const key = `steer-fallback-deferred-${dropPolicy}`;
+      keys.add(key);
+      const settings = createQueueSettings({ mode: "steer", cap: 1, dropPolicy });
+      const active = createQueueTestRun({ prompt: "active delivery", messageId: "active" });
+      const first = createQueueTestRun({ prompt: "first fallback", messageId: "first" });
+      const newer = createQueueTestRun({ prompt: "newer fallback", messageId: "newer" });
+      const firstDisposition = vi.fn();
+      first.onQueueDisposition = firstDisposition;
+      const activeEntered = createDeferred();
+      const releaseActive = createDeferred();
+      const runFollowup = async (run: FollowupRun) => {
+        if (run === active) {
+          activeEntered.resolve();
+          await releaseActive.promise;
+        }
+      };
+      enqueueFollowupRun(key, active, settings, "message-id", runFollowup);
+      await activeEntered.promise;
+      try {
+        const firstReservation = parkSteerCandidate(key, first, settings, runFollowup)!;
+        const newerReservation = parkSteerCandidate(key, newer, settings, runFollowup)!;
+        await expect(firstReservation.admit()).resolves.toBe("steer");
+        // newer is still parked, so the cap is not reconciled yet.
+        expect(firstReservation.fallback()).toBe(dropPolicy === "new" ? "queued" : "at-cap");
+        await expect(newerReservation.admit()).resolves.toBe("steer");
+        const newerOutcome = newerReservation.fallback();
+        const queue = getExistingFollowupQueue(key);
+        if (dropPolicy === "new") {
+          expect(newerOutcome).toBe("dropped");
+          expect(queue?.items).toEqual([active, first]);
+        } else {
+          expect(newerOutcome).toBe("queued");
+          expect(queue?.items).toEqual([active, newer]);
+          expect(queue?.summarySources.includes(first)).toBe(dropPolicy === "summarize");
+        }
+        // drop:old reports the later eviction of the earlier fallback, which is what
+        // lets its receipt be followed up; summarize keeps the content, new keeps first.
+        expect(firstDisposition.mock.calls).toEqual(
+          dropPolicy === "old" ? [["queue-cap-old"]] : [],
+        );
+      } finally {
+        releaseActive.resolve();
+      }
+    },
+  );
+
+  it("reports a run moved into a summary elision as summarized, not dropped", async () => {
+    const key = "steer-fallback-elided-summary";
+    keys.add(key);
+    const settings = createQueueSettings({ mode: "steer", cap: 1, dropPolicy: "summarize" });
+    const active = createQueueTestRun({ prompt: "active delivery", messageId: "active" });
+    const first = createQueueTestRun({ prompt: "first fallback", messageId: "first" });
+    const middle = createQueueTestRun({ prompt: "middle fallback", messageId: "middle" });
+    const last = createQueueTestRun({ prompt: "last fallback", messageId: "last" });
+    const activeEntered = createDeferred();
+    const releaseActive = createDeferred();
+    const runFollowup = async (run: FollowupRun) => {
+      if (run === active) {
+        activeEntered.resolve();
+        await releaseActive.promise;
+      }
+    };
+    enqueueFollowupRun(key, active, settings, "message-id", runFollowup);
+    await activeEntered.promise;
+    try {
+      const firstReservation = parkSteerCandidate(key, first, settings, runFollowup)!;
+      const middleReservation = parkSteerCandidate(key, middle, settings, runFollowup)!;
+      const lastReservation = parkSteerCandidate(key, last, settings, runFollowup)!;
+      await expect(firstReservation.admit()).resolves.toBe("steer");
+      expect(firstReservation.fallback()).toBe("at-cap");
+      await expect(middleReservation.admit()).resolves.toBe("steer");
+      expect(middleReservation.fallback()).toBe("at-cap");
+      await expect(lastReservation.admit()).resolves.toBe("steer");
+      // Settling the last park reconciles the cap: first and middle overflow into the
+      // summary, and the one-line summary limit elides first's line.
+      expect(lastReservation.fallback()).toBe("queued");
+      const queue = getExistingFollowupQueue(key);
+      expect(queue?.summarySources).toEqual([middle]);
+      expect(queue?.summaryElisions.some((entry) => entry.sourceRefs.has(first))).toBe(true);
+      // The disposition is read from the queue, so a repeated fallback reports it again.
+      expect(firstReservation.fallback()).toBe("summarized");
+      expect(middleReservation.fallback()).toBe("summarized");
+      // More overflow trims the elisions to the cap and evicts first's retained copy;
+      // the queue then reports a drop, which is why the summarized receipt warns that
+      // older summary entries can be trimmed.
+      for (const id of ["later-1", "later-2", "later-3"]) {
+        enqueueFollowupRun(
+          key,
+          createQueueTestRun({ prompt: id, messageId: id }),
+          settings,
+          "message-id",
+          runFollowup,
+        );
+      }
+      expect(queue?.summaryElisions.some((entry) => entry.sourceRefs.has(first))).toBe(true);
+      expect(firstReservation.fallback()).toBe("dropped");
+    } finally {
+      releaseActive.resolve();
+    }
+  });
 });

@@ -290,6 +290,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
   "messages.queue.drop":
     'Drop strategy when queue cap is exceeded. "summarize" drops oldest entries but preserves compact summaries; "old" drops oldest without summaries; "new" rejects the newest item. Use "summarize" for long-running chats where context matters.',
+  "messages.queue.steerReceipts":
+    'Reply to each message that arrives during an active run in steer mode: "🦞🛞 Current run steered with your new message." once the runtime takes it into the running turn, or a notice matching the queue outcome when it falls back (queued behind the run, summarized, or dropped at the queue cap), plus a follow-up if drop:old later evicts a queued message. Off by default.',
   "messages.inbound":
     "Direct inbound debounce settings used before queue/turn processing starts. Configure this for provider-specific rapid message bursts from the same sender.",
   "messages.inbound.byChannel":
