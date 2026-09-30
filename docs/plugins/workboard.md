@@ -102,6 +102,8 @@ Classification is shared across the Gateway and uses the configured utility
 model. Reads follow the current caller's session visibility; the board and its
 classification cache follow the Gateway's trusted-operator model.
 Interactive edits are admitted under the caller's live authority immediately before the write, while background classification runs under the plugin service's authority.
+Draft sessions are creator-private and never enter a Sessions board, its facts reads,
+or utility-model requests; incognito sessions are excluded the same way.
 
 New Sessions boards use these columns, in this order:
 
@@ -590,7 +592,9 @@ without inlining attachment blob contents.
 Sessions boards add optional `kind` and `sessions_spec` columns to
 `workboard_boards`, plus `workboard_session_placements` for cached column, source,
 reason, facts hash, and update time. Existing board rows are not backfilled;
-an absent kind still means a Cards board. Session transcripts and the Board agent
+an absent kind still means a Cards board. Rolling back to a release without Sessions
+boards shows each Sessions board as an empty Cards board and ignores the placement
+table; cards created against it there are rejected once the newer release runs again. Session transcripts and the Board agent
 conversation remain in the normal session store.
 
 SQLite opening, queries, and transactions run in a background database worker.

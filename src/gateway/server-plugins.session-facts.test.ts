@@ -142,6 +142,10 @@ describe("trusted plugin session facts", () => {
     withFixture(async (fixture) => {
       const releaseForeground = retainSessionListForegroundWork();
       try {
+        // Another operator's draft is creator-private; the service read has no sharing
+        // filter, so the reader itself must keep it away from preview enrichment.
+        const foreignDraft = "agent:main:foreign-draft";
+        await fixture.seed(foreignDraft, fixture.other.id, { visibility: "draft" });
         await persistSessionTranscriptTurn(
           { agentId: "main", sessionKey, sessionId: fixture.sessionId },
           {
@@ -157,7 +161,7 @@ describe("trusted plugin session facts", () => {
             pluginId: "workboard",
             pluginOrigin: "bundled",
           },
-          () => runtime.gateway.readSessionFacts({ sessionKeys: [sessionKey] }),
+          () => runtime.gateway.readSessionFacts({ sessionKeys: [foreignDraft, sessionKey] }),
         );
         expect(result.sessions).toMatchObject([
           {
@@ -166,6 +170,7 @@ describe("trusted plugin session facts", () => {
             lastMessagePreview: "May I merge this change?",
           },
         ]);
+        expect(result.sessions.map((session) => session.key)).not.toContain(foreignDraft);
         expect(result.warnings).toBeUndefined();
       } finally {
         releaseForeground();

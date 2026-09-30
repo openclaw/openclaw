@@ -22,6 +22,7 @@ import { prepareProjectedSessionPresentation } from "./session-row-presentation.
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { MaterializedRow } from "./session-row-projection-record.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
+import { resolveSessionVisibility } from "./session-sharing.js";
 
 const SESSION_FACTS_LIMIT = 40;
 type PreparedSessionFacts = {
@@ -168,7 +169,13 @@ export async function readTrustedPluginSessionFacts(
                 key: target.params.sessionKey,
                 agentId: target.params.agentId,
               });
-              return selected && !selected.entry.incognito ? selected : undefined;
+              // Drafts are creator-private; a service-scoped read has no sharing filter, so
+              // exclude them before any preview enrichment or model dispatch.
+              return selected &&
+                !selected.entry.incognito &&
+                resolveSessionVisibility(selected.entry) !== "draft"
+                ? selected
+                : undefined;
             },
           );
           if (!record) {
@@ -213,6 +220,7 @@ export async function readTrustedPluginSessionFacts(
                 if (
                   !record ||
                   record.entry.incognito ||
+                  resolveSessionVisibility(record.entry) === "draft" ||
                   presentation.sharing.entryFilter?.(record.key, record.entry) === false
                 ) {
                   continue;
