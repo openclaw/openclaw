@@ -129,6 +129,7 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       "apps/android/scripts/build-release-artifacts.ts",
       "apps/android/Config/ReleaseSigning.json",
       "apps/android/fastlane/Fastfile",
+      "scripts/android-release-upload.sh",
     ]) {
       write(root, file, fs.readFileSync(path.join(process.cwd(), file), "utf8"));
     }
@@ -152,10 +153,13 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       root,
       "scripts/lib/android-fastlane.sh",
       `run_android_fastlane() {
+  if [[ "$2" != "release_plan" ]]; then
+    (cd ../.. && ruby scripts/fixture-upload.rb "$3")
+    return
+  fi
   echo '{"schemaVersion":2,"gatewayVersion":"2026.9.2","revision":0,"buildNumber":1,"version":"2026.9.20","versionCode":2026090250,"wearVersionCode":2026090251,"legacyMaxVersionCode":2026090249,"releaseNotesBaselines":[{"audience":"phone","version":null,"build":null},{"audience":"wear","version":null,"build":null}]}' > "\u0024{3#output_path:}"
 }\n`,
     );
-    write(root, "scripts/android-release-upload.sh", "exec ruby scripts/fixture-upload.rb\n");
     write(
       root,
       "scripts/fixture-upload.rb",
@@ -180,12 +184,12 @@ def build_release_artifacts!
   raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run")
 end
 def upload_play_store_build!(metadata, **options)
-  File.write(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), JSON.generate({ version: metadata.fetch(:version), versionCode: metadata.fetch(:version_code), wearVersionCode: metadata.fetch(:wear_version_code), gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"], gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"], gradleWearCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"] }) + "\n")
+  File.write(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), JSON.generate({ version: metadata.fetch(:version), versionCode: metadata.fetch(:version_code), wearVersionCode: metadata.fetch(:wear_version_code), uploadMetadata: options.fetch(:upload_metadata), gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"], gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"], gradleWearCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"] }) + "\n")
   %w(initialize-android record).each do |command|
     raise "Record failed" unless system("node", "--import", "tsx", "scripts/mobile-release-ref.ts", command, "--plan", ENV.fetch("OPENCLAW_ANDROID_RELEASE_PLAN"))
   end
 end
-$lanes.fetch(:release_upload).call
+$lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("destination:"))
 `,
     );
   }
@@ -237,55 +241,79 @@ function advanceMain(f: ReturnType<typeof fixture>): string {
 }
 
 describe("mobile release CLI", () => {
-  it("builds Android from the saved store plan and notes without changing Git or pinned metadata", () => {
-    const f = fixture("android");
-    const pinned = [
-      "apps/android/version.json",
-      "apps/android/Config/Version.properties",
-      "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-    ];
-    const original = pinned.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
-    const result = f.invoke("run");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Android versionName: 2026.9.20");
-    expect(result.stdout).toContain("Android versionCode: 2026090250");
-    expect(result.stdout).toContain("Android Wear versionCode: 2026090251");
-    expect(f.audit()[0]).toMatchObject({
-      version: "2026.9.20",
-      versionCode: 2026090250,
-      wearVersionCode: 2026090251,
-      gradleVersion: "2026.9.20",
-      gradleCode: "2026090250",
-      gradleWearCode: "2026090251",
-    });
-    expect(
-      git(
-        f.remote,
-        "rev-parse",
-        "refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251",
-      ),
-    ).toBe(f.base);
-    expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
-    for (const [index, file] of pinned.entries()) {
-      expect(fs.readFileSync(path.join(f.root, file), "utf8")).toBe(original[index]);
-    }
-    const rebuilt = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],
-      {
-        cwd: f.root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
-          OPENCLAW_MOBILE_RELEASE_NOTES: path.join(f.recovery, "release-notes.json"),
+  it.each(["play-store", "internal"])(
+    "builds Android %s from the saved plan without changing Git or pinned metadata",
+    (destination) => {
+      const f = fixture("android");
+      const pinned = [
+        "apps/android/version.json",
+        "apps/android/Config/Version.properties",
+        "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+      ];
+      const original = pinned.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
+      const ci = {
+        GITHUB_ACTIONS: "true",
+        GITHUB_EVENT_NAME: "schedule",
+        GITHUB_RUN_ATTEMPT: "1",
+        GITHUB_REF: "refs/heads/main",
+        GITHUB_SHA: f.base,
+      };
+      if (destination === "internal") {
+        const rejected = f.invoke("run", ["--destination", "play-store"], ci);
+        expect(rejected.status).toBe(1);
+        expect(rejected.stderr).toContain("scheduled events are accepted only");
+        expect(fs.existsSync(f.uploadAudit)).toBe(false);
+      }
+      const result = f.invoke(
+        "run",
+        destination === "internal" ? ["--destination", destination] : [],
+        destination === "internal" ? ci : {},
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(f.recovery, "android-plan.json"), "utf8")),
+      ).toMatchObject({ destination, sourceSha: f.base });
+      expect(result.stdout).toContain("Android versionName: 2026.9.20");
+      expect(result.stdout).toContain("Android versionCode: 2026090250");
+      expect(result.stdout).toContain("Android Wear versionCode: 2026090251");
+      expect(f.audit()[0]).toMatchObject({
+        version: "2026.9.20",
+        versionCode: 2026090250,
+        wearVersionCode: 2026090251,
+        uploadMetadata: destination === "play-store",
+        gradleVersion: "2026.9.20",
+        gradleCode: "2026090250",
+        gradleWearCode: "2026090251",
+      });
+      expect(
+        git(
+          f.remote,
+          "rev-parse",
+          "refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251",
+        ),
+      ).toBe(f.base);
+      expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
+      for (const [index, file] of pinned.entries()) {
+        expect(fs.readFileSync(path.join(f.root, file), "utf8")).toBe(original[index]);
+      }
+      const rebuilt = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],
+        {
+          cwd: f.root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
+            OPENCLAW_MOBILE_RELEASE_NOTES: path.join(f.recovery, "release-notes.json"),
+          },
         },
-      },
-    );
-    expect(rebuilt.status, rebuilt.stderr).toBe(0);
-    expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
-    expect(git(f.root, "status", "--porcelain")).toBe("");
-  });
+      );
+      expect(rebuilt.status, rebuilt.stderr).toBe(0);
+      expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
+      expect(git(f.root, "status", "--porcelain")).toBe("");
+    },
+  );
 
   it("uploads the detached dispatch source with generated notes and leaves advanced main untouched", () => {
     const f = fixture();
