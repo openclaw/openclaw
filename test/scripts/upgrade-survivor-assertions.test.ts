@@ -1720,7 +1720,7 @@ process.stdout.write(sessionDir + "\\n");
     { baselineVersion: "2026.9.6", legacy: true },
     { baselineVersion: "2026.9.7", legacy: false },
   ])(
-    "preserves Tool Search from baseline $baselineVersion without disabling it",
+    "validates Tool Search at baseline $baselineVersion and after upgrade",
     ({ baselineVersion, legacy }) => {
       const run = (toolSearch: unknown, stage: "baseline" | "survival" = "survival") =>
         assertConfig({
@@ -1738,15 +1738,23 @@ process.stdout.write(sessionDir + "\\n");
         legacy ? /Tool Search mode/ : /legacy timeout/,
       );
       expect(() => run({ mode: "tools" })).not.toThrow();
-      expect(() => run({ mode: "code", codeTimeoutMs: 5000 })).toThrow(/Tool Search mode/);
-      expect(() => run({ mode: "tools", codeTimeoutMs: 5000 })).toThrow(/legacy timeout/);
-      expect(() => run({ mode: "tools", enabled: false })).toThrow(/disabled/);
-      expect(() => run(undefined)).toThrow(/Tool Search mode/);
-      expect(() =>
-        assertConfig({ acceptedIntents: [], config: {}, scenario: "base" }),
-      ).not.toThrow();
     },
   );
+
+  it("requires migrated Tool Search unless the intent was not accepted", () => {
+    // Survival validation is independent of the published baseline version.
+    const run = (toolSearch: unknown) =>
+      assertConfig({
+        acceptedIntents: ["tool-search"],
+        config: { tools: { toolSearch } },
+        scenario: "base",
+      });
+    expect(() => run({ mode: "code", codeTimeoutMs: 5000 })).toThrow(/Tool Search mode/);
+    expect(() => run({ mode: "tools", codeTimeoutMs: 5000 })).toThrow(/legacy timeout/);
+    expect(() => run({ mode: "tools", enabled: false })).toThrow(/disabled/);
+    expect(() => run(undefined)).toThrow(/Tool Search mode/);
+    expect(() => assertConfig({ acceptedIntents: [], config: {}, scenario: "base" })).not.toThrow();
+  });
 
   it("requires password auth for the mobile pairing reconnect scenario", () => {
     expect(() =>
