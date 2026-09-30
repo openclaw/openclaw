@@ -1730,41 +1730,44 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalled();
   });
 
-  it("fails when required preflight compaction returns an unknown successful no-op", async () => {
-    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: false,
-      reason: "plugin already stored this turn",
-    });
-    const sessionEntry: SessionEntry = createFlushSessionEntry({
-      totalTokens: 180_499,
-      compactionCount: 0,
-    });
-    const sessionStore = { main: sessionEntry };
-    const replyOperation = createReplyOperation();
+  it.each(["plugin already stored this turn", "deferred to background context-engine maintenance"])(
+    "fails required preflight compaction for a successful no-op: %s",
+    async (reason) => {
+      compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: false,
+        reason,
+      });
+      const sessionEntry: SessionEntry = createFlushSessionEntry({
+        totalTokens: 180_499,
+        compactionCount: 0,
+      });
+      const sessionStore = { main: sessionEntry };
+      const replyOperation = createReplyOperation();
 
-    await expect(
-      runDefaultPreflight(sessionEntry, {
-        modelContextTokens: 200_000,
-        sessionStore,
-        sessionKey: "main",
-        ...createCompactionLifecycle(replyOperation),
-      }),
-    ).rejects.toThrow("Preflight compaction required but failed: plugin already stored this turn");
+      await expect(
+        runDefaultPreflight(sessionEntry, {
+          modelContextTokens: 200_000,
+          sessionStore,
+          sessionKey: "main",
+          ...createCompactionLifecycle(replyOperation),
+        }),
+      ).rejects.toThrow(`Preflight compaction required but failed: ${reason}`);
 
-    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
-    const compactCall = requireCompactEmbeddedAgentSessionCall();
-    expect(compactCall.contextTokenBudget).toBe(200_000);
-    expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
-    expect(
-      replyOperation.setPhase.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    ).toBeLessThan(
-      compactEmbeddedAgentSessionMock.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY,
-    );
-    expect(replyOperation.updateSessionId).not.toHaveBeenCalled();
-    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
-    expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
-  });
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+      const compactCall = requireCompactEmbeddedAgentSessionCall();
+      expect(compactCall.contextTokenBudget).toBe(200_000);
+      expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
+      expect(
+        replyOperation.setPhase.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      ).toBeLessThan(
+        compactEmbeddedAgentSessionMock.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY,
+      );
+      expect(replyOperation.updateSessionId).not.toHaveBeenCalled();
+      expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+      expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("estimates Codex tool-result mirrors through the provider projection after provider usage after runtime cutover", async () => {
     const providerPromptTokens = 20_000;
@@ -2006,6 +2009,16 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const latchedBytes = latchedEntry?.transcriptByteCompactionLatch?.activeBytes ?? 0;
     expect(latchedBytes).toBeGreaterThan(0);
+
+    await replaceTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(260) }, type: "message" },
+    ]);
+    const growthBytes = readSessionTranscriptActiveStats(scope).sizeBytes - latchedBytes;
+    expect(growthBytes).toBeGreaterThan(0);
+    expect(growthBytes).toBeLessThan(10);
+    entry = await run(entry);
+    expect(entry?.compactionCount).toBe(1);
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
 
     await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(512) }, type: "message" },

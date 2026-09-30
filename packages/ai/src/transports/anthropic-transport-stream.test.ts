@@ -667,7 +667,7 @@ describe("anthropic transport stream", () => {
     );
   });
 
-  it.each(anthropicServerSideFallbackCases.filter((model) => model.optionHeaders))(
+  it.each(anthropicServerSideFallbackCases)(
     "sends default server-side fallback params for direct $name API-key requests",
     async ({ optionHeaders, customBeta, ...model }) => {
       mockSse([
@@ -687,6 +687,32 @@ describe("anthropic transport stream", () => {
       );
     },
   );
+
+  it.each([
+    {
+      label: "OAuth requests",
+      apiKey: "sk-ant-oat01-synthetic",
+      baseUrl: "https://api.anthropic.com",
+    },
+    {
+      label: "custom proxy endpoints",
+      apiKey: "sk-ant-api",
+      baseUrl: "https://proxy.example.com/v1",
+    },
+  ])("omits server-side fallback params for $label", async ({ apiKey, baseUrl }) => {
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({ ...anthropicServerSideFallbackCases[0], baseUrl }),
+      undefined,
+      { apiKey },
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+    expect(latestAnthropicRequest().payload).not.toHaveProperty("fallbacks");
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta") ?? "").not.toContain(
+      "server-side-fallback",
+    );
+  });
 
   it("rebuilds Fable output at a mid-stream server-side fallback boundary", async () => {
     mockSse([
@@ -965,18 +991,28 @@ describe("anthropic transport stream", () => {
     expect(cancelCalled).toBe(true);
   });
 
-  it("honors ANTHROPIC_BASE_URL when model base URL is blank", async () => {
-    vi.stubEnv("ANTHROPIC_BASE_URL", " https://anthropic-proxy.example/v1 ");
+  it.each([
+    { baseUrl: "", expectedBaseUrl: "https://anthropic-proxy.example/v1" },
+    { baseUrl: "https://configured.example", expectedBaseUrl: "https://configured.example" },
+  ])(
+    "resolves the endpoint with model base URL '$baseUrl'",
+    async ({ baseUrl, expectedBaseUrl }) => {
+      vi.stubEnv("ANTHROPIC_BASE_URL", " https://anthropic-proxy.example/v1 ");
 
-    await runTransportStream(makeAnthropicTransportModel({ baseUrl: "" }));
+      await runTransportStream(makeAnthropicTransportModel({ baseUrl }));
 
-    const [url] = guardedFetchCall();
-    expect(url).toBe("https://anthropic-proxy.example/v1/messages");
-    expect(buildGuardedModelFetchMock.mock.calls[0]?.[0]).toMatchObject({
-      baseUrl: "https://anthropic-proxy.example/v1",
-    });
-    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
-  });
+      const [url] = guardedFetchCall();
+      expect(url).toBe(
+        baseUrl
+          ? "https://configured.example/v1/messages"
+          : "https://anthropic-proxy.example/v1/messages",
+      );
+      expect(buildGuardedModelFetchMock.mock.calls[0]?.[0]).toMatchObject({
+        baseUrl: expectedBaseUrl,
+      });
+      expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
+    },
+  );
 
   it("strips the provider prefix from direct Anthropic request model ids", async () => {
     await runTransportStream(
@@ -1065,18 +1101,38 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequest().payload.stop_sequences).toEqual(["User:", "Assistant:"]);
   });
 
-  it("clamps the custom Anthropic maxTokens fallback to the context window", async () => {
+  it.each([
+    {
+      label: "caps large catalog limits",
+      maxTokens: 196_608,
+      contextWindow: 200_000,
+      expected: 32_000,
+    },
+    {
+      label: "defaults missing catalog limits",
+      maxTokens: undefined as never,
+      contextWindow: 200_000,
+      expected: 4_096,
+    },
+    {
+      label: "clamps the fallback to the context window",
+      maxTokens: undefined as never,
+      contextWindow: 4_096,
+      expected: 1_024,
+    },
+  ])("$label for custom Anthropic models", async ({ maxTokens, contextWindow, expected }) => {
     const model = makeAnthropicTransportModel({
       id: "custom-model",
       provider: "custom-anthropic",
       baseUrl: "https://custom.example/anthropic",
       reasoning: false,
-      contextWindow: 4096,
-      maxTokens: undefined as never,
+      contextWindow,
+      maxTokens,
     });
-    await runTransportStream(model, undefined, { apiKey: "fake" } as AnthropicStreamOptions);
+    const result = await runTransportStream(model, undefined, { apiKey: "fake" });
 
-    expect(latestAnthropicRequest().payload.max_tokens).toBe(1_024);
+    expect(result.stopReason).toBe("stop");
+    expect(latestAnthropicRequest().payload.max_tokens).toBe(expected);
   });
 
   it("fails locally when a custom Anthropic model has an invalid maxTokens", async () => {

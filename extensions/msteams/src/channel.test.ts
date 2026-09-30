@@ -303,14 +303,17 @@ describe("msteams config schema", () => {
     expect(res.success).toBe(false);
   });
 
-  it("accepts Azure China Bot Framework serviceUrl hosts", () => {
-    const res = MSTeamsConfigSchema.safeParse({
-      cloud: "China",
-      serviceUrl: "https://msteams.botframework.azure.cn/teams",
-    });
+  it.each([undefined, "https://msteams.botframework.azure.cn/teams"])(
+    "accepts China cloud with serviceUrl %s",
+    (serviceUrl) => {
+      const res = MSTeamsConfigSchema.safeParse({
+        cloud: "China",
+        serviceUrl,
+      });
 
-    expect(res.success).toBe(true);
-  });
+      expect(res.success).toBe(true);
+    },
+  );
 
   it("rejects non-China serviceUrl hosts when China cloud is configured", () => {
     const res = MSTeamsConfigSchema.safeParse({

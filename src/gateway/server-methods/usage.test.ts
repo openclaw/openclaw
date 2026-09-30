@@ -264,7 +264,7 @@ describe("gateway usage", () => {
     });
   });
 
-  it("aggregates usage.cost only for explicit all-agent scope", async () => {
+  it("isolates per-agent cost caches and aggregates only for explicit all-agent scope", async () => {
     vi.mocked(loadCostUsageSummaryFromCache).mockImplementation(async (params) =>
       params?.agentId === "opus" ? costSummary(20, 2) : costSummary(10, 1),
     );
@@ -274,16 +274,23 @@ describe("gateway usage", () => {
     expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(1);
     expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("main");
     expect(defaultResult).toMatchObject({ totals: { totalTokens: 10, totalCost: 1 } });
+    for (const [agentId, totalTokens, totalCost] of [
+      ["opus", 20, 2],
+      ["main", 10, 1],
+      ["opus", 20, 2],
+    ] as const) {
+      const [ok, result] = await request("usage.cost", { ...params, agentId }, config);
+      expect(ok).toBe(true);
+      expect(result).toMatchObject({ totals: { totalTokens, totalCost } });
+      expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(2);
+    }
     const [ok, aggregate] = await request("usage.cost", { ...params, agentScope: "all" }, config);
-    expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(3);
+    expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(4);
     expect(ok).toBe(true);
     expect(aggregate).toMatchObject({
       totals: { totalTokens: 30, totalCost: 3 },
       daily: [{ date: "2026-02-01", totalTokens: 30, totalCost: 3 }],
     });
-    const [, main] = await request("usage.cost", { ...params, agentId: "main" }, config);
-    expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(3);
-    expect(main).toMatchObject({ totals: { totalTokens: 10, totalCost: 1 } });
   });
 
   it("bounds all-agent cache loads", async () => {

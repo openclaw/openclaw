@@ -1946,7 +1946,10 @@ describe("scheduleRestartSentinelWake", () => {
     );
     expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
       "session-delivery-media-internal-partial",
-      expect.objectContaining({ expectedMediaUrls: ["/tmp/two.png"] }),
+      expect.objectContaining({
+        expectedMediaUrls: ["/tmp/two.png"],
+        suppressTextDelivery: true,
+      }),
       expectQueueContext(),
     );
   });
@@ -2000,7 +2003,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
       status: "ok",
       result: {
-        payloads: [{ mediaUrls: ["/tmp/one.png"] }, { mediaUrls: ["/tmp/two.png"] }],
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/one.png"] }, { mediaUrls: ["/tmp/two.png"] }],
         deliveryStatus: {
           status: "partial_failed",
           errorMessage: "second attachment failed before send",
@@ -2023,8 +2026,15 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
       "session-delivery-media-cross-path-partial",
-      expect.objectContaining({ expectedMediaUrls: ["/tmp/two.png"] }),
+      expect.objectContaining({
+        expectedMediaUrls: ["/tmp/two.png"],
+        message: expect.stringContaining("MEDIA:/tmp/two.png"),
+        suppressTextDelivery: true,
+      }),
       expectQueueContext(),
+    );
+    expect(mocks.advanceSessionDeliveryAgentRun.mock.calls[0]?.[1]?.message).not.toContain(
+      "/tmp/one.png",
     );
   });
 
@@ -2072,6 +2082,31 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
   });
 
+  it("dead-letters a partial visible send instead of replaying it", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/one.png", "/tmp/two.png"] }],
+        deliveryStatus: {
+          status: "partial_failed",
+          errorMessage: "second attachment failed after first send",
+          payloadOutcomes: [{ index: 0, status: "failed", sentBeforeError: true }],
+        },
+      },
+    });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-partial",
+        message: "generated images ready",
+        messageId: "image:task-partial:agent-loop",
+        expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+      }),
+    ).rejects.toThrow("dead-lettered after ambiguous side effects");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+  });
+
   it("dead-letters impossible truncated messaging-tool evidence", async () => {
     mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
       status: "ok",
@@ -2092,6 +2127,29 @@ describe("scheduleRestartSentinelWake", () => {
         id: "session-delivery-media-tool-targets-truncated",
         messageId: "image:task-tool-targets-truncated:agent-loop",
         sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/proof.png"],
+      }),
+    ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      kind: "aggregate-only message-tool delivery",
+      result: { didSendViaMessagingTool: true, messagingToolSentMediaUrls: ["/tmp/proof.png"] },
+    },
+    {
+      kind: "committed cron action",
+      result: { payloads: [{ text: "ready" }], successfulCronAdds: 1 },
+    },
+  ])("dead-letters $kind before a fresh attempt", async ({ result }) => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok", result });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-unsafe-side-effect",
+        messageId: "image:task-unsafe-side-effect:agent-loop",
         expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");

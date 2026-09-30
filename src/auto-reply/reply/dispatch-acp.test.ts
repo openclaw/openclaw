@@ -1094,10 +1094,14 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(runTurnCall().text).not.toContain("Recent image");
   });
 
-  it("falls back to ordered, deduplicated history images when current image bytes are unusable", async () => {
+  it("falls back to bounded, ordered, deduplicated history images when current image bytes are unusable", async () => {
     const currentPath = "/tmp/openclaw-acp-current-spoofed.bin";
     const historyPath = "/tmp/openclaw-acp-history-valid.bin";
     const stickerPath = "C:\\Users\\Alice\\Pictures\\sticker";
+    const earlierPaths = Array.from({ length: 3 }, (_, index) => `/tmp/earlier-image-${index}.png`);
+    for (const earlierPath of earlierPaths) {
+      acpAttachmentBuffers.set(earlierPath, ACP_PNG_IMAGE_BYTES);
+    }
     acpAttachmentBuffers.set(currentPath, ACP_PDF_BYTES);
     acpAttachmentBuffers.set(historyPath, ACP_PNG_IMAGE_BYTES);
     acpAttachmentBuffers.set(stickerPath, ACP_JPEG_IMAGE_BYTES);
@@ -1107,6 +1111,9 @@ describe("tryDispatchAcpReplyCore", () => {
         Timestamp: 1_700_000_000_000,
         media: [{ path: currentPath, contentType: "image/png", kind: "image" }],
         InboundHistory: [
+          ...earlierPaths.map((imagePath, index) =>
+            imageHistory([{ path: imagePath, kind: "image" }], { messageId: `earlier-${index}` }),
+          ),
           imageHistory(
             [
               { path: historyPath, contentType: "application/octet-stream", kind: "image" },
@@ -1121,8 +1128,11 @@ describe("tryDispatchAcpReplyCore", () => {
     });
     expect(runTurnCall().attachments).toEqual([
       { mediaType: "image/png", data: ACP_PNG_IMAGE_BYTES.toString("base64") },
+      { mediaType: "image/png", data: ACP_PNG_IMAGE_BYTES.toString("base64") },
+      { mediaType: "image/png", data: ACP_PNG_IMAGE_BYTES.toString("base64") },
       { mediaType: "image/jpeg", data: ACP_JPEG_IMAGE_BYTES.toString("base64") },
     ]);
+    expect(runTurnCall().text).not.toContain("message earlier-0");
   });
 
   it("annotates recent history images with sent time and available history position", async () => {
@@ -1351,33 +1361,53 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(runTurnCall().text).toBe("test");
   });
 
-  it("unbinds stale bound conversations before surfacing stale ACP resolution errors", async () => {
-    const aliasSessionKey = "main";
-    const canonicalSessionKey = "agent:main:main";
-    managerMocks.resolveSessionAsync.mockResolvedValue({
-      kind: "stale",
-      sessionKey: canonicalSessionKey,
-      agentId: "main",
-      error: new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP metadata is missing."),
-    });
-    bindingServiceMocks.unbind.mockResolvedValueOnce([sessionBinding(canonicalSessionKey)]);
-    const { dispatcher } = createDispatcher();
+  it.each(["resolution", "runtime", "generic init"] as const)(
+    "only unbinds stale ACP conversations after a %s failure",
+    async (failure) => {
+      const aliasSessionKey = "main";
+      const canonicalSessionKey = "agent:main:main";
+      const stale = failure !== "generic init";
+      const error = new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        stale ? "ACP metadata is missing." : "Could not initialize ACP session runtime.",
+      );
+      if (failure === "resolution") {
+        managerMocks.resolveSessionAsync.mockResolvedValue({
+          kind: "stale",
+          sessionKey: canonicalSessionKey,
+          agentId: "main",
+          error,
+        });
+      } else {
+        managerMocks.resolveSessionAsync.mockResolvedValue({
+          kind: "ready",
+          sessionKey: canonicalSessionKey,
+          agentId: "main",
+          meta: createAcpSessionMeta(),
+        });
+        managerMocks.runTurn.mockRejectedValueOnce(error);
+      }
+      bindingServiceMocks.unbind.mockResolvedValueOnce([sessionBinding(canonicalSessionKey)]);
+      const { dispatcher } = createDispatcher();
 
-    await runDispatch({
-      bodyForAgent: "test",
-      dispatcher,
-      sessionKeyOverride: aliasSessionKey,
-    });
+      await runDispatch({
+        bodyForAgent: "test",
+        dispatcher,
+        sessionKeyOverride: aliasSessionKey,
+      });
 
-    expect(managerMocks.runTurn).not.toHaveBeenCalled();
-    expect(bindingServiceMocks.unbind).toHaveBeenCalledTimes(1);
-    expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
-      targetSessionKey: canonicalSessionKey,
-      reason: "acp-session-init-failed",
-    });
-    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
-    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("ACP metadata is missing.");
-  });
+      expect(managerMocks.runTurn).toHaveBeenCalledTimes(failure === "resolution" ? 0 : 1);
+      expect(bindingServiceMocks.unbind).toHaveBeenCalledTimes(stale ? 1 : 0);
+      if (stale) {
+        expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
+          targetSessionKey: canonicalSessionKey,
+          reason: "acp-session-init-failed",
+        });
+      }
+      expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+      expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(error.message);
+    },
+  );
 
   it("honors the configured default account when checking bound-session identity notices", async () => {
     const canonicalSessionKey = "agent:main:main";
