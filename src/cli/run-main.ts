@@ -693,14 +693,14 @@ function resolveUnownedCliPrimaryCandidate(argv: string[]): string | null {
   return primary;
 }
 
-async function resolveUnownedCliPrimary(params: {
+async function assertCliPrimaryOwned(params: {
   argv: string[];
   config: OpenClawConfig;
   session?: PluginCliLoadSession;
-}): Promise<string | null> {
+}): Promise<void> {
   const primary = resolveUnownedCliPrimaryCandidate(params.argv);
   if (!primary) {
-    return null;
+    return;
   }
   const pluginRoot = await isPluginCliRoot({
     primary,
@@ -708,29 +708,24 @@ async function resolveUnownedCliPrimary(params: {
     session: params.session,
   });
   if (pluginRoot !== false) {
-    return null;
+    return;
   }
-  return primary;
-}
-
-async function resolveUnownedCliPrimaryError(params: {
-  argv: string[];
-  primary: string;
-  config: OpenClawConfig;
-}): Promise<Error> {
-  const pluginPolicyError = await resolveExpectedPluginPolicyError(params);
+  const pluginPolicyError = await resolveExpectedPluginPolicyError({
+    primary,
+    config: params.config,
+  });
   if (pluginPolicyError) {
-    return pluginPolicyError;
+    throw pluginPolicyError;
   }
-  const sanitizedPrimary = sanitizeTerminalText(params.primary);
+  const sanitizedPrimary = sanitizeTerminalText(primary);
   const displayPrimary =
     sanitizedPrimary.length <= UNKNOWN_COMMAND_DISPLAY_LIMIT
       ? sanitizedPrimary
       : `${truncateUtf16Safe(sanitizedPrimary, UNKNOWN_COMMAND_DISPLAY_LIMIT - 1)}…`;
   const { createCliUnknownCommandError } = await import("./program/error-output.js");
-  return createCliUnknownCommandError(displayPrimary, {
+  throw createCliUnknownCommandError(displayPrimary, {
     argv: params.argv,
-    ...(displayPrimary === params.primary ? {} : { commandNames: [] }),
+    ...(displayPrimary === primary ? {} : { commandNames: [] }),
   });
 }
 
@@ -1163,18 +1158,11 @@ async function runCliWithPreparedOutputMode(
     if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
       const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
       if (!bareSessionInvocation) {
-        const unownedPrimary = await resolveUnownedCliPrimary({
+        await assertCliPrimaryOwned({
           argv: normalizedArgv,
           config,
           session: pluginCliSession,
         });
-        if (unownedPrimary) {
-          throw await resolveUnownedCliPrimaryError({
-            argv: normalizedArgv,
-            primary: unownedPrimary,
-            config,
-          });
-        }
       }
       await replaceStartedProxy(config?.proxy ?? undefined);
     }
@@ -1238,23 +1226,13 @@ async function runCliWithPreparedOutputMode(
     // `openclaw <typo>` instead of silently showing generic top-level help.
     // Runs after legitimate precomputed help fast paths so known help commands
     // still dispatch normally. See #81077.
-    {
-      const unownedPrimaryCandidate = resolveUnownedCliPrimaryCandidate(normalizedArgv);
-      if (unownedPrimaryCandidate) {
-        const config = await readBestEffortCliConfig();
-        const unownedPrimary = await resolveUnownedCliPrimary({
-          argv: normalizedArgv,
-          config,
-          session: pluginCliSession,
-        });
-        if (unownedPrimary) {
-          throw await resolveUnownedCliPrimaryError({
-            argv: normalizedArgv,
-            primary: unownedPrimary,
-            config,
-          });
-        }
-      }
+    if (resolveUnownedCliPrimaryCandidate(normalizedArgv)) {
+      const config = await readBestEffortCliConfig();
+      await assertCliPrimaryOwned({
+        argv: normalizedArgv,
+        config,
+        session: pluginCliSession,
+      });
     }
 
     const shouldRunBareRootCommand = shouldHandleBareRoot(normalizedArgv);

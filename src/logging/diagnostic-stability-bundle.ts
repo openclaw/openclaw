@@ -343,35 +343,25 @@ function readHeapSpaces(value: unknown): DiagnosticHeapSpaceSummary[] | undefine
   }
   const spaces: DiagnosticHeapSpaceSummary[] = [];
   for (const [index, entry] of value.entries()) {
-    const source = readObject(entry, `evidence.memoryPressure.heapSpaces[${index}]`);
-    const spaceName = readOptionalCodeString(
-      source.spaceName,
-      `evidence.memoryPressure.heapSpaces[${index}].spaceName`,
-    );
+    const label = `evidence.memoryPressure.heapSpaces[${index}]`;
+    const source = readObject(entry, label);
+    const spaceName = readOptionalCodeString(source.spaceName, `${label}.spaceName`);
     if (!spaceName) {
       continue;
     }
     spaces.push({
       spaceName,
       spaceSizeBytes:
-        readOptionalPositiveInteger(
-          source.spaceSizeBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].spaceSizeBytes`,
-        ) ?? 0,
+        readOptionalPositiveInteger(source.spaceSizeBytes, `${label}.spaceSizeBytes`) ?? 0,
       spaceUsedBytes:
-        readOptionalPositiveInteger(
-          source.spaceUsedBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].spaceUsedBytes`,
-        ) ?? 0,
+        readOptionalPositiveInteger(source.spaceUsedBytes, `${label}.spaceUsedBytes`) ?? 0,
       spaceAvailableBytes:
-        readOptionalPositiveInteger(
-          source.spaceAvailableBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].spaceAvailableBytes`,
-        ) ?? 0,
+        readOptionalPositiveInteger(source.spaceAvailableBytes, `${label}.spaceAvailableBytes`) ??
+        0,
       physicalSpaceSizeBytes:
         readOptionalPositiveInteger(
           source.physicalSpaceSizeBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].physicalSpaceSizeBytes`,
+          `${label}.physicalSpaceSizeBytes`,
         ) ?? 0,
     });
   }
@@ -431,11 +421,9 @@ function readSessionFiles(value: unknown): DiagnosticSessionFileSummary[] | unde
   }
   const files: DiagnosticSessionFileSummary[] = [];
   for (const [index, entry] of value.entries()) {
-    const source = readObject(entry, `evidence.memoryPressure.topSessionFiles[${index}]`);
-    const relativePath = readRequiredString(
-      source.relativePath,
-      `evidence.memoryPressure.topSessionFiles[${index}].relativePath`,
-    );
+    const label = `evidence.memoryPressure.topSessionFiles[${index}]`;
+    const source = readObject(entry, label);
+    const relativePath = readRequiredString(source.relativePath, `${label}.relativePath`);
     if (
       path.isAbsolute(relativePath) ||
       relativePath.includes("..") ||
@@ -446,16 +434,8 @@ function readSessionFiles(value: unknown): DiagnosticSessionFileSummary[] | unde
     }
     files.push({
       relativePath: sanitizeSessionEvidencePath(relativePath),
-      sizeBytes:
-        readOptionalPositiveInteger(
-          source.sizeBytes,
-          `evidence.memoryPressure.topSessionFiles[${index}].sizeBytes`,
-        ) ?? 0,
-      mtimeMs:
-        readOptionalPositiveInteger(
-          source.mtimeMs,
-          `evidence.memoryPressure.topSessionFiles[${index}].mtimeMs`,
-        ) ?? 0,
+      sizeBytes: readOptionalPositiveInteger(source.sizeBytes, `${label}.sizeBytes`) ?? 0,
+      mtimeMs: readOptionalPositiveInteger(source.mtimeMs, `${label}.mtimeMs`) ?? 0,
     });
   }
   return files.length > 0 ? files : undefined;
@@ -534,12 +514,9 @@ function readNumberMap(value: unknown, label: string): Record<string, number> {
   return result;
 }
 
-function readOptionalMemorySummary(
+function readMemorySummary(
   value: unknown,
-): DiagnosticStabilitySnapshot["summary"]["memory"] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]> {
   const memory = readObject(value, "snapshot.summary.memory");
   const latest =
     memory.latest === undefined
@@ -564,12 +541,9 @@ function readOptionalMemorySummary(
   };
 }
 
-function readOptionalPayloadLargeSummary(
+function readPayloadLargeSummary(
   value: unknown,
-): DiagnosticStabilitySnapshot["summary"]["payloadLarge"] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["payloadLarge"]> {
   const payloadLarge = readObject(value, "snapshot.summary.payloadLarge");
   return {
     count: readRequiredNumber(payloadLarge.count, "snapshot.summary.payloadLarge.count"),
@@ -718,11 +692,9 @@ function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
     events,
     summary: {
       byType: readNumberMap(summary.byType, "snapshot.summary.byType"),
-      ...(summary.memory !== undefined
-        ? { memory: readOptionalMemorySummary(summary.memory) }
-        : {}),
+      ...(summary.memory !== undefined ? { memory: readMemorySummary(summary.memory) } : {}),
       ...(summary.payloadLarge !== undefined
-        ? { payloadLarge: readOptionalPayloadLargeSummary(summary.payloadLarge) }
+        ? { payloadLarge: readPayloadLargeSummary(summary.payloadLarge) }
         : {}),
     },
   };

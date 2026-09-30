@@ -323,6 +323,9 @@ final class WatchReplyCoordinator {
                         outcome: .reply(text: OpenClawWatchChatDeliveryCodec.boundedReplyText(text)))
                     return
                 }
+            } catch is CancellationError {
+                // Route invalidation must release a pending reconnect without the history retry delay.
+                return
             } catch {
                 if inputRunIDs != nil, IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(error) {
                     inputRunIDs = nil

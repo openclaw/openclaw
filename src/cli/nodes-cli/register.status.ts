@@ -99,10 +99,7 @@ function isWindowsNodePlatform(platform?: string): boolean {
 }
 
 function formatPathEnv(raw?: string, platform?: string): string | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -116,17 +113,15 @@ function formatPathEnv(raw?: string, platform?: string): string | null {
 }
 
 function formatClientLabel(node: { clientId?: string; clientMode?: string }): string | null {
-  const clientId = node.clientId?.trim();
-  const clientMode = node.clientMode?.trim();
-  if (clientId && clientMode) {
-    return `${clientId}/${clientMode}`;
-  }
-  return clientId || clientMode || null;
+  return [node.clientId?.trim(), node.clientMode?.trim()].filter(Boolean).join("/") || null;
 }
 
 function formatNodeTerminalLabel(node: { nodeId: string; displayName?: string }): string {
-  const label = node.displayName?.trim() ? node.displayName.trim() : node.nodeId;
-  return sanitizeTerminalText(label);
+  return sanitizeTerminalText(node.displayName?.trim() || node.nodeId);
+}
+
+function sortedNodeStrings(value: unknown): string[] | null {
+  return Array.isArray(value) ? value.map(String).filter(Boolean).toSorted() : null;
 }
 
 function formatNodeTimeAgo(now: number, timestamp: unknown): string | null {
@@ -309,9 +304,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             ]
               .filter(Boolean)
               .map((part) => sanitizeTerminalText(String(part)));
-            const caps = Array.isArray(n.caps)
-              ? sanitizeTerminalText(n.caps.map(String).filter(Boolean).toSorted().join(", "))
-              : "?";
+            const caps = sortedNodeStrings(n.caps);
             const paired = n.paired ? ok("paired") : warn("unpaired");
             const connected = n.connected ? ok("connected") : muted("disconnected");
             const approvalState = formatNodeApprovalState(n.approvalState);
@@ -334,7 +327,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               IP: sanitizeTerminalText(n.remoteIp ?? ""),
               Detail: detailParts.join(" · "),
               Status: `${paired} · ${connected}${since}${approval ? ` · ${approval}` : ""}`,
-              Caps: caps,
+              Caps: caps ? sanitizeTerminalText(caps.join(", ")) : "?",
             };
           });
 
@@ -396,21 +389,13 @@ export function registerNodesStatusCommands(nodes: Command) {
           const displayName = typeof obj.displayName === "string" ? obj.displayName : nodeId;
           const connected = Boolean(obj.connected);
           const paired = Boolean(obj.paired);
-          const caps = Array.isArray(obj.caps)
-            ? obj.caps.map(String).filter(Boolean).toSorted()
-            : null;
-          const commands = Array.isArray(obj.commands)
-            ? obj.commands.map(String).filter(Boolean).toSorted()
-            : [];
+          const caps = sortedNodeStrings(obj.caps);
+          const commands = sortedNodeStrings(obj.commands) ?? [];
           const perms = formatPermissions(obj.permissions);
           const approvalState = formatNodeApprovalState(obj.approvalState);
           const pendingRequestId = normalizeOptionalString(obj.pendingRequestId);
-          const pendingCaps = Array.isArray(obj.pendingDeclaredCaps)
-            ? obj.pendingDeclaredCaps.map(String).filter(Boolean).toSorted()
-            : null;
-          const pendingCommands = Array.isArray(obj.pendingDeclaredCommands)
-            ? obj.pendingDeclaredCommands.map(String).filter(Boolean).toSorted()
-            : [];
+          const pendingCaps = sortedNodeStrings(obj.pendingDeclaredCaps);
+          const pendingCommands = sortedNodeStrings(obj.pendingDeclaredCommands) ?? [];
           const pendingPerms = formatPermissions(obj.pendingDeclaredPermissions);
           const approveCommand =
             isPendingApprovalState(approvalState) && pendingRequestId
@@ -511,7 +496,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
           const result = await callNodesGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
-          const { heading, muted, warn } = getNodesTheme();
+          const { heading, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
@@ -551,7 +536,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               pending,
               now,
               tableWidth,
-              theme: { heading, warn, muted },
+              theme: { heading, muted },
             });
             defaultRuntime.log("");
             defaultRuntime.log(rendered.heading);

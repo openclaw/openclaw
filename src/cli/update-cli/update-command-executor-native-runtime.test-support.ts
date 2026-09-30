@@ -2,6 +2,41 @@
 const currentModuleUrl = import.meta.url;
 
 export const updateExecutorNativeEntrypoints = {
+  postUpdate: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-post-update",
+    distWorkerPath: "cli/update-cli/update-command-post-update.js",
+  },
+  candidateState: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/update-candidate-state",
+    distWorkerPath: "infra/update-candidate-state.js",
+  },
+  candidateStateWorker: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/update-candidate-state.worker",
+    distWorkerPath: "infra/update-candidate-state.worker.js",
+  },
+  systemdMaintenance: {
+    currentModuleUrl,
+    sourceWorkerName: "../../daemon/systemd-maintenance",
+    distWorkerPath: "daemon/systemd-maintenance.js",
+  },
+  serviceDrain: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-service-drain",
+    distWorkerPath: "cli/update-cli/update-command-service-drain.js",
+  },
+  serviceMembership: {
+    currentModuleUrl,
+    sourceWorkerName: "../../daemon/service-process-membership",
+    distWorkerPath: "daemon/service-process-membership.js",
+  },
+  serviceMaintenance: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-service-maintenance",
+    distWorkerPath: "cli/update-cli/update-command-service-maintenance.js",
+  },
   artifact: {
     currentModuleUrl,
     sourceWorkerName: "update-command-artifact",

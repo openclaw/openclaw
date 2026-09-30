@@ -648,10 +648,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       };
     }
     const pluginUpdate = postCoreResult;
-    if (exitCode !== 0) {
-      if (pluginUpdate) {
-        return { resumed: true, pluginUpdate };
-      }
+    if (exitCode !== 0 && !pluginUpdate) {
       await restoreTentativePluginIndex();
       return { resumed: false, exitCode };
     }

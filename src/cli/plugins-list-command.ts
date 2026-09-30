@@ -146,10 +146,5 @@ export async function runPluginsListCommand(
     return;
   }
 
-  const lines: string[] = [];
-  for (const plugin of list) {
-    lines.push(formatPluginLine(plugin));
-    lines.push("");
-  }
-  runtime.log(lines.join("\n").trim());
+  runtime.log(list.map(formatPluginLine).join("\n\n").trim());
 }

@@ -722,6 +722,11 @@ verify_crabbox_admin_merge_bypass() {
 # Fault the Git boundary, not the outcome owner: crash after intent CAS, or
 # reject later receipt writes. All successful object/ref operations are real.
 pr_git() {
+  if [ "$1" = --no-lazy-fetch ] && [ "\${2:-}" = cat-file ] && [ "\${3:-}" = -e ] &&
+    [ "\${4:-}" = "$(command jq -r .priorCi.localOnlyFailureOid "$FIXTURE_STATE")^{commit}" ]; then
+    command jq -r .priorCi.localOnlyFailureStderr "$FIXTURE_STATE" >&2
+    return 128
+  fi
   if [ "$1" = --no-lazy-fetch ] &&
     [ "$(command jq -r .priorCi.unsupportedNoLazy "$FIXTURE_STATE")" = true ]; then return 129; fi
   if [ "$1" = fetch ] && [ "\${2:-}" = --no-tags ] && [ "\${3:-}" = --no-write-fetch-head ] &&

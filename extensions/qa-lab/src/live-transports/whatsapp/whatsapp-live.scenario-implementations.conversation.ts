@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  toWhatsAppQaError,
-  type WhatsAppQaMessageScenarioRun,
-  type WhatsAppQaScenarioImplementation,
+import { toQaError } from "../../errors.js";
+import type {
+  WhatsAppQaMessageScenarioRun,
+  WhatsAppQaScenarioImplementation,
 } from "./whatsapp-live.contracts.js";
 import {
   resolveWhatsAppQaNoReplyTarget,
@@ -189,10 +189,10 @@ export const whatsappConversationScenarios = {
             );
           }
           if (activationProbeError) {
-            throw toWhatsAppQaError(activationProbeError);
+            throw toQaError(activationProbeError);
           }
           if (restoreError) {
-            throw toWhatsAppQaError(restoreError);
+            throw toQaError(restoreError);
           }
 
           const quietStartedAt = new Date();

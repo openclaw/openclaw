@@ -180,14 +180,6 @@ function parseTuiPluginApproval(payload: unknown): TuiPluginApproval | null {
   };
 }
 
-function parseResolvedApprovalId(payload: unknown): string | null {
-  const id = asOptionalObjectRecord(payload)?.id;
-  if (typeof id !== "string") {
-    return null;
-  }
-  return id.trim() || null;
-}
-
 function decisionLabel(decision: TuiApprovalDecision): string {
   if (decision === "allow-once") {
     return "allowed once";
@@ -468,7 +460,8 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
       if (event !== "plugin.approval.resolved" && event !== "plugin.approval.removed") {
         return;
       }
-      const id = parseResolvedApprovalId(payload);
+      const value = asOptionalObjectRecord(payload)?.id;
+      const id = typeof value === "string" ? value.trim() : "";
       if (!id) {
         return;
       }

@@ -224,16 +224,9 @@ export function resolveSessionIdToSend(params: {
 }): { sessionId?: string; isNew: boolean } {
   const mode = params.backend.sessionMode ?? "always";
   const existing = params.cliSessionId?.trim();
-  if (mode === "none") {
-    return { sessionId: undefined, isNew: !existing };
-  }
-  if (mode === "existing") {
-    return { sessionId: existing, isNew: !existing };
-  }
-  if (existing) {
-    return { sessionId: existing, isNew: false };
-  }
-  return { sessionId: crypto.randomUUID(), isNew: true };
+  const sessionId =
+    mode === "none" ? undefined : mode === "existing" || existing ? existing : crypto.randomUUID();
+  return { sessionId, isNew: !existing };
 }
 
 export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: string }): {

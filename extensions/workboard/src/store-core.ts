@@ -12,6 +12,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
+  PersistedWorkboardCard,
   WorkboardCardStore,
   WorkboardKeyedStore,
   WorkboardSubscriptionStore,
@@ -832,10 +833,12 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       delete next.metadata;
     }
     const expectedUpdatedAt = options.expectedUpdatedAt ?? existing.updatedAt;
+    const nextEntry: PersistedWorkboardCard = { version: 1, card: next };
+    let updated: boolean;
     if (options.ownerSlot) {
       const result = await this.store.claimIfOwnerAvailable(
         next.id,
-        { version: 1, card: next },
+        nextEntry,
         expectedUpdatedAt,
         options.ownerSlot.ownerId,
         options.ownerSlot.now,
@@ -843,14 +846,11 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       if (result === "owner_busy") {
         throw new Error(`Owner ${options.ownerSlot.ownerId} already has active Workboard work.`);
       }
-      if (result === "updated") {
-        this.recordCardMutation(existing, next);
-        await this.deleteDetachedAttachments(existing, next);
-        return next;
-      }
-    } else if (
-      await this.store.registerIfUpdatedAt(next.id, { version: 1, card: next }, expectedUpdatedAt)
-    ) {
+      updated = result === "updated";
+    } else {
+      updated = await this.store.registerIfUpdatedAt(next.id, nextEntry, expectedUpdatedAt);
+    }
+    if (updated) {
       this.recordCardMutation(existing, next);
       await this.deleteDetachedAttachments(existing, next);
       return next;

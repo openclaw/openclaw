@@ -22,30 +22,13 @@ export function buildGatewayInstallEntrypointCandidates(root?: string): string[]
 }
 
 export function buildGatewayDistEntrypointCandidates(...inputs: string[]): string[] {
-  const distDirs: string[] = [];
-  const seenDirs = new Set<string>();
-
-  for (const inputPath of inputs) {
-    if (!isGatewayDistEntrypointPath(inputPath)) {
-      continue;
-    }
-    const distDir = path.dirname(inputPath);
-    if (seenDirs.has(distDir)) {
-      continue;
-    }
-    seenDirs.add(distDir);
-    distDirs.push(distDir);
-  }
+  const distDirs = new Set(inputs.filter(isGatewayDistEntrypointPath).map(path.dirname));
 
   // Prefer canonical basenames across every observed dist dir before falling
   // through, so repaired services converge on the same entrypoint order.
-  const candidates: string[] = [];
-  for (const basename of GATEWAY_DIST_ENTRYPOINT_BASENAMES) {
-    for (const distDir of distDirs) {
-      candidates.push(path.join(distDir, basename));
-    }
-  }
-  return candidates;
+  return GATEWAY_DIST_ENTRYPOINT_BASENAMES.flatMap((basename) =>
+    Array.from(distDirs, (distDir) => path.join(distDir, basename)),
+  );
 }
 
 export async function findFirstAccessibleGatewayEntrypoint(

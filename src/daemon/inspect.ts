@@ -614,9 +614,7 @@ async function scanGatewayServices(
         continue;
       }
       let marker = hasGatewayAction ? "openclaw" : (actionMarkers.find(Boolean) ?? null);
-      let gateway = actionArgv.some(
-        (argv, index) => actionMarkers[index] === "openclaw" && hasGatewaySubcommandArg(argv),
-      );
+      let gateway = hasGatewayAction;
       let profile =
         actionArgv.length === 1
           ? resolveWindowsServiceCommandProfile({ programArguments: actionArgv[0]! })

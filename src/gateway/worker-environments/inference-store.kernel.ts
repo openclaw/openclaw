@@ -318,14 +318,11 @@ export function createWorkerInferenceStoreKernel(options: {
     return rawInput.outcome;
   };
 
-  const cancelPending = (params: {
-    environmentId: string;
-    sessionId: string;
-    runEpoch: number;
-    runId: string;
-    turnId: string;
-    outcome: WorkerInferenceTerminalOutcome;
-  }): void => {
+  const cancelPending = (
+    params: Omit<WorkerInferenceTurnInput, "requestHash"> & {
+      outcome: WorkerInferenceTerminalOutcome;
+    },
+  ): void => {
     const nowMs = nonNegativeInteger(now(), "timestamp");
     const terminalJson = serializeTerminalOutcome(params.outcome);
     const identity = {

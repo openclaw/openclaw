@@ -7945,12 +7945,12 @@ describe("ci workflow guards", () => {
           {
             check_name: "android-test-third-party",
             task: "test-third-party",
-            app_lint: "third-party",
           },
           {
             check_name: "android-test-wear",
             task: "test-wear",
             lint: true,
+            app_lint: "third-party",
           },
           { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
         ]);
@@ -8508,12 +8508,12 @@ describe("ci workflow guards", () => {
       {
         check_name: "android-test-third-party",
         task: "test-third-party",
-        app_lint: "third-party",
       },
       {
         check_name: "android-test-wear",
         task: "test-wear",
         lint: true,
+        app_lint: "third-party",
       },
       { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
     ]);
