@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -197,30 +198,38 @@ export function migrateJsonCanonicalWideRowsV13(
   }
   if (tableExists(db, "installed_plugin_index")) {
     // Fold the singleton index row (revision lived in updated_at_ms) into the KV.
-    // workspace_dir was a same-version additive column; pre-addition rows lack it.
-    const workspaceDirColumn = tableHasColumn(db, "installed_plugin_index", "workspace_dir")
-      ? "workspace_dir"
-      : "NULL AS workspace_dir";
-    const rawRow = db
-      .prepare(
-        `SELECT version, warning, host_contract_version, compat_registry_version,
-                migration_version, policy_hash, generated_at_ms, ${workspaceDirColumn},
-                refresh_reason, install_records_json, plugins_json, diagnostics_json,
-                updated_at_ms
-           FROM installed_plugin_index
-          WHERE index_key = 'installed-plugin-index'`,
-      )
+    const row = db
+      .prepare("SELECT * FROM installed_plugin_index WHERE index_key = 'installed-plugin-index'")
       .get();
-    const installRecords = asNullableRecord(
-      safeParseJson(String(rawRow?.install_records_json ?? "")),
-    );
-    const plugins = safeParseJson(String(rawRow?.plugins_json ?? ""));
-    const diagnostics = safeParseJson(String(rawRow?.diagnostics_json ?? ""));
-    const row =
-      rawRow && installRecords && Array.isArray(plugins) && Array.isArray(diagnostics)
-        ? rawRow
-        : undefined;
     if (row) {
+      const installRecords = asNullableRecord(safeParseJson(String(row.install_records_json)));
+      const parsedPlugins = safeParseJson(String(row.plugins_json));
+      const parsedDiagnostics = safeParseJson(String(row.diagnostics_json));
+      const plugins = Array.isArray(parsedPlugins) ? parsedPlugins : null;
+      const diagnostics = Array.isArray(parsedDiagnostics) ? parsedDiagnostics : null;
+      if (!installRecords || !plugins || !diagnostics) {
+        const scope = "plugins.installedIndex.quarantine";
+        const current = db
+          .prepare("SELECT MAX(sequence) AS sequence FROM diagnostic_events WHERE scope = ?")
+          .get(scope)?.sequence;
+        const sequence = Number(current ?? 0) + 1;
+        if (!Number.isSafeInteger(sequence)) {
+          throw new Error(`Audit sequence exhausted for scope ${scope}`);
+        }
+        const message =
+          "Preserved invalid legacy installed_plugin_index row. Run openclaw doctor --fix or openclaw plugins registry --refresh to repair the plugin index.";
+        db.prepare(
+          `INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at, sequence)
+           VALUES (?, ?, ?, ?, ?)`,
+        ).run(
+          scope,
+          createHash("sha256").update(JSON.stringify(row)).digest("hex"),
+          JSON.stringify({ level: "warn", message, raw: row }),
+          Date.now(),
+          sequence,
+        );
+      }
+      // Preserve the install ledger independently of invalid derived metadata.
       const index = {
         version: Number(row.version),
         ...(typeof row.warning === "string" && row.warning ? { warning: row.warning } : {}),
