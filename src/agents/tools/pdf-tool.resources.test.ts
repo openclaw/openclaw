@@ -37,6 +37,7 @@ import { createPdfTool } from "./pdf-tool.js";
 import { FAKE_PDF_MEDIA } from "./pdf-tool.test-support.js";
 
 type Connection = {
+  dbPath: string;
   database: DatabaseSync;
   disposals: number;
   lateReads: number;
@@ -137,7 +138,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const dbPath = state.databasePath();
   const database = new DatabaseSync(dbPath);
   database.exec("CREATE TABLE proof (value INTEGER); INSERT INTO proof VALUES (42)");
-  const connection = { database, disposals: 0, lateReads: 0, cleanupReads: 0 };
+  const connection = { dbPath, database, disposals: 0, lateReads: 0, cleanupReads: 0 };
   state.connections.push(connection);
   const read = () => database.prepare("SELECT value FROM proof").get().value;
   api.lifecycle.registerRuntimeLifecycle({ id: "native-pdf", dispose() {
@@ -272,6 +273,12 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       for (const connection of connections) {
         expect(connection.disposals).toBe(1);
         expect(connection.database.isOpen).toBe(false);
+        const reopened = new DatabaseSync(connection.dbPath, { readOnly: true });
+        try {
+          expect(reopened.prepare("SELECT value FROM proof").get()?.value).toBe(42);
+        } finally {
+          reopened.close();
+        }
       }
     },
   };

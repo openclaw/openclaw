@@ -213,6 +213,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       agentDir: mainAgentDir,
     });
     await expect(resolveFrom(subAgents[2])).resolves.toBeNull();
+    clearRuntimeAuthProfileStoreSnapshots();
     await expect(resolveFrom(subAgents[2])).resolves.toBeNull();
     expect(callCount).toBe(1);
     await expect(resolveFrom(subAgents[3])).resolves.toEqual(

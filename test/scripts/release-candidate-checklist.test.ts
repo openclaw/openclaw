@@ -20,6 +20,7 @@ import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import {
   normalizePublicationIntent,
   publicationAdmissionContract,
@@ -2137,6 +2138,17 @@ describe("release candidate checklist", () => {
       wait_for_clawhub: "true",
     });
     expect(preparedInputs).not.toHaveProperty("finalize_release_before_docker");
+    for (const mode of ["prepare", "publish"] as const) {
+      const generated = buildPublishCommand(options, undefined, mode);
+      const workflow = parse(
+        readFileSync(`.github/workflows/openclaw-release-${mode}.yml`, "utf8"),
+      ) as { on: { workflow_dispatch: { inputs: Record<string, unknown> } } };
+      for (const match of generated.matchAll(/'-f' '([^=']+)=/gu)) {
+        expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(
+          expectDefined(match[1], "release command input"),
+        );
+      }
+    }
   });
 
   it("validates Plugin SDK acknowledgement digests", () => {
