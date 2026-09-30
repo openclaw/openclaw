@@ -118,6 +118,7 @@ struct ChatSessionSidebar: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 self.batchBar
+                self.archiveUndoNotice
                 self.connectionFooter
             }
             .background(.bar)

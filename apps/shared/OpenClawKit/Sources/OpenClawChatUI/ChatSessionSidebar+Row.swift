@@ -66,7 +66,8 @@ extension ChatSessionSidebar {
                     pinned: session.pinned != true,
                     agentID: session.agentId)
             },
-            archive: { self.viewModel.setSessionArchived(session, archived: !session.isArchived) },
+            archive: { Task { await self.archiveSidebarSession(session) } },
+            archiving: self.batch.isArchiving(session),
             presentedAttention: self.$presentedAttention)
         return self.interactionRow(content, session: session, isChild: isChild)
             .overlay(alignment: .leading) {
@@ -154,6 +155,7 @@ private struct ChatSidebarRow: View {
     let mainSessionKey: String
     let pin: () -> Void
     let archive: () -> Void
+    let archiving: Bool
     @Binding var presentedAttention: OpenClawChatAttentionPresentation?
     @State private var hovered = false
     @FocusState private var focus: Focus?
@@ -306,7 +308,7 @@ private struct ChatSidebarRow: View {
             .accessibilityLabel(self.node.session
                 .isArchived ? String(localized: "Restore") : String(localized: "Archive"))
             .focused(self.$focus, equals: .archive)
-            .disabled(!self.connected || !ChatSessionSidebarEligibility.canArchive(
+            .disabled(!self.connected || self.archiving || !ChatSessionSidebarEligibility.canArchive(
                 self.node.session, mainSessionKey: self.mainSessionKey))
         }
         .buttonStyle(.borderless)

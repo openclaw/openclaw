@@ -196,6 +196,13 @@ web actions menu, including plugin actions and **Stop cloud worker…** when
 available. Confirmation, progress, and errors stay in the web conversation.
 Older Gateway UIs keep their existing conversation behavior without these extras.
 
+Archiving from the sidebar offers **Undo** for six seconds; hovering or focusing
+the notice pauses that countdown. Undo restores the captured thread and its
+previous pin state, including successful threads from a partial batch archive.
+It remains available while you change conversations, filters, or agents, and
+leaves the current conversation selected. Reconnecting retires the action; if a
+thread was replaced before Undo, the failure stays visible.
+
 **Show message preview**, **Show automation sessions**, and **Show system sessions**
 are off by default. Automation sessions are cron conversations; system sessions
 are identified from their recorded creation source. Human-created and named

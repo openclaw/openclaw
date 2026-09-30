@@ -36,8 +36,9 @@ extension ChatSessionSidebar {
             rename: {
                 self.renameText = session.label ?? session.displayName ?? ""
                 self.sessionPendingRename = session
-            },
-            delete: { self.sessionPendingDeletion = session },
+            }, delete: { self.sessionPendingDeletion = session },
+            archive: { Task { await self.archiveSidebarSession(session) } },
+            archiving: self.batch.isArchiving(session),
             present: { self.menuPresentation = $0 })
     }
 }
@@ -53,6 +54,8 @@ private struct ChatSessionSidebarRowMenu: View {
     let inspect: () -> Void
     let rename: () -> Void
     let delete: () -> Void
+    let archive: () -> Void
+    let archiving: Bool
     let present: (ChatSessionMenuPresentation) -> Void
 
     var body: some View {
@@ -115,12 +118,14 @@ private struct ChatSessionSidebarRowMenu: View {
                 mainSessionKey: self.viewModel.selectedAgentMainSessionKey)
             {
                 self.button(
-                    self.session.isArchived ? String(localized: "Restore") : String(localized: "Archive"),
+                    self.archiving ? String(localized: "Archiving…") :
+                        self.session.isArchived ? String(localized: "Restore") : String(localized: "Archive"),
                     "archivebox",
                     key: "a")
                 {
-                    self.viewModel.setSessionArchived(self.session, archived: !self.session.isArchived)
+                    self.archive()
                 }
+                .disabled(self.archiving)
             }
             Divider()
             self.button(String(localized: "Icon & color…"), "paintpalette", key: "i") {
