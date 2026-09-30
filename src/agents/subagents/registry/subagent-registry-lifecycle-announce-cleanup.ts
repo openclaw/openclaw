@@ -345,8 +345,11 @@ export const startSubagentAnnounceCleanupFlow = (
   const requesterSettleGeneration = entry.requesterSettleWake?.rearmGeneration;
   const requesterOwnsCompletion = () =>
     entry.requesterTurnYielded === true || hasRequesterCompletionCohort(entry);
+  // Existing cohort ownership blocks competing sends but does not settle this attempt's delivery.
   const requesterTookCompletion = () =>
-    requesterOwnsCompletion() ||
+    entry.requesterTurnYielded === true ||
+    (entry.completionTarget === "parent" &&
+      entry.requesterSettleWake?.requesterYieldBatch === true) ||
     entry.requesterSettleWake?.rearmGeneration !== requesterSettleGeneration;
   let latestDeliveryError = getDeliveryLastError(entry);
   let committedDelivery: SubagentRunRecord["delivery"];
