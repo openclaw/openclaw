@@ -22,6 +22,8 @@ const uiDir = path.join(repoRoot, "ui");
 const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
 const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
+const PUBLISH_RENAME_DELAYS_MS = [100, 200, 400, 800, 1600];
+const PUBLISH_RENAME_WAIT = new Int32Array(new SharedArrayBuffer(4));
 
 type UiBuildEnvironmentSources = {
   env?: NodeJS.ProcessEnv;
@@ -348,6 +350,25 @@ function removeUiBuildDirectory(directory: string): void {
   }
 }
 
+function renameWithRetry(from: string, to: string): void {
+  // Windows scanners/indexers can transiently deny freshly written or served trees.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error) {
+      const delay = PUBLISH_RENAME_DELAYS_MS[attempt];
+      if (
+        delay === undefined ||
+        !["EPERM", "EACCES", "EBUSY"].some((code) => hasErrorCode(error, code))
+      ) {
+        throw error;
+      }
+      Atomics.wait(PUBLISH_RENAME_WAIT, 0, 0, delay);
+    }
+  }
+}
+
 function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpawnResult {
   const dist = path.join(repoRoot, "dist");
   const output = path.join(dist, "control-ui");
@@ -363,7 +384,7 @@ function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpa
       .map((name) => path.join(dist, name))
       .toSorted((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs)[0];
     if (retired) {
-      fs.renameSync(retired, output);
+      renameWithRetry(retired, output);
     }
   }
   for (const name of fs.readdirSync(dist)) {
@@ -394,13 +415,13 @@ function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpa
     }
     const hadOutput = fs.existsSync(output);
     if (hadOutput) {
-      fs.renameSync(output, retired);
+      renameWithRetry(output, retired);
     }
     try {
-      fs.renameSync(staging, output);
+      renameWithRetry(staging, output);
     } catch (error) {
       if (hadOutput) {
-        fs.renameSync(retired, output);
+        renameWithRetry(retired, output);
       }
       throw new Error("Failed to publish Control UI build; previous output retained.", {
         cause: error,

@@ -391,11 +391,12 @@ process.exitCode = ${expectedExit};\n`,
       viteExit: 1,
       performanceExit: 0,
       seedSiblings: false,
-      failPublish: false,
+      publishDenials: 0,
       expectedExit: 1,
       expectedHealth: "missing-index",
       expectedOutputId: null,
       expectedDistEntries: [],
+      expectedWaits: [],
       expectedStderr: null,
     },
     {
@@ -405,11 +406,12 @@ process.exitCode = ${expectedExit};\n`,
       viteExit: 1,
       performanceExit: 0,
       seedSiblings: false,
-      failPublish: false,
+      publishDenials: 0,
       expectedExit: 1,
       expectedHealth: "stale",
       expectedOutputId: "stale-runtime",
       expectedDistEntries: ["control-ui"],
+      expectedWaits: [],
       expectedStderr: null,
     },
     {
@@ -419,11 +421,12 @@ process.exitCode = ${expectedExit};\n`,
       viteExit: 0,
       performanceExit: 17,
       seedSiblings: false,
-      failPublish: false,
+      publishDenials: 0,
       expectedExit: 17,
       expectedHealth: "stale",
       expectedOutputId: "stale-runtime",
       expectedDistEntries: ["control-ui"],
+      expectedWaits: [],
       expectedStderr: null,
     },
     {
@@ -433,11 +436,12 @@ process.exitCode = ${expectedExit};\n`,
       viteExit: 0,
       performanceExit: 0,
       seedSiblings: true,
-      failPublish: false,
+      publishDenials: 0,
       expectedExit: 0,
       expectedHealth: "ready",
       expectedOutputId: "fixture-runtime",
       expectedDistEntries: ["control-ui", ...liveUiBuildSiblings],
+      expectedWaits: [],
       expectedStderr: null,
     },
     {
@@ -447,11 +451,12 @@ process.exitCode = ${expectedExit};\n`,
       viteExit: 0,
       performanceExit: 0,
       seedSiblings: false,
-      failPublish: true,
+      publishDenials: 100,
       expectedExit: 1,
       expectedHealth: "stale",
       expectedOutputId: "stale-runtime",
       expectedDistEntries: ["control-ui"],
+      expectedWaits: [100, 200, 400, 800, 1600],
       expectedStderr: "Failed to publish Control UI build; previous output retained.",
     },
     {
@@ -461,11 +466,27 @@ process.exitCode = ${expectedExit};\n`,
       viteExit: 1,
       performanceExit: 0,
       seedSiblings: false,
-      failPublish: false,
+      publishDenials: 0,
       expectedExit: 1,
       expectedHealth: "stale",
       expectedOutputId: "stale-runtime",
       expectedDistEntries: ["control-ui"],
+      expectedWaits: [],
+      expectedStderr: null,
+    },
+    {
+      label: "g: transient publication denial clears",
+      prior: true,
+      retiredOnly: false,
+      viteExit: 0,
+      performanceExit: 0,
+      seedSiblings: false,
+      publishDenials: 2,
+      expectedExit: 0,
+      expectedHealth: "ready",
+      expectedOutputId: "fixture-runtime",
+      expectedDistEntries: ["control-ui"],
+      expectedWaits: [100, 200],
       expectedStderr: null,
     },
   ])(
@@ -476,11 +497,12 @@ process.exitCode = ${expectedExit};\n`,
       viteExit,
       performanceExit,
       seedSiblings,
-      failPublish,
+      publishDenials,
       expectedExit,
       expectedHealth,
       expectedOutputId,
       expectedDistEntries,
+      expectedWaits,
       expectedStderr,
     }) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-ui-publication-"));
@@ -546,25 +568,38 @@ process.exitCode = ${exitCode};
 `,
         );
       }
-      const args = ["scripts/ui.js", "build", "--mode", "fixture with spaces"];
-      if (failPublish) {
-        const fsGuard = path.join(root, "fs-guard.cjs");
-        fs.writeFileSync(
-          fsGuard,
-          `
+      const fsGuard = path.join(root, "fs-guard.cjs");
+      const waitsFile = path.join(root, "rename-waits.json");
+      fs.writeFileSync(
+        fsGuard,
+        `
 const fs = require("node:fs");
 const rename = fs.renameSync;
+let remainingDenials = ${publishDenials};
+const waits = [];
+Atomics.wait = (_array, _index, _value, delay) => {
+  waits.push(delay);
+  return "timed-out";
+};
+process.on("exit", () => fs.writeFileSync(${JSON.stringify(waitsFile)}, JSON.stringify(waits)));
 fs.renameSync = function(from, to) {
-  if (to === ${JSON.stringify(output)} && !from.endsWith(".retired")) {
+  if (to === ${JSON.stringify(output)} && !from.endsWith(".retired") && remainingDenials > 0) {
+    remainingDenials -= 1;
     throw Object.assign(new Error("fixture publication failure"), { code: "EPERM" });
   }
   return rename(from, to);
 };
 require("node:module").syncBuiltinESMExports();
 `,
-        );
-        args.unshift("--require", fsGuard);
-      }
+      );
+      const args = [
+        "--require",
+        fsGuard,
+        "scripts/ui.js",
+        "build",
+        "--mode",
+        "fixture with spaces",
+      ];
       if (seedSiblings) {
         for (const name of [
           ...liveUiBuildSiblings,
@@ -589,6 +624,7 @@ require("node:module").syncBuiltinESMExports();
       });
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(expectedExit);
+      expect(JSON.parse(fs.readFileSync(waitsFile, "utf8"))).toEqual(expectedWaits);
       expect(inspectControlUiRootAssets(output, buildId).kind).toBe(expectedHealth);
       if (expectedOutputId) {
         const expected = buildFiles(expectedOutputId);
