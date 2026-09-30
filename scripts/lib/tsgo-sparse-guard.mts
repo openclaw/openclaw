@@ -108,7 +108,7 @@ export function getSparseTsgoGuardError(
   }: SparseGuardOptions = {},
 ) {
   const projectNames = readProjectNames(args);
-  if (projectNames.length === 0 || isMetadataOnlyCommand(args)) {
+  if (projectNames.length === 0 || isTsgoInfoCommand(args)) {
     return null;
   }
 
@@ -245,8 +245,7 @@ function readProjectNames(args: readonly string[]) {
   ];
 }
 
-function isMetadataOnlyCommand(args: readonly string[]) {
-  return args.some((arg) =>
-    ["--help", "-h", "--version", "-v", "--init", "--showConfig"].includes(arg),
-  );
+/** These exact invocations exit before native project/config loading. */
+export function isTsgoInfoCommand(args: readonly string[]) {
+  return args.length === 1 && ["--help", "-h", "--version", "-v"].includes(args[0]!);
 }

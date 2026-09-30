@@ -19,6 +19,7 @@ import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { findRepoRoot } from "./lib/repo-root.mjs";
 import {
   getSparseTsgoGuardError,
+  isTsgoInfoCommand,
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mts";
 
@@ -39,25 +40,15 @@ export function resolveTsgoTimeoutMs(env: NodeJS.ProcessEnv): number | undefined
 }
 
 /** Prepare one compiler invocation; the caller owns its process group and deadline. */
-export function prepareTsgoCommand(
+export async function prepareTsgoCommand(
   args: string[],
   baseEnv: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd(),
 ) {
-  const hostResources = {
-    logicalCpuCount:
-      typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
-    totalMemoryBytes: os.totalmem(),
-  };
-  const { args: finalArgs, env } = applyLocalTsgoPolicy(
-    args,
-    resolveLocalCheckEnv(baseEnv),
-    hostResources,
-  );
-
-  const sparseGuardError = getSparseTsgoGuardError(finalArgs, { cwd });
+  const localEnv = resolveLocalCheckEnv(baseEnv);
+  const sparseGuardError = getSparseTsgoGuardError(args, { cwd });
   if (sparseGuardError) {
-    if (shouldSkipSparseTsgoGuardError(env)) {
+    if (shouldSkipSparseTsgoGuardError(localEnv)) {
       console.error(sparseGuardError);
       console.error("[tsgo] skipping sparse-missing project because OPENCLAW_TSGO_SPARSE_SKIP=1");
       return null;
@@ -67,6 +58,17 @@ export function prepareTsgoCommand(
 
   // Subdirectories share checkout ownership, but another checkout's install never does.
   const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: findRepoRoot(cwd) ?? cwd });
+  // Sparse refusal and singleton queries must work without package source.
+  // Load the canonical capacity reader only after that dependency-free preflight.
+  const memoryCapacityBytes = isTsgoInfoCommand(args)
+    ? undefined
+    : (await import("./lib/process-memory.mts")).readProcessMemoryCapacity({}).capacityBytes;
+  const { args: finalArgs, env } = applyLocalTsgoPolicy(args, localEnv, {
+    logicalCpuCount:
+      typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
+    totalMemoryBytes: os.totalmem(),
+    memoryCapacityBytes,
+  });
   let timeoutMs: number | undefined;
   try {
     timeoutMs = resolveTsgoTimeoutMs(env);
@@ -87,7 +89,7 @@ export function prepareTsgoCommand(
 
 /** The caller holds artifact ownership until this compiler and its output are joined. */
 export async function runPreparedTsgoCommand(
-  command: NonNullable<ReturnType<typeof prepareTsgoCommand>>,
+  command: NonNullable<Awaited<ReturnType<typeof prepareTsgoCommand>>>,
   evidence: { evidenceId?: string; onEvidence?: () => void } = {},
 ): Promise<number> {
   try {
@@ -174,9 +176,9 @@ export async function runPreparedTsgoCommand(
 }
 
 async function main(): Promise<void> {
-  let command: ReturnType<typeof prepareTsgoCommand>;
+  let command: Awaited<ReturnType<typeof prepareTsgoCommand>>;
   try {
-    command = prepareTsgoCommand(process.argv.slice(2));
+    command = await prepareTsgoCommand(process.argv.slice(2));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

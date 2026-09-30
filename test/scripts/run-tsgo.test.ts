@@ -2,16 +2,19 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as processMemory from "../../scripts/lib/process-memory.mts";
 import {
   createSparseTsgoSkipEnv,
   getSparseTsgoGuardError,
+  isTsgoInfoCommand,
   shouldSkipSparseTsgoGuardError,
 } from "../../scripts/lib/tsgo-sparse-guard.mts";
-import { resolveTsgoTimeoutMs } from "../../scripts/run-tsgo.mts";
+import { prepareTsgoCommand, resolveTsgoTimeoutMs } from "../../scripts/run-tsgo.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { withTestTimeout } from "../helpers/promise.js";
@@ -83,6 +86,57 @@ export default () => process.execPath;\n`,
   },
 );
 
+it.each(["--help", "-h", "--version", "-v"])("recognizes singleton %s", (arg) => {
+  expect(isTsgoInfoCommand([arg])).toBe(true);
+});
+
+it.for([
+  [],
+  ["--showConfig"],
+  ["--init"],
+  ["--help", "false"],
+  ["--version", "null"],
+  ["--version", "--version", "false"],
+  ["--showConfig", "false"],
+  ["-b", "-v"],
+  ["--version", "@flags.txt"],
+  ["--outDir", "--showConfig"],
+])("does not classify compiler-capable arguments %j as singleton queries", (args) => {
+  expect(isTsgoInfoCommand(args)).toBe(false);
+});
+
+it.each([7, null])(
+  "prepares the compiler against %s GiB capacity on a large host",
+  async (capacity) => {
+    const memory = processMemory.readProcessMemoryCapacity({
+      cgroupMemoryLimitBytes: 7 * 1024 ** 3,
+      procMemTotalBytes: 64 * 1024 ** 3,
+    });
+    const memoryReader = vi.spyOn(processMemory, "readProcessMemoryCapacity").mockReturnValue({
+      ...memory,
+      capacityBytes: capacity === null ? null : capacity * 1024 ** 3,
+    });
+    const totalMemory = vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 ** 3);
+    const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(16);
+    try {
+      for (const ci of [undefined, "true"]) {
+        const command = await prepareTsgoCommand(["--noEmit"], {
+          CI: ci,
+          OPENCLAW_LOCAL_CHECK: ci ? "0" : "1",
+        });
+        expect(command?.args).toContain("--singleThreaded");
+        expect(command?.args).toContain("--checkers");
+        expect(command?.env).toMatchObject({ GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" });
+      }
+      expect(memoryReader).toHaveBeenCalledWith({});
+    } finally {
+      parallelism.mockRestore();
+      totalMemory.mockRestore();
+      memoryReader.mockRestore();
+    }
+  },
+);
+
 describe("run-tsgo sparse guard", () => {
   it("ends sparse-checkout failures with the stable failure trailer", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
@@ -125,7 +179,7 @@ describe("run-tsgo sparse guard", () => {
     ).toBeNull();
   });
 
-  it("ignores metadata-only commands", () => {
+  it("does not exempt project inventory from sparse input checks", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
 
     expect(
@@ -133,7 +187,7 @@ describe("run-tsgo sparse guard", () => {
         cwd,
         isSparseCheckoutEnabled: () => true,
       }),
-    ).toBeNull();
+    ).toContain("tracked project inputs are missing");
   });
 
   it("ignores sparse worktrees when the required files are present", () => {

@@ -106,6 +106,8 @@ describe("run-tsgo linked worktree entry", () => {
     installCheckoutTools(primary);
     const native = installCheckoutTools(root);
     const write = (file: string, text: string) => writeNativeFixtureFile(root, file, text);
+    const memoryDependency = "packages/normalization-core/src/mountinfo-path.ts";
+    write(memoryDependency, fs.readFileSync(path.join(sourceRoot, memoryDependency), "utf8"));
     const compilerOptions = {
       module: "NodeNext",
       target: "ES2023",

@@ -423,7 +423,7 @@ it.runIf(process.platform !== "win32").each([
     fs.writeFileSync(
       path.join(root, "scripts/run-tsgo.mts"),
       `import fs from "node:fs";
-export function prepareTsgoCommand(args) { return args; }
+export async function prepareTsgoCommand(args) { return args; }
 export async function runPreparedTsgoCommand(args, options) {
   const fd = fs.openSync("active-compiler", "wx");
   try {

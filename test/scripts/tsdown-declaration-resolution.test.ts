@@ -230,7 +230,7 @@ console.log("standalone package boundary verified");
           path.join(root, "node_modules/typescript/lib/getExePath.js"),
         );
         expect(getExePath.default()).toBe(path.toNamespacedPath(native));
-        const compilerCommand = prepareTsgoCommand(["--version"], process.env, root);
+        const compilerCommand = await prepareTsgoCommand(["--version"], process.env, root);
         expect(compilerCommand?.bin).toBe(getExePath.default());
         const result = spawnSync(resolveRepoToolBinPath("tsgo", { cwd: root }), ["--version"], {
           cwd: root,

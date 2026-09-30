@@ -26,7 +26,7 @@ import { prepareTsgoCommand, runPreparedTsgoCommand } from "./run-tsgo.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 async function runShard(config: string, env: NodeJS.ProcessEnv, evidenceId: string) {
-  const command = prepareTsgoCommand(
+  const command = await prepareTsgoCommand(
     // These graphs have no project references. Project mode rechecks root
     // membership even when a restored build-info file is newer than a new root.
     [

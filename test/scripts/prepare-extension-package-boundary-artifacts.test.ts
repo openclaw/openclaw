@@ -542,7 +542,9 @@ child.once("message", () => process.exit(${exitCode}));
 
   it.each([false, true])("runs the declared compiler directly (invalid args=%s)", (invalid) =>
     fixture.run(async () => {
-      const command = prepareTsgoCommand([invalid ? "--invalid-boundary-proof" : "--version"]);
+      const command = await prepareTsgoCommand([
+        invalid ? "--invalid-boundary-proof" : "--version",
+      ]);
       expect(command).not.toBeNull();
       if (!command) {
         throw new Error("compiler unexpectedly skipped");
