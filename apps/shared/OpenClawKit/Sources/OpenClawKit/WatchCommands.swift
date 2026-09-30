@@ -649,7 +649,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         case .legacy: "Unavailable"
         }
         return [status.verbatim, status.localizationKey]
-            .compactMap { $0 }
+            .compactMap(\.self)
             .first { !$0.isEmpty } ?? defaultText
     }
 }
