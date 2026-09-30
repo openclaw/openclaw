@@ -1,4 +1,5 @@
 #if os(macOS)
+import OpenClawKit
 import SwiftUI
 
 extension ChatSessionSidebar {
@@ -11,12 +12,16 @@ extension ChatSessionSidebar {
         let session = node.session
         let attention = self.attentionSummary(sessions: node.previewSessions, now: now)
         let targetID = "session:\(session.key)"
+        let agentID = OpenClawChatSessionKey.agentID(from: session.key) ??
+            self.viewModel.sessionMutationTarget(key: session.key, agentID: session.agentId).agentID
         let facts = ChatSessionSidebarRowFacts(
             node: node,
             isChild: isChild,
             attention: attention,
             showPreview: self.showMessagePreview,
             isConnected: self.viewModel.healthOK,
+            webFacts: agentID.flatMap { self.viewModel.webConversation?.sidebarFacts(
+                for: .init(agentId: $0, sessionKey: session.key)) },
             preview: self.rowPreview(for: session, previewRequest: previewRequest),
             now: now)
         return ChatSidebarRow(
@@ -139,10 +144,14 @@ private struct ChatSidebarRow: View {
                 }
                 ForEach(self.facts.badges.indices, id: \.self) { index in
                     let badge = self.facts.badges[index]
-                    self.graphic(badge.glyph)
-                        .foregroundStyle(self.color(badge.tone))
-                        .help(badge.label)
-                        .accessibilityLabel(badge.label)
+                    HStack(spacing: 2) {
+                        self.graphic(badge.glyph)
+                        if let count = badge.count { Text(verbatim: String(count)).monospacedDigit() }
+                    }
+                    .foregroundStyle(self.color(badge.tone))
+                    .help(badge.label)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(badge.label)
                 }
                 if self.isChild, self.node.session.runtimeMs != nil || self.node.session.startedAt != nil {
                     ChatSidebarRuntime(session: self.node.session, isConnected: self.connected)

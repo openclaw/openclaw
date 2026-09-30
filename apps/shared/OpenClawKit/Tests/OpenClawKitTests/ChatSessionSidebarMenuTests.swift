@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
@@ -30,6 +31,26 @@ func sidebarMenuConnection(
 
 @MainActor
 struct ChatSessionSidebarMenuTests {
+    @Test func `more actions needs an advertised web owner and retains the clicked session`() throws {
+        let owner = OpenClawWebConversation()
+        let context = NativeConversationContext(agentId: "research", sessionKey: "agent:research:other")
+        #expect(owner.sessionActions(for: context) == nil)
+        owner.mode = .web
+        #expect(owner.sessionActions(for: context) == nil)
+        var invoked: [NativeConversationContext] = []
+        owner.openSessionActions = { invoked.append($0) }
+        let invoke = try #require(owner.sessionActions(for: context))
+        invoke()
+        #expect(invoked == [context])
+        owner.mode = .native
+        #expect(owner.sessionActions(for: context) == nil)
+        invoke()
+        #expect(invoked == [context])
+        owner.mode = .web
+        owner.openSessionActions = nil
+        #expect(owner.sessionActions(for: context) == nil)
+    }
+
     @Test func `appearance reset and involvement address the row incarnation and agent`() async throws {
         let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
         {"key":"agent:research:release-plan","sessionId":"durable-123","agentId":"stale-agent"}
