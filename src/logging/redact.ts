@@ -14,6 +14,12 @@ import {
   type RedactionEdit,
 } from "./redact-edit-composition.js";
 import { modelVisibleToolTextRedactionState } from "./redact-internal-state.js";
+import {
+  appendModelVisibleRedactionNotice,
+  maskReplacement,
+  MODEL_VISIBLE_REDACT_MARKER,
+  withModelVisibleMarker,
+} from "./redact-model-visible.js";
 import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
 import {
   redactJsonRecord,
@@ -73,56 +79,7 @@ const DEFAULT_REDACT_KEEP_END = 4;
 // Model-visible redaction replaces masked spans with a self-describing marker so a user or model
 // can tell a redacted span from real content instead of mistaking `***` / `proces…OKEN` for a value.
 // Diagnostic log surfaces keep the compact `***` marker.
-const MODEL_VISIBLE_REDACT_MARKER = "⟦redacted⟧";
-// Appended to model-visible tool content when redaction changed it, so the tool call itself carries
-// the notification (a user reading the transcript or the model reading the result both see it).
-const MODEL_VISIBLE_REDACTION_NOTICE =
-  "\n\n[openclaw] Note: sensitive value(s) in this content were redacted by the secret redactor before it reached the model.";
-// Stable prefix used to recognize an already-redacted model-visible payload by content.
-const MODEL_VISIBLE_REDACTION_NOTICE_PREFIX = "[openclaw] Note: sensitive value(s)";
-
-/** Whether a value (recursively) carries a model-visible redaction marker or notice. */
-export function containsModelVisibleRedaction(value: unknown, seen = new WeakSet<object>()): boolean {
-  if (typeof value === "string") {
-    return (
-      value.includes(MODEL_VISIBLE_REDACT_MARKER) ||
-      value.includes(MODEL_VISIBLE_REDACTION_NOTICE_PREFIX)
-    );
-  }
-  if (Array.isArray(value)) {
-    return value.some((entry) => containsModelVisibleRedaction(entry, seen));
-  }
-  if (value && typeof value === "object") {
-    if (seen.has(value)) {
-      return false;
-    }
-    seen.add(value);
-    return Object.values(value as Record<string, unknown>).some((entry) =>
-      containsModelVisibleRedaction(entry, seen),
-    );
-  }
-  return false;
-}
-
-// The active mask replacement is scoped to a synchronous redaction call. A module-level value keeps
-// the low-level mask helpers (maskToken, maskSecretValue, literal placeholders) in sync without
-// threading an option through every call site. Defaults to the compact "***" marker.
-let activeRedactMarker: string | undefined;
-function maskReplacement(): string {
-  return activeRedactMarker ?? "***";
-}
-function withRedactMarker<T>(marker: string | undefined, fn: () => T): T {
-  if (marker === undefined) {
-    return fn();
-  }
-  const previous = activeRedactMarker;
-  activeRedactMarker = marker;
-  try {
-    return fn();
-  } finally {
-    activeRedactMarker = previous;
-  }
-}
+export { containsModelVisibleRedaction } from "./redact-model-visible.js";
 const shellReferencePreservingPatterns = new WeakSet<ResolvedRedactPattern>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
@@ -335,11 +292,11 @@ function matchesAnyRedactPattern(
 }
 
 function maskToken(token: string): string {
-  if (token === "***" || token === activeRedactMarker) {
+  if (token === "***" || token === maskReplacement()) {
     return token;
   }
-  if (activeRedactMarker !== undefined) {
-    return activeRedactMarker;
+  if (maskReplacement() !== "***") {
+    return maskReplacement();
   }
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
@@ -395,8 +352,9 @@ function splitFormAwareCredentialValue(token: string): { secret: string; suffix:
 
 function maskSecretValue(token: string, options?: { hinted?: boolean }): string {
   const { maskable, suffix } = splitSecretValueForMask(token);
-  if (activeRedactMarker !== undefined) {
-    return `${activeRedactMarker}${suffix}`;
+  const marker = maskReplacement();
+  if (marker !== "***") {
+    return `${marker}${suffix}`;
   }
   return `${options?.hinted ? maskToken(maskable) : "***"}${suffix}`;
 }
@@ -692,12 +650,12 @@ function isEmptyShellParameterExpansionTail(token: string): boolean {
 // becomes `const token = proces…OKEN`) without protecting a credential, so assignment-family
 // patterns leave the captured reference intact.
 const ENV_REFERENCE_VALUE_RE =
-  /^(?:process\.env\.[A-Za-z_$][\w$]*|process\.env\[\s*["'][^"']+["']\s*\]|(?:os\.)?environ\[\s*["'][^"']+["']\s*\]|(?:os\.)?environ\.get\(\s*["'][^"']+["']|(?:os\.)?getenv\(\s*["'][^"']+["'])/;
+  /^(?:process\.env\.[A-Za-z_$][\w$]*|process\.env\[\s*["'][^"']+["']\s*\]|(?:os\.)?environ\[\s*["'][^"']+["']\s*\]|(?:os\.)?environ\.get\(\s*["'][^"']+["']|(?:os\.)?getenv\(\s*["'][^"']+["'])$/;
 
-function isNonSecretReferenceValue(input: string, start: number): boolean {
-  // Anchor on the raw input from the capture start: bracket/quote forms can be truncated by the
-  // capturing pattern (e.g. `process.env["FOO"]` is captured only up to the opening quote).
-  return ENV_REFERENCE_VALUE_RE.test(input.slice(start));
+function isNonSecretReferenceValue(value: string): boolean {
+  // The entire captured value must be a complete reference. A prefix match stays masked: a capture
+  // like `process.env.FOO-privateCredential` is a credential, not a reference.
+  return ENV_REFERENCE_VALUE_RE.test(value);
 }
 
 // Assignment-family patterns capture a scalar value after a secret-looking key. Only they may
@@ -731,7 +689,10 @@ function prepareRedactionCapture(
     };
   }
   const selected = selectSecretCapture(match, groups);
-  if (selected.value === maskReplacement() || (maskMarker !== undefined && selected.value === maskMarker)) {
+  if (
+    selected.value === maskReplacement() ||
+    (maskMarker !== undefined && selected.value === maskMarker)
+  ) {
     return undefined;
   }
   const tokenIndex =
@@ -751,7 +712,10 @@ function prepareRedactionCapture(
       if (allowPatterns?.length && matchesAnyRedactPattern(token, allowPatterns)) {
         return undefined;
       }
-      if (isAssignmentFamilyPattern(pattern) && isNonSecretReferenceValue(input, target.start)) {
+      if (
+        isAssignmentFamilyPattern(pattern) &&
+        isNonSecretReferenceValue(splitSecretValueForMask(token).maskable)
+      ) {
         return undefined;
       }
       if (
@@ -906,7 +870,7 @@ function markPatternMatchRedaction(
   }
   if (
     isAssignmentFamilyPattern(pattern) &&
-    isNonSecretReferenceValue(input, match.offset + tokenStart)
+    isNonSecretReferenceValue(splitSecretValueForMask(selected.value).maskable)
   ) {
     return;
   }
@@ -1126,7 +1090,7 @@ export function prepareModelVisibleToolTextBlock<T extends { type: "text"; text:
     ...block,
     text: appendModelVisibleRedactionNotice(
       block.text,
-      withRedactMarker(MODEL_VISIBLE_REDACT_MARKER, () =>
+      withModelVisibleMarker(() =>
         redactModelVisibleSensitiveFieldValueWithConfig("text", block.text, loggingConfig),
       ),
     ),
@@ -1141,7 +1105,7 @@ export function redactModelVisibleToolPayloadTextWithConfig(
 ): string {
   return appendModelVisibleRedactionNotice(
     text,
-    withRedactMarker(MODEL_VISIBLE_REDACT_MARKER, () =>
+    withModelVisibleMarker(() =>
       redactToolPayloadTextWithPolicy(
         text,
         loggingConfig,
