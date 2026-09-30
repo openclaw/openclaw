@@ -321,12 +321,12 @@ async function migrateAgentDatabase(
     assertOpenClawAgentDatabaseForMaintenance(database, params);
     const cursor = readMigrationCursor(database, params.pathname);
     if (cursor.phase === "complete") {
-      recoverPendingTranscriptArchivePublication({
+      const warnings = recoverPendingTranscriptArchivePublication({
         agentId: params.agentId,
         database,
         pathname: params.pathname,
       });
-      return { archivedTranscripts: 0, transcriptSessions: 0, warnings: [] };
+      return { archivedTranscripts: 0, transcriptSessions: 0, warnings };
     }
     const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
     const transcriptSessions =

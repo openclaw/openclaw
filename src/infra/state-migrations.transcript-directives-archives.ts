@@ -456,14 +456,15 @@ function recoverArchivePublication(params: {
   onArchive?: (archivePath: string) => void;
   pathname: string;
   recoveryKey: string;
-}): void {
+}): string[] {
   const journal = readArchiveRecoveryJournal(params.database, params.recoveryKey);
   if (!journal) {
-    return;
+    return [];
   }
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(params.database);
   const ready: ArchiveRecoveryRow[] = [];
   const unresolved: ArchiveRecoveryRow[] = [];
+  const missingCopyExamples: string[] = [];
   for (const recorded of journal.rows) {
     const row = executeSqliteQueryTakeFirstSync(
       params.database,
@@ -492,6 +493,9 @@ function recoverArchivePublication(params: {
       ready.push(recorded);
     } else {
       unresolved.push(recorded);
+      if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
+        missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
+      }
     }
   }
   runSqliteImmediateTransactionSync(
@@ -525,14 +529,25 @@ function recoverArchivePublication(params: {
       operationLabel: "historical-transcript-archive-recovery",
     },
   );
+  return unresolved.length > 0
+    ? [
+        formatMigrationWarningSummary({
+          summary: `${params.pathname}: Missing ${unresolved.length} canonical transcript archive file(s)`,
+          count: unresolved.length,
+          detail:
+            "Canonical SQLite archive blobs remain retained. Migration completed without recreating the missing copies.",
+        }),
+        ...missingCopyExamples,
+      ]
+    : [];
 }
 
 export function recoverPendingTranscriptArchivePublication(params: {
   agentId: string;
   database: DatabaseSync;
   pathname: string;
-}): void {
-  recoverArchivePublication({
+}): string[] {
+  return recoverArchivePublication({
     ...params,
     archiveDirectory: resolveSqliteTranscriptArchiveDirectory({
       agentId: params.agentId,
