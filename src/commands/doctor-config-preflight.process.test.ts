@@ -453,7 +453,7 @@ describe("Doctor repair followed by gateway readiness", () => {
       const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
       expect(loaded.store.jobs.map((entry) => entry.id)).toContain("valid-job");
       expect(
-        loadCronQuarantinedJobs(storePath, env).map((entry) => ({
+        (await loadCronQuarantinedJobs(storePath, env)).map((entry) => ({
           sourceIndex: entry.sourceIndex,
           reason: entry.reason,
           id: entry.job?.id,
