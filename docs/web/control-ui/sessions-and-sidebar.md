@@ -300,6 +300,8 @@ The menu groups routine actions first: **Pin/Unpin**, **Rename**, **Mark as unre
 If an owner assignment fails on the Sessions page, the page keeps the session and
 shows the Gateway's error. Resolve the reported problem, then reopen **Assign to**
 to retry. A late failure from a previous connection does not replace the current page's state.
+The **Assign to** menu marks the session's current owner and disables that choice,
+including while the team directory is loading or unavailable.
 
 ### Share a session publicly
 
