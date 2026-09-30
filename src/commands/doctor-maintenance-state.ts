@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
+import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -27,6 +28,7 @@ export function createDoctorMaintenanceState(options: {
 }) {
   const { params, env, settle } = options;
   let resources: OpenClawDatabaseMaintenanceScope | undefined;
+  let inspections: ReturnType<typeof createSqliteReadOnlyWorkerScope> | undefined;
   let owner: Awaited<ReturnType<typeof acquireDoctorGatewayMaintenanceOwner>> | undefined;
   let selectedEnv = env;
   let captureAdmitted = false;
@@ -40,7 +42,9 @@ export function createDoctorMaintenanceState(options: {
   });
   const closeResources = async () => {
     await resources?.close();
+    await inspections?.close();
     resources = undefined;
+    inspections = undefined;
   };
   const settleCapture = async () => {
     if (owner && capture && captureAdmitted) {
@@ -69,6 +73,10 @@ export function createDoctorMaintenanceState(options: {
           admitOpenClawMaintenanceLiveAuthorityReads(resolveOpenClawStateSqlitePath(selectedEnv)),
         );
       }
+      inspections = createSqliteReadOnlyWorkerScope({
+        signal: options.signal,
+        deadlineOwnedByCaller: false,
+      });
     } catch (error) {
       await acquired.release();
       owner = undefined;
@@ -88,6 +96,10 @@ export function createDoctorMaintenanceState(options: {
     },
     get receipt() {
       return owner ? undefined : capture?.receipt;
+    },
+    run<T>(operation: () => T): T {
+      // Cancellation stops read-only inspections; admitted writers retain their resource scope.
+      return resources!.run(() => inspections!.run(operation));
     },
     async acquire(relocatedMaintenanceOwner?: typeof owner) {
       if (resources) {
