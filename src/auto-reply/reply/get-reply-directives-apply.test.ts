@@ -1,5 +1,6 @@
 // Tests applying parsed directives to get-reply execution options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -36,6 +37,55 @@ beforeEach(() => {
 });
 
 describe("applyInlineDirectiveOverrides", () => {
+  it.each(["thinking", "catalog"] as const)(
+    "cancels a reply directive during %s discovery without consuming its late result",
+    async (stage) => {
+      const held = createDeferred();
+      const entered = createDeferred();
+      const controller = new AbortController();
+      const wait = async () => {
+        entered.resolve();
+        await held.promise;
+      };
+      const pending = applyMixedDirectives({
+        body: stage === "thinking" ? "/think low" : "/status",
+        abortSignal: controller.signal,
+        resolveDefaultThinkingLevel: async () => {
+          if (stage === "thinking") {
+            await wait();
+          }
+          return "off";
+        },
+        resolveThinkingCatalog: async () => {
+          if (stage === "catalog") {
+            await wait();
+          }
+          return [];
+        },
+      });
+      await entered.promise;
+      const outcome = pending.then(
+        () => "completed",
+        (error: unknown) => (error instanceof Error ? error.name : "unknown"),
+      );
+      controller.abort();
+      try {
+        expect(
+          await Promise.race([
+            outcome,
+            new Promise<string>((resolve) => {
+              setImmediate(() => resolve("pending"));
+            }),
+          ]),
+        ).toBe("AbortError");
+        expect(mocks.handleDirective).not.toHaveBeenCalled();
+      } finally {
+        held.resolve();
+        await Promise.allSettled([pending]);
+      }
+    },
+  );
+
   it("returns the elevated denial for a prepared global owner", async () => {
     const ctx = buildTestCtx({
       Body: "/elevated on",
