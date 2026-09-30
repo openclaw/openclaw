@@ -843,6 +843,7 @@ const EXCLUSIVE_COMPACT_GROUP_RE =
 // An indivisible file above this budget must not acquire additional work.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 const COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS = 250;
+const COMPACT_SERIAL_CLI_GROUP_NAME_RE = /^agentic-cli(?:(?:-process)?-hosted-\d+)?$/u;
 
 export function isExclusiveCompactShardName(shardName: string): boolean {
   return EXCLUSIVE_COMPACT_GROUP_RE.test(shardName);
@@ -4411,7 +4412,7 @@ function packSelectedNodeTestJobs(
       return runnerBackend === "hybrid" &&
         !first.pretestBuildMode &&
         bin.every((job) => job.predictedSeconds! <= COMPACT_EXCLUSIVE_JOB_SECONDS) &&
-        groups.every((group) => /^agentic-cli(?:-process-hosted-\d+)?$/u.test(group.shard_name))
+        groups.every((group) => COMPACT_SERIAL_CLI_GROUP_NAME_RE.test(group.shard_name))
         ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
         : COMPACT_EXCLUSIVE_JOB_SECONDS;
     }
@@ -4889,7 +4890,7 @@ function createCompactNodeTestShardBundles(
           (entry) =>
             !entry.requiresDist &&
             !entry.pretestBuildMode &&
-            /^agentic-cli(?:-process-hosted-\d+)?$/u.test(entry.shard_name) &&
+            COMPACT_SERIAL_CLI_GROUP_NAME_RE.test(entry.shard_name) &&
             estimateBinSeconds([entry]) <= COMPACT_EXCLUSIVE_JOB_SECONDS,
         );
       // Hosted preparation exceeds the exclusive test budget by itself. Share

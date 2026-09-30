@@ -1673,7 +1673,6 @@ src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
 src/auto-reply/reply/commands-acp/diagnostics.ts	2
-src/auto-reply/reply/commands-acp/shared.ts	1
 src/auto-reply/reply/commands-allowlist.ts	6
 src/auto-reply/reply/commands-config.ts	1
 src/auto-reply/reply/commands-context-report.ts	1
@@ -2213,7 +2212,7 @@ src/gateway/server-methods/approval-shared.ts	1
 src/gateway/server-methods/approval.ts	2
 src/gateway/server-methods/attachment-normalize.ts	1
 src/gateway/server-methods/base-hash.ts	1
-src/gateway/server-methods/channels.ts	12
+src/gateway/server-methods/channels.ts	2
 src/gateway/server-methods/chat-abort-authorization.ts	3
 src/gateway/server-methods/chat-assistant-content.ts	1
 src/gateway/server-methods/chat-broadcast.ts	1
@@ -2229,7 +2228,6 @@ src/gateway/server-methods/config.ts	4
 src/gateway/server-methods/cron.ts	3
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3
-src/gateway/server-methods/exec-approval.ts	2
 src/gateway/server-methods/exec-approvals.ts	2
 src/gateway/server-methods/mcp-app.ts	1
 src/gateway/server-methods/memory-search.ts	3
@@ -2254,7 +2252,6 @@ src/gateway/server-methods/sessions-create.ts	1
 src/gateway/server-methods/sessions-messaging.ts	3
 src/gateway/server-methods/sessions-patch-engine.ts	1
 src/gateway/server-methods/skills-workspace-handler.ts	1
-src/gateway/server-methods/skills.ts	3
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
 src/gateway/server-methods/task-suggestions.ts	5

@@ -546,6 +546,7 @@ extension OpenClawChatViewModel {
             }
             self.switchSession(to: createdKey)
         } catch {
+            guard self.isCurrentSession(initiatingSession) else { return }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.create(fork) failed \(error.localizedDescription, privacy: .public)")
@@ -588,6 +589,7 @@ extension OpenClawChatViewModel {
             await self.refreshSessionBranches(confirmingBranchChange: true)
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
+            guard self.isCurrentSession(initiatingSession) else { return }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.rewind failed \(error.localizedDescription, privacy: .public)")
@@ -824,6 +826,7 @@ extension OpenClawChatViewModel {
             self.restoreEditorAttachments(result.editorAttachments)
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
+            guard self.isCurrentSession(initiatingSession) else { return }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.fork failed \(error.localizedDescription, privacy: .public)")
