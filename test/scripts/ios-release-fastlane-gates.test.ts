@@ -326,23 +326,27 @@ puts JSON.generate(rows)
     const source = String.raw`
 require "json"
 require "tempfile"
-module UI
+module TestUI
   def self.user_error!(message); raise message; end
   def self.success(*); end
   def self.important(*); end
   def self.message(*); end
   def self.header(*); end
 end
-# Fastlane evaluates its Fastfile in an instance binding. Top-level load
-# incorrectly makes Fastfile constants visible to require_relative helpers.
+# Fastlane evaluates its Fastfile in an instance binding and exposes UI only
+# through its namespace, not Object. Neither constant scope leaks into helpers.
 if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
   require "fastlane"
-  FastlaneCore::UI.ui_object = UI
+  FastlaneCore::UI.ui_object = TestUI
   Fastlane.load_actions
   fastfile = Fastlane::FastFile.new(ARGV.fetch(0))
   run_stage = ->(options) { fastfile.runner.execute(:release_stage, :ios, options) }
 else
+  module FastlaneCore
+    UI = TestUI
+  end
   class FastfileFixture
+    UI = FastlaneCore::UI
     def parsing_binding; binding; end
     def default_platform(*); end
     def desc(*); end
