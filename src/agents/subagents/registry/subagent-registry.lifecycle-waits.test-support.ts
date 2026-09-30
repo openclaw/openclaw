@@ -1,5 +1,6 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
@@ -82,29 +83,28 @@ export function createLifecycleWaits(requesterSessionKey: string) {
     runId: string,
     options?: { allowPendingRequesterSettleWake?: boolean },
   ) => {
-    let lastRun: ReturnType<typeof mod.listSubagentRunsForRequester>[number] | undefined;
-    for (let attempt = 0; attempt < 80; attempt += 1) {
+    const delivered = createDeferred();
+    const observe = () => {
       const run = mod
         .listSubagentRunsForRequester(requesterSessionKey)
         .find((candidate) => candidate.runId === runId);
-      lastRun = run;
       if (
         run?.delivery?.status === "delivered" &&
         typeof run.cleanupCompletedAt === "number" &&
         (options?.allowPendingRequesterSettleWake === true || run.requesterSettleWake === undefined)
       ) {
-        return;
+        delivered.resolve();
       }
-      await vi.advanceTimersByTimeAsync(1);
-      await flushAsync();
+    };
+    const stop = subscribeSubagentRunChanges(observe);
+    onTestFinished(stop);
+    try {
+      observe();
+      await vi.advanceTimersByTimeAsync(0);
+      await delivered.promise;
+    } finally {
+      stop();
     }
-    throw new Error(
-      `run ${runId} did not finish delivered cleanup in time: ${JSON.stringify({
-        cleanupCompletedAt: lastRun?.cleanupCompletedAt,
-        delivery: lastRun?.delivery,
-        requesterSettleWake: lastRun?.requesterSettleWake,
-      })}`,
-    );
   };
 
   const waitForFrozenResult = async (runId: string, matches: (resultText: string) => boolean) => {
