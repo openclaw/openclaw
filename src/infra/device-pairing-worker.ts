@@ -4,15 +4,13 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import { invalidatePairedCardRendererCache } from "./device-pairing-card-renderer.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
 import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import { listDevicePairingStoreRecordsReadOnly } from "./device-pairing-store-readonly.js";
-import type {
-  DevicePairingAdmissionFacts,
-  DevicePairingWorkerOperations,
-} from "./device-pairing-worker-contract.js";
+import type { DevicePairingWorkerOperations } from "./device-pairing-worker-contract.js";
 import type { PairedDevice } from "./device-pairing.types.js";
 import {
   createSqliteWorkerOperationAdmission,
