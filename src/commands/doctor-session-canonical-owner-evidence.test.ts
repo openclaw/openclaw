@@ -14,7 +14,13 @@ describe("applyCanonicalOwnerEvidence depth cap", () => {
     // Build an acyclic chain: node 0 -> 1 -> ... -> depth-1 -> terminal.
     // Every node's `canonicalOwnerSessionKey` is the *next* node's sessionKey,
     // so each link is a distinct identity (no cycle for `seen` to catch).
-    const inventory = Array.from({ length: depth }, (_, i) => ({
+    const inventory: Array<{
+      canonicalKey: string;
+      canonicalOwnerSessionKey?: string;
+      sessionKey: string;
+      storedKey: string;
+      target: { agentId: string; sqlitePath: string };
+    }> = Array.from({ length: depth }, (_, i) => ({
       canonicalKey: `key-${i}`,
       canonicalOwnerSessionKey: `session-${i + 1}`,
       sessionKey: `session-${i}`,
@@ -24,7 +30,6 @@ describe("applyCanonicalOwnerEvidence depth cap", () => {
     // Terminal node: no owner, so it is the root of the chain.
     inventory.push({
       canonicalKey: "root",
-      canonicalOwnerSessionKey: undefined,
       sessionKey: `session-${depth}`,
       storedKey: `session-${depth}`,
       target: { agentId: "main", sqlitePath },
@@ -37,7 +42,13 @@ describe("applyCanonicalOwnerEvidence depth cap", () => {
 
   it("still folds short chains to the terminal owner's canonical key", () => {
     const sqlitePath = "/store/openclaw-agent.sqlite";
-    const inventory = [
+    const inventory: Array<{
+      canonicalKey: string;
+      canonicalOwnerSessionKey?: string;
+      sessionKey: string;
+      storedKey: string;
+      target: { agentId: string; sqlitePath: string };
+    }> = [
       {
         canonicalKey: "alias",
         canonicalOwnerSessionKey: "owner",
@@ -47,7 +58,6 @@ describe("applyCanonicalOwnerEvidence depth cap", () => {
       },
       {
         canonicalKey: "root",
-        canonicalOwnerSessionKey: undefined,
         sessionKey: "owner",
         storedKey: "owner",
         target: { agentId: "main", sqlitePath },
@@ -55,13 +65,19 @@ describe("applyCanonicalOwnerEvidence depth cap", () => {
     ];
     const result = applyCanonicalOwnerEvidence(inventory);
     // The alias node must fold to the owner's canonical key ("root").
-    expect(inventory[0].canonicalKey).toBe("root");
+    expect(inventory[0]?.canonicalKey).toBe("root");
     expect(result).toBeInstanceOf(Map);
   });
 
   it("breaks cycles without infinite recursion", () => {
     const sqlitePath = "/store/openclaw-agent.sqlite";
-    const inventory = [
+    const inventory: Array<{
+      canonicalKey: string;
+      canonicalOwnerSessionKey?: string;
+      sessionKey: string;
+      storedKey: string;
+      target: { agentId: string; sqlitePath: string };
+    }> = [
       {
         canonicalKey: "a",
         canonicalOwnerSessionKey: "b",
