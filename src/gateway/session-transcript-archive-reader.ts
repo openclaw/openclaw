@@ -45,7 +45,8 @@ type ReadSessionMessagesPageOptions = {
 
 export type ReadSessionMessagesAsyncOptions =
   | {
-      mode: "full";
+      /** `full` reads the restorable active path; `retained` also keeps inactive branches. */
+      mode: "full" | "retained";
       reason: string;
     }
   | ({

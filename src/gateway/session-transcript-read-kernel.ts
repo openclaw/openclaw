@@ -14,9 +14,10 @@ import {
   readSessionTranscriptHistoryAnchorPageFromProjection,
   type SessionTranscriptMessageByIdOptions,
 } from "../config/sessions/session-accessor.sqlite-history-query.js";
-import type {
-  CurrentTranscriptProjection,
-  SessionTranscriptMessageEvent,
+import {
+  readInactiveTranscriptEventsFromProjection,
+  type CurrentTranscriptProjection,
+  type SessionTranscriptMessageEvent,
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import {
   iterateVisibleMessageRange,
@@ -37,7 +38,10 @@ import {
   type ReadRecentSessionMessagesOptions,
   type ReadSessionMessagesAsyncOptions,
 } from "./session-transcript-archive-reader.js";
-import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
+import {
+  projectTranscriptEntryMessage,
+  sqliteMessageEventWithSeq,
+} from "./session-transcript-entry-message.js";
 import type { ResolvedTranscriptReadTarget } from "./session-transcript-read-target.js";
 
 export type { SessionTranscriptReadScope };
@@ -95,6 +99,18 @@ function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEv
   const messages: unknown[] = [];
   for (const entry of entries) {
     const message = sqliteMessageEventWithSeq(entry);
+    if (message) {
+      messages.push(message);
+    }
+  }
+  return messages;
+}
+
+/** Destructive retention keeps inactive branches, which a switch can make visible again. */
+function projectInactiveTranscriptMessages(projection: CurrentTranscriptProjection): unknown[] {
+  const messages: unknown[] = [];
+  for (const { event, seq } of readInactiveTranscriptEventsFromProjection(projection)) {
+    const message = projectTranscriptEntryMessage(event, seq);
     if (message) {
       messages.push(message);
     }
@@ -208,24 +224,27 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     opts: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
   ): Promise<ReadSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
-    const messages =
-      (await readSnapshotIfPresent(
-        target,
-        (projection) =>
+    const { messages, inactive } = (await readSnapshotIfPresent(
+      target,
+      (projection) => ({
+        messages:
           opts.mode === "recent"
             ? readRecentSqliteMessageRecords(projection, opts).messages
             : projectSqliteHistoryEvents(
                 readSessionTranscriptHistoryEventsFromProjection(projection),
               ),
-        opts,
-      )) ?? [];
-    if (messages.length === 0 && opts.allowResetArchiveFallback === true) {
-      return await archivedTranscriptReader(target).read(opts);
-    }
-    return {
-      messages,
-      transcriptPath: target.sessionFile,
-    };
+        inactive: opts.mode === "retained" ? projectInactiveTranscriptMessages(projection) : [],
+      }),
+      opts,
+    )) ?? { messages: [], inactive: [] };
+    // Archive fallback keys on visible history alone; inactive rows never hide an archive.
+    const visible =
+      messages.length === 0 && opts.allowResetArchiveFallback === true
+        ? await archivedTranscriptReader(target).read(opts)
+        : { messages, transcriptPath: target.sessionFile };
+    return inactive.length > 0
+      ? { ...visible, messages: [...visible.messages, ...inactive] }
+      : visible;
   }
 
   async function readSessionMessageByIdAsync(

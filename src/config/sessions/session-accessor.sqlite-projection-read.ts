@@ -3,6 +3,7 @@ import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
   prepareSqliteQueryIterator,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
@@ -119,6 +120,43 @@ export function selectMessageRows(
     : query
         .where("active.message_position", ">=", selection.start)
         .where("active.message_position", "<", selection.endExclusive);
+}
+
+/**
+ * Rewind and branch switch keep abandoned branches in `transcript_events` and only move the
+ * leaf, so rows outside the active path stay restorable. Rows on the active path are left to
+ * the visible-history readers, which own reset windows there. A corrupt row throws, like a
+ * corrupt visible row: an unreadable branch cannot prove its media is unreferenced.
+ */
+export function readInactiveTranscriptEventsFromProjection(
+  projection: CurrentTranscriptProjection,
+): Array<{ event: TranscriptEvent; seq: number }> {
+  const { database } = projection;
+  const rows = iterateSqliteQuerySync(
+    database.db,
+    getActiveTranscriptKysely(database)
+      .selectFrom("transcript_events as event")
+      .select(["event.seq", transcriptEventJsonSql(database.db, "event").as("event_json")])
+      .where("event.session_id", "=", projection.resolved.sessionId)
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("session_transcript_active_events as active")
+              .select("active.event_seq")
+              .whereRef("active.session_id", "=", "event.session_id")
+              .whereRef("active.event_seq", "=", "event.seq"),
+          ),
+        ),
+      )
+      .orderBy("event.seq", "asc"),
+  );
+  // Array.from closes the iterator on parse failure; no live cursor escapes the snapshot.
+  return Array.from(rows, (row) => ({
+    // SAFETY: transcript_events stores serialized TranscriptEvent rows.
+    event: JSON.parse(row.event_json) as TranscriptEvent,
+    seq: row.seq,
+  }));
 }
 
 export function selectMessagePayload(

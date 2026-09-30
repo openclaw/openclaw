@@ -935,7 +935,7 @@ async function recordMatchesTranscriptMessage(
   const messages = cache
     ? (
         await readSessionMessagesWithSourceAsync(scope, {
-          mode: "full",
+          mode: "retained",
           reason: "managed outgoing attachment index",
           allowResetArchiveFallback: true,
         })

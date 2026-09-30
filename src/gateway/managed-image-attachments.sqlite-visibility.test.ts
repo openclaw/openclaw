@@ -410,11 +410,18 @@ describe("managed attachment SQLite visibility", () => {
         full.messages.map((m) => (m as { __openclaw?: { id?: string } })["__openclaw"]?.id),
       ).toEqual(kind === "reset-only" ? ["reset"] : ["root", "replacement"]);
       expect((await f.download()) === null).toBe(true);
+      // Downloads follow the active path, but a branch switch can restore an inactive
+      // branch, so cleanup must keep its bytes.
+      const retained = kind === "inactive-branch";
       expect(
         await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-      ).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
-      expect(await readManagedImageRecord(f.attachmentId, stateDir)).toBeNull();
-      expect(fs.existsSync(f.originalPath)).toBe(false);
+      ).toEqual(
+        retained
+          ? { deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 }
+          : { deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 },
+      );
+      expect((await readManagedImageRecord(f.attachmentId, stateDir)) !== null).toBe(retained);
+      expect(fs.existsSync(f.originalPath)).toBe(retained);
       expect(fs.readFileSync(archivePath)).toEqual(archiveBefore);
     },
   );
