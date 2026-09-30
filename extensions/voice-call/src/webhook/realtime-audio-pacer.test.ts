@@ -138,6 +138,42 @@ describe("RealtimeAudioPacer", () => {
     expect(sent.slice(-2)).toEqual(["mark:audio-1", "mark:audio-2"]);
   });
 
+  it("reports terminal mark transmission only after the preceding audio backlog", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    const sent: string[] = [];
+    const onSent = vi.fn();
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: (message) => {
+        sent.push(message);
+        return true;
+      },
+    });
+
+    pacer.sendAudio(createSequencedAudio(10));
+    pacer.sendMark("terminal", onSent);
+
+    expect(onSent).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(8);
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(sent.at(-1)).toBe("mark:terminal");
+    expect(onSent).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("reports a terminal mark that could not be sent", () => {
+    const onSent = vi.fn();
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: (message) => !message.startsWith("mark:"),
+    });
+
+    pacer.sendMark("terminal", onSent);
+
+    expect(onSent).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
   it("closes without sending the remaining lead-window backlog", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
     const sent: string[] = [];
