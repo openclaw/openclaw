@@ -30,6 +30,7 @@ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -71,7 +72,6 @@ import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slas
 import {
   applyLinkUnderstandingIfNeeded,
   applyMediaUnderstandingIfNeeded,
-  assertReplyPreprocessingActive,
   hasExplicitAudioUnderstandingConfig,
   hasLinkCandidate,
   resolveReplyAgentScope,
@@ -100,6 +100,7 @@ import {
   recordReplyPreRunRejection,
   resolveReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
@@ -925,10 +926,15 @@ export async function getReplyFromConfig(
     directives.hasStatusDirective ||
     command.commandBodyNormalized.trim() === "/status";
   const statusThinkingCatalog = shouldPrepareStatusThinkingCatalog
-    ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () =>
-        modelState.resolveThinkingCatalog(),
-      )
+    ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () => {
+        assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
+        return racePromiseWithAbortSignal(
+          modelState.resolveThinkingCatalog(),
+          resolvedOpts?.abortSignal,
+        );
+      })
     : undefined;
+  assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
 
   const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
     handleInlineActions({
@@ -1045,6 +1051,7 @@ export async function getReplyFromConfig(
     }
     resolveRunModelLevels = await createReplyProbeModelLevelResolver({
       modelState: runModelState,
+      abortSignal: resolvedOpts?.abortSignal,
       previous: resolveModelLevels,
       directives,
       sessionEntry,

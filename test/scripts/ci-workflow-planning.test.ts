@@ -11315,6 +11315,7 @@ describe("ci workflow guards", () => {
           { FRV_WINDOWS_NODE_ADVISORY: "true", GITHUB_STEP_SUMMARY: summary },
         );
         expect(outcome.status, `${job}: ${outcome.stdout}\n${outcome.stderr}`).toBe(1);
+        expect(outcome.stdout.split("\n")).toContain(`${job}: failure (selected=true)`);
         expect(outcome.stdout).toContain(`${job} finished with failure (selected=true)`);
       }
     },

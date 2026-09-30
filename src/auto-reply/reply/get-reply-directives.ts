@@ -445,6 +445,7 @@ export async function resolveReplyDirectives(params: {
   const inlineStatusRequested = hasInlineStatus && canInterpretMessageDirectives;
 
   const applyResult = await applyInlineDirectiveOverrides({
+    abortSignal: opts?.abortSignal,
     ctx,
     cfg,
     agentId,
@@ -551,6 +552,7 @@ export async function resolveReplyDirectives(params: {
       defaultActivation,
       resolveModelLevels: createReplyModelLevelResolver({
         modelState,
+        abortSignal: opts?.abortSignal,
         selection: {
           provider,
           model,

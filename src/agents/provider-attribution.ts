@@ -594,7 +594,7 @@ export function resolveProviderRequestCapabilities(
 
 function describeProviderRequestRoutingPolicy(
   policy: ProviderRequestPolicyResolution,
-): "hidden" | "documented" | "sdk-hook-only" | "none" {
+): "hidden" | "documented" | "none" {
   if (!policy.attributionProvider) {
     return "none";
   }
@@ -603,8 +603,6 @@ function describeProviderRequestRoutingPolicy(
       return "hidden";
     case "vendor-documented":
       return "documented";
-    case "vendor-sdk-hook-only":
-      return "sdk-hook-only";
     default:
       return "none";
   }

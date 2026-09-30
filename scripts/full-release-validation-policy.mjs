@@ -5,6 +5,10 @@ import {
   validateRecordedFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
 import {
+  validateFlakeClassification,
+  validateFlakeGateEntries,
+} from "./full-release-flake-classification.mjs";
+import {
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
   FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
   publicationIntentInputs,
@@ -30,7 +34,7 @@ export const WINDOWS_NODE_CI_ADVISORY = Object.freeze({
   aggregateJob: "checks-windows",
 });
 
-function isAdvisoryJob(child, job) {
+function isWindowsNodeAdvisoryJob(child, job) {
   return (
     child.key === WINDOWS_NODE_CI_ADVISORY.child &&
     typeof job.name === "string" &&
@@ -40,26 +44,102 @@ function isAdvisoryJob(child, job) {
   );
 }
 
+function recordedFlakeReceipt(child, job) {
+  return child.flakeClassifications?.find((receipt) => {
+    if (receipt.jobName !== job.name || receipt.jobUrl !== (job.html_url ?? job.url)) {
+      return false;
+    }
+    try {
+      validateFlakeClassification(receipt, { child: { ...child, jobs: [job] } });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function isAdvisoryJob(child, job) {
+  return isWindowsNodeAdvisoryJob(child, job) || Boolean(recordedFlakeReceipt(child, job));
+}
+
 export function releaseAdvisoryJobs(children) {
   return children.flatMap((child) =>
-    child.jobs
-      .filter((job) => isAdvisoryJob(child, job))
-      .map((job) => ({
-        class: WINDOWS_NODE_CI_ADVISORY.id,
-        child: child.key,
-        job: job.name,
-        conclusion: job.conclusion,
-        runId: child.runId,
-        url: job.html_url ?? job.url ?? "",
-      })),
+    child.jobs.flatMap((job) => {
+      const windows = isWindowsNodeAdvisoryJob(child, job);
+      const receipt = windows ? undefined : recordedFlakeReceipt(child, job);
+      return windows || receipt
+        ? [
+            {
+              class: windows ? WINDOWS_NODE_CI_ADVISORY.id : "recorded-flake",
+              child: child.key,
+              job: job.name,
+              conclusion: job.conclusion,
+              runId: child.runId,
+              url: job.html_url ?? job.url ?? "",
+              ...(receipt
+                ? {
+                    jobId: receipt.jobId,
+                    trackingUrl: receipt.trackingUrl,
+                    reason: receipt.reason,
+                    receiptRunId: receipt.receiptRunId,
+                  }
+                : {}),
+            },
+          ]
+        : [];
+    }),
   );
+}
+
+export function releaseChildClassificationEvidence(child) {
+  return child.flakeClassifications === undefined && child.gateEntries === undefined
+    ? {}
+    : {
+        flakeClassifications: child.flakeClassifications ?? [],
+        gateEntries: child.gateEntries ?? [],
+        status: child.status,
+        conclusion: child.conclusion,
+      };
+}
+
+function validateChildClassificationEvidence(child, binding) {
+  if (child.flakeClassifications !== undefined) {
+    if (!Array.isArray(child.flakeClassifications)) {
+      throw new Error("Release flake classifications are invalid");
+    }
+    if (
+      child.flakeClassifications.length &&
+      (!/^[1-9][0-9]*$/u.test(String(binding.parentRunId ?? "")) ||
+        positiveInteger(binding.parentRunAttempt) === undefined ||
+        !/^[a-f0-9]{40}$/u.test(String(binding.targetSha ?? "")))
+    ) {
+      throw new Error("Release flake classification parent binding is invalid");
+    }
+    const jobs = new Set();
+    for (const receipt of child.flakeClassifications) {
+      validateFlakeClassification(receipt, { ...binding, child });
+      if (jobs.has(receipt.jobId)) {
+        throw new Error("Release flake classifications repeat a job");
+      }
+      jobs.add(receipt.jobId);
+    }
+  }
+  if (child.gateEntries !== undefined) {
+    if (!Array.isArray(child.gateEntries)) {
+      throw new Error("Release CI gate entries are invalid");
+    }
+    if (child.gateEntries.length) {
+      validateFlakeGateEntries(child.gateEntries);
+    }
+  }
+  return releaseChildClassificationEvidence(child);
 }
 
 function validateReleaseAdvisoryJobs(value, children) {
   const expected = releaseAdvisoryJobs(children);
   const recorded = value === undefined ? [] : value;
   if (!Array.isArray(recorded) || jsonSha256(recorded) !== jsonSha256(expected)) {
-    throw new Error("Release advisory jobs differ from the windows-node-ci policy evidence");
+    throw new Error("Release advisory jobs differ from the release policy evidence");
   }
   return expected;
 }
@@ -88,7 +168,16 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
     ) {
       throw new Error("Release advisory child run differs from the manifest");
     }
-    return { key, runId: child.runId, jobs: child.jobs };
+    const snapshot = Object.assign({}, child, { key });
+    validateChildClassificationEvidence(snapshot, {
+      parentRunId: manifest.runId,
+      parentRunAttempt: manifest.sourceParentRunAttempt,
+      targetSha: manifest.targetSha,
+    });
+    if (child.flakeClassifications?.length && !terminalPolicyPass(snapshot)) {
+      throw new Error("Release recorded flake evidence does not pass terminal policy");
+    }
+    return snapshot;
   });
   return validateReleaseAdvisoryJobs(manifest.advisoryJobs, children);
 }
@@ -98,6 +187,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     Object.entries(drain?.children ?? {}).map(([key, child]) => [
       key,
       {
+        ...releaseChildClassificationEvidence(child),
         runId: child.runId,
         plannedRunAttempt: child.plannedRunAttempt,
         effectiveRunAttempt: child.runAttempt,
@@ -134,11 +224,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     publishInputs: context.publishInputs,
     advisoryJobs: releaseAdvisoryJobs(
-      Object.entries(childEvidence).map(([key, child]) => ({
-        key,
-        runId: child.runId,
-        jobs: child.jobs,
-      })),
+      Object.entries(childEvidence).map(([key, child]) => Object.assign({}, child, { key })),
     ),
     childEvidence,
     executionPlanSha256: plan.sha256,
@@ -1602,16 +1688,54 @@ function isFailedJob(job) {
   );
 }
 
+function recordedFlakeGatePass(child) {
+  const gates = child.jobs.filter((job) => job.name === "openclaw/ci-gate");
+  const advisoryJobs = child.jobs.filter((job) => isAdvisoryJob(child, job));
+  const entries = child.gateEntries;
+  if (
+    gates.length !== 1 ||
+    child.jobs.some((job) => job.status !== "completed") ||
+    gates[0].conclusion !== "failure" ||
+    !advisoryJobs.some((job) => recordedFlakeReceipt(child, job)) ||
+    child.jobs.some((job) => isFailedJob(job) && job !== gates[0] && !isAdvisoryJob(child, job)) ||
+    !Array.isArray(entries)
+  ) {
+    return false;
+  }
+  try {
+    validateFlakeGateEntries(entries);
+  } catch {
+    return false;
+  }
+  const nonPassing = entries.filter(
+    (entry) =>
+      !((entry.selected === true || entry.selected === false) && entry.result === "success") &&
+      !(entry.selected === false && entry.result === "skipped"),
+  );
+  // Every failed job is advisory, so failure entries can only come from those jobs.
+  // Any other non-passing entry means lost coverage; matrix display names may differ.
+  return (
+    nonPassing.length > 0 &&
+    nonPassing.every((entry) => entry.selected === true && entry.result === "failure")
+  );
+}
+
 export function terminalPolicyPass(child) {
   const failures = child.jobs.filter(isFailedJob);
-  const advisoryOnly = failures.length > 0 && failures.every((job) => isAdvisoryJob(child, job));
+  const gatePass = recordedFlakeGatePass(child);
+  const advisoryOnly =
+    failures.length > 0 &&
+    failures.every(
+      (job) => isAdvisoryJob(child, job) || (gatePass && job.name === "openclaw/ci-gate"),
+    );
   const gates = child.jobs.filter((job) => job.name === "openclaw/ci-gate");
   return (
     child.status === "completed" &&
     (child.conclusion === "success" || (child.conclusion === "failure" && advisoryOnly)) &&
-    failures.every((job) => isAdvisoryJob(child, job)) &&
-    // The gate owns selected-vs-skipped coverage, which the jobs API cannot prove.
+    (failures.length === 0 || advisoryOnly) &&
+    // Selected-vs-skipped coverage comes from the successful gate or its exact log.
     (!advisoryOnly ||
+      gatePass ||
       (gates.length === 1 && gates[0].status === "completed" && gates[0].conclusion === "success"))
   );
 }
@@ -1704,7 +1828,12 @@ export function classifyReleaseSnapshot({
   );
   const childJobBlockers = selected.flatMap((child) =>
     child.jobs
-      .filter((job) => isFailedJob(job) && !isAdvisoryJob(child, job))
+      .filter(
+        (job) =>
+          isFailedJob(job) &&
+          !isAdvisoryJob(child, job) &&
+          !(job.name === "openclaw/ci-gate" && recordedFlakeGatePass(child)),
+      )
       .map((job) => ({
         child: child.key,
         conclusion: job.conclusion,
@@ -1876,6 +2005,7 @@ export function buildReleaseStateArtifact({
         .map((child) => [
           child.key,
           {
+            ...releaseChildClassificationEvidence(child),
             compositeJobsSha256: boundedString(child.compositeJobsSha256, MAX_LABEL_LENGTH),
             conclusion: stringValue(child.conclusion),
             dispatchActor: boundedString(child.dispatchActor, MAX_LABEL_LENGTH),
@@ -2223,6 +2353,14 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
             return [
               key,
               {
+                ...validateChildClassificationEvidence(
+                  { ...child, key, jobs: timingJobs },
+                  {
+                    parentRunId: payload.parentRunId,
+                    parentRunAttempt: payload.sourceParentRunAttempt,
+                    targetSha: payload.targetSha,
+                  },
+                ),
                 compositeJobsSha256: boundedString(child.compositeJobsSha256, MAX_LABEL_LENGTH),
                 conclusion: stringValue(child.conclusion),
                 dispatchActor: boundedString(child.dispatchActor, MAX_LABEL_LENGTH),
@@ -2256,11 +2394,12 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
     activeRunIds,
     advisoryJobs: validateReleaseAdvisoryJobs(
       payload.advisoryJobs,
-      Object.entries(children).map(([key, child]) => ({
-        key,
-        runId: child.runId,
-        jobs: child.timing.jobs,
-      })),
+      Object.entries(children).map(([key, child]) =>
+        Object.assign({}, child, {
+          key,
+          jobs: child.timing.jobs,
+        }),
+      ),
     ),
     blockerCount: machineEvidence ? payload.blockerCount : null,
     blockerIndex: completeBlockerIndex,
@@ -2288,6 +2427,7 @@ export function releasePlanGateFailures(gates) {
 
 export function releaseStateChildEvidence(child) {
   return canonicalValue({
+    ...releaseChildClassificationEvidence(child),
     compositeJobsSha256: child.compositeJobsSha256,
     conclusion: child.conclusion,
     dispatchActor: child.dispatchActor,
@@ -2383,6 +2523,7 @@ function verifyStateStructure(state, executionPlan, label) {
     }
     return Object.assign({}, child, snapshot, {
       jobs: snapshot.timing.jobs.map((job) => ({
+        acceptedRunAttempt: job.acceptedRunAttempt,
         conclusion: job.conclusion,
         html_url: job.url,
         name: job.name,
@@ -2611,7 +2752,11 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
     lines.push(issueSummary("Collector error", error));
   }
   for (const advisory of payload.advisoryJobs ?? []) {
-    lines.push(issueSummary(`Advisory [${advisory.class}]`, advisory));
+    lines.push(
+      advisory.class === "recorded-flake"
+        ? `${issueSummary("Advisory [recorded-flake]", { ...advisory, job: `${advisory.child}/${advisory.job}` })} — ${advisory.reason} ${advisory.trackingUrl}`
+        : issueSummary(`Advisory [${advisory.class}]`, advisory),
+    );
   }
   const omitted =
     Math.max(0, payload.blockers.length - normalizedMax) +

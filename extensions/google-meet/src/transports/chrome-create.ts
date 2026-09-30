@@ -74,39 +74,6 @@ function isGoogleMeetCreateTab(tab: MeetingBrowserCandidateTab): boolean {
   );
 }
 
-async function findGoogleMeetCreateTab(params: {
-  runtime: PluginRuntime;
-  nodeId: string;
-  timeoutMs: number;
-}): Promise<MeetingBrowserCandidateTab | undefined> {
-  const tabs = asMeetingBrowserTabs(
-    await callBrowserProxyOnNode({
-      runtime: params.runtime,
-      nodeId: params.nodeId,
-      method: "GET",
-      path: "/tabs",
-      timeoutMs: params.timeoutMs,
-    }),
-  );
-  return tabs.find(isGoogleMeetCreateTab);
-}
-
-async function focusBrowserTab(params: {
-  runtime: PluginRuntime;
-  nodeId: string;
-  targetId: string;
-  timeoutMs: number;
-}): Promise<void> {
-  await callBrowserProxyOnNode({
-    runtime: params.runtime,
-    nodeId: params.nodeId,
-    method: "POST",
-    path: "/tabs/focus",
-    body: { targetId: params.targetId },
-    timeoutMs: params.timeoutMs,
-  });
-}
-
 function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionState | undefined {
   const action = asRecord(value);
   return typeof action.reason === "string" && typeof action.message === "string"
@@ -236,16 +203,22 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   );
   const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
   let openedByPlugin = false;
-  let tab = await findGoogleMeetCreateTab({
-    runtime: params.runtime,
-    nodeId,
-    timeoutMs: stepTimeoutMs,
-  });
-  if (tab?.targetId) {
-    await focusBrowserTab({
+  let tab = asMeetingBrowserTabs(
+    await callBrowserProxyOnNode({
       runtime: params.runtime,
       nodeId,
-      targetId: tab.targetId,
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: stepTimeoutMs,
+    }),
+  ).find(isGoogleMeetCreateTab);
+  if (tab?.targetId) {
+    await callBrowserProxyOnNode({
+      runtime: params.runtime,
+      nodeId,
+      method: "POST",
+      path: "/tabs/focus",
+      body: { targetId: tab.targetId },
       timeoutMs: stepTimeoutMs,
     });
     // Meet automation scripts match English UI labels; a reused tab may have

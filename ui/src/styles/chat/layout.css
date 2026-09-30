@@ -625,10 +625,6 @@ openclaw-pending-session-create {
   min-height: 0;
 }
 
-.chat-session {
-  min-width: 240px;
-}
-
 /* Virtual geometry must commit with its rows. A global reduced-motion duration
    otherwise activates the default "all" transition for offsets and height. */
 .chat-virtual-sizer,
@@ -2361,7 +2357,8 @@ button.chat-pr__diff {
   transform: rotate(180deg);
 }
 
-.chat-pr__checks-dot {
+.chat-pr__checks-dot,
+.chat-pr__checks-row-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -2422,13 +2419,6 @@ button.chat-pr__diff {
   align-items: center;
   gap: 5px;
   white-space: nowrap;
-}
-
-.chat-pr__checks-row-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
 }
 
 .chat-pr__checks-row--passed .chat-pr__checks-row-dot {
@@ -2973,11 +2963,6 @@ openclaw-chat-ci-details {
   }
 }
 
-@media (max-width: 900px) {
-  .chat-session {
-    min-width: 180px;
-  }
-}
 @container chat-composer (max-width: 480px) {
   @media (hover: none) {
     /* Touch has no hover reveal, so the microphone picker stays reachable as a

@@ -301,13 +301,7 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
       flushChunk();
       continue;
     }
-    const candidateSnippet = buildDailyChunkSnippet(activeHeading, [...chunkLines, snippet]);
-    const shouldSplit =
-      chunkLines.length > 0 &&
-      (chunkLines.length >= DAILY_INGESTION_MAX_CHUNK_LINES ||
-        candidateSnippet.length > DAILY_INGESTION_MAX_SNIPPET_CHARS);
-
-    if (shouldSplit) {
+    if (chunkLines.length >= DAILY_INGESTION_MAX_CHUNK_LINES) {
       flushChunk();
     }
 

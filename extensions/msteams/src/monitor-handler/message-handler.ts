@@ -315,7 +315,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     await dispatchMSTeamsInboundTurn({
       cfg: currentCfg,
       runtime,
-      appId,
       app,
       tokenProvider,
       textLimit,

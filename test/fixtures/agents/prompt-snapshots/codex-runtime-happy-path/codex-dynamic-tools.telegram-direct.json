@@ -1566,7 +1566,7 @@
         "inputSchema": {
           "properties": {
             "acknowledgment": {
-              "description": "Optional waiting reply for an otherwise-silent interactive parent turn.",
+              "description": "Optional waiting reply for an otherwise-silent interactive parent turn; with waitFor, the pause notice for the requester.",
               "type": "string"
             },
             "message": {
@@ -1575,7 +1575,7 @@
             },
             "waitFor": {
               "const": "message",
-              "description": "Explicitly pause an unfinished subagent until an incoming continuation message. Does not schedule a message or submit the final result.",
+              "description": "Explicitly pause an unfinished subagent until an incoming continuation message; its requester is notified once. Does not schedule a message or submit the final result.",
               "type": "string"
             }
           },

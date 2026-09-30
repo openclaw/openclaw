@@ -149,8 +149,7 @@ export function renderUsage(props: UsageProps) {
   // Get first selected session for detail view (timeseries, logs)
   const primarySelectedEntry =
     filters.selectedSessions.length === 1
-      ? (data.sessions.find((s) => s.key === filters.selectedSessions[0]) ??
-        filteredSessions.find((s) => s.key === filters.selectedSessions[0]))
+      ? data.sessions.find((s) => s.key === filters.selectedSessions[0])
       : null;
 
   const scopedSessions = selectedSessionSet.size
