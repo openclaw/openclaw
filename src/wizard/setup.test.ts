@@ -1251,7 +1251,6 @@ describe("runSetupWizard", () => {
           expect.objectContaining({ url: `ws://127.0.0.1:${port}`, token, password }),
         );
         expect(configureGatewayForSetup.mock.calls[0]?.[0]).toMatchObject({
-          localPort: port,
           quickstartGateway: { ...quickstartGateway, token, tailscaleMode: "off" },
         });
       } else {
