@@ -45,35 +45,7 @@ export type ExecutedToolCallBatch = {
   fatal?: { error: unknown };
 };
 
-type AssistantMessageUpdateEvent = Extract<
-  AssistantMessageEvent,
-  {
-    type:
-      | "text_start"
-      | "text_delta"
-      | "text_end"
-      | "thinking_start"
-      | "thinking_delta"
-      | "thinking_end"
-      | "toolcall_start"
-      | "toolcall_delta"
-      | "toolcall_end";
-  }
->;
-
-function appendTextDeltaToAssistantMessage(
-  message: AssistantMessage,
-  contentIndex: number,
-  delta: string,
-): AssistantMessage {
-  const content = [...message.content];
-  const currentContent = content[contentIndex];
-  content[contentIndex] =
-    currentContent?.type === "text"
-      ? { ...currentContent, text: currentContent.text + delta }
-      : { type: "text", text: delta };
-  return { ...message, content };
-}
+type AssistantMessageUpdateEvent = Extract<AssistantMessageEvent, { contentIndex: number }>;
 
 function resolveAssistantMessageUpdate(
   event: AssistantMessageUpdateEvent,
@@ -82,10 +54,16 @@ function resolveAssistantMessageUpdate(
   if ("partial" in event && event.partial) {
     return event.partial;
   }
-  if (event.type === "text_delta") {
-    return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
+  if (event.type !== "text_delta") {
+    return currentMessage;
   }
-  return currentMessage;
+  const content = [...currentMessage.content];
+  const currentContent = content[event.contentIndex];
+  content[event.contentIndex] =
+    currentContent?.type === "text"
+      ? { ...currentContent, text: currentContent.text + event.delta }
+      : { type: "text", text: event.delta };
+  return { ...currentMessage, content };
 }
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
