@@ -2403,8 +2403,7 @@ jobs:
             export OPENCLAW_VITEST_INCLUDE_FILE
           fi
           config=test/vitest/vitest.ui-e2e-prebuilt.config.ts
-          # Old frozen targets retain their own serial config and complete test list.
-          # A present config's readiness failure must fail this invocation.
+          # Fall back only for old frozen targets; existing configs must pass readiness.
           if [[ ! -f "$config" ]]; then
             if [[ "$FROZEN_TARGET" != "true" ]]; then
               echo "::error::Current target is missing $config" >&2
@@ -2412,7 +2411,7 @@ jobs:
             fi
             config=test/vitest/vitest.ui-e2e.config.ts
           fi
-          # Frozen targets retain their own reporter implementation and defaults.
+          # Frozen targets keep their reporter defaults.
           reporter_args=()
           if [[ "$FROZEN_TARGET" != "true" ]]; then
             reporter_args=(--reporter verbose --reporter github-actions --reporter default --reporter ./scripts/lib/vitest-resource-reporter.mts)
@@ -2436,6 +2435,7 @@ jobs:
             ui/src/e2e/profile-page.real-gateway.e2e.test.ts \
             ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts \
             ui/src/e2e/logs-lifecycle.e2e.test.ts \
+            ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts \
             ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts \
