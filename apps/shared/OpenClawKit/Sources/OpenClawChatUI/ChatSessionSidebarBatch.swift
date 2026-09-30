@@ -28,12 +28,13 @@ struct ChatSidebarSelection {
 @MainActor @Observable
 final class ChatSessionSidebarBatch {
     enum Action: Equatable {
-        case unread(Bool), category(String?), archived(Bool), delete
+        case unread(Bool), category(String?), newGroup(String), archived(Bool), delete
 
         var patch: [String: AnyCodable] {
             switch self {
             case let .unread(value): ["unread": .init(value)]
             case let .category(value): ["category": value.map(AnyCodable.init) ?? .init(NSNull())]
+            case let .newGroup(name): ["category": .init(name)]
             case let .archived(value): ["archived": .init(value)]
             case .delete: [:]
             }
@@ -199,6 +200,10 @@ final class ChatSessionSidebarBatch {
         rows: [OpenClawChatSessionEntry],
         connection: OpenClawSessionMenuConnection) -> Bool
     {
+        if case .newGroup = action {
+            return connection.allows("sessions.groups.list", scope: "operator.read") &&
+                connection.allows("sessions.groups.put") && connection.allows("sessions.patchMany")
+        }
         if action == .delete {
             return connection.allows(
                 "sessions.delete",
@@ -219,12 +224,16 @@ final class ChatSessionSidebarBatch {
         mainKey: String,
         connection: OpenClawSessionMenuConnection) async -> [OpenClawChatSessionEntry]
     {
+        guard connection.isCurrent(), !Task.isCancelled else { return [] }
         let scope = self.scope
         self.errors = [:]
         self.notices = []
         guard Self.allows(action, rows: rows, connection: connection) else {
             self.fail(rows, String(localized: "This connection cannot change every selected thread."))
             return []
+        }
+        if case let .newGroup(name) = action {
+            guard await self.createGroup(named: name, rows: rows, connection: connection) else { return [] }
         }
         let rows = rows.filter {
             switch action {
@@ -272,6 +281,36 @@ final class ChatSessionSidebarBatch {
             return rows.filter { result.succeededKeys.contains(OpenClawChatSessionSidebarData.identity($0)) }
         }
         return await self.patch(rows, fields: action.patch, connection: connection)
+    }
+
+    private func createGroup(
+        named name: String,
+        rows: [OpenClawChatSessionEntry],
+        connection: OpenClawSessionMenuConnection) async -> Bool
+    {
+        let scope = self.scope
+        // ui/src/components/session-organizer-operations.runtime.ts:472: capture identities before
+        // catalog creation; paging must not invalidate rows that the Gateway can still guard.
+        guard rows.allSatisfy({ ChatPayloadDecoding.trimmedNonEmptyString($0.sessionId) != nil }) else {
+            self.fail(rows, String(localized: "Refresh these threads and try again."))
+            return false
+        }
+        do {
+            let current: Groups = try await connection.read("sessions.groups.list")
+            guard self.scope == scope else { return false }
+            if !current.groups.contains(where: { $0.name == name }) {
+                // ui/src/components/session-organizer-catalog.ts:32 leaves sectionOrder untouched.
+                let _: Groups = try await connection.read("sessions.groups.put", [
+                    "names": .init(current.groups.map(\.name) + [name]),
+                ])
+                guard self.scope == scope else { return false }
+            }
+            return true
+        } catch {
+            guard self.scope == scope, connection.isCurrent(), !Task.isCancelled else { return false }
+            self.fail(rows, error.localizedDescription)
+            return false
+        }
     }
 
     func patch(
