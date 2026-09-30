@@ -269,9 +269,14 @@ private class GatewayConnectFailure(
   val gatewayError: GatewaySession.ErrorShape,
 ) : IllegalStateException(gatewayError.message)
 
+/** Locally classified request failure; wire error codes never establish transport provenance. */
+internal sealed class GatewayRequestFailure(
+  override val message: String,
+) : IllegalStateException(message)
+
 internal sealed class GatewayRequestDefinitiveFailure(
   message: String,
-) : IllegalStateException(message)
+) : GatewayRequestFailure(message)
 
 internal class GatewayRequestNotEnqueued(
   message: String,
@@ -284,7 +289,7 @@ internal class GatewayRequestRejected(
 /** Request frame was sent, but no response proved whether the gateway applied it. */
 internal class GatewayRequestOutcomeUnknown(
   message: String,
-) : IllegalStateException(message)
+) : GatewayRequestFailure(message)
 
 internal enum class NodeEventSendOutcome {
   COMPLETED,
@@ -967,14 +972,14 @@ class GatewaySession(
       expectedEndpointStableId == null || connection.target.endpoint.stableId == expectedEndpointStableId
     }
 
-  /** Sends an RPC request frame and reports errors asynchronously through [onError]. */
+  /** Sends an RPC frame; [onError] distinguishes peer rejection from a locally unknown outcome. */
   internal suspend fun sendRequestFrameForEndpoint(
     expectedEndpointStableId: String?,
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
     withEnqueue: (() -> Unit) -> Unit = { it() },
-    onError: (ErrorShape) -> Unit = {},
+    onError: (GatewayRequestFailure) -> Unit = {},
   ) {
     val conn = readyConnection(expectedEndpointStableId) ?: throw IllegalStateException("not connected")
     val params =
@@ -1321,7 +1326,7 @@ class GatewaySession(
       params: JsonElement?,
       timeoutMs: Long,
       withEnqueue: (() -> Unit) -> Unit = { it() },
-      onError: (ErrorShape) -> Unit,
+      onError: (GatewayRequestFailure) -> Unit,
     ) {
       val id = UUID.randomUUID().toString()
       val deferred = registerPending(id)
@@ -1340,14 +1345,14 @@ class GatewaySession(
               try {
                 withTimeout(timeoutMs) { deferred.await() }
               } catch (_: TimeoutCancellationException) {
-                onError(ErrorShape("UNAVAILABLE", "request timeout"))
+                onError(GatewayRequestOutcomeUnknown("request timeout"))
                 return@withContext
               } catch (err: GatewayRequestOutcomeUnknown) {
-                onError(ErrorShape("UNAVAILABLE", err.message ?: "request outcome unknown"))
+                onError(err)
                 return@withContext
               }
             if (!response.ok) {
-              onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+              onError(GatewayRequestRejected(response.error ?: ErrorShape("UNAVAILABLE", "request failed")))
             }
           } finally {
             pending.remove(id)

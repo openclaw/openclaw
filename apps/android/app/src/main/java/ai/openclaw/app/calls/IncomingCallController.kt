@@ -380,7 +380,7 @@ internal class IncomingCallController(
           } catch (error: CancellationException) {
             throw error
           } catch (error: Exception) {
-            if (generation == audioGeneration && isCurrent(id)) finish(IncomingCallStatus.Error, "Live voice could not connect. Check Gateway Talk configuration.")
+            if (generation == audioGeneration) finish(IncomingCallStatus.Error, voiceFailureDetail(error.message))
           }
         }
       audioJob?.start()
@@ -451,8 +451,12 @@ internal class IncomingCallController(
             }
           delay(retryDelay)
           if (generation != audioGeneration) return@launch
-          if (!hasRecoveryAuthority(id) || !hasPermission(Manifest.permission.RECORD_AUDIO)) {
+          if (!hasRecoveryAuthority(id)) {
             finish(IncomingCallStatus.Ended, "Gateway connection closed")
+            return@launch
+          }
+          if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
+            finish(IncomingCallStatus.Error, "Microphone permission required")
             return@launch
           }
           if (call.gatewayId != gatewayId() || isBusy()) continue
@@ -470,10 +474,13 @@ internal class IncomingCallController(
             }
             audioConnected()
             return@launch
+          } catch (_: GatewayRequestNotEnqueued) {
+            // Talk classifies transport failures before readiness observers resume.
           } catch (error: CancellationException) {
             if (error !is TimeoutCancellationException) throw error
-          } catch (_: Exception) {
-            // Recovery failures retry inside the original deadline, not a new timeout window.
+          } catch (error: Exception) {
+            if (generation == audioGeneration) finish(IncomingCallStatus.Error, voiceFailureDetail(error.message))
+            return@launch
           }
           if (generation != audioGeneration) return@launch
           stopAudio(id)
@@ -512,6 +519,22 @@ internal class IncomingCallController(
   fun end(id: String) {
     if (_state.value?.invite?.callId == id && _state.value?.status?.isTerminal == false) finish(IncomingCallStatus.Ended)
   }
+
+  /** A relay completion is not a Gateway disconnect; only the capture owner's failure is an error. */
+  internal fun audioStopped(
+    id: String,
+    failureDetail: String?,
+  ) {
+    val call = _state.value ?: return
+    if (call.invite.callId != id || call.status == IncomingCallStatus.Ringing || call.status.isTerminal) return
+    if (failureDetail == null) {
+      finish(IncomingCallStatus.Ended)
+    } else {
+      finish(IncomingCallStatus.Error, voiceFailureDetail(failureDetail))
+    }
+  }
+
+  private fun voiceFailureDetail(detail: String?): String = detail?.trim()?.takeIf { it.isNotEmpty() }?.take(240) ?: "Live voice could not connect. Check Gateway Talk configuration."
 
   fun connectionFailed(id: String) {
     if (isCurrent(id)) finish(IncomingCallStatus.Error, "Android rejected the incoming call")

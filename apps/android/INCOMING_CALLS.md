@@ -9,6 +9,10 @@ Tailscale Gateway endpoint works like any other configured Gateway endpoint.
 
 1. Pair the app with the Gateway as both operator and node.
 2. Configure a working realtime Talk provider on the Gateway.
+   Prepared calls require a compatible Gateway build that accepts the
+   `talk.session.create` greeting parameter and loads the prepared session's
+   history on initial creation. Updating only the Android app cannot add these
+   server capabilities; incompatible Gateways produce a call error.
 3. Open **Settings → Voice → Incoming data calls** and enable calls. Grant microphone
    and notification access. On Android 14+, allow full-screen call alerts if desired.
    Consent applies only to the selected Gateway; enable it separately for another
@@ -54,7 +58,13 @@ payloads with a reused ID fail. IDs are remembered across process death until
 their expiration, so retries cannot reopen already-handled invitations.
 
 Only one call is allowed at a time. Other audio capture blocks acceptance. A
-Gateway disconnection/switch, user decline/hangup, or remote end closes the call.
+transport drop during an answered call pauses audio and gives the same Gateway
+up to 30 seconds to reconnect. Recovery retains the call's session, mute, and
+audio route without repeating its opening greeting or replaying outage audio.
+A disconnection while ringing, a Gateway switch, revoked consent or permission,
+user decline/hangup, or remote end closes the call. Protocol, authorization, and
+microphone errors are terminal and report the voice failure; they are not
+reported as generic Gateway disconnections or retried as network loss.
 The internal call activity is not exported; Android's Telecom binding requires
 its signature-level permission. PhoneAccount is self-managed and cannot place
 PSTN calls. Topic/session content is not persisted in the replay ledger.

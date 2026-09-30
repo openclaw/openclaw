@@ -1210,7 +1210,46 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun incomingCallRetriesTransportFailureButNotAuthorizationFailure() =
+  fun incomingCallReportsUnsupportedGatewayWithoutRetryingOrStartingMicrophone() =
+    runBlocking {
+      val requests = ConcurrentLinkedQueue<JsonObject>()
+      var stopped = 0
+      var interrupted = 0
+      withStartedTalk(
+        incomingCallSessionKey = "agent:assistant:prepared-call",
+        expectStartupFailure = true,
+        captureRelayStopNotification = { { current -> if (current()) stopped++ } },
+        captureRelayInterruptionNotification = { { current -> if (current()) interrupted++ } },
+        interceptRequest = { request, socket ->
+          requests.add(request)
+          if (request.getValue("method").jsonPrimitive.content == "talk.session.create") {
+            val id = request.getValue("id").jsonPrimitive.content
+            socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"invalid talk.session.create params: at root: unexpected property 'greeting'"}}""")
+            true
+          } else {
+            false
+          }
+        },
+      ) { proof ->
+        assertEquals(1, requests.count { it.getValue("method").jsonPrimitive.content == "talk.session.create" })
+        assertEquals(1, stopped)
+        assertEquals(0, interrupted)
+        assertTrue(
+          proof.manager.failureNotice.value!!
+            .text
+            .contains("Install a compatible Gateway build"),
+        )
+        assertFalse(proof.manager.isEnabled.value)
+        assertFalse(proof.manager.isListening.value)
+        assertNull(readPrivateField(proof.manager, "realtimeAudioInput"))
+        assertFalse(requests.any { it.getValue("method").jsonPrimitive.content == "talk.session.appendAudio" })
+        val failure = runCatching { proof.manager.awaitIncomingCallReady() }.exceptionOrNull()
+        assertTrue(failure!!.message!!.contains("does not support prepared incoming calls"))
+      }
+    }
+
+  @Test
+  fun incomingCallDoesNotRetryProviderOrAuthorizationRejectionsAsTransportFailures() =
     runBlocking {
       for (code in listOf("UNAVAILABLE", "FORBIDDEN")) {
         val append = CompletableDeferred<Pair<String, WebSocket>>()
@@ -1232,14 +1271,14 @@ class TalkModeManagerTest {
           val (id, socket) = append.await()
           socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"$code","message":"synthetic failure"}}""")
           awaitTalkWork(proof) { interrupted + stopped == 1 }
-          assertEquals(if (code == "UNAVAILABLE") 1 else 0, interrupted)
-          assertEquals(if (code == "FORBIDDEN") 1 else 0, stopped)
+          assertEquals(0, interrupted)
+          assertEquals(1, stopped)
           assertFalse(proof.manager.isEnabled.value)
           assertFalse(proof.manager.isListening.value)
           // The callback above records intent but has not settled the outer call owner.
           // Its concurrent readiness waiter must see the same transport classification.
           val readinessFailure = runCatching { proof.manager.awaitIncomingCallReady() }.exceptionOrNull()
-          assertEquals(code == "UNAVAILABLE", readinessFailure is GatewayRequestNotEnqueued)
+          assertFalse(readinessFailure is GatewayRequestNotEnqueued)
           assertNotNull(readinessFailure)
           assertNull(readPrivateField(proof.manager, "recognizer"))
         }
@@ -1266,6 +1305,101 @@ class TalkModeManagerTest {
         assertEquals(1, interrupted)
         assertEquals(0, stopped)
         assertFalse(proof.manager.isListening.value)
+      }
+    }
+
+  @Test
+  fun incomingCapturedFrameProviderRejectionIsTerminalRatherThanATransportInterruption() =
+    runBlocking {
+      val frames = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+      val append = CompletableDeferred<Pair<String, WebSocket>>()
+      val stopped = AtomicLong()
+      val interrupted = AtomicLong()
+      org.robolectric.shadows.ShadowAudioRecord.setSourceProvider {
+        object : org.robolectric.shadows.ShadowAudioRecord.AudioRecordSource {
+          override fun readInByteArray(
+            bytes: ByteArray,
+            offset: Int,
+            size: Int,
+            blocking: Boolean,
+          ): Int {
+            val frame = checkNotNull(frames.poll(5, TimeUnit.SECONDS)) { "Capture fixture did not receive its next frame" }
+            frame.copyInto(bytes, destinationOffset = offset)
+            return frame.size
+          }
+        }
+      }
+      try {
+        frames.put(byteArrayOf(1, 2))
+        withStartedTalk(
+          incomingCallSessionKey = "agent:assistant:prepared-call",
+          realtimeCaptureDispatcher = Dispatchers.IO,
+          captureRelayStopNotification = { { current -> if (current()) stopped.incrementAndGet() } },
+          captureRelayInterruptionNotification = { { current -> if (current()) interrupted.incrementAndGet() } },
+          interceptRequest = { request, socket ->
+            val params = request["params"]?.jsonObject
+            if (request["method"]?.jsonPrimitive?.content == "talk.session.appendAudio" &&
+              params?.get("audioBase64")?.jsonPrimitive?.content == "AQI="
+            ) {
+              // This is a real captured frame, not the synchronous post-Answer silence request.
+              append.complete(request.getValue("id").jsonPrimitive.content to socket)
+              true
+            } else {
+              false
+            }
+          },
+        ) { proof ->
+          try {
+            // Drive owner work while capture runs on its normal dispatcher, including resumptions.
+            awaitTalkWork(proof) { append.isCompleted }
+            val (id, socket) = append.await()
+            socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"Realtime provider credential is missing"}}""")
+            awaitTalkWork(proof) { stopped.get() + interrupted.get() == 1L }
+            assertEquals(1L, stopped.get())
+            assertEquals(0L, interrupted.get())
+            assertFalse(proof.manager.isEnabled.value)
+            assertFalse(proof.manager.isListening.value)
+            assertTrue(
+              proof.manager.failureNotice.value!!
+                .text
+                .contains("Realtime provider credential is missing"),
+            )
+          } finally {
+            proof.manager.stopAllCapture()
+            frames.offer(byteArrayOf())
+          }
+        }
+      } finally {
+        org.robolectric.shadows.ShadowAudioRecord
+          .clearSource()
+      }
+    }
+
+  @Test
+  fun incomingReadinessWaiterPreservesProviderFailureBeforeTheQueuedOwnerNotification() =
+    runBlocking {
+      var ownerNotification: (() -> Unit)? = null
+      var stopped = 0
+      withStartedTalk(
+        incomingCallSessionKey = "agent:assistant:prepared-call",
+        captureRelayStopNotification = {
+          { current -> ownerNotification = { if (current()) stopped++ } }
+        },
+      ) { proof ->
+        val readiness = proof.scope.async { runCatching { proof.manager.awaitIncomingCallReady() }.exceptionOrNull() }
+        proof.scheduler.runCurrent()
+        assertFalse("Readiness must wait for the installed recorder", readiness.isCompleted)
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"error","message":"Realtime provider credential is missing"}""")
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"close","reason":"error"}""")
+        // Recorder retirement releases readiness before the outer owner's queued stop runs.
+        proof.drainCancelledCapture()
+        proof.scheduler.runCurrent()
+        assertTrue(readiness.isCompleted)
+        assertEquals("Talk failed: Realtime provider credential is missing", readiness.await()?.message)
+        assertEquals(0, stopped)
+        assertNotNull(ownerNotification)
+        ownerNotification!!.invoke()
+        assertEquals(1, stopped)
       }
     }
 
@@ -3108,6 +3242,8 @@ class TalkModeManagerTest {
   private suspend fun withStartedTalk(
     sessionKey: String = "main",
     incomingCallSessionKey: String? = null,
+    expectStartupFailure: Boolean = false,
+    realtimeCaptureDispatcher: CoroutineDispatcher? = null,
     captureRelayStopNotification: () -> ((() -> Boolean) -> Unit) = { {} },
     captureRelayInterruptionNotification: () -> ((() -> Boolean) -> Unit) = captureRelayStopNotification,
     responseForRequest: (JsonObject, WebSocket) -> String? = { _, _ -> null },
@@ -3154,7 +3290,7 @@ class TalkModeManagerTest {
         talkAudioPlayer = player,
         onBeforeSpeak = { callbackDepth += 1 },
         onAfterSpeak = { callbackDepth -= 1 },
-        realtimeCaptureDispatcher = captureDispatcher,
+        realtimeCaptureDispatcher = realtimeCaptureDispatcher ?: captureDispatcher,
         realtimePlaybackDispatcher = StandardTestDispatcher(scheduler),
         captureRelayStopNotification = captureRelayStopNotification,
         captureRelayInterruptionNotification = captureRelayInterruptionNotification,
@@ -3223,7 +3359,7 @@ class TalkModeManagerTest {
         incomingCallSessionKey?.let(manager::prepareIncomingCall)
         manager.setEnabled(true)
         val deadline = System.nanoTime() + 5_000_000_000L
-        while (!manager.isListening.value) {
+        while (if (expectStartupFailure) manager.failureNotice.value == null else !manager.isListening.value) {
           scheduler.runCurrent()
           check(System.nanoTime() < deadline) { "Real gateway session did not start realtime Talk: ${manager.statusText.value}" }
           withContext(Dispatchers.Default) { delay(10) }

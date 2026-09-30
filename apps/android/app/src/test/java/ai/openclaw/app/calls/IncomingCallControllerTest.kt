@@ -4,6 +4,8 @@ import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession.ErrorShape
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
@@ -649,7 +651,7 @@ class IncomingCallControllerTest {
       Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
       try {
         var fail = false
-        val f = Fixture(this) { if (fail) error("temporary network error") }
+        val f = Fixture(this) { if (fail) throw GatewayRequestNotEnqueued("temporary network error") }
         val service = answered(f)
         fail = true
         f.controller.transportInterrupted()
@@ -877,6 +879,80 @@ class IncomingCallControllerTest {
         assertEquals(IncomingCallStatus.Active, status(f))
         assertEquals(listOf(false, true), f.resumptions)
         f.controller.end(f.id)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `initial and resumed terminal startup errors preserve bounded reasons and never retry`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val errors =
+          listOf(
+            GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "invalid talk.session.create params: unexpected property 'greeting'")),
+            GatewayRequestRejected(ErrorShape("UNAVAILABLE", "Realtime provider credential is missing")),
+            SecurityException("Microphone permission required"),
+            IllegalStateException("Realtime provider rejected the session: " + "details ".repeat(60)),
+          )
+        for (resuming in listOf(false, true)) {
+          for (error in errors) {
+            var fail = !resuming
+            val f = Fixture(this) { if (fail) throw error }
+            val service = answered(f)
+            if (resuming) {
+              fail = true
+              f.controller.transportInterrupted()
+              advanceTimeBy(1_000)
+              runCurrent()
+            }
+            assertEquals(expectedCall(f, "error", error.message?.trim()?.take(240)), response(f))
+            assertFalse(f.controller.ownsForegroundService(service))
+            val starts = f.starts
+            f.controller.transportConnected()
+            advanceTimeBy(30_001)
+            runCurrent()
+            assertEquals(starts, f.starts)
+            assertEquals(IncomingCallStatus.Error, status(f))
+          }
+        }
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `late startup error cannot replace a recovered call or deliberate hangup`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        for (hangup in listOf(false, true)) {
+          val release = CompletableDeferred<Unit>()
+          var attempt = 0
+          val f =
+            Fixture(this) {
+              if (++attempt == 1) {
+                withContext(NonCancellable) { release.await() }
+                error("Retired startup failure")
+              }
+            }
+          answered(f)
+          if (hangup) {
+            f.controller.end(f.id)
+          } else {
+            f.controller.transportInterrupted()
+            advanceTimeBy(1_000)
+            runCurrent()
+          }
+          val expected = f.controller.state.value
+          val stops = f.stops
+          release.complete(Unit)
+          runCurrent()
+          assertEquals(expected, f.controller.state.value)
+          assertEquals(stops, f.stops)
+          f.controller.end(f.id)
+        }
       } finally {
         Dispatchers.resetMain()
       }

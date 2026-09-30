@@ -377,7 +377,10 @@ class TalkModeManager internal constructor(
       fun captureReady() =
         synchronized(realtimeCapturePauseLock) {
           if (realtimeTransportInterrupted) throw GatewayRequestNotEnqueued("Incoming call transport interrupted")
-          check(realtimeSessionId == sessionId && _isEnabled.value) { "Incoming call stopped before readiness" }
+          check(realtimeSessionId == sessionId && _isEnabled.value) {
+            currentStatus.takeIf { it.state == TalkStatusState.TalkFailure }?.text?.resolveNativeText()
+              ?: "Incoming call stopped before readiness"
+          }
           checkNotNull(realtimeCaptureReady) { "Microphone unavailable" }
         }
       captureReady().await()
@@ -1094,7 +1097,11 @@ class TalkModeManager internal constructor(
         Log.w(tag, "start failed: ${err.message ?: err::class.simpleName}")
         disableRealtimeModeAndNotifyOwner(
           generation,
-          nativeText("Start failed: \$message", err.message ?: err::class.simpleName.orEmpty()),
+          if (incomingCallSessionKey != null && err is GatewayRequestRejected && err.gatewayError.isUnsupportedIncomingCallGreeting()) {
+            nativeText("This Gateway does not support prepared incoming calls. Install a compatible Gateway build, then call again.")
+          } else {
+            nativeText("Start failed: \$message", err.message ?: err::class.simpleName.orEmpty())
+          },
           recoverable = isRecoverableRelayTransportFailure(err),
         )
       }
@@ -1555,7 +1562,7 @@ class TalkModeManager internal constructor(
 
   private fun isRecoverableRelayTransportFailure(error: Throwable): Boolean =
     error is GatewayRequestNotEnqueued || error is GatewayRequestOutcomeUnknown ||
-      error is IOException || (error is GatewayRequestRejected && error.gatewayError.code == "UNAVAILABLE")
+      error is IOException
 
   private fun realtimeCloseStatus(reason: String?): TalkStatus =
     when (reason) {
@@ -1624,7 +1631,7 @@ class TalkModeManager internal constructor(
               },
             ) { error ->
               Log.w(tag, "realtime appendAudio failed: ${error.message}")
-              failRealtimeRelay(sessionId, error.message, inputGeneration = inputGeneration, recoverable = error.code == "UNAVAILABLE")
+              failRealtimeRelay(sessionId, error.message, inputGeneration = inputGeneration, recoverable = isRecoverableRelayTransportFailure(error))
             }
           } catch (_: CancellationException) {
             // A rejected frame does not end capture; actual job cancellation does.
@@ -3473,4 +3480,10 @@ private fun GatewaySession.ErrorShape.isUnsupportedSessionLanguageParam(): Boole
   code == "INVALID_REQUEST" &&
     message
       .lowercase(Locale.ROOT)
-      .contains("invalid talk.session.create params")
+      .contains("invalid talk.session.create params") &&
+    !isUnsupportedIncomingCallGreeting()
+
+private fun GatewaySession.ErrorShape.isUnsupportedIncomingCallGreeting(): Boolean =
+  code == "INVALID_REQUEST" &&
+    message.contains("invalid talk.session.create params", ignoreCase = true) &&
+    message.contains("unexpected property 'greeting'", ignoreCase = true)

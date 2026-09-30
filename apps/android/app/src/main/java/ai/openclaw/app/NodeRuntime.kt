@@ -2444,15 +2444,18 @@ class NodeRuntime private constructor(
 
   private fun captureIncomingRelayStop(recoverable: Boolean): (() -> Boolean) -> Unit {
     val ownershipEpoch = voiceCaptureOwnershipEpoch.get()
+    val callId = incomingCallCaptureId
     return { isCurrent ->
+      // Stopping capture clears Talk's diagnostic status; retain the producer's failure first.
+      val failureDetail = if (recoverable) null else talkMode.failureNotice.value?.text
       scope.launch(Dispatchers.Main.immediate) {
         val ownsCapture =
           synchronized(voiceCaptureOwnershipLock) {
-            voiceCaptureOwnershipEpoch.get() == ownershipEpoch && isCurrent()
+            voiceCaptureOwnershipEpoch.get() == ownershipEpoch && incomingCallCaptureId == callId && isCurrent()
           }
         if (ownsCapture) {
-          if (incomingCallCaptureId != null) {
-            if (recoverable) incomingCalls.transportInterrupted() else incomingCalls.invalidate()
+          if (callId != null) {
+            if (recoverable) incomingCalls.transportInterrupted() else incomingCalls.audioStopped(callId, failureDetail)
           } else {
             finishTalkModeAfterRelayClose(ownershipEpoch, isCurrent)
           }
@@ -8208,7 +8211,7 @@ class NodeRuntime private constructor(
           definitiveFailure = verbatimText(err.gatewayError.message)
           false
         } catch (err: GatewayRequestDefinitiveFailure) {
-          definitiveFailure = verbatimText(err.message ?: "Gateway request failed.")
+          definitiveFailure = verbatimText(err.message)
           false
         } catch (_: GatewayRequestOutcomeUnknown) {
           false

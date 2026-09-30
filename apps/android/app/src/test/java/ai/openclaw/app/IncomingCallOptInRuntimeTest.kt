@@ -7,6 +7,7 @@ import ai.openclaw.app.calls.IncomingCallTelecomShadow
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
@@ -15,6 +16,8 @@ import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
@@ -233,6 +236,167 @@ class IncomingCallOptInRuntimeTest {
         Dispatchers.resetMain()
       }
     }
+
+  @Test
+  fun terminalRelayCallbackPreservesTheActualFailureBeforeCaptureCleanupClearsIt() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = createRelayFixture(this)
+        for (
+        detail in
+        listOf(
+          "Start failed: INVALID_REQUEST: invalid talk.session.create params: unexpected property 'greeting'",
+          "Microphone permission required",
+          "Talk failed: Realtime provider closed unexpectedly. " + "details ".repeat(60),
+        )
+        ) {
+          val id = answerRelayCall(f)
+          val stopped = relayStopNotification(f.talk)
+          f.talk.stopAllCapture(failure = verbatimText(detail))
+          // Force the registered runtime callback to queue, then clear the producer's status.
+          Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+          stopped { true }
+          f.talk.stopAllCapture()
+          runCurrent()
+          assertEquals(
+            IncomingCallStatus.Error,
+            f.calls.state.value
+              ?.status,
+          )
+          assertEquals(
+            detail.trim().take(240),
+            f.calls.state.value
+              ?.detail,
+          )
+          assertEquals(null, f.talk.failureNotice.value)
+          assertEquals(null, ReflectionHelpers.getField<String?>(f.runtime, "incomingCallCaptureId"))
+          Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+          val status = f.commands.handleInvoke("talk.callStatus", buildJsonObject { put("callId", id) }.toString())
+          assertTrue(status.ok)
+          assertTrue(status.payloadJson.orEmpty().contains("\"status\":\"error\""))
+        }
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun terminalRelayCallbackDistinguishesCleanCompletionAndRejectsLateCallOwners() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = createRelayFixture(this)
+        answerRelayCall(f)
+        val completed = relayStopNotification(f.talk)
+        completed { true }
+        assertEquals(
+          IncomingCallStatus.Ended,
+          f.calls.state.value
+            ?.status,
+        )
+        assertEquals(
+          null,
+          f.calls.state.value
+            ?.detail,
+        )
+
+        val nextId = answerRelayCall(f)
+        f.talk.stopAllCapture(failure = verbatimText("Late provider failure"))
+        completed { true }
+        assertEquals(
+          IncomingCallStatus.Active,
+          f.calls.state.value
+            ?.status,
+        )
+        assertEquals(
+          nextId,
+          f.calls.state.value
+            ?.invite
+            ?.callId,
+        )
+        val stopped = relayStopNotification(f.talk)
+        stopped { false }
+        assertEquals(
+          IncomingCallStatus.Active,
+          f.calls.state.value
+            ?.status,
+        )
+
+        f.calls.end(nextId)
+        f.talk.stopAllCapture(failure = verbatimText("Late failure after hangup"))
+        stopped { true }
+        assertEquals(
+          IncomingCallStatus.Ended,
+          f.calls.state.value
+            ?.status,
+        )
+        assertEquals(
+          null,
+          f.calls.state.value
+            ?.detail,
+        )
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  private data class RelayFixture(
+    val runtime: NodeRuntime,
+    val talk: TalkModeManager,
+    val calls: IncomingCallController,
+    val commands: InvokeDispatcher,
+  )
+
+  private fun createRelayFixture(scope: TestScope): RelayFixture {
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.MANAGE_OWN_CALLS)
+    val prefs = createPrefs()
+    selectGateway(prefs, "synthetic-gateway")
+    val runtime = createRuntime(prefs)
+    val talk = ReflectionHelpers.getField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    val calls =
+      IncomingCallController(
+        context = app,
+        scope = scope.backgroundScope,
+        prefs = prefs,
+        gatewayId = { "synthetic-gateway" },
+        captureAuthority = { { true } },
+        isBusy = { false },
+        startAudio = { id, _, _ -> ReflectionHelpers.setField(runtime, "incomingCallCaptureId", id) },
+        stopAudio = {
+          ReflectionHelpers.setField(runtime, "incomingCallCaptureId", null)
+          talk.stopAllCapture()
+        },
+        setMuted = {},
+      )
+    ReflectionHelpers.setField(runtime, "incomingCalls\$delegate", lazyOf(calls))
+    runtime.setIncomingCallsEnabled(true)
+    return RelayFixture(runtime, talk, calls, dispatcher(runtime))
+  }
+
+  private suspend fun answerRelayCall(fixture: RelayFixture): String {
+    val id = UUID.randomUUID().toString()
+    val invitation =
+      buildJsonObject {
+        put("callId", id)
+        put("sessionKey", "agent:assistant:synthetic-relay-test")
+        put("callerName", "Assistant")
+        put("topic", "Synthetic relay lifecycle test")
+        put("expiresAtMs", System.currentTimeMillis() + 60_000)
+      }.toString()
+    assertTrue(fixture.commands.handleInvoke("talk.incoming", invitation).ok)
+    fixture.calls.answer(id)
+    val service = Robolectric.buildService(IncomingCallForegroundService::class.java).create().get()
+    assertTrue(fixture.calls.foregroundServiceReady(id, service))
+    assertEquals(
+      IncomingCallStatus.Active,
+      fixture.calls.state.value
+        ?.status,
+    )
+    return id
+  }
+
+  private fun relayStopNotification(talk: TalkModeManager): (() -> Boolean) -> Unit = ReflectionHelpers.getField<() -> ((() -> Boolean) -> Unit)>(talk, "captureRelayStopNotification").invoke()
 
   private fun createPrefs(): SecurePrefs = SecurePrefs(app, app.getSharedPreferences("incoming-opt-in-secure", Context.MODE_PRIVATE))
 

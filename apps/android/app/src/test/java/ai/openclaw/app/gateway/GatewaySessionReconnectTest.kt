@@ -987,7 +987,7 @@ class GatewaySessionReconnectTest {
         val cancelStarted = CompletableDeferred<Unit>()
         val allowCancel = CountDownLatch(1)
         val requestSeen = CompletableDeferred<Unit>()
-        val errors = ConcurrentLinkedQueue<GatewaySession.ErrorShape>()
+        val errors = ConcurrentLinkedQueue<GatewayRequestFailure>()
         val server =
           startGatewayServer(json = Json) { webSocket, id, method ->
             if (method == "connect") {
