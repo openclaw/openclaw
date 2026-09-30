@@ -191,8 +191,8 @@ function projectSenderAccess(params: {
   providerMissingFallbackApplied?: boolean;
 }): ChannelIngressSenderAccess {
   const gate = params.ingress.graph.gates.find(
-    (gate) =>
-      gate.phase === "sender" && gate.kind === (params.isGroup ? "groupSender" : "dmSender"),
+    (entry) =>
+      entry.phase === "sender" && entry.kind === (params.isGroup ? "groupSender" : "dmSender"),
   );
   const reasonCode =
     !gate &&
@@ -223,7 +223,7 @@ function projectCommandAccess(params: {
   policy: ChannelIngressPolicyInput;
 }): ChannelIngressCommandAccess {
   const gate = params.ingress.graph.gates.find(
-    (gate) => gate.phase === "command" && gate.kind === "command",
+    (entry) => entry.phase === "command" && entry.kind === "command",
   );
   return {
     requested: params.policy.command != null,
@@ -238,7 +238,7 @@ function projectActivationAccess(params: {
   ingress: ResolvedChannelMessageIngress["ingress"];
 }): ChannelIngressActivationAccess {
   const gate = params.ingress.graph.gates.find(
-    (gate) => gate.phase === "activation" && gate.kind === "mention",
+    (entry) => entry.phase === "activation" && entry.kind === "mention",
   );
   return {
     ran: gate != null,
