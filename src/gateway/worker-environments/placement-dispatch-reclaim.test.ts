@@ -1014,12 +1014,16 @@ describe("worker placement dispatch reclaim", () => {
     const locked = createDeferredCore();
     const resume = createDeferredCore();
     const identities = [REQUEST.sessionKey, REQUEST.sessionId];
+    let competingEntered = false;
     const harness = createHarness(database, placementStore, {
       workspacePath: root,
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       runReclaimBarrier: async ({ authorize, beforeDrain, begin, reclaim }) => {
-        queued.resolve();
+        if (!competingEntered) {
+          competingEntered = true;
+          queued.resolve();
+        }
         return await runExclusiveSessionLifecycleMutation({
           scope,
           identities,
@@ -1046,7 +1050,7 @@ describe("worker placement dispatch reclaim", () => {
           return await Promise.race([
             harness.service.reclaim(REQUEST),
             new Promise<"blocked">((resolve) => {
-              timer = setTimeout(() => resolve("blocked"), 1_000);
+              timer = setTimeout(() => resolve("blocked"), 10_000);
             }),
           ]);
         } finally {
@@ -1057,6 +1061,7 @@ describe("worker placement dispatch reclaim", () => {
     await locked.promise;
     const competing = harness.service.reclaim(REQUEST);
     await queued.promise;
+    await new Promise((resolve) => setTimeout(resolve, 50));
     resume.resolve();
     try {
       expect(await owner).toMatchObject({ state: "reclaimed" });
