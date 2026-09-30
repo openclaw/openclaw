@@ -96,7 +96,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-readonly.ts",
   ],
   "cold-process read-only relay lookup avoids the shared state writer lifecycle": [
-    "src/agents/harness/native-hook-relay-client.worker.ts",
+    "src/agents/harness/native-hook-relay-client-read.ts",
   ],
   "read-only schema preflight and integrity verification access": [
     "src/state/openclaw-database-preflight.ts",
