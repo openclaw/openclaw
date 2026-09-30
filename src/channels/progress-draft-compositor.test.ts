@@ -107,6 +107,22 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(progress.mergeReasoningProgress("Checking again")).toBe("Checking again");
   });
 
+  it.each([
+    ["plain", ["Reading", "Reading the handler", "Reading the handler and tests"]],
+    ["italic", ["_Reading_", "_Reading the handler_", "_Reading the handler and tests_"]],
+  ])(
+    "replaces flag-less cumulative %s reasoning snapshots instead of duplicating them",
+    (_format, snapshots) => {
+      const progress = createTestProgressDraftCompositor({});
+
+      for (const snapshot of snapshots) {
+        expect(progress.mergeReasoningProgress(snapshot)).toBe(snapshot);
+      }
+      const latest = snapshots.at(-1);
+      expect(progress.mergeReasoningProgress(latest)).toBe(latest);
+    },
+  );
+
   it("re-arms the draft for a queued turn after the primary final settled", async () => {
     const update = vi.fn();
     const progress = createTestProgressDraftCompositor({

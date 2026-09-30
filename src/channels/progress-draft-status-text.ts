@@ -152,11 +152,17 @@ function mergeReasoningProgressText(
   current: string,
   incoming: string,
   options?: { snapshot?: boolean },
+  // Normalized form of `current` when the caller already computed it for the
+  // previous delta. Reasoning arrives as many small deltas that append to an
+  // ever-growing buffer, and normalization is a full-buffer scan (markdown
+  // parse + tag strip), so recomputing it here every delta is quadratic in the
+  // reasoning length. The hint must equal normalizeReasoningProgressInput(current).
+  normalizedCurrentHint?: string,
 ): string {
   if (!current) {
     return incoming;
   }
-  const normalizedCurrent = normalizeReasoningProgressInput(current);
+  const normalizedCurrent = normalizedCurrentHint ?? normalizeReasoningProgressInput(current);
   const normalizedIncoming = normalizeReasoningProgressInput(incoming);
   if (!normalizedIncoming) {
     return shouldAppendEmptyReasoningProgressDelta(current, incoming)
@@ -228,16 +234,35 @@ export function resolveCommentaryLineId(commentary: {
 
 export function createReasoningProgressAccumulator() {
   let rawText = "";
+  // Memoize normalizeReasoningProgressInput(rawText) across deltas. Each merge
+  // needs the normalized form of the accumulated buffer twice — once to compare
+  // against the incoming delta, once to build the returned line — and each is a
+  // full-buffer scan. Reusing the value computed for the buffer we just emitted
+  // keeps a long reasoning stream from re-normalizing its whole prefix on every
+  // delta. Keyed by exact string identity so it is only reused for the same
+  // buffer; derived from the line form below so it costs nothing extra.
+  let normalizedInputKey: string | undefined;
+  let normalizedInputValue = "";
   return {
     reset() {
       rawText = "";
+      normalizedInputKey = undefined;
+      normalizedInputValue = "";
     },
     merge(this: void, text?: string, options?: { snapshot?: boolean }): string {
       if (!text) {
         return "";
       }
-      rawText = mergeReasoningProgressText(rawText, text, options);
-      return redactToolPayloadText(normalizeReasoningProgressLine(rawText));
+      const currentHint = rawText === normalizedInputKey ? normalizedInputValue : undefined;
+      rawText = mergeReasoningProgressText(rawText, text, options, currentHint);
+      const normalizedLine = normalizeReasoningProgressLine(rawText);
+      // normalizeReasoningProgressInput(rawText) is exactly the italic-unwrapped,
+      // trimmed line form, so cache it for the next delta's merge without a
+      // second full-buffer parse.
+      const italic = normalizedLine.match(/^_(.*)_$/u);
+      normalizedInputKey = rawText;
+      normalizedInputValue = (italic?.[1] ?? normalizedLine).trim();
+      return redactToolPayloadText(normalizedLine);
     },
   };
 }
