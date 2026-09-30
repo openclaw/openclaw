@@ -413,6 +413,29 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       .toBeVisible();
   });
 
+  it("preserves Person grouping while owner data temporarily hides it", async () => {
+    const { sidebar, sessions, page } = await mountFilters(1440);
+    const original = sessions.sessions.state.result!;
+    await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+    await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
+    await page.getByRole("option", { name: "Person", exact: true }).click();
+    sessions.publish({ result: { ...original, owners: original.owners!.slice(0, 1) } });
+    await expect
+      .element(page.getByRole("button", { name: "Group by: Custom groups", exact: true }))
+      .toBeVisible();
+    expect(loadStoredSidebarSessionsGrouping()).toBe("person");
+    expect(sidebar.querySelector("#sidebar-sessions-reset")).toBeNull();
+    await page.getByRole("switch", { name: "Show message preview", exact: true }).click();
+    await page.getByRole("button", { name: "Reset", exact: true }).click();
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
+    expect(loadStoredSidebarSessionsGrouping()).toBe("person");
+    sessions.publish({ result: original });
+    await expect
+      .element(page.getByRole("button", { name: "Group by: Person", exact: true }))
+      .toBeVisible();
+    expect(sidebar.querySelector("#sidebar-sessions-reset")).not.toBeNull();
+  });
+
   it("applies every preference instantly and resets filters and display", async () => {
     const { sidebar, sessions, page } = await mountFilters(1440);
     await page.getByRole("button", { name: "Filter & sort", exact: true }).click();

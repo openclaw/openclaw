@@ -147,7 +147,8 @@ Up and Down move between choices, and Enter selects. Automation, system sessions
 and message previews use consistent on/off toggles. Escape closes an open picker first, then the popover and returns
 focus to the filter button. **Session sources** opens its Settings destination. In **Show all agents**
 mode, Display omits grouping and empty-group controls because the sidebar always
-groups by agent. Reset leaves those hidden preferences unchanged.
+groups by agent. Reset leaves those hidden preferences unchanged. It also preserves
+a saved Person grouping while owner data temporarily makes that choice unavailable.
 
 On phone-width layouts the panel opens as a bottom sheet, like the issues sheet:
 tap the backdrop or press Escape to close it. The sheet has no hover or flyouts:

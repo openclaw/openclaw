@@ -500,6 +500,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
   }
   const sessionSources = SETTINGS_ROUTE_TARGETS.sessionSources;
   const rosterMode = host.sidebarAgentsMode === "roster";
+  const displayedGrouping = host.effectiveSessionsGrouping();
   return renderSidebarSessionSortMenu({
     position,
     trigger: controller.sessionSortMenuTrigger,
@@ -507,7 +508,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       pathForRoute(sessionSources.routeId, host.basePath) +
       sessionSources.search +
       sessionSources.hash,
-    grouping: host.effectiveSessionsGrouping(),
+    grouping: displayedGrouping,
     rosterMode,
     sortMode: host.effectiveSessionSortMode(),
     peopleSortAvailable: host.sessionPeopleSortAvailable(),
@@ -528,8 +529,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       host.sessionsShowPreview ||
       host.effectiveSessionSortMode() !== "created" ||
       (!rosterMode &&
-        (host.effectiveSessionsGrouping() !== "category" ||
-          host.sessionsEmptyGroupsMode !== "filtering")),
+        (displayedGrouping !== "category" || host.sessionsEmptyGroupsMode !== "filtering")),
     onReset: () => {
       host.setSessionOwnerFilter(null);
       host.sessionOrganizer.setSessionsStatusFilter("active");
@@ -538,7 +538,10 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       host.sessionOrganizer.setSessionsShowPreview(false);
       host.setSessionSortMode("created");
       if (!rosterMode) {
-        host.sessionOrganizer.setSessionsGrouping("category");
+        // A displayed default can hide a saved Person choice until owners return.
+        if (displayedGrouping !== "category") {
+          host.sessionOrganizer.setSessionsGrouping("category");
+        }
         host.setSessionsEmptyGroupsMode("filtering");
       }
     },
