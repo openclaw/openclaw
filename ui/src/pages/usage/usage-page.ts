@@ -421,15 +421,11 @@ class UsagePage extends OpenClawLightDomElement {
     return this.usageRequest.run([client, refreshSessionKey]);
   }
 
-  private clearSelections() {
+  private clearSelectionsAndDetails() {
+    this.usageExportRequest.cancel();
     this.usageSelectedDays = [];
     this.usageSelectedHours = [];
     this.usageSelectedSessions = [];
-  }
-
-  private clearSelectionsAndDetails() {
-    this.usageExportRequest.cancel();
-    this.clearSelections();
     this.details.clear();
   }
 

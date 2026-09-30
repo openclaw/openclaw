@@ -17,7 +17,6 @@ import {
   gatewayCommandCall,
   getLogOutput,
   requireValue,
-  type UpdateCliScenario,
 } from "./update-cli-assertions.test-support.js";
 import { registerUpdateCliLifecycle } from "./update-cli-lifecycle.test-support.js";
 import {
@@ -246,12 +245,6 @@ export function createUpdateCliFixture() {
     );
   };
 
-  const runUpdateCliScenario = async (testCase: UpdateCliScenario) => {
-    vi.clearAllMocks();
-    await testCase.run();
-    testCase.assert();
-  };
-
   const runRestartFallbackScenario = async (params: { daemonInstall: "ok" | "fail" }) => {
     mockOwnedGitService();
     const entrypoint = path.join(process.cwd(), "dist", "index.js");
@@ -437,7 +430,6 @@ export function createUpdateCliFixture() {
     mockRunningManagedGateway,
     mockStoppedManagedGitGateway,
     mockNpmGlobalRoot,
-    mockPackageReplacementFailure,
     mockGatewayInstallFailure,
   } = createUpdateCliPackageFixtures({
     runCommandWithTimeout,
@@ -599,7 +591,6 @@ export function createUpdateCliFixture() {
     mockPackageGatewayLifecycle,
     mockPackageInstallAtCaseDir,
     mockPackageInstallStatus,
-    mockPackageReplacementFailure,
     mockPostDoctorSnapshot,
     mockRunningManagedGateway,
     mockServicePackageCommands,
@@ -612,7 +603,6 @@ export function createUpdateCliFixture() {
     runPostCoreCommand,
     runPostCoreUpdate,
     runRestartFallbackScenario,
-    runUpdateCliScenario,
     runWithGatewayServiceEnv,
     setStdoutTty,
     setTty,

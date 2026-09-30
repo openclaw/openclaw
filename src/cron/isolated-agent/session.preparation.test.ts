@@ -76,9 +76,9 @@ it("prepares a missing start timestamp from the bounded transcript header withou
 
 it.each([
   ["shared.sqlite", "full"],
-  ["shared.sqlite", "backing"],
+  ["shared.sqlite", "list"],
   ["configured.json", "full"],
-  ["configured.json", "backing"],
+  ["configured.json", "list"],
 ] as const)(
   "resolves %s ownership in the worker with the %s projection",
   async (name, projection) => {
@@ -110,7 +110,9 @@ it.each([
               : {
                   sessionId: entry.sessionId,
                   updatedAt: entry.updatedAt,
+                  sessionStartedAt: entry.sessionStartedAt,
                   subagentRecovery: entry.subagentRecovery,
+                  delivery: { kind: "none" },
                 },
         },
       ]);
@@ -165,7 +167,7 @@ it("rejects a noncanonical persisted key instead of repairing it at runtime", as
   ).rejects.toThrow(/doctor --fix/i);
 });
 
-it.each(["full", "backing"] as const)(
+it.each(["full", "list"] as const)(
   "rejects a %s read revoked during dispatch and joins worker close",
   async (projection) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
@@ -214,7 +216,7 @@ it("keeps the captured source when caller inputs change during dispatch", async 
   expect(fs.existsSync(input.storePath)).toBe(false);
 });
 
-it.each(["full", "backing"] as const)(
+it.each(["full", "list"] as const)(
   "rejects a configured alias redirected while its %s read is in flight",
   async (projection) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });

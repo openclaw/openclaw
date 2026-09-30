@@ -655,7 +655,9 @@ transcript search is filtering messages.
 In completed dashboard turns, commentary, reasoning-only messages, and tool activity
 share one **Worked for…** disclosure above the answers. Expanding it shows the
 activity in its original order; explicit answer segments and visual results stay
-visible below it. Failed tool results after the last answer stay visible outside
+visible below it. Browser tab previews keep their execution order relative to those
+visible results, so a page opened after an inline widget appears after that widget.
+Failed tool results after the last answer stay visible outside
 the disclosure until a later answer follows them. This is display grouping, not a
 change to stored history. Live turns, search results, and turns without an answer
 stay expanded. User messages,

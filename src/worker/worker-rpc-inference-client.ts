@@ -114,10 +114,8 @@ export class WorkerInferenceProxyClient {
       unsubscribe();
     }
     for (const operation of this.operations.values()) {
-      operation.settled = true;
-      operation.reject(new Error("worker inference client disposed"));
+      this.rejectOperation(operation, new Error("worker inference client disposed"));
     }
-    this.operations.clear();
   }
 
   private resume(): void {

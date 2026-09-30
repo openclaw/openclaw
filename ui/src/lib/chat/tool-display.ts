@@ -9,6 +9,7 @@ import {
 } from "../../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
 import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
+import { resolveToolDisplayIcon } from "./tool-display-icon.ts";
 
 const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
@@ -20,7 +21,7 @@ type SharedToolDisplaySpec = ToolDisplaySpec & {
 
 type ToolDisplay = {
   name: string;
-  icon: string;
+  icon: ReturnType<typeof resolveToolDisplayIcon>;
   title: string;
   label: string;
   verb?: string;
@@ -28,23 +29,6 @@ type ToolDisplay = {
 };
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;
-
-const EMOJI_ICON_MAP: Record<string, string> = {
-  "🧩": "puzzle",
-  "🛠️": "wrench",
-  "🧰": "wrench",
-  "📖": "fileText",
-  "✍️": "edit",
-  "📝": "penLine",
-  "📎": "paperclip",
-  "🌐": "globe",
-  "📺": "monitor",
-  "🧾": "fileText",
-  "🔐": "settings",
-  "💻": "monitor",
-  "🔌": "plug",
-  "💬": "messageSquare",
-};
 
 const FALLBACK = SHARED_TOOL_DISPLAY_JSON.fallback;
 const TOOL_MAP: Record<string, SharedToolDisplaySpec> = SHARED_TOOL_DISPLAY_JSON.tools;
@@ -65,7 +49,7 @@ export function resolveToolDisplay(params: {
   const name = normalizeToolDisplayName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const icon = EMOJI_ICON_MAP[(spec ?? FALLBACK).emoji ?? ""] ?? "puzzle";
+  const icon = resolveToolDisplayIcon(name);
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
   const toolDisplayParts = resolveToolVerbAndDetailForArgs({

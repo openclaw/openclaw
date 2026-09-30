@@ -1,8 +1,3 @@
-/**
- * Asynchronous security audit collector functions.
- *
- * These functions perform I/O (filesystem, config reads) to detect security issues.
- */
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import {
@@ -48,10 +43,6 @@ const loadSandboxBrowserSecurityHashEpoch = createLazyRuntimeNamedExport(
   "SANDBOX_BROWSER_SECURITY_HASH_EPOCH",
 );
 
-// --------------------------------------------------------------------------
-// Helpers
-// --------------------------------------------------------------------------
-
 function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   if (!p.startsWith("~")) {
     return p;
@@ -68,10 +59,6 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   }
   return null;
 }
-
-// --------------------------------------------------------------------------
-// Exported collectors
-// --------------------------------------------------------------------------
 
 function normalizeDockerLabelValue(raw: string | undefined): string | null {
   const trimmed = normalizeOptionalString(raw) ?? "";
@@ -347,40 +334,32 @@ export async function collectIncludeFilePermFindings(params: {
     if (!perms.ok) {
       continue;
     }
+    let finding: SecurityAuditFinding | undefined;
     if (perms.worldWritable || perms.groupWritable) {
-      findings.push({
+      finding = {
         checkId: "fs.config_include.perms_writable",
         severity: "critical",
         title: "Config include file is writable by others",
         detail: `${formatPermissionDetail(p, perms)}; another user could influence your effective config.`,
-        remediation: formatPermissionRemediation({
-          targetPath: p,
-          perms,
-          isDir: false,
-          posixMode: 0o600,
-          env: params.env,
-        }),
-      });
+      };
     } else if (perms.worldReadable) {
-      findings.push({
+      finding = {
         checkId: "fs.config_include.perms_world_readable",
         severity: "critical",
         title: "Config include file is world-readable",
         detail: `${formatPermissionDetail(p, perms)}; include files can contain tokens and private settings.`,
-        remediation: formatPermissionRemediation({
-          targetPath: p,
-          perms,
-          isDir: false,
-          posixMode: 0o600,
-          env: params.env,
-        }),
-      });
+      };
     } else if (perms.groupReadable) {
-      findings.push({
+      finding = {
         checkId: "fs.config_include.perms_group_readable",
         severity: "warn",
         title: "Config include file is group-readable",
         detail: `${formatPermissionDetail(p, perms)}; include files can contain tokens and private settings.`,
+      };
+    }
+    if (finding) {
+      findings.push({
+        ...finding,
         remediation: formatPermissionRemediation({
           targetPath: p,
           perms,
@@ -413,26 +392,25 @@ export async function collectStateDeepFilesystemFindings(params: {
     exec: params.execIcacls,
   });
   if (oauthPerms.ok && oauthPerms.isDir) {
+    let finding: SecurityAuditFinding | undefined;
     if (oauthPerms.worldWritable || oauthPerms.groupWritable) {
-      findings.push({
+      finding = {
         checkId: "fs.credentials_dir.perms_writable",
         severity: "critical",
         title: "Credentials dir is writable by others",
         detail: `${formatPermissionDetail(oauthDir, oauthPerms)}; another user could drop/modify credential files.`,
-        remediation: formatPermissionRemediation({
-          targetPath: oauthDir,
-          perms: oauthPerms,
-          isDir: true,
-          posixMode: 0o700,
-          env: params.env,
-        }),
-      });
+      };
     } else if (oauthPerms.groupReadable || oauthPerms.worldReadable) {
-      findings.push({
+      finding = {
         checkId: "fs.credentials_dir.perms_readable",
         severity: "warn",
         title: "Credentials dir is readable by others",
         detail: `${formatPermissionDetail(oauthDir, oauthPerms)}; credentials and allowlists can be sensitive.`,
+      };
+    }
+    if (finding) {
+      findings.push({
+        ...finding,
         remediation: formatPermissionRemediation({
           targetPath: oauthDir,
           perms: oauthPerms,
@@ -477,26 +455,25 @@ export async function collectStateDeepFilesystemFindings(params: {
         exec: params.execIcacls,
       });
       if (authPerms.ok) {
+        let finding: SecurityAuditFinding | undefined;
         if (authPerms.worldWritable || authPerms.groupWritable) {
-          findings.push({
+          finding = {
             checkId: "fs.auth_profiles.perms_writable",
             severity: "critical",
             title: `${authTarget.label} is writable by others`,
             detail: `${formatPermissionDetail(authTarget.path, authPerms)}; another user could inject credentials.`,
-            remediation: formatPermissionRemediation({
-              targetPath: authTarget.path,
-              perms: authPerms,
-              isDir: false,
-              posixMode: 0o600,
-              env: params.env,
-            }),
-          });
+          };
         } else if (authPerms.worldReadable || authPerms.groupReadable) {
-          findings.push({
+          finding = {
             checkId: "fs.auth_profiles.perms_readable",
             severity: "warn",
             title: `${authTarget.label} is readable by others`,
             detail: `${formatPermissionDetail(authTarget.path, authPerms)}; auth profile storage contains API keys and OAuth tokens.`,
+          };
+        }
+        if (finding) {
+          findings.push({
+            ...finding,
             remediation: formatPermissionRemediation({
               targetPath: authTarget.path,
               perms: authPerms,

@@ -219,6 +219,45 @@ describe("subagent registry state read cache", () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
+  it("borrows live maintenance rows while observing published and live changes", () => {
+    const active = {
+      ...createRun("active"),
+      delivery: { status: "pending" as const },
+      killIntent: { requestedAt: 2, reason: "stop" },
+    };
+    const sibling = createRun("sibling");
+    const runs = new Map<string, SubagentRunRecord>([
+      [active.runId, active],
+      [sibling.runId, sibling],
+    ]);
+    persistSubagentRunsToDiskOrThrow(runs);
+    const before = getSubagentMaintenanceRunsSnapshotForRead(runs);
+    const publishedBefore = getSubagentMaintenanceRunsSnapshotForRead(new Map());
+
+    active.execution = { status: "terminal", endedAt: 3 };
+    persistSubagentRunsToDiskOrThrow(runs, [active.runId]);
+    const after = getSubagentMaintenanceRunsSnapshotForRead(runs);
+    expect(after.get(sibling.runId)).toBe(before.get(sibling.runId));
+    expect(publishedBefore.get(active.runId)?.execution.status).toBe("running");
+    expect(after.get(active.runId)?.execution).toEqual({ status: "terminal", endedAt: 3 });
+
+    // Pending in-place intent edits remain visible before their publication.
+    active.killIntent.reason = "cancel";
+    const pending = getSubagentMaintenanceRunsSnapshotForRead(runs);
+    expect(pending.get(active.runId)?.killIntent?.reason).toBe("cancel");
+    expect(pending.get(sibling.runId)).toBe(after.get(sibling.runId));
+
+    runs.delete(active.runId);
+    persistSubagentRunsToDiskOrThrow(runs, [active.runId]);
+    expect(getSubagentMaintenanceRunsSnapshotForRead(runs).has(active.runId)).toBe(false);
+    const replacement = { ...createRun(active.runId), childSessionKey: "agent:main:new-child" };
+    runs.set(replacement.runId, replacement);
+    persistSubagentRunsToDiskOrThrow(runs);
+    expect(getSubagentMaintenanceRunsSnapshotForRead(runs).get(active.runId)?.childSessionKey).toBe(
+      replacement.childSessionKey,
+    );
+  });
+
   registerSubagentRestoreCacheCases({
     createRun,
     mockRestoredRows: (runs) => {

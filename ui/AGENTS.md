@@ -38,6 +38,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 - Re-adopting cached lineage rows changes presentation without invalidating
   managed list membership. Fresh descriptor reads and Gateway events retain
   their authoritative invalidation paths.
+- Descriptor observations apply admitted rows immediately; incomplete ancestor coverage retains one paced authoritative descriptor refresh through the coordinator instead of a read per event.
 - `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
   collect events in a four-to-five-second window sampled once when armed so
   browsers spread their reads and subsequent events cannot postpone them.

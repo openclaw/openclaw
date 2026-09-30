@@ -55,13 +55,8 @@ export function resolveGroupAllowFromSources(params: {
 /**
  * Returns the first value that is present, preserving falsy values such as false, 0, and "".
  */
-export function firstDefined<T>(...values: Array<T | undefined>) {
-  for (const value of values) {
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
+export function firstDefined<T>(...values: Array<T | undefined>): T | undefined {
+  return values.find((value) => value !== undefined);
 }
 
 /**
