@@ -1170,6 +1170,41 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("preserves successor audio and tools after an interrupted response's late terminal", async () => {
+    const onAudio = vi.fn();
+    const onToolCall = vi.fn();
+    const onResponseDone = vi.fn();
+    const { bridge, socket } = await connect({ onAudio, onToolCall, onResponseDone });
+    socket.emitServer({ type: "response.created", response: { id: "interrupted" } });
+    toolArguments(
+      socket,
+      "item_interrupted",
+      "call_interrupted",
+      '{"city":"Paris"}',
+      "lookup_weather",
+    );
+    bridge.handleBargeIn?.();
+    socket.emitServer({ type: "response.created", response: { id: "successor" } });
+    responseDone(socket, "interrupted", "cancelled");
+    expect(onResponseDone).not.toHaveBeenCalled();
+    expect(onToolCall).not.toHaveBeenCalled();
+    socket.emitServer({
+      type: "response.output_audio.delta",
+      response_id: "successor",
+      delta: "AAA=",
+    });
+    expect(onAudio).toHaveBeenCalledOnce();
+    toolArguments(socket, "item_successor", "call_successor", '{"city":"Tokyo"}', "lookup_weather");
+    responseDone(socket, "successor");
+    expect(onToolCall).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ callId: "call_successor", args: { city: "Tokyo" } }),
+    );
+    expect(onResponseDone).toHaveBeenCalledExactlyOnceWith({
+      responseId: "successor",
+      status: "completed",
+    });
+  });
+
   it("ignores a late cancellation error after a successor response starts", async () => {
     const { bridge, socket } = await connect({});
     socket.emitServer({ type: "response.created", response: { id: "interrupted" } });
@@ -1272,6 +1307,38 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
       ["user", "Again", true, { textMode: "snapshot" }],
       ["user", "Again", true, { textMode: "snapshot" }],
+    ]);
+  });
+
+  it("preserves pending spoken input when the response fails without duplicating it on close", async () => {
+    const onTranscript = vi.fn();
+    const { bridge, socket } = await connect({ onTranscript });
+    inputTranscript(socket, "Check the sensor");
+    socket.emitServer({ type: "response.created", response: { id: "response-1" } });
+    responseDone(socket, "response-1", "failed");
+    expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
+      ["user", "Check the sensor", true, { textMode: "snapshot" }],
+    ]);
+    await bridge.close();
+    expect(onTranscript.mock.calls.filter((call) => call[2])).toHaveLength(1);
+  });
+
+  it("keeps a pending snapshot when a different input item fails transcription", async () => {
+    const onError = vi.fn();
+    const onTranscript = vi.fn();
+    const { socket } = await connect({ onError, onTranscript });
+    socket.emitServer({ type: "input_audio_buffer.speech_started" });
+    socket.emitServer({ type: "response.created", response: { id: "one" } });
+    inputTranscript(socket, "Read the gauge", "b");
+    socket.emitServer({
+      type: "conversation.item.input_audio_transcription.failed",
+      item_id: "a",
+      error: { message: "recognition failed" },
+    });
+    expect(onError).toHaveBeenCalledOnce();
+    responseDone(socket, "one");
+    expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
+      ["user", "Read the gauge", true, { textMode: "snapshot" }],
     ]);
   });
 
