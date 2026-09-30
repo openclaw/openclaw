@@ -69,7 +69,7 @@ overrides:
   request: "npm:@cypress/request@4.0.1"
   request-promise: "npm:@cypress/request-promise@5.0.0"
   basic-ftp: 6.2.0
-  brace-expansion: 5.0.9
+  brace-expansion: 5.0.12
   file-type: 22.0.2
   form-data: 4.0.6
   "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
