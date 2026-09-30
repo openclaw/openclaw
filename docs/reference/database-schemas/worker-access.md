@@ -280,9 +280,19 @@ reconciliation journal. Local worktree reconciliation preserves its applied
 journal and final-verification ordering, then awaits durable pointer publication.
 Commit receipts
 invalidate pending-result read observations without revoking separate turn
-claims; uncertain writes retain recovery custody and are not replayed. Other
-placement lifecycle methods and their synchronous guards remain separate
-migration work. Schemas, stored fields, and update behavior are unchanged.
+claims; uncertain writes retain recovery custody and are not replayed.
+
+Workspace reconciliation journal reads use the shared-state reader, and journal
+creation, cleanup, orphan pruning, and manifest acceptance use the existing
+shared-state writer. Callers await durable journal creation before applying files
+and await manifest acceptance before reporting success. Manifest acceptance still
+updates the placement base and applied-journal marker in one transaction. Native
+commit receipts preserve accepted results when ordinary reply delivery fails;
+an unknown commit retains recovery custody instead of authorizing inverse file
+changes. Journal inputs are copied under the existing worker input budget, and
+source and caller authority remain checked at admission and commit. General
+placement getters and lifecycle guards remain separate migration work. Journal
+formats, schemas, pack limits, retention, and update behavior are unchanged.
 
 Worker session-tool grants and operation journals use the same shared-state
 writer. The placement authority owner publishes committed tool grants and fences

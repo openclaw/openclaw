@@ -32,13 +32,13 @@ export async function forceAbandonWorkerEnvironment(
 ): Promise<void> {
   const { environmentId, placements } = params;
   const recoveryError = FORCED_WORKER_ABANDONMENT_ERROR;
-  const journalOwners = params.placements
-    .listWorkspaceReconciliationOwners()
-    .filter((owner) => owner.environmentId === environmentId);
+  const journalOwners = (await params.placements.listWorkspaceReconciliationOwners()).filter(
+    (owner) => owner.environmentId === environmentId,
+  );
   const journalCleanups: Array<{
     owner: (typeof journalOwners)[number];
     placement: WorkerSessionPlacementIdentity;
-    journal: NonNullable<ReturnType<typeof placements.loadWorkspaceReconciliation>>;
+    journal: NonNullable<Awaited<ReturnType<typeof placements.loadWorkspaceReconciliation>>>;
   }> = [];
   const retainedJournalSessions = new Set<string>();
   for (const owner of journalOwners) {
@@ -57,7 +57,7 @@ export async function forceAbandonWorkerEnvironment(
       placement.activeOwnerEpoch === owner.ownerEpoch
     ) {
       try {
-        const journal = placements.loadWorkspaceReconciliation(
+        const journal = await placements.loadWorkspaceReconciliation(
           owner,
           isForceFailedOwner ? { allowFailedOwner: true } : undefined,
         );
@@ -167,7 +167,7 @@ export async function forceAbandonWorkerEnvironment(
     if (retainedJournalSessions.has(owner.sessionId)) {
       continue;
     }
-    placements.abortWorkspaceReconciliation(owner, { force: true });
+    await placements.abortWorkspaceReconciliation(owner, { force: true });
   }
   for (const cleanup of stagedResultCleanups) {
     try {

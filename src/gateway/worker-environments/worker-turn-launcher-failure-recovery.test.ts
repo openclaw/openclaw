@@ -431,7 +431,7 @@ describe("worker turn launcher failure recovery", () => {
       placementGeneration: active.generation,
     };
     const basePack = Buffer.from("conflicted journal snapshot");
-    placements.beginWorkspaceReconciliation(owner, {
+    await placements.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "e".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -495,7 +495,7 @@ describe("worker turn launcher failure recovery", () => {
     await expect(attempt).rejects.toThrow("workspace recovery could not complete");
 
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-    expect(placements.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(await placements.listWorkspaceReconciliationOwners()).toEqual([owner]);
     expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
     expect(environments.destroy).not.toHaveBeenCalled();
   });

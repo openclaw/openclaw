@@ -3,7 +3,6 @@ import {
   type MeetingBrowserJoinSession,
   type MeetingManualActionCategory,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import type { TeamsMeetingsMode } from "../config.js";
 import {
   teamsMeetingAudioCaptureScript,
   teamsMeetingLeaveScript,
@@ -16,7 +15,11 @@ import {
   normalizeTeamsMeetingUrl,
   normalizeTeamsMeetingUrlForReuse,
 } from "./teams-meetings-urls.js";
-import type { TeamsMeetingsChromeHealth, TeamsMeetingsTranscriptSnapshot } from "./types.js";
+import type {
+  TeamsMeetingsChromeHealth,
+  TeamsMeetingsMode,
+  TeamsMeetingsTranscriptSnapshot,
+} from "./types.js";
 
 function teamsMeetingOrigin(meetingUrl: string): string | undefined {
   try {

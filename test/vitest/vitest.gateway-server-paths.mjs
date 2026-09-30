@@ -362,6 +362,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-trajectory.test.ts",
   "src/gateway/worker-environments/workspace-result-finalize.test.ts",
   "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts",
+  "src/gateway/worker-environments/workspace-result-repository.editor-admission.test.ts",
   "src/gateway/worker-environments/workspace-result-repository.test.ts",
   "src/gateway/worker-workspace-recovery-binding.test.ts",
   "src/gateway/worker-workspace-recovery-transcript.test.ts",

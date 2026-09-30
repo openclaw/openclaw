@@ -1,12 +1,10 @@
 import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
 import { hasSessionActiveAutoModelFallback } from "./model-override-provenance.js";
-import type { SessionPatchProjectionSnapshot } from "./session-accessor.types.js";
+import type {
+  SessionPatchProjectionSnapshot,
+  SessionPatchProjectionTarget,
+} from "./session-accessor.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
-
-type SessionProjectionTarget = {
-  candidateKeys?: readonly string[];
-  primaryKey: string;
-};
 
 export class SessionLabelOwnerIndex {
   readonly #owners = new Map<string, Set<string>>();
@@ -122,7 +120,7 @@ export function inheritSessionSelection(
 
 export function resolveProjectionExistingEntry(
   snapshot: SessionPatchProjectionSnapshot,
-  target: SessionProjectionTarget,
+  target: SessionPatchProjectionTarget,
 ): SessionEntry | undefined {
   const candidateKeys = target.candidateKeys ?? [target.primaryKey];
   let freshest: SessionEntry | undefined;

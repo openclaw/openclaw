@@ -34,17 +34,13 @@ export function createConfigResolutionFacts(
   const provider = envProvider?.trim() || DEFAULT_SECRET_PROVIDER_ALIAS;
   if (pendingEnvSecretRefs.size > 0 || resolvedEnvSecretRefs.size > 0) {
     const envSecretRefs = new Map<string, ConfigEnvSecretRefFact>();
-    for (const [path, id] of pendingEnvSecretRefs) {
-      envSecretRefs.set(path, {
-        ref: { source: "env", provider, id },
-        state: "pending",
-      });
-    }
-    for (const [path, id] of resolvedEnvSecretRefs) {
-      envSecretRefs.set(path, {
-        ref: { source: "env", provider, id },
-        state: "resolved",
-      });
+    for (const [state, refs] of [
+      ["pending", pendingEnvSecretRefs],
+      ["resolved", resolvedEnvSecretRefs],
+    ] as const) {
+      for (const [path, id] of refs) {
+        envSecretRefs.set(path, { ref: { source: "env", provider, id }, state });
+      }
     }
     envSecretRefsByFacts.set(facts, envSecretRefs);
   }

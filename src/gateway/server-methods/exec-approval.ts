@@ -1,5 +1,3 @@
-// Exec approval gateway methods create, list, inspect, and resolve command
-// approval requests, including iOS push delivery and requester visibility.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -79,11 +77,10 @@ export function createExecApprovalHandlers(
       if (!assertValidParams(params, validateExecApprovalGetParams, "exec.approval.get", respond)) {
         return;
       }
-      const p = params as { id: string };
       const resolved = await resolvePendingApprovalRecord({
         authority,
         manager,
-        inputId: p.id,
+        inputId: params.id,
         client,
         ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         exposeAmbiguousPrefixError: true,
@@ -442,7 +439,7 @@ export function createExecApprovalHandlers(
       await handleApprovalWaitDecision({
         authority,
         manager,
-        inputId: (params as { id?: string }).id,
+        inputId: params.id,
         client,
         ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         respond,
@@ -463,9 +460,8 @@ export function createExecApprovalHandlers(
       ) {
         return;
       }
-      // SAFETY: validated against ExecApprovalGrantsListParamsSchema above.
-      const p = params as { limit?: number };
-      const grants = listCronStandingGrants(p.limit ? { limit: p.limit } : {}).map((grant) => {
+      const { limit } = params;
+      const grants = listCronStandingGrants(limit ? { limit } : {}).map((grant) => {
         const operation = parseCronExecOperationBinding(grant.operationBinding);
         return {
           grantId: grant.grantId,
@@ -499,12 +495,10 @@ export function createExecApprovalHandlers(
       ) {
         return;
       }
-      // SAFETY: validated against ExecApprovalGrantsRevokeParamsSchema above.
-      const p = params as { grantId: string };
       // Same actor attribution as approval resolution; recorded for the ledger.
       const revokedBy =
         client?.connect?.client?.displayName ?? client?.connect?.client?.id ?? "operator";
-      const result = revokeCronStandingGrant({ grantId: p.grantId, revokedBy });
+      const result = revokeCronStandingGrant({ grantId: params.grantId, revokedBy });
       respond(true, { outcome: result.outcome }, undefined);
     },
     "exec.approval.resolve": async (options) => {
@@ -523,8 +517,7 @@ export function createExecApprovalHandlers(
       // Grant terms freeze at resolve time. An explicit per-resolve override
       // (custom operator UIs) wins over the configured default; the manager
       // applies tools.exec.grantExpiryDays when this stays undefined.
-      // SAFETY: schema-validated above; the typeof guard re-narrows the field.
-      const overrideDays = (params as { grantExpiresInDays?: unknown }).grantExpiresInDays;
+      const overrideDays = params.grantExpiresInDays;
       const grantExpiresAtMs =
         decision === "allow-always" && typeof overrideDays === "number"
           ? Date.now() + Math.floor(overrideDays) * 86_400_000

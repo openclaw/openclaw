@@ -75,7 +75,7 @@ async function mutateAcpSessionMeta(
     assertCurrent: params.assertCommitAllowed,
   });
   const store = resolveSessionStorePathForAcp({ ...captured, sessionKey, agentId: params.agentId });
-  if (isIncognitoSessionKey(sessionKey)) {
+  const mutateNative = (assertCommitAllowed = captured.assertCurrent) => {
     if (control) {
       throw new Error("ACP controlled metadata mutation requires its durable worker source");
     }
@@ -83,8 +83,11 @@ async function mutateAcpSessionMeta(
       ...params,
       ...captured,
       expectedControlBinding,
-      assertCommitAllowed: captured.assertCurrent,
+      assertCommitAllowed,
     });
+  };
+  if (isIncognitoSessionKey(sessionKey)) {
+    return mutateNative();
   }
   return withSessionEntryReadOnlyInWorker(
     {
@@ -101,15 +104,7 @@ async function mutateAcpSessionMeta(
       const entry = read.value;
       const readerScope = readOwner.scope;
       if (readOwner.kind === "native") {
-        if (control) {
-          throw new Error("ACP controlled metadata mutation requires its durable worker source");
-        }
-        return upsertAcpSessionMetaNative({
-          ...params,
-          ...captured,
-          expectedControlBinding,
-          assertCommitAllowed: captured.assertCurrent,
-        });
+        return mutateNative();
       }
       if (!readerScope?.storePath) {
         throw new Error("ACP mutation has no retained canonical source");
@@ -120,15 +115,7 @@ async function mutateAcpSessionMeta(
         env: captured.env,
       };
       if (!supportsOpenClawAgentDatabaseExecution(options)) {
-        if (control) {
-          throw new Error("ACP controlled metadata mutation requires its durable worker source");
-        }
-        return upsertAcpSessionMetaNative({
-          ...params,
-          ...captured,
-          expectedControlBinding,
-          assertCommitAllowed: readOwner.assertCurrent,
-        });
+        return mutateNative(readOwner.assertCurrent);
       }
       const identity = readDatabasePathIdentitySync(options.path);
       const context = captureOpenClawStateWorkerContext({

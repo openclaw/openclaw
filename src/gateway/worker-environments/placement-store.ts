@@ -59,7 +59,7 @@ import {
   createPlacementTurnClaimOps,
   registerWorkerTurnClaimClosedHandler,
 } from "./placement-turn-claims.js";
-import { createPlacementWorkspaceJournalOps } from "./placement-workspace-journal.js";
+import { createPlacementWorkspaceJournalWorkerOps } from "./placement-workspace-journal-store.js";
 import { createPlacementWorkspaceReservationOps } from "./placement-workspace-reservation.js";
 import {
   createPlacementWorkspaceResultOps,
@@ -138,7 +138,7 @@ export function createWorkerSessionPlacementStore(
     }),
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
-    ...createPlacementWorkspaceJournalOps(runtime),
+    ...createPlacementWorkspaceJournalWorkerOps({ path, now: options.now }),
     ...createPlacementWorkspaceResultOps(runtime),
 
     registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void {

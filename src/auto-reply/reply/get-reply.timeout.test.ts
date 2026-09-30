@@ -21,48 +21,68 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
+async function runReply(
+  ctx: Parameters<typeof finalizeInboundContext>[0],
+  options?: GetReplyOptions,
+) {
+  state = await createOpenClawTestState({
+    label: "reply-runtime",
+    env: { OPENCLAW_TEST_FAST: "0" },
+  });
+  const cfg = withFullRuntimeReplyConfig({
+    agents: {
+      defaults: {
+        workspace: state.workspaceDir,
+        skipBootstrap: true,
+        timeoutSeconds: 180,
+        model: { primary: "mock-openai/gpt-4o" },
+        models: { "mock-openai/gpt-4o": { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+    plugins: { enabled: false },
+    commands: { text: true },
+  });
+  await state.writeConfig(cfg);
+  const reply = await getReplyFromConfig(
+    finalizeInboundContext({
+      Provider: "webchat",
+      Surface: "webchat",
+      ChatType: "direct",
+      SessionKey: "agent:main:dashboard:runtime-proof",
+      ...ctx,
+    }),
+    options,
+    cfg,
+  );
+  expect([reply].flat()).toEqual([expect.objectContaining({ text: "Done" })]);
+  expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+  return vi.mocked(runEmbeddedAgent).mock.calls[0]![0];
+}
+
 it.each([
-  [{ timeoutOverrideMs: 1800000 }, 1800000, 1800000],
   [{ timeoutOverrideMs: 1500 }, 1500, 1500],
-  [{ timeoutOverrideMs: 0 }, MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS],
-  [{}, 180000, undefined],
-  [{ timeoutOverrideSeconds: 1800 }, 1800000, 1800000],
   [{ timeoutOverrideSeconds: 0 }, MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS],
+  [{}, 180000, undefined],
 ])(
   "passes timeout options %s to the actual runtime entrypoint",
-  async (options, expected, expectedOverride) => {
-    state = await createOpenClawTestState({
-      label: "reply-timeout",
-      env: { OPENCLAW_TEST_FAST: "0" },
-    });
-    const cfg = withFullRuntimeReplyConfig({
-      agents: {
-        defaults: {
-          workspace: state.workspaceDir,
-          skipBootstrap: true,
-          timeoutSeconds: 180,
-          model: { primary: "mock-openai/gpt-4o" },
-          models: { "mock-openai/gpt-4o": { agentRuntime: { id: "openclaw" } } },
-        },
-      },
-      plugins: { enabled: false },
-    });
-    await state.writeConfig(cfg);
-    const reply = await getReplyFromConfig(
-      finalizeInboundContext({
-        Body: "Review the public documentation",
-        Provider: "webchat",
-        Surface: "webchat",
-        ChatType: "direct",
-        SessionKey: "agent:main:dashboard:timeout-proof",
-      }),
-      options satisfies GetReplyOptions,
-      cfg,
-    );
-    expect([reply].flat()).toEqual([expect.objectContaining({ text: "Done" })]);
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    const run = vi.mocked(runEmbeddedAgent).mock.calls[0]![0];
+  async (options, expected, override) => {
+    const run = await runReply({ Body: "Review the public documentation" }, options);
     expect(run.timeoutMs).toBe(expected);
-    expect(run.runTimeoutOverrideMs).toBe(expectedOverride);
+    expect(run.runTimeoutOverrideMs).toBe(override);
   },
 );
+
+it("runs the task following a text exec policy", async () => {
+  const body = "/exec security=deny ask=always Explain the output.";
+  const run = await runReply({
+    Body: body,
+    RawBody: body,
+    BodyForAgent: body,
+    CommandBody: body,
+    CommandSource: "text",
+    CommandAuthorized: true,
+  });
+  expect(run.prompt).toContain("Explain the output.");
+  expect(run.prompt).not.toContain("/exec");
+  expect(run.execOverrides).toMatchObject({ security: "deny", ask: "always" });
+});

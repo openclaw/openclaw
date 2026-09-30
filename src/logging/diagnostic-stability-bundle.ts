@@ -383,10 +383,7 @@ function readCgroupMemorySummary(value: unknown): DiagnosticCgroupMemorySummary 
     return undefined;
   }
   const source = readObject(value, "evidence.memoryPressure.cgroup");
-  const version = readCodeString(
-    source.version,
-    "evidence.memoryPressure.cgroup.version",
-  ) as DiagnosticCgroupMemorySummary["version"];
+  const version = readCodeString(source.version, "evidence.memoryPressure.cgroup.version");
   if (version !== "v2") {
     return undefined;
   }
@@ -471,14 +468,8 @@ function readMemoryPressureEvidence(
     return undefined;
   }
   const pressure = readObject(value, "evidence.memoryPressure");
-  const level = readCodeString(
-    pressure.level,
-    "evidence.memoryPressure.level",
-  ) as DiagnosticMemoryPressureEvent["level"];
-  const reason = readCodeString(
-    pressure.reason,
-    "evidence.memoryPressure.reason",
-  ) as DiagnosticMemoryPressureEvent["reason"];
+  const level = readCodeString(pressure.level, "evidence.memoryPressure.level");
+  const reason = readCodeString(pressure.reason, "evidence.memoryPressure.reason");
   if ((level !== "warning" && level !== "critical") || !isMemoryPressureReason(reason)) {
     return undefined;
   }
@@ -554,24 +545,18 @@ function readOptionalMemorySummary(
     memory.latest === undefined
       ? undefined
       : readMemoryUsage(memory.latest, "snapshot.summary.memory.latest");
+  const result: Partial<NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]>> = latest
+    ? { latest }
+    : {};
+  assignOptionalFields(
+    result,
+    memory,
+    "snapshot.summary.memory",
+    ["maxRssBytes", "maxHeapUsedBytes"],
+    readOptionalNumber,
+  );
   return {
-    ...(latest ? { latest } : {}),
-    ...(memory.maxRssBytes !== undefined
-      ? {
-          maxRssBytes: readRequiredNumber(
-            memory.maxRssBytes,
-            "snapshot.summary.memory.maxRssBytes",
-          ),
-        }
-      : {}),
-    ...(memory.maxHeapUsedBytes !== undefined
-      ? {
-          maxHeapUsedBytes: readRequiredNumber(
-            memory.maxHeapUsedBytes,
-            "snapshot.summary.memory.maxHeapUsedBytes",
-          ),
-        }
-      : {}),
+    ...result,
     pressureCount: readRequiredNumber(
       memory.pressureCount,
       "snapshot.summary.memory.pressureCount",

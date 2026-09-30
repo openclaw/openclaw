@@ -116,7 +116,13 @@ function normalizeProviderDoneMessage(
   matcher: PlainTextToolCallNameMatcher,
   preserveEmptyTextBlocks = false,
 ): PlainTextToolCallMessageNormalization {
-  const scrubbedMessage = scrubProviderTerminalMessage(message, matcher, preserveEmptyTextBlocks);
+  const scrubbedMessage = projectScrubbedPlainTextToolCallMessage({
+    forceKnownCandidates: false,
+    matcher,
+    message,
+    preserveEmptyTextBlocks,
+    resolveProtectedRanges: findCodeRegions,
+  });
   if (scrubbedMessage) {
     return { kind: "scrubbed", ...scrubbedMessage };
   }
@@ -127,21 +133,6 @@ function normalizeProviderDoneMessage(
   }
   const promotedMessage = promotePlainTextToolCalls(message, toolNames);
   return promotedMessage ? { kind: "promoted", ...promotedMessage } : undefined;
-}
-
-function scrubProviderTerminalMessage(
-  message: unknown,
-  matcher: PlainTextToolCallNameMatcher,
-  preserveEmptyTextBlocks = false,
-  forceKnownCandidates = false,
-): PlainTextToolCallMessageProjection | undefined {
-  return projectScrubbedPlainTextToolCallMessage({
-    forceKnownCandidates,
-    matcher,
-    message,
-    preserveEmptyTextBlocks,
-    resolveProtectedRanges: findCodeRegions,
-  });
 }
 
 function wrapPlainTextToolCallStream(
@@ -567,8 +558,6 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
     return;
   }
 
-  let hasVisibleText = false;
-  let hasToolCall = false;
   let hasVisibleThinking = false;
   for (const block of record.content) {
     if (!block || typeof block !== "object") {
@@ -576,14 +565,13 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
     }
     const typedBlock = block as { type?: unknown; text?: unknown; thinking?: unknown };
     if (
-      typedBlock.type === "text" &&
-      typeof typedBlock.text === "string" &&
-      typedBlock.text.trim()
+      (typedBlock.type === "text" &&
+        typeof typedBlock.text === "string" &&
+        typedBlock.text.trim()) ||
+      typedBlock.type === "toolCall" ||
+      typedBlock.type === "tool_use"
     ) {
-      hasVisibleText = true;
-    }
-    if (typedBlock.type === "toolCall" || typedBlock.type === "tool_use") {
-      hasToolCall = true;
+      return;
     }
     if (
       typedBlock.type === "thinking" &&
@@ -593,7 +581,7 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
       hasVisibleThinking = true;
     }
   }
-  if (hasVisibleText || hasToolCall || !hasVisibleThinking) {
+  if (!hasVisibleThinking) {
     return;
   }
 
@@ -602,14 +590,11 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
       return block;
     }
     const typedBlock = block as { type?: unknown; thinking?: unknown };
-    if (
-      typedBlock.type !== "thinking" ||
-      typeof typedBlock.thinking !== "string" ||
-      !typedBlock.thinking.trim()
-    ) {
-      return block;
-    }
-    return { type: "text", text: typedBlock.thinking };
+    return typedBlock.type === "thinking" &&
+      typeof typedBlock.thinking === "string" &&
+      typedBlock.thinking.trim()
+      ? { type: "text", text: typedBlock.thinking }
+      : block;
   });
 }
 

@@ -642,7 +642,12 @@ describe("node worker tunnel manager", () => {
         source: {
           kind: "local",
           path: localPath,
-          journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
+          journal: {
+            load: async () => undefined,
+            begin: vi.fn(async () => {}),
+            commit: vi.fn(async () => {}),
+            abort: vi.fn(async () => {}),
+          },
           stagedResult: { ref: workerWorkspaceResultRef("node-error"), record: () => {} },
         },
         remoteWorkspaceDir,
@@ -740,7 +745,12 @@ describe("node worker tunnel manager", () => {
         generation: 1,
       });
       const quiescence = { assertActive: async () => {}, resume: async () => {} };
-      const journal = { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() };
+      const journal = {
+        load: async () => undefined,
+        begin: vi.fn(async () => {}),
+        commit: vi.fn(async () => {}),
+        abort: vi.fn(async () => {}),
+      };
       workspaceDebug.mockClear();
 
       for (let turn = 0; turn < 2; turn += 1) {
@@ -864,7 +874,12 @@ describe("node worker tunnel manager", () => {
       source: {
         kind: "local",
         path: localPath,
-        journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
+        journal: {
+          load: async () => undefined,
+          begin: vi.fn(async () => {}),
+          commit: vi.fn(async () => {}),
+          abort: vi.fn(async () => {}),
+        },
         stagedResult: { ref: workerWorkspaceResultRef("node-current"), record: () => {} },
       },
       remoteWorkspaceDir,

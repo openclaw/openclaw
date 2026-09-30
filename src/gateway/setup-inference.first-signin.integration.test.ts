@@ -4,6 +4,8 @@ import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import * as catalogRefresh from "../agents/prepared-model-runtime.refresh-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { getCurrentDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -19,6 +21,62 @@ it(
   async ({ signal, onTestFinished }) => {
     const requests: string[] = [];
     const startedAt = performance.now();
+    const observedPhases = new Set([
+      "config.load",
+      "config.normalize",
+      "state.ownership",
+      "state.schema-preflight",
+      "worker-environments.store-import",
+      "plugins.bootstrap-imports",
+      "plugins.load",
+      "startup.maintenance",
+      "gateway.ready",
+      "sidecars.model-runtime",
+      "sidecars.reply-runtime",
+      "sidecars.chat-metadata",
+      "sidecars.total",
+    ]);
+    const ownerTimings: Array<{
+      name: string;
+      phase: string;
+      elapsedMs: number;
+      durationMs?: number;
+      cpuTotalMs?: number;
+      admissionMs?: number;
+      queueWaitMs?: number;
+    }> = [];
+    // Keep only named timing facts: diagnostic details can contain private state.
+    const stopObserving = onInternalDiagnosticEvent(
+      (event) => {
+        if (ownerTimings.length >= 64) {
+          return;
+        }
+        const elapsedMs = Math.round(performance.now() - startedAt);
+        if (event.type === "diagnostic.phase.completed" && observedPhases.has(event.name)) {
+          ownerTimings.push({
+            name: event.name,
+            phase: "completed",
+            elapsedMs,
+            durationMs: event.durationMs,
+            cpuTotalMs: event.cpuTotalMs,
+          });
+        } else if (
+          event.type === "gateway.rpc" &&
+          (event.method === "openclaw.setup.auth.start" || event.method === "wizard.next")
+        ) {
+          ownerTimings.push({
+            name: event.method,
+            phase: event.phase,
+            elapsedMs,
+            durationMs: event.phase === "received" ? undefined : event.durationMs,
+            admissionMs: event.phase === "handler" ? event.admissionMs : undefined,
+            queueWaitMs: event.phase === "dispatch" ? event.queueWaitMs : undefined,
+          });
+        }
+      },
+      { include: ["diagnostic.phase.completed", "gateway.rpc"] },
+    );
+    onTestFinished(stopObserving);
     const requestPhases = new Map([
       ["https://github.com/login/device/code", "device-code"],
       ["https://github.com/login/oauth/access_token", "access-token"],
@@ -40,7 +98,16 @@ it(
     let wizardProgressPhase: "device-code" | "browser" | "testing" | "other" | undefined;
     let wizardProgressElapsedMs: number | undefined;
     const reportAbort = () => {
+      const activePhase = getCurrentDiagnosticPhase();
       console.error("[setup-first-signin] test aborted", {
+        pid: process.pid,
+        activePhase: activePhase
+          ? observedPhases.has(activePhase)
+            ? activePhase
+            : "other"
+          : "none",
+        ownerTimingLimitReached: ownerTimings.length === 64,
+        ownerTimings,
         phase,
         elapsedMs: Math.round(performance.now() - startedAt),
         phaseTransitions,

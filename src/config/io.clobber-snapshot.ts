@@ -141,20 +141,6 @@ function compareClobberedSiblings(
   );
 }
 
-function createClobberedSiblingSnapshot(params: {
-  dir: string;
-  entry: string;
-  prefix: string;
-  mtimeMs: number;
-}): ClobberedSiblingSnapshot {
-  return {
-    name: params.entry,
-    path: path.join(params.dir, params.entry),
-    timestampKey: params.entry.slice(params.prefix.length).replace(/-\d{2}$/, ""),
-    mtimeMs: params.mtimeMs,
-  };
-}
-
 function* listClobberedSiblings(
   deps: ConfigClobberSnapshotDeps,
   dir: string,
@@ -175,9 +161,12 @@ function* listClobberedSiblings(
         sync: () => deps.fs.statSync(pathname, { throwIfNoEntry: false }),
         async: () => deps.fs.promises.stat(pathname).catch(() => null),
       });
-      snapshots.push(
-        createClobberedSiblingSnapshot({ dir, entry, prefix, mtimeMs: stat?.mtimeMs ?? 0 }),
-      );
+      snapshots.push({
+        name: entry,
+        path: pathname,
+        timestampKey: entry.slice(prefix.length).replace(/-\d{2}$/, ""),
+        mtimeMs: stat?.mtimeMs ?? 0,
+      });
     }
     return snapshots.toSorted(compareClobberedSiblings);
   } catch {

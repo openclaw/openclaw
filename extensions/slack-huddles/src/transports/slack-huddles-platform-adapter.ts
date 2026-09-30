@@ -3,7 +3,6 @@ import {
   type MeetingBrowserJoinSession,
   type MeetingManualActionCategory,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import type { SlackHuddlesMode } from "../config.js";
 import {
   slackHuddleAudioCaptureScript,
   slackHuddleLeaveScript,
@@ -16,7 +15,11 @@ import {
   normalizeSlackHuddleUrl,
   normalizeSlackHuddleUrlForReuse,
 } from "./slack-huddles-urls.js";
-import type { SlackHuddlesChromeHealth, SlackHuddlesTranscriptSnapshot } from "./types.js";
+import type {
+  SlackHuddlesChromeHealth,
+  SlackHuddlesMode,
+  SlackHuddlesTranscriptSnapshot,
+} from "./types.js";
 
 function slackHuddleOrigin(meetingUrl: string): string | undefined {
   return normalizeSlackHuddleUrlForReuse(meetingUrl) ? "https://app.slack.com" : undefined;

@@ -6,8 +6,8 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
+import { ZOOM_MEETINGS_CLI_METADATA } from "./cli-metadata.js";
 import plugin from "./index.js";
-import { ZOOM_MEETINGS_CLI_METADATA } from "./src/cli-output-mode.js";
 
 const MEETING_URL = "https://zoom.us/j/12345678901?pwd=owned";
 

@@ -215,7 +215,7 @@ describe("cloud transcript write admission", () => {
           if (!cleared) {
             await request.source.stagedResult.record(request.source.stagedResult.ref);
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,

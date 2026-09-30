@@ -162,7 +162,7 @@ describe("worker placement result recovery", () => {
     };
     const base = encode(params.base);
     const current = encode(params.current);
-    params.store.updateWorkspaceBaseManifest({ claim: params.claim, manifestRef: base.ref });
+    await params.store.updateWorkspaceBaseManifest({ claim: params.claim, manifestRef: base.ref });
     params.store.markWorkspaceResultPending(params.claim);
     const stagedResultRef = workerWorkspaceResultRef(params.claim.claimId);
     await stageWorkerWorkspaceResult({
@@ -934,7 +934,7 @@ describe("worker placement result recovery", () => {
       ownerEpoch: active.activeOwnerEpoch,
       placementGeneration: active.generation,
     };
-    expect(interruptedStore.loadWorkspaceReconciliation(owner)).toMatchObject({
+    expect(await interruptedStore.loadWorkspaceReconciliation(owner)).toMatchObject({
       appliedManifestRef: baseManifestRef,
     });
     await fs.rm(path.join(workspacePath, "result.txt"));

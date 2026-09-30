@@ -1649,7 +1649,7 @@ AFTER_CD
     }
   });
 
-  it("runs the Docker seed tier with the published updater and a checked main smoke package", () => {
+  it("runs the Docker seed tier with the published updater and a checked main/PR smoke package", () => {
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const jobs = readCiWorkflow().jobs;
     const job = jobs["docker-seed-e2e"];
@@ -1680,16 +1680,15 @@ AFTER_CD
         OPENCLAW_DOCKER_ALL_LANES: "${{ needs.preflight.outputs.docker_seed_lanes }}",
         OPENCLAW_DOCKER_ALL_LIVE_MODE: "skip",
         OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
-          "${{ needs.preflight.outputs.frozen_target == 'true' && 'base' || 'legacy-operator-state' }}",
         OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
         OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: parallelism,
       },
     });
     expect(parallelism).toContain("&& 3 || 1");
     expect(run.env).not.toHaveProperty("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC");
-    const prepare = job.steps.find(
-      (step: WorkflowStep) => step.name === "Prepare main Docker smoke package",
+    expect(run.env).not.toHaveProperty("OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS");
+    const prepare = job.steps.find((step: WorkflowStep) =>
+      step.run?.includes("scripts/package-openclaw-for-docker.mjs"),
     ) as WorkflowStep;
     for (const eventName of ["push", "pull_request"] as const) {
       expect(
@@ -1698,7 +1697,20 @@ AFTER_CD
           repository: "openclaw/openclaw",
           runAttempt: 1,
         }),
-      ).toBe(eventName === "push");
+      ).toBe(true);
+    }
+    for (const releaseGate of [false, true]) {
+      for (const qualification of [false, true]) {
+        expect(
+          evaluateWorkflowExpression("${{ " + prepare.if + " }}", {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            releaseGate,
+            preflightOutputs: { ci_qualification: String(qualification) },
+          }),
+        ).toBe(releaseGate && !qualification);
+      }
     }
     expect(prepare.run).toContain("pnpm build:ci-artifacts");
     expect(prepare.run).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
@@ -1713,6 +1725,7 @@ AFTER_CD
     );
     expect(baseline.env).toEqual({
       TARGET_CONTEXT_REF: "${{ inputs.target_context_ref || github.base_ref || github.ref_name }}",
+      FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
     });
     expect(job.steps.indexOf(baseline)).toBeLessThan(job.steps.indexOf(run));
     const survivorProof = job.steps.find(
@@ -1745,16 +1758,70 @@ AFTER_CD
     }
   });
 
-  it.each([
-    { candidate: "2026.9.3", expected: "openclaw@2026.9.2" },
-    { candidate: "2026.9.4-beta.1", expected: "openclaw@2026.9.3" },
+  it.each<{
+    candidate: string;
+    shape: string;
+    expected?: string;
+    context?: string;
+    frozen?: boolean;
+    catalog?: unknown;
+    catalogText?: string;
+    scenario?: string;
+    error?: string;
+  }>([
+    { candidate: "2026.9.3", shape: "current", expected: "openclaw@2026.9.2" },
+    { candidate: "2026.9.4-beta.1", shape: "prerelease", expected: "openclaw@2026.9.3" },
     {
       candidate: "2026.6.35",
+      shape: "extended-stable",
       context: "extended-stable/2026.6.33",
       expected: "openclaw@2026.6.34",
     },
-    { candidate: "2026.6.34", expected: undefined },
-  ])("hands Docker seed a strictly older published baseline for $candidate", (fixture) => {
+    { candidate: "2026.6.34", shape: "no-predecessor", expected: undefined },
+    {
+      candidate: "2026.9.3",
+      shape: "frozen-current",
+      frozen: true,
+      catalog: { scenarios: ["base", "legacy-operator-state"], assertionOnlyScenarios: [] },
+      expected: "openclaw@2026.9.2",
+    },
+    {
+      candidate: "2026.9.3",
+      shape: "historical-declared",
+      frozen: true,
+      catalog: { scenarios: ["base"], assertionOnlyScenarios: [] },
+      expected: "openclaw@2026.9.2",
+      scenario: "base",
+    },
+    {
+      candidate: "2026.9.3",
+      shape: "historical-pre-catalog",
+      frozen: true,
+      expected: "openclaw@2026.9.2",
+      scenario: "base",
+    },
+    {
+      candidate: "2026.9.3",
+      shape: "malformed-catalog",
+      frozen: true,
+      catalogText: "{",
+      error: "SyntaxError",
+    },
+    {
+      candidate: "2026.9.3",
+      shape: "invalid-catalog",
+      frozen: true,
+      catalog: { scenarios: "base", assertionOnlyScenarios: [] },
+      error: "Invalid upgrade-survivor scenario catalog",
+    },
+    {
+      candidate: "2026.9.3",
+      shape: "unsupported-catalog",
+      frozen: true,
+      catalog: { scenarios: ["other"], assertionOnlyScenarios: [] },
+      error: "No supported Docker seed upgrade scenario",
+    },
+  ])("hands Docker seed published inputs for $candidate ($shape)", (fixture) => {
     const job = readCiWorkflow().jobs["docker-seed-e2e"];
     const baseline = job.steps.find(
       (step: WorkflowStep) => step.name === "Resolve published Docker seed upgrade baseline",
@@ -1775,6 +1842,11 @@ AFTER_CD
         path.join(root, "package.json"),
         JSON.stringify({ version: fixture.candidate }),
       );
+      if (fixture.catalogText !== undefined || fixture.catalog !== undefined) {
+        const catalog = path.join(root, "scripts/lib/upgrade-survivor-scenarios.json");
+        mkdirSync(path.dirname(catalog), { recursive: true });
+        writeFileSync(catalog, fixture.catalogText ?? JSON.stringify(fixture.catalog));
+      }
       writeFileSync(
         path.join(root, ".ci-harness", "package.json"),
         JSON.stringify({ version: "2026.10.1" }),
@@ -1794,11 +1866,18 @@ console.log(JSON.stringify(["2026.6.34", "2026.6.35", "2026.9.1", "2026.9.2", "2
         `#!${process.execPath}
 if (process.argv.slice(2).join(" ") !== "test:docker:all") process.exit(2);
 require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC ?? "missing");
+require("node:fs").writeFileSync("scheduler-scenario", process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS ?? "missing");
+require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE ?? "missing");
 `,
         { mode: 0o755 },
       );
       writeFileSync(path.join(root, "github-env"), "");
       const inheritedBaseline = run.env?.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC;
+      const inheritedScenario = run.env?.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS;
+      const inheritedRestartMode = run.env?.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE;
+      if (typeof inheritedRestartMode !== "string") {
+        throw new Error("Docker seed restart mode must be a string");
+      }
       const result = runWorkflowShellScript(
         `set -euo pipefail\n${baseline?.run ?? ""}\nset -a\nsource "$GITHUB_ENV"\nset +a\n${run.run}`,
         {
@@ -1809,6 +1888,19 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
             GITHUB_ENV: path.join(root, "github-env"),
             OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:
               typeof inheritedBaseline === "string" ? inheritedBaseline : "",
+            OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
+              typeof inheritedScenario === "string"
+                ? String(
+                    evaluateWorkflowExpression(inheritedScenario, {
+                      eventName: "workflow_dispatch",
+                      repository: "openclaw/openclaw",
+                      runAttempt: 1,
+                      preflightOutputs: { frozen_target: String(fixture.frozen ?? false) },
+                    }),
+                  )
+                : "",
+            OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: inheritedRestartMode,
+            FROZEN_TARGET: String(fixture.frozen ?? false),
             TARGET_CONTEXT_REF: fixture.context ?? "main",
           },
         },
@@ -1817,9 +1909,15 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       if (fixture.expected) {
         expect(result.status, result.stderr).toBe(0);
         expect(readFileSync(receipt, "utf8")).toBe(fixture.expected);
+        expect(readFileSync(path.join(root, "scheduler-scenario"), "utf8")).toBe(
+          fixture.scenario ?? "legacy-operator-state",
+        );
+        expect(readFileSync(path.join(root, "scheduler-restart"), "utf8")).toBe("auto-auth");
       } else {
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("no published stable OpenClaw baseline predates candidate");
+        expect(result.stderr).toContain(
+          fixture.error ?? "no published stable OpenClaw baseline predates candidate",
+        );
         expect(existsSync(receipt)).toBe(false);
       }
     } finally {

@@ -46,13 +46,12 @@ struct UsageRow: Identifiable {
         var parts = ["\(remaining)% left"]
         if let windowLabel, !windowLabel.isEmpty { parts.append(windowLabel) }
         if let resetAt {
-            let reset = UsageRow.formatResetRemaining(target: resetAt, now: now)
-            if let reset { parts.append("⏱\(reset)") }
+            parts.append("⏱\(Self.formatResetRemaining(target: resetAt, now: now))")
         }
         return parts.joined(separator: " · ")
     }
 
-    private static func formatResetRemaining(target: Date, now: Date) -> String? {
+    private static func formatResetRemaining(target: Date, now: Date) -> String {
         let diff = target.timeIntervalSince(now)
         if diff <= 0 { return "now" }
         let minutes = Int(floor(diff / 60))

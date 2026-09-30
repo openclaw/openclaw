@@ -21,24 +21,20 @@ const EdgeAuthHeadersSchema = z
     });
   });
 
-const GatewayRemoteSchemaShape = {
-  url: z.string().optional(),
-
-  transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
-
-  remotePort: z.number().int().min(1).max(65_535).optional(),
-
-  token: SecretInputSchema.optional().register(sensitive),
-
-  password: SecretInputSchema.optional().register(sensitive),
-  edgeAuth: EdgeAuthHeadersSchema.optional(),
-  tlsFingerprint: z.string().optional(),
-  sshTarget: z.string().optional(),
-  sshIdentity: z.string().optional(),
-  sshHostKeyPolicy: z.union([z.literal("strict"), z.literal("openssh")]).optional(),
-};
-
-export const GatewayRemoteConfigSchema = z.strictObject(GatewayRemoteSchemaShape).optional();
+export const GatewayRemoteConfigSchema = z
+  .strictObject({
+    url: z.string().optional(),
+    transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
+    remotePort: z.number().int().min(1).max(65_535).optional(),
+    token: SecretInputSchema.optional().register(sensitive),
+    password: SecretInputSchema.optional().register(sensitive),
+    edgeAuth: EdgeAuthHeadersSchema.optional(),
+    tlsFingerprint: z.string().optional(),
+    sshTarget: z.string().optional(),
+    sshIdentity: z.string().optional(),
+    sshHostKeyPolicy: z.union([z.literal("strict"), z.literal("openssh")]).optional(),
+  })
+  .optional();
 
 export const SecuritySchema = z
   .strictObject({
@@ -290,19 +286,16 @@ function createMcpServersSchema(serverNameSchema: z.ZodType<string>) {
 }
 
 export function validateHttpOrigin(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") &&
-      url.pathname === "/" &&
-      !url.search &&
-      !url.hash &&
-      !url.username &&
-      !url.password
-    );
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value);
+  return (
+    url !== null &&
+    (url.protocol === "http:" || url.protocol === "https:") &&
+    url.pathname === "/" &&
+    !url.search &&
+    !url.hash &&
+    !url.username &&
+    !url.password
+  );
 }
 
 export const McpConfigSchema = z

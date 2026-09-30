@@ -16,10 +16,15 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
-import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
+import {
+  adoptSubagentRunForRequesterTurn,
+  registerSubagentRun,
+  replaceSubagentRunAfterSteerCore,
+} from "./subagent-registry.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   releaseSubagentRun,
@@ -63,6 +68,77 @@ afterEach(() => {
 });
 
 describe("registered completion source custody", () => {
+  it.each([false, true])(
+    "publishes ordinary registration only after a current worker commit (caller revoked: %s)",
+    async (revoke) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        vi.mocked(config.getRuntimeConfig).mockReturnValue({
+          session: { store: state.path("sessions.json") },
+        });
+        const runId = "worker-registration";
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const execute = stateWorker.runOpenClawStateWorkerOperation;
+        const held = vi
+          .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+          .mockImplementationOnce(async (owner, run, options) => {
+            entered.resolve();
+            await release.promise;
+            return execute(owner, run, options);
+          });
+        let current = true;
+        let pending: Promise<void> | undefined;
+        try {
+          pending = Promise.resolve(
+            registerSubagentRun(registration(runId), {
+              persistence: "worker",
+              assertCurrent: () => {
+                if (!current) {
+                  throw new Error("requester retired before registry commit");
+                }
+              },
+            }),
+          );
+          await Promise.race([
+            entered.promise,
+            pending.then(() => {
+              throw new Error("Registration completed without entering worker persistence");
+            }),
+          ]);
+          expect(subagentRuns.has(runId)).toBe(false);
+          expect(callGateway).not.toHaveBeenCalled();
+          current = !revoke;
+          release.resolve();
+          if (revoke) {
+            await expect(pending).rejects.toThrow("requester retired before registry commit");
+            expect(subagentRuns.has(runId)).toBe(false);
+            expect(callGateway).not.toHaveBeenCalled();
+          } else {
+            await pending;
+            expect(subagentRuns.get(runId)).toMatchObject({
+              execution: { status: "running" },
+              expectsCompletionMessage: true,
+            });
+            expect(callGateway).toHaveBeenCalledWith(
+              expect.objectContaining({
+                method: "agent.wait",
+                params: expect.objectContaining({ runId }),
+              }),
+            );
+            const accepted = subagentRuns.get(runId);
+            await registerSubagentRun(registration(runId), { persistence: "worker" });
+            expect(subagentRuns.get(runId)).toBe(accepted);
+            expect(callGateway).toHaveBeenCalledTimes(1);
+          }
+        } finally {
+          release.resolve();
+          await pending?.catch(() => {});
+          held.mockRestore();
+        }
+      });
+    },
+  );
+
   it.each([
     "admission",
     "lifecycle",
@@ -368,7 +444,17 @@ describe("registered completion source custody", () => {
           expect(source.authority.assertCurrent).not.toThrow();
           releaseSubagentRun(entry.runId);
         } else {
+          entry.requesterTurnRunId = undefined;
           revoked.abort(new Error("operator revoked"));
+          await expect(
+            adoptSubagentRunForRequesterTurn({
+              expected: entry,
+              requesterSessionKey: entry.requesterSessionKey,
+              requesterAgentId: "main",
+              requesterTurnRunId: "next-parent",
+              assertCurrent: () => {},
+            }),
+          ).rejects.toThrow(/authority/);
         }
         expect(source.authority.assertCurrent).toThrow();
         expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
