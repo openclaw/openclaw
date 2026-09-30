@@ -560,9 +560,10 @@ export async function executeMutableUpdate(
       }
       // Both install paths enter mutation only after the post-stop schema/authority fence.
       if (!mutationStarted) {
+        await params.onActivation?.();
+        assertExecutionCurrent();
         preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
         mutationStarted = true;
-        params.onActivation?.();
       }
       return;
     }

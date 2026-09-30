@@ -24,6 +24,59 @@ const { executionParams, inspectOrStopService, mocks, successfulUpdate } =
 
 describe("mutable update execution", () => {
   it.each(
+    (["package", "git"] as const).flatMap((kind) =>
+      [false, true].map((closeFails) => ({ kind, closeFails })),
+    ),
+  )(
+    "awaits reader drainage before $kind mutation (close failure=$closeFails)",
+    async ({ kind, closeFails }) => {
+      const entered = createDeferred();
+      const settled = createDeferred();
+      let mutated = false;
+      mocks.maybeStopService.mockResolvedValue({
+        stopped: false,
+        inspected: true,
+        runtimeInspected: true,
+        running: false,
+      });
+      mocks.runPackageUpdate.mockImplementation(async ({ beforeActivate }) => {
+        await beforeActivate();
+        mutated = true;
+        return successfulUpdate;
+      });
+      mocks.runGitUpdate.mockImplementation(async (params) => {
+        const target = { schemaVersions: { state: 15, agent: 19 } };
+        await params.inspectGitTarget?.(target);
+        await params.beforeGitMutation?.(target);
+        mutated = true;
+        return { ...successfulUpdate, mode: "git" };
+      });
+      const execution = executeMutableUpdate({
+        ...executionParams(kind),
+        onActivation: () => {
+          entered.resolve();
+          return settled.promise;
+        },
+      });
+      try {
+        await entered.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(mutated).toBe(false);
+      } finally {
+        if (closeFails) {
+          settled.reject(new Error("reader drainage failed"));
+        } else {
+          settled.resolve();
+        }
+      }
+      expect((await execution)?.result.status).toBe(closeFails ? "error" : "ok");
+      expect(mutated).toBe(!closeFails);
+    },
+  );
+
+  it.each(
     (["root", "include"] as const).flatMap((source) =>
       (["after-validation", "after-stop", "after-git-transfer"] as const).flatMap((phase) =>
         [true, false].map((accepted) => ({ source, phase, accepted })),

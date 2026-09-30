@@ -9,6 +9,8 @@ import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { VERSION } from "../../version.js";
 import type { createUpdateProgress } from "./progress.js";
 import {
@@ -531,9 +533,10 @@ async function runResolvedUpdate(
     invocationCwd,
     recoveryState,
     prepareMutableUpdate,
-    onActivation: () => {
-      presentation.suspend();
+    onActivation: async () => {
+      await presentation.suspend();
       progress.deferLedgerWrites();
+      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(run.env));
     },
   });
   run.executorFence?.assertCurrent();
