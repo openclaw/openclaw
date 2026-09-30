@@ -556,9 +556,8 @@ describe("media migration of canonical SQLite transcript archives", () => {
     );
   });
 
-  it("rolls back a failed archive publication and recovers on the next pass", async () => {
+  it("keeps a failed archive publication pending and recovers on the next pass", async () => {
     const f = fixture();
-    const before = f.read();
     const originalFile = fs.readFileSync(f.archivePath);
     const renameSync = fs.renameSync;
     let failed = false;
@@ -574,7 +573,9 @@ describe("media migration of canonical SQLite transcript archives", () => {
     });
     expect(failed).toBe(true);
     expect(result.warnings.join("\n")).toContain("synthetic archive publication failure");
-    expect(f.read()).toEqual(before);
+    const pending = f.read();
+    expectCanonical(pending);
+    expect(pending.published_at).toBeNull();
     // A second standalone attempt would succeed after the one-shot failure and violate this state.
     expect(fs.readFileSync(f.archivePath)).toEqual(originalFile);
 

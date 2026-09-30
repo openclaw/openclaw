@@ -10,6 +10,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   migrateCanonicalTranscriptArchives,
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
+  transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 
 const tempDirs: string[] = [];
@@ -25,6 +26,10 @@ function fixture(count = 3) {
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(pathname);
   database.exec(`
+    CREATE TABLE schema_meta (
+      meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER NOT NULL,
+      agent_id TEXT, app_version TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
     CREATE TABLE session_transcript_archives (
       session_id TEXT NOT NULL, generation TEXT NOT NULL, archive_blob BLOB NOT NULL,
       archive_name TEXT NOT NULL, archive_sha256 TEXT NOT NULL, encoding TEXT NOT NULL,
@@ -135,7 +140,7 @@ afterEach(() => {
 });
 
 describe("canonical transcript archive batch transactions", () => {
-  it("preserves unchanged bytes across batch boundaries with one transaction per batch", async () => {
+  it("preserves unchanged bytes across batch boundaries with two transactions per batch", async () => {
     const f = fixture(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
     try {
       const before = f.database
@@ -150,8 +155,8 @@ describe("canonical transcript archive batch transactions", () => {
           .all(),
       ).toEqual(before);
       expect(f.progress()).toBe('{"phase":"complete"}');
-      expect(f.transactions).toBe(3); // One per batch, plus completion.
-      expect(f.checks).toBe(6); // Entry and pre-commit for every transaction.
+      expect(f.transactions).toBe(5); // Two per batch, plus completion.
+      expect(f.checks).toBe(10); // Entry and pre-commit for every transaction.
     } finally {
       f.close();
     }
@@ -183,7 +188,7 @@ describe("canonical transcript archive batch transactions", () => {
           blob,
         );
       }
-      expect(f.transactions).toBe(2);
+      expect(f.transactions).toBe(3);
     } finally {
       f.close();
     }
@@ -310,11 +315,22 @@ describe("canonical transcript archive batch transactions", () => {
         }),
       ).rejects.toThrow("cursor write failed");
       expect(f.progress()).toBe("start");
+      expect(
+        f.database
+          .prepare(
+            "SELECT count(*) AS count FROM session_transcript_archives WHERE published_at IS NULL",
+          )
+          .get()?.count,
+      ).toBe(3);
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(1);
+      expect(
+        transcriptDirectiveArchivesNeedMigration(f.database, { generation: "", sessionId: "" }),
+      ).toBe(true);
 
       expect(
         (await f.migrate({ transformContent: changeContent, onArchive: prepareFile }))
           .rewrittenArchives,
-      ).toBe(3);
+      ).toBe(0);
       for (let index = 0; index < 3; index++) {
         const sessionId = `s${String(index).padStart(5, "0")}`;
         const blob = archiveBlob(f.database, sessionId);
@@ -327,6 +343,7 @@ describe("canonical transcript archive batch transactions", () => {
           blob,
         );
       }
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
     } finally {
       f.close();
     }
@@ -354,14 +371,15 @@ describe("canonical transcript archive batch transactions", () => {
       ).rejects.toThrow("file repair failed");
       rename.mockRestore();
       expect(f.progress()).toBe("start");
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(1);
       for (let index = 0; index < 3; index++) {
         const sessionId = `s${String(index).padStart(5, "0")}`;
-        expect(archiveBlob(f.database, sessionId).toString()).toContain("old");
+        expect(archiveBlob(f.database, sessionId).toString()).toContain("new");
         expect(
           f.database
             .prepare("SELECT published_at FROM session_transcript_archives WHERE session_id = ?")
             .get(sessionId)?.published_at,
-        ).toBe(123);
+        ).toBeNull();
       }
       expect(
         fs.readFileSync(path.join(f.archiveDirectory, "archive-0.jsonl")).toString(),
@@ -370,7 +388,7 @@ describe("canonical transcript archive batch transactions", () => {
       expect(
         (await f.migrate({ transformContent: changeContent, onArchive: prepareFile }))
           .rewrittenArchives,
-      ).toBe(3);
+      ).toBe(0);
       for (let index = 0; index < 3; index++) {
         const sessionId = `s${String(index).padStart(5, "0")}`;
         const blob = archiveBlob(f.database, sessionId);
@@ -384,6 +402,115 @@ describe("canonical transcript archive batch transactions", () => {
           blob,
         );
       }
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
+    } finally {
+      f.close();
+    }
+  });
+
+  it("recovers a failed second batch when the caller restarts at the beginning", async () => {
+    const f = fixture(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
+    try {
+      const prepareFile = (archivePath: string) => {
+        if (!fs.existsSync(archivePath)) {
+          fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+          fs.writeFileSync(archivePath, originalContent);
+        }
+      };
+      const renameSync = fs.renameSync;
+      const failedPath = path.join(f.archiveDirectory, "archive-33.jsonl");
+      const rename = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+        if (destination === failedPath) {
+          throw new Error("second batch repair failed");
+        }
+        return renameSync(source, destination);
+      });
+      await expect(
+        f.migrate({ transformContent: changeContent, onArchive: prepareFile }),
+      ).rejects.toThrow("second batch repair failed");
+      rename.mockRestore();
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(1);
+      expect(
+        f.database
+          .prepare(
+            "SELECT published_at FROM session_transcript_archives WHERE session_id = 's00033'",
+          )
+          .get()?.published_at,
+      ).toBeNull();
+      expect(
+        (await f.migrate({ transformContent: changeContent, onArchive: prepareFile }))
+          .rewrittenArchives,
+      ).toBe(0);
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
+      expect(
+        f.database
+          .prepare(
+            "SELECT count(*) AS count FROM session_transcript_archives WHERE published_at = 123",
+          )
+          .get()?.count,
+      ).toBe(35);
+    } finally {
+      f.close();
+    }
+  });
+
+  it("recovers surviving rows after deletion, insertion, and another rewrite", async () => {
+    const f = fixture();
+    try {
+      const prepareFile = (archivePath: string) => {
+        if (!fs.existsSync(archivePath)) {
+          fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+          fs.writeFileSync(archivePath, originalContent);
+        }
+      };
+      await expect(
+        f.migrate({
+          transformContent: changeContent,
+          onArchive: prepareFile,
+          writeCursor: () => {
+            throw new Error("cursor write failed");
+          },
+        }),
+      ).rejects.toThrow("cursor write failed");
+      f.database
+        .prepare("DELETE FROM session_transcript_archives WHERE session_id = 's00000'")
+        .run();
+      const inserted = Buffer.from(originalContent.replace("old", "inserted"));
+      f.database
+        .prepare(
+          "INSERT INTO session_transcript_archives VALUES (?, 'g', ?, ?, ?, 'identity', 456)",
+        )
+        .run("s00000a", inserted, "inserted.jsonl", sha256(inserted));
+      const rewritten = Buffer.from(originalContent.replace("old", "independently rewritten"));
+      f.database
+        .prepare(
+          "UPDATE session_transcript_archives SET archive_blob = ?, archive_sha256 = ? WHERE session_id = 's00001'",
+        )
+        .run(rewritten, sha256(rewritten));
+
+      await f.migrate({ transformContent: changeContent, onArchive: prepareFile });
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
+      expect(
+        f.database
+          .prepare(
+            "SELECT published_at FROM session_transcript_archives WHERE session_id = 's00002'",
+          )
+          .get()?.published_at,
+      ).toBe(123);
+      expect(
+        f.database
+          .prepare(
+            "SELECT published_at FROM session_transcript_archives WHERE session_id = 's00001'",
+          )
+          .get()?.published_at,
+      ).toBeNull();
+      expect(
+        f.database
+          .prepare(
+            "SELECT published_at FROM session_transcript_archives WHERE session_id = 's00000a'",
+          )
+          .get()?.published_at,
+      ).toBe(456);
     } finally {
       f.close();
     }

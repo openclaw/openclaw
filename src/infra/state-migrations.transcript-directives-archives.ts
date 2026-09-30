@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
@@ -29,10 +30,11 @@ import {
 } from "./state-migrations.transcript-directives-transform.js";
 
 export const TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE = 32;
+const DIRECTIVE_ARCHIVE_RECOVERY_KEY = "historical-transcript-directive-archive-recovery-v1";
 
 type TranscriptArchiveMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "session_transcript_archives"
+  "schema_meta" | "session_transcript_archives"
 >;
 
 type ArchiveCursor = { generation: string; sessionId: string };
@@ -46,6 +48,7 @@ type ArchiveMigrationOptions = {
   agentId: string;
   database: DatabaseSync;
   pathname: string;
+  recoveryKey?: string;
   start: ArchiveCursor;
   writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
 };
@@ -67,6 +70,82 @@ type ArchiveRowPlan = {
   publishedAt: number | null;
   sessionId: string;
 };
+
+type ArchiveRecoveryJournal = {
+  rows: { generation: string; nextSha256: string; publishedAt: number; sessionId: string }[];
+};
+
+function readArchiveRecoveryJournal(
+  database: DatabaseSync,
+  recoveryKey: string,
+): ArchiveRecoveryJournal | undefined {
+  const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    db.selectFrom("schema_meta").select("app_version").where("meta_key", "=", recoveryKey),
+  );
+  if (!row) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.app_version ?? "");
+  } catch {
+    throw new Error("Invalid transcript archive recovery journal");
+  }
+  if (
+    !isRecord(parsed) ||
+    !Array.isArray(parsed.rows) ||
+    !parsed.rows.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.sessionId === "string" &&
+        typeof entry.generation === "string" &&
+        typeof entry.nextSha256 === "string" &&
+        typeof entry.publishedAt === "number",
+    )
+  ) {
+    throw new Error("Invalid transcript archive recovery journal");
+  }
+  return {
+    rows: parsed.rows.map((entry) => ({
+      sessionId: entry.sessionId,
+      generation: entry.generation,
+      nextSha256: entry.nextSha256,
+      publishedAt: entry.publishedAt,
+    })),
+  };
+}
+
+function writeArchiveRecoveryJournal(
+  database: DatabaseSync,
+  agentId: string,
+  recoveryKey: string,
+  journal: ArchiveRecoveryJournal,
+): void {
+  const now = Date.now();
+  const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
+  executeSqliteQuerySync(
+    database,
+    db.insertInto("schema_meta").values({
+      agent_id: agentId,
+      app_version: JSON.stringify(journal),
+      created_at: now,
+      meta_key: recoveryKey,
+      role: "agent",
+      schema_version: 1,
+      updated_at: now,
+    }),
+  );
+}
+
+function clearArchiveRecoveryJournal(database: DatabaseSync, recoveryKey: string): void {
+  const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
+  executeSqliteQuerySync(
+    database,
+    db.deleteFrom("schema_meta").where("meta_key", "=", recoveryKey),
+  );
+}
 
 function transformArchiveContent(
   content: string,
@@ -186,6 +265,9 @@ export function transcriptDirectiveArchivesNeedMigration(
   database: DatabaseSync,
   start: ArchiveCursor,
 ): boolean {
+  if (readArchiveRecoveryJournal(database, DIRECTIVE_ARCHIVE_RECOVERY_KEY)) {
+    return true;
+  }
   let cursor = start;
   while (true) {
     const batch = listArchiveBatch(database, cursor);
@@ -255,7 +337,7 @@ function rewriteArchiveRow(database: DatabaseSync, planned: ArchiveRowPlan): boo
 
 function repairPublishedArchiveFile(params: {
   archiveDirectory: string;
-  planned: ArchiveRowPlan;
+  planned: Pick<ArchiveRowPlan, "archiveName" | "nextBytes" | "nextSha256">;
 }): boolean {
   const archiveDirectory = path.resolve(params.archiveDirectory);
   const archivePath = path.resolve(archiveDirectory, params.planned.archiveName);
@@ -337,6 +419,82 @@ function finalizeArchiveCursor(params: {
   });
 }
 
+// Recover the committed pending batch independently of the caller's cursor.
+// The media caller starts from the beginning on every run, and ordinary archive
+// retention or insertion may change which rows fit in a listed page.
+function recoverArchivePublication(params: {
+  archiveDirectory: string;
+  database: DatabaseSync;
+  onArchive?: (archivePath: string) => void;
+  pathname: string;
+  recoveryKey: string;
+}): void {
+  const journal = readArchiveRecoveryJournal(params.database, params.recoveryKey);
+  if (!journal) {
+    return;
+  }
+  const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(params.database);
+  const ready: {
+    generation: string;
+    nextSha256: string;
+    publishedAt: number;
+    sessionId: string;
+  }[] = [];
+  for (const recorded of journal.rows) {
+    const row = executeSqliteQueryTakeFirstSync(
+      params.database,
+      db
+        .selectFrom("session_transcript_archives")
+        .select(["archive_blob", "archive_name", "archive_sha256", "published_at"])
+        .where("session_id", "=", recorded.sessionId)
+        .where("generation", "=", recorded.generation),
+    );
+    // Deleted, replaced, or independently republished rows no longer belong to
+    // this recovery attempt. Never restore an old timestamp to new content.
+    if (!row || row.archive_sha256 !== recorded.nextSha256 || row.published_at !== null) {
+      continue;
+    }
+    const nextBytes = Buffer.from(row.archive_blob);
+    if (sha256Hex(nextBytes) !== recorded.nextSha256) {
+      throw new Error(`Canonical SQLite transcript archive is corrupt for ${recorded.sessionId}`);
+    }
+    const archivePath = path.resolve(params.archiveDirectory, row.archive_name);
+    params.onArchive?.(archivePath);
+    const fileCurrent = repairPublishedArchiveFile({
+      archiveDirectory: params.archiveDirectory,
+      planned: { archiveName: row.archive_name, nextBytes, nextSha256: recorded.nextSha256 },
+    });
+    if (fileCurrent) {
+      ready.push(recorded);
+    }
+  }
+  runSqliteImmediateTransactionSync(
+    params.database,
+    () => {
+      assertAgentDatabaseMaintenanceAuthority();
+      for (const recorded of ready) {
+        executeSqliteQuerySync(
+          params.database,
+          db
+            .updateTable("session_transcript_archives")
+            .set({ published_at: recorded.publishedAt })
+            .where("session_id", "=", recorded.sessionId)
+            .where("generation", "=", recorded.generation)
+            .where("archive_sha256", "=", recorded.nextSha256)
+            .where("published_at", "is", null),
+        );
+      }
+      clearArchiveRecoveryJournal(params.database, params.recoveryKey);
+      assertAgentDatabaseMaintenanceAuthority();
+    },
+    {
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      databaseLabel: params.pathname,
+      operationLabel: "historical-transcript-archive-recovery",
+    },
+  );
+}
+
 /** Repairs canonical blobs before their reconstructible files under maintenance authority. */
 export async function migrateCanonicalTranscriptArchives(
   params: ArchiveMigrationOptions & {
@@ -345,13 +503,21 @@ export async function migrateCanonicalTranscriptArchives(
   },
 ): Promise<ArchiveMigrationResult> {
   let rewrittenArchives = 0;
-  let missingCopies = 0;
-  const missingCopyExamples: string[] = [];
+  const recoveryKey = params.recoveryKey ?? DIRECTIVE_ARCHIVE_RECOVERY_KEY;
   let cursor = params.start;
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
     agentId: params.agentId,
     path: params.pathname,
   });
+  recoverArchivePublication({
+    archiveDirectory,
+    database: params.database,
+    onArchive: params.onArchive,
+    pathname: params.pathname,
+    recoveryKey,
+  });
+  let missingCopies = 0;
+  const missingCopyExamples: string[] = [];
   while (true) {
     const batch = listArchiveBatch(params.database, cursor, params.transformContent);
     if (batch.length === 0) {
@@ -386,34 +552,27 @@ export async function migrateCanonicalTranscriptArchives(
     for (const planned of batch) {
       params.onArchive?.(path.resolve(archiveDirectory, planned.archiveName));
     }
-    // Keep the original publication timestamps recoverable until file repair
-    // and cursor progress both succeed. A failed batch rolls back its blobs;
-    // already replaced files are verified again on retry.
+    // Persist the original publication timestamps with the rewritten blobs.
+    // Until file repair and cursor commit finish, changed rows remain pending.
     const rowsPresent = runSqliteImmediateTransactionSync(
       params.database,
       () => {
         assertAgentDatabaseMaintenanceAuthority();
         const result = batch.map((planned) => rewriteArchiveRow(params.database, planned));
-        const filesCurrent = batch.map((planned, index) => {
-          const archivePath = path.resolve(archiveDirectory, planned.archiveName);
-          const fileCurrent = result[index]
-            ? repairPublishedArchiveFile({ archiveDirectory, planned })
-            : false;
-          if (result[index] && !fileCurrent) {
-            missingCopies += 1;
-            if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
-              missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
-            }
-          }
-          return fileCurrent;
-        });
-        for (const [index, planned] of batch.entries()) {
-          finalizeArchiveCursor({
-            database: params.database,
-            fileCurrent: filesCurrent[index] === true,
-            planned,
-            writeCursor: params.writeCursor,
-          });
+        const rows = batch.flatMap((planned, index) =>
+          result[index] && planned.changed && planned.publishedAt !== null
+            ? [
+                {
+                  generation: planned.generation,
+                  nextSha256: planned.nextSha256,
+                  publishedAt: planned.publishedAt,
+                  sessionId: planned.sessionId,
+                },
+              ]
+            : [],
+        );
+        if (rows.length > 0) {
+          writeArchiveRecoveryJournal(params.database, params.agentId, recoveryKey, { rows });
         }
         assertAgentDatabaseMaintenanceAuthority();
         return result;
@@ -422,6 +581,43 @@ export async function migrateCanonicalTranscriptArchives(
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         databaseLabel: params.pathname,
         operationLabel: "historical-transcript-archive-directives",
+      },
+    );
+    // Published files never point at rolled-back blobs: rewritten rows are
+    // committed as pending before an atomic replacement can touch a file.
+    const filesCurrent = batch.map((planned, index) => {
+      const archivePath = path.resolve(archiveDirectory, planned.archiveName);
+      const fileCurrent = rowsPresent[index]
+        ? repairPublishedArchiveFile({ archiveDirectory, planned })
+        : false;
+      if (rowsPresent[index] && !fileCurrent) {
+        missingCopies += 1;
+        if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
+          missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
+        }
+      }
+      return fileCurrent;
+    });
+    // Cursor progress and timestamp restoration are atomic with journal removal.
+    runSqliteImmediateTransactionSync(
+      params.database,
+      () => {
+        assertAgentDatabaseMaintenanceAuthority();
+        for (const [index, planned] of batch.entries()) {
+          finalizeArchiveCursor({
+            database: params.database,
+            fileCurrent: filesCurrent[index] === true,
+            planned,
+            writeCursor: params.writeCursor,
+          });
+        }
+        clearArchiveRecoveryJournal(params.database, recoveryKey);
+        assertAgentDatabaseMaintenanceAuthority();
+      },
+      {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: params.pathname,
+        operationLabel: "historical-transcript-archive-cursor",
       },
     );
     rewrittenArchives += batch.filter(
