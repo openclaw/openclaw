@@ -9,6 +9,7 @@ import {
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import { latestSubagentRun } from "./subagent-run-generation.js";
 
 export function resetRequesterSettleWakeRetry(
   wake?: RequesterSettleWakeState,
@@ -25,30 +26,62 @@ export function resetRequesterSettleWakeRetry(
 }
 
 /** Capture the accepted tool intent before the runtime publishes its yielded terminal. */
-export async function markSubagentMessageWaitInRuns(params: {
+export async function claimSubagentYieldInRuns(params: {
   runId: string;
   sessionKey: string;
   acknowledgment?: string;
+  waitForMessage: boolean;
+  hasPendingWork: () => boolean;
   runs: Map<string, SubagentRunRecord>;
   context: OpenClawStateWorkerContext;
   assertCurrent: () => void;
   persist: Parameters<typeof publishSubagentRunPostimages>[0]["persist"];
-}): Promise<void> {
+}): Promise<"accepted" | "nothing-pending" | "pending-work"> {
   params.assertCurrent();
   const entry = params.runs.get(params.runId);
   if (
     !entry ||
     entry.childSessionKey !== params.sessionKey ||
-    entry.expectsCompletionMessage !== true ||
     entry.collect ||
     entry.execution.status !== "running" ||
     entry.killIntent ||
     entry.killReconciliation ||
-    entry.suppressCompletionDelivery ||
-    entry.requesterSettleWake?.pauseNotice
+    entry.suppressCompletionDelivery
   ) {
-    return;
+    return "nothing-pending";
   }
+  const taskRunId = entry.taskRunId ?? entry.runId;
+  const ownsTaskGeneration = () =>
+    params.runs.get(params.runId) === entry &&
+    latestSubagentRun(
+      params.runs.values(),
+      (candidate) =>
+        candidate.childSessionKey === params.sessionKey &&
+        (candidate.taskRunId ?? candidate.runId) === taskRunId,
+    ) === entry;
+  // A separate followup may share this session without replacing this task.
+  if (!ownsTaskGeneration()) {
+    return "nothing-pending";
+  }
+  if (params.hasPendingWork()) {
+    return "pending-work";
+  }
+  if (!params.waitForMessage) {
+    return "nothing-pending";
+  }
+  // Quiet tasks can pause too, but never acquire an announcing obligation.
+  if (entry.expectsCompletionMessage !== true || entry.requesterSettleWake?.pauseNotice) {
+    return "accepted";
+  }
+  const assertCurrent = () => {
+    params.assertCurrent();
+    if (!ownsTaskGeneration()) {
+      throw new Error("Subagent message wait lost its current task generation");
+    }
+    if (params.hasPendingWork()) {
+      throw new Error("Subagent message wait acquired pending background work");
+    }
+  };
   const previous = captureSubagentRunMutationSnapshot(entry);
   entry.requesterSettleWake = {
     ...resetRequesterSettleWakeRetry(previous.requesterSettleWake),
@@ -66,16 +99,17 @@ export async function markSubagentMessageWaitInRuns(params: {
     previous: new Map([[entry, previous]]),
     persist: params.persist,
     context: params.context,
-    assertCurrent: params.assertCurrent,
+    assertCurrent,
   });
   try {
-    params.assertCurrent();
+    assertCurrent();
     if (result.publication !== "published") {
       throw new Error("Subagent message wait lost its original run");
     }
   } catch (error) {
     throw new SubagentRegistryWriteError("committed", error, result.publication);
   }
+  return "accepted";
 }
 
 /** A pause uses the existing retry owner, but never consumes the completion cohort. */

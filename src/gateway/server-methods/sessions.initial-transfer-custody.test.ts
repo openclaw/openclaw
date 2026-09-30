@@ -8,7 +8,9 @@ import {
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { createRequesterYieldCallback } from "../../agents/openclaw-tools.requester-yield.js";
 import { useSubagentControlFixture } from "../../agents/subagents/registry/subagent-control.test-support.js";
+import { createLifecycleControllerFixture } from "../../agents/subagents/registry/subagent-registry-lifecycle-controller.test-support.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { commitRequesterInitialTransfer } from "../../agents/subagents/registry/subagent-registry-requester-wake-commit.js";
 import * as registryState from "../../agents/subagents/registry/subagent-registry-state.js";
 import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
@@ -109,6 +111,99 @@ async function createYieldedChild(withSibling = false) {
       }),
   };
 }
+
+it.each(["preselected", "selected by mutation", "already published"] as const)(
+  "retires a completed initial transfer only after publication (%s)",
+  async (mode) => {
+    const { entry, nativeState } = await createYieldedChild();
+    entry.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+    entry.completion = {
+      required: true,
+      resultText: "Completed child result",
+      capturedAt: Date.now(),
+    };
+    entry.delivery = { status: "delivered" };
+    entry.requesterSettleWake = undefined;
+    const stateContext = captureOpenClawStateWorkerContext();
+    await nativeState.persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, [entry.runId], {
+      context: stateContext,
+    });
+    if (mode === "already published") {
+      subagentRuns.delete(entry.runId);
+      await nativeState.persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, [entry.runId], {
+        context: stateContext,
+      });
+    }
+    const context = createLifecycleControllerFixture(
+      {
+        entry,
+        runs: subagentRuns,
+        persistAsyncOrThrow: (writeContext, callbacks, ...ids) =>
+          nativeState.persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, ids, {
+            context: writeContext,
+            ...callbacks,
+          }),
+      },
+      {
+        callGateway: fixture.gateway,
+        cleanupBrowserSessionsForLifecycleEnd: fixture.cleanup,
+        ownersByEntry: new WeakMap(),
+      },
+    );
+    const persist = vi.spyOn(context.options, "persistAsyncOrThrow");
+    const retire = new Set(mode === "selected by mutation" ? [] : [entry]);
+    const mutate = vi.fn(() => {
+      retire.add(entry);
+    });
+    const finish = vi.fn(() => {
+      expect(subagentRuns.has(entry.runId)).toBe(false);
+    });
+    await commitRequesterInitialTransfer(context, {
+      kind: "completed-cohort",
+      entries: [entry],
+      stateContext,
+      retire,
+      alreadyPublished: mode === "already published",
+      assertCurrent: () => {},
+      assertHandoffCurrent: () => {},
+      mutate,
+      finish,
+      scheduleRetry: () => {},
+    });
+    expect(mutate).toHaveBeenCalledTimes(mode === "already published" ? 0 : 1);
+    expect(persist).toHaveBeenCalledTimes(mode === "already published" ? 0 : 1);
+    expect(finish).toHaveBeenCalledOnce();
+    expect(subagentRuns.has(entry.runId)).toBe(false);
+  },
+);
+
+it.each([false, true])(
+  "retires the actual completed requester cohort (yielded: %s)",
+  async (yielded) => {
+    const { entry, settle, nativeState } = await createYieldedChild();
+    entry.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+    entry.cleanup = "delete";
+    entry.cleanupCompletedAt = Date.now();
+    entry.retireAfterRequesterTurn = true;
+    entry.delivery = {
+      status: "delivered",
+      ...(yielded
+        ? {
+            requesterVisibleFinal: {
+              requesterTurnRunId: "staged-cohort-parent",
+              batchRunIds: [entry.runId],
+            },
+          }
+        : {}),
+    };
+    await nativeState.persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, [entry.runId], {
+      context: captureOpenClawStateWorkerContext(),
+    });
+    expect(await settle(yielded)).toBe(true);
+    expect(subagentRuns.has(entry.runId)).toBe(false);
+    expect(fixture.wake).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["unchanged", "replaced", "empty"] as const)(
   "retains the original session source through cold registry restore (%s)",

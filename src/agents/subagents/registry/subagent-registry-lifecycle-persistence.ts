@@ -5,6 +5,7 @@ import {
   captureSubagentRunMutationSnapshot,
   publishSubagentRunPostimages,
   SubagentRegistryWriteError,
+  waitForPendingSubagentRegistryWrites,
 } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -29,7 +30,19 @@ export async function commitSubagentLifecycleMutation(
     }
   };
   if (!args.previous) {
-    assertCurrent();
+    // Join earlier admitted row publications before taking the cleanup preimage.
+    // Never replay a staged mutation or adopt an uncertain write outcome.
+    for (;;) {
+      assertCurrent();
+      const pending = waitForPendingSubagentRegistryWrites(
+        [args.entry.runId],
+        args.stateContext.admission,
+      );
+      if (!pending) {
+        break;
+      }
+      await pending;
+    }
   }
   const previous = args.previous ?? captureSubagentRunMutationSnapshot(args.entry);
   args.mutate();

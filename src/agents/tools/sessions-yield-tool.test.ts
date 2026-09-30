@@ -203,7 +203,7 @@ describe("sessions_yield tool", () => {
 
     expect(details.status).toBe("already_pending");
     expect(details.message).toBe(
-      "1 child session spawned by an earlier turn of this session is paused by its own sessions_yield and will not complete until an incoming continuation arrives: agent:main:subagent:worker, paused, started 2026-09-21T03:00:00.000Z. Send that continuation with sessions_send if this session owns it; otherwise the work stays waiting. This turn owns no new claim, so no yield is needed: end this turn normally.",
+      "1 child session spawned by an earlier turn of this session is paused by its own sessions_yield and will not complete until an incoming continuation arrives: agent:main:subagent:worker, paused, started 2026-09-21T03:00:00.000Z. An authorized caller must send that continuation; owning a child does not grant a messaging tool. Otherwise the work stays waiting. This turn owns no new claim, so no yield is needed: end this turn normally.",
     );
     expect(details.message).not.toContain("do not re-spawn, re-send");
     expect(onYield).not.toHaveBeenCalled();

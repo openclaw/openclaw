@@ -12,6 +12,7 @@ import {
   captureSubagentRunPostimagePublication,
   publishSubagentRunPostimages,
   SubagentRegistryWriteError,
+  waitForPendingSubagentRegistryWrites,
 } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -186,31 +187,25 @@ export function commitRequesterInitialTransfer(
     new Map(
       params.entries.map((entry) => [entry, captureSubagentRunMutationSnapshot(entry)] as const),
     );
-  let previous = snapshot();
-  let custody = captureSubagentRunPostimagePublication({
-    runs: context.options.runs,
-    previous,
-    context: params.stateContext,
-    assertCurrent: () => {},
-    requireMutationOwnerIdentity: true,
-  });
-  let handoffOwners:
-    | {
-        entry: SubagentRunRecord;
-        identity: ReturnType<typeof captureRequesterSettleRunIdentity>;
-        killIntent: SubagentRunRecord["killIntent"];
-        killReconciliation: SubagentRunRecord["killReconciliation"];
-        suppressed: SubagentRunRecord["suppressCompletionDelivery"];
-        retired: boolean;
-      }[]
-    | undefined;
+  // Planning owns the admitted cohort, not a frozen copy of mutable completion
+  // progress. Capture the exact row preimage only when a write is ready to stage.
+  const captureOwners = () =>
+    params.entries.map((entry) => ({
+      entry,
+      identity: captureRequesterSettleRunIdentity(entry),
+      killIntent: entry.killIntent,
+      killReconciliation: entry.killReconciliation,
+      suppressed: entry.suppressCompletionDelivery,
+      retired: params.retire?.has(entry) === true,
+    }));
+  let handoffOwners = captureOwners();
   let writeFailure: SubagentRegistryWriteError | undefined;
   let finished = false;
   let retired = false;
   let prepared = false;
   let promoted = false;
   let released = !params.release;
-  let writing = false;
+  let writing: ReturnType<typeof captureSubagentRunPostimagePublication> | undefined;
   const initialTransfer = {
     kind: params.kind,
     completion: completion.promise,
@@ -258,10 +253,9 @@ export function commitRequesterInitialTransfer(
   function assertHandoffCurrent() {
     assertSubagentRegistryWriteSourceCurrent(params.stateContext);
     if (
-      !handoffOwners ||
       handoffOwners.some(
         (owner) =>
-          (owner.retired
+          (initialTransfer.published && owner.retired
             ? context.options.runs.has(owner.entry.runId)
             : context.options.runs.get(owner.entry.runId) !== owner.entry) ||
           !isDeepStrictEqual(captureRequesterSettleRunIdentity(owner.entry), owner.identity) ||
@@ -272,19 +266,12 @@ export function commitRequesterInitialTransfer(
     ) {
       throw new Error("Initial requester handoff lost its recorded cohort");
     }
-    if (!params.release || !released) {
+    if (initialTransfer.published && (!params.release || !released)) {
       params.assertHandoffCurrent();
     }
   }
   function adoptPublished() {
-    handoffOwners = params.entries.map((entry) => ({
-      entry,
-      identity: captureRequesterSettleRunIdentity(entry),
-      killIntent: entry.killIntent,
-      killReconciliation: entry.killReconciliation,
-      suppressed: entry.suppressCompletionDelivery,
-      retired: params.retire?.has(entry) === true,
-    }));
+    handoffOwners = captureOwners();
     initialTransfer.published = true;
   }
   function assertEpisodeCurrent() {
@@ -301,23 +288,35 @@ export function commitRequesterInitialTransfer(
     ) {
       throw new Error("Initial requester transfer episode was superseded");
     }
-    if (initialTransfer.published && !writing) {
-      assertHandoffCurrent();
+    if (writing) {
+      writing.assertCurrent();
     } else {
-      custody.assertCurrent();
+      assertHandoffCurrent();
     }
   }
   async function write(mutate: () => void, onPublished: () => void) {
-    assertEpisodeCurrent();
-    previous = snapshot();
-    custody = captureSubagentRunPostimagePublication({
+    // Completion may already have an admitted terminal/cleanup publication.
+    // Join it, then stage once from its committed facts under the same cohort.
+    for (;;) {
+      assertEpisodeCurrent();
+      const pending = waitForPendingSubagentRegistryWrites(
+        params.entries.map((entry) => entry.runId),
+        params.stateContext.admission,
+      );
+      if (!pending) {
+        break;
+      }
+      await pending;
+    }
+    const previous = snapshot();
+    const custody = captureSubagentRunPostimagePublication({
       runs: context.options.runs,
       previous,
       context: params.stateContext,
       assertCurrent: () => {},
       requireMutationOwnerIdentity: true,
     });
-    writing = true;
+    writing = custody;
     let capturing = true;
     try {
       mutate();
@@ -364,7 +363,7 @@ export function commitRequesterInitialTransfer(
       }
       throw writeFailure;
     } finally {
-      writing = false;
+      writing = undefined;
     }
   }
   const pending: PendingRequesterSettleWakeCommit = {

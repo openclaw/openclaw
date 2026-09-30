@@ -309,6 +309,11 @@ a polling loop just to wait for completion.
 A sub-agent can also explicitly set `waitFor: "message"` to wait for an incoming
 continuation about external work, such as a remote job it does not drive itself.
 This does not schedule that message; an operator or integration must send it.
+The wait belongs to the current registered native task, whether its session is
+hidden or a visible dashboard child. A dashboard link, a human owner, or a
+subagent-shaped key alone cannot create a wait. Missing, finished, stopped, or
+replaced task owners cannot pause; an explicit message wait without an eligible
+task returns `nothing_pending` without ending the turn.
 Without a real pending child/runtime completion or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses
@@ -369,8 +374,8 @@ rather than announced. Where collector context reaches the tool factory, such as
 the embedded runner, the turn is not offered `sessions_yield`, and if an override
 ever reaches the tool, it returns an error explaining that collector results are
 collected explicitly. Other paths do not pass that context yet: a CLI-backed
-collector turn through the Gateway tool resolver can still be offered the tool
-and receive a successful `yielded` result. In every case a collector that yields
+collector turn through the Gateway tool resolver can still be offered the tool,
+but its registered collector task cannot claim a message wait. In every case a collector that yields
 is settled at its own terminal instead of pausing, so its waiter resolves rather
 than blocking for good.
 
