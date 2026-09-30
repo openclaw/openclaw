@@ -555,7 +555,6 @@ export function buildGatewayCronService(params: {
 
   // Built after cron so watcher exit callbacks can call back into the service.
   let exitWatchers: CronExitWatchers | undefined;
-  let streamWatchers: ReturnType<typeof createCronStreamWatchers> | undefined;
   let exitWatcherReconciliations = 0;
   let streamWatcherReconciliations = 0;
   const terminalExitCompletionTokens = new Map<
@@ -1169,7 +1168,7 @@ export function buildGatewayCronService(params: {
     logger: cronServiceLogger,
   } satisfies CronExitWatcherHandlers;
   exitWatchers = createCronExitWatchers(exitWatcherHandlers, params.scheduler);
-  streamWatchers = createCronStreamWatchers({
+  const streamWatchers = createCronStreamWatchers({
     scheduler: params.scheduler,
     getProcessSupervisor,
     updateState: async (jobId, patch, streamScheduleKey, streamSourceIdentity) => {

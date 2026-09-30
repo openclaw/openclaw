@@ -2289,7 +2289,7 @@ src/gateway/stale-install.ts	1
 src/gateway/system-ca-warmup.ts	1
 src/gateway/talk/handlers/index.ts	3
 src/gateway/talk/relay/session-create.ts	1
-src/gateway/talk/session-config.ts	5
+src/gateway/talk/session-config.ts	4
 src/gateway/terminal/node-relay.ts	1
 src/gateway/test-http-response.ts	4
 src/gateway/test-temp-config.ts	1
