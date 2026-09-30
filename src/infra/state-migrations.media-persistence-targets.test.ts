@@ -235,6 +235,37 @@ describe("media persistence migration targets", () => {
     expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
   });
 
+  it("fences a configured database when deletion history becomes unavailable before final I/O", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-unavailable-history-race-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "deleting-configured";
+    const databasePath = createLegacyAgentDatabase({ agentId, env });
+    const bytesBefore = fs.readFileSync(databasePath);
+
+    const result = await migrateLegacyMediaPersistence({
+      configuredAgentDatabaseTargets: [{ agentId, path: databasePath }],
+      env,
+      hooks: {
+        beforeDatabaseWrite: () => {
+          const state = openOpenClawStateDatabase({ env });
+          state.db.exec("DROP TABLE agent_deletion_journal");
+          closeOpenClawStateDatabaseForTest();
+        },
+      },
+    });
+
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("deletion journal history is unavailable"),
+        expect.stringContaining(`Skipped agent database ${databasePath}`),
+      ]),
+    );
+    expect(fs.readFileSync(databasePath)).toEqual(bytesBefore);
+    expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
+  });
+
   it("holds an unowned database when retained deletion history is malformed", async () => {
     const stateDir = fs.realpathSync.native(
       makeTempDir(tempDirs, "media-persistence-malformed-deletion-history-"),

@@ -74,12 +74,9 @@ function classifyRetainedAgentDatabaseHold(params: {
         sameDatabasePath(owner.path, params.candidate.path),
     );
   if (retainedAgentDeletionHistoryUnavailable(params.retainedDeletions)) {
-    if (hasConfiguredOwner(new Set())) {
-      return undefined;
-    }
     return {
       kind: "warning",
-      message: `Skipped unowned agent database ${params.candidate.path}; deletion journal history is unavailable.`,
+      message: `Skipped agent database ${params.candidate.path}; deletion journal history is unavailable.`,
     };
   }
   if (retainedAgentDeletionHistoryAbsent(params.retainedDeletions)) {
