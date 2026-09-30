@@ -742,4 +742,3 @@ export async function bootstrapWorker(
     await prepared.dispose();
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
