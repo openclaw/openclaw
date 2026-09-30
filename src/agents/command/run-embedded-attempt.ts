@@ -52,6 +52,7 @@ import {
 } from "../thinking-runtime.js";
 import {
   createAgentAttemptLifecycleCallbacks,
+  resetAgentAttemptLifecycle,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
@@ -348,9 +349,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           attemptMediaTaskIds = sessionKey
             ? getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId)
             : new Set<string>();
-          attemptLifecycleState.lifecycleError = undefined;
-          attemptLifecycleState.lifecycleFinishing = false;
-          attemptLifecycleState.lifecycleEnded = false;
+          resetAgentAttemptLifecycle(attemptLifecycleState);
           const isAutoFallbackPrimaryProbeCandidate =
             autoFallbackPrimaryProbe &&
             providerOverride === autoFallbackPrimaryProbe.provider &&
