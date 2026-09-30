@@ -98,12 +98,15 @@ function captureRecoverySource({
         return false;
       },
     });
+    const verifiedDirectories = new Set<string>();
     for (const [target, fact] of hardlinkedTargets) {
       assertPluginNativeReferenceNamespace(
         target,
         fact,
         native!.namespaces.get(fact.namespace)!,
         recovery.directory,
+        undefined,
+        verifiedDirectories,
       );
     }
     const relocate = (filename: string) =>

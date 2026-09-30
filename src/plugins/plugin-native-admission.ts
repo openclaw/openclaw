@@ -373,6 +373,7 @@ export function createPluginNativeAdmission(
     return linked.sourceIdentity;
   };
   const assertReferenceNamespaces = () => {
+    const verifiedDirectories = new Set<string>();
     for (const target of hardlinkedTargets) {
       const fact = files.get(targets.get(target)!)!;
       assertPluginNativeReferenceNamespace(
@@ -381,6 +382,7 @@ export function createPluginNativeAdmission(
         state.namespaces.get(fact.namespace)!,
         directory,
         hostRoot,
+        verifiedDirectories,
       );
     }
   };
