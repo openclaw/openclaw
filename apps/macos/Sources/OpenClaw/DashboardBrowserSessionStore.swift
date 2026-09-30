@@ -20,6 +20,25 @@ final class DashboardBrowserSessionStore {
             self.owner.revision == self.revision
         }
 
+        func signInEmbed(appURL: URL) async throws -> Bool {
+            guard self.isCurrent, let gateway = self.session else { throw GatewayBrowserSessionError.superseded }
+            try gateway.validate(for: gateway.origin)
+            let embed = try await self.owner.embedSignIn.signIn(appURL: appURL, gateway: gateway, isCurrent: {
+                guard self.isCurrent, let current = self.session,
+                      current.browserDataPrincipal == gateway.browserDataPrincipal
+                else { return false }
+                return (try? current.validate(for: current.origin)) != nil
+            })
+            guard let embed else { return false }
+            try await self.installEmbedSession(embed)
+            return true
+        }
+
+        func installEmbedSession(_ session: GatewayBrowserSession) async throws {
+            guard self.isCurrent else { throw GatewayBrowserSessionError.superseded }
+            try await self.owner.installEmbedSession(session, revision: self.revision)
+        }
+
         func prepare(for url: URL, in contentController: WKUserContentController) async throws {
             try self.session?.validate(for: url)
             guard self.isCurrent else { throw GatewayBrowserSessionError.superseded }
@@ -27,9 +46,7 @@ final class DashboardBrowserSessionStore {
             try Task.checkCancellation()
             guard self.isCurrent else { throw GatewayBrowserSessionError.superseded }
             try self.session?.validate(for: url)
-            if let rule = self.owner.cookieRule {
-                contentController.add(rule)
-            }
+            self.owner.prepareController(contentController)
             try await self.owner.publishCookie(revision: self.revision).value
             try Task.checkCancellation()
             guard self.isCurrent else { throw GatewayBrowserSessionError.superseded }
@@ -50,7 +67,20 @@ final class DashboardBrowserSessionStore {
     private var revision: UInt64 = 0
     private var preparation: Task<Void, Error>?
     private var cookieRule: WKContentRuleList?
+    private var cookieRuleSource: String?
     private var publishedRevision: UInt64?
+    private let embedSignIn = CloudflareAccessEmbedLogin()
+    private final class PreparedController {
+        weak var controller: WKUserContentController?
+        var rule: WKContentRuleList?
+
+        init(_ controller: WKUserContentController, rule: WKContentRuleList?) {
+            self.controller = controller
+            self.rule = rule
+        }
+    }
+
+    private var preparedControllers: [PreparedController] = []
 
     convenience init(dataStore: WKWebsiteDataStore) {
         self.init(dataStore: dataStore, ownership: Ownership())
@@ -94,7 +124,7 @@ final class DashboardBrowserSessionStore {
         let store = self.persistent(profileID: profileID, registryNamespace: registryNamespace)
         let samePrincipal = previous != nil && previous?.browserDataPrincipal == next?.browserDataPrincipal
         let preparation = samePrincipal
-            ? store.invalidate(previousPrincipal: previous?.browserDataPrincipal)
+            ? store.invalidate(previousPrincipal: previous?.browserDataPrincipal, retainingEmbedsFor: next)
             : store.removeData()
         let revision = store.revision
         try await preparation.value
@@ -145,6 +175,7 @@ final class DashboardBrowserSessionStore {
             // leases can use the new expiry without losing route or worker state.
             self.session = next
             self.publishedRevision = revision
+            try await self.refreshCookieRule(revision: revision)
         }
         // A failed renewal must not poison later navigation with a valid session.
         self.preparation = Task { @MainActor in _ = await preparation.result }
@@ -171,9 +202,12 @@ final class DashboardBrowserSessionStore {
     }
 
     @discardableResult
-    func invalidate(previousPrincipal: String? = nil) -> Task<Void, Error> {
+    func invalidate(
+        previousPrincipal: String? = nil,
+        retainingEmbedsFor session: GatewayBrowserSession? = nil) -> Task<Void, Error>
+    {
         if self.ownership.principal == nil { self.ownership.principal = previousPrincipal }
-        return self.replaceSession(nil)
+        return self.replaceSession(nil, retainingEmbedsFor: session)
     }
 
     func expire(_ session: GatewayBrowserSession) {
@@ -188,7 +222,10 @@ final class DashboardBrowserSessionStore {
     }
 
     @discardableResult
-    private func replaceSession(_ session: GatewayBrowserSession?) -> Task<Void, Error> {
+    private func replaceSession(
+        _ session: GatewayBrowserSession?,
+        retainingEmbedsFor retainedSession: GatewayBrowserSession? = nil) -> Task<Void, Error>
+    {
         let principal = session?.browserDataPrincipal
         if let previous = self.ownership.principal, let principal, previous != principal {
             self.ownership.requiresRemoval = true
@@ -204,19 +241,12 @@ final class DashboardBrowserSessionStore {
             // waits for the prior write, then clears it before publishing its cookie.
             _ = await previous?.result
             guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
-            // WebKit returns an immutable mapped rule snapshot per compilation;
-            // replacing this bounded cache entry does not change other profiles.
-            let rule: WKContentRuleList? = if let session {
-                try await WKContentRuleListStore.default().compileContentRuleList(
-                    forIdentifier: "openclaw.gateway-cookie-origin",
-                    encodedContentRuleList: Self.cookieRules(for: session.origin))
-            } else {
-                nil
-            }
             let cookies = await self.dataStore.httpCookieStore.allCookies()
             guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
             let current = cookies.filter { $0.name == "CF_Authorization" }
-            let samePrincipal = principal != nil && principal == self.ownership.principal
+            let embedSession = session ?? retainedSession
+            let samePrincipal = embedSession != nil &&
+                embedSession?.browserDataPrincipal == self.ownership.principal
             let clearWebsiteData = self.ownership.requiresRemoval ||
                 (session != nil && !samePrincipal)
             if clearWebsiteData {
@@ -228,6 +258,9 @@ final class DashboardBrowserSessionStore {
                 await self.dataStore.removeData(
                     ofTypes: [WKWebsiteDataTypeServiceWorkerRegistrations], modifiedSince: .distantPast)
                 for cookie in current {
+                    if samePrincipal, let embedSession,
+                       Self.embedOrigin(for: cookie, gateway: embedSession) != nil
+                    { continue }
                     await self.dataStore.httpCookieStore.deleteCookie(cookie)
                 }
             }
@@ -237,7 +270,7 @@ final class DashboardBrowserSessionStore {
                 self.ownership.principal = nil
             }
             if let principal { self.ownership.principal = principal }
-            self.cookieRule = rule
+            try await self.refreshCookieRule(revision: revision, retainingSession: retainedSession)
         }
         self.preparation = preparation
         return preparation
@@ -261,17 +294,114 @@ final class DashboardBrowserSessionStore {
         return preparation
     }
 
-    private static func cookieRules(for origin: URL) throws -> String {
+    private func prepareController(_ controller: WKUserContentController) {
+        self.preparedControllers.removeAll { $0.controller == nil }
+        guard !self.preparedControllers.contains(where: { $0.controller === controller }) else { return }
+        if let rule = self.cookieRule { controller.add(rule) }
+        self.preparedControllers.append(PreparedController(controller, rule: self.cookieRule))
+    }
+
+    private func refreshCookieRule(
+        revision: UInt64,
+        retainingSession: GatewayBrowserSession? = nil) async throws
+    {
+        let rule: WKContentRuleList?
+        if let session = self.session ?? retainingSession {
+            let cookies = await self.dataStore.httpCookieStore.allCookies()
+            guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
+            let origins = Set(cookies.compactMap { Self.embedOrigin(for: $0, gateway: session) })
+            for cookie in cookies where cookie.name == "CF_Authorization" && cookie.domain != session.origin.host() {
+                guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
+                if Self.embedOrigin(for: cookie, gateway: session) == nil {
+                    await self.dataStore.httpCookieStore.deleteCookie(cookie)
+                }
+            }
+            guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
+            // Compilation returns an immutable snapshot; updating this cache entry
+            // never changes another profile's already installed rule list.
+            let source = try Self.cookieRules(for: session.origin, embedOrigins: origins)
+            if source == self.cookieRuleSource, self.cookieRule != nil { return }
+            rule = try await WKContentRuleListStore.default().compileContentRuleList(
+                forIdentifier: "openclaw.gateway-cookie-origin", encodedContentRuleList: source)
+            guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
+            self.cookieRuleSource = source
+        } else {
+            rule = nil
+            self.cookieRuleSource = nil
+        }
+        guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
+        self.cookieRule = rule
+        self.preparedControllers.removeAll { $0.controller == nil }
+        for prepared in self.preparedControllers {
+            if let previous = prepared.rule { prepared.controller?.remove(previous) }
+            if let rule { prepared.controller?.add(rule) }
+            prepared.rule = rule
+        }
+    }
+
+    private func installEmbedSession(_ embed: GatewayBrowserSession, revision: UInt64) async throws {
+        let previous = self.preparation
+        let preparation = Task { @MainActor in
+            try await previous?.value
+            guard self.revision == revision, !self.ownership.requiresRemoval,
+                  let gateway = self.session
+            else { throw GatewayBrowserSessionError.superseded }
+            try gateway.validate(for: gateway.origin)
+            let cookie = try embed.cookie()
+            guard embed.issuer == gateway.issuer, embed.subject == gateway.subject,
+                  embed.origin.port == nil || embed.origin.port == 443,
+                  Self.embedOrigin(for: cookie, gateway: gateway) == embed.origin
+            else { throw GatewayBrowserSessionError.invalidSession }
+            await self.dataStore.httpCookieStore.setCookie(cookie)
+            guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
+            try await self.refreshCookieRule(revision: revision)
+        }
+        // Invalid embed credentials must not poison the Gateway's own lease.
+        self.preparation = Task { @MainActor in _ = await preparation.result }
+        try await preparation.value
+    }
+
+    static func embedOrigin(
+        for cookie: HTTPCookie,
+        gateway: GatewayBrowserSession,
+        now: Date = Date()) -> URL?
+    {
+        let host = cookie.domain.lowercased()
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard cookie.name == "CF_Authorization", cookie.isSecure, cookie.isHTTPOnly,
+              cookie.path == "/", cookie.expiresDate.map({ $0 > now }) ?? false,
+              cookie.portList.map({ $0.allSatisfy { $0.intValue == 443 } }) ?? true,
+              host != gateway.origin.host(), host.utf8.count <= 253, labels.count >= 2,
+              labels.allSatisfy({ label in
+                  !label.isEmpty && label.utf8.count <= 63 && label.first != "-" && label.last != "-" &&
+                      label.utf8.allSatisfy { (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }
+              }),
+              let claims = try? CloudflareAccessLogin.decodeJWT(
+                  CloudflareAccessLogin.TokenClaims.self,
+                  token: cookie.value),
+              claims.type == "app", claims.sub == gateway.subject,
+              claims.iss == gateway.issuer.absoluteString || claims.iss + "/" == gateway.issuer.absoluteString,
+              claims.exp.isFinite, claims.exp > now.timeIntervalSince1970,
+              claims.nbf.map({ $0 <= now.timeIntervalSince1970 }) ?? true
+        else { return nil }
+        return URL(string: "https://\(host)/")
+    }
+
+    static func cookieRules(for origin: URL, embedOrigins: Set<URL> = []) throws -> String {
         guard let originHost = origin.host() else { throw GatewayBrowserSessionError.invalidSession }
         let host = NSRegularExpression.escapedPattern(for: originHost)
         let port = origin.port.map { ":\($0)" } ?? "(:443)?"
+        var patterns = ["https", "wss"].map { "^\($0)://\(host)\(port)/" }
+        for origin in embedOrigins.sorted(by: { $0.absoluteString < $1.absoluteString }) {
+            guard origin.scheme == "https", let host = origin.host(), origin.port == nil || origin.port == 443,
+                  origin.user == nil, origin.password == nil
+            else { throw GatewayBrowserSessionError.invalidSession }
+            patterns.append("^https://\(NSRegularExpression.escapedPattern(for: host))(:443)?/")
+        }
         let rules: [[String: Any]] = [
             ["trigger": ["url-filter": ".*"], "action": ["type": "block-cookies"]],
-        ] + ["https", "wss"].map { scheme in
-            [
-                "trigger": ["url-filter": "^\(scheme)://\(host)\(port)/"],
-                "action": ["type": "ignore-previous-rules"],
-            ]
+        ] + patterns.map { pattern in
+            ["trigger": ["url-filter": pattern], "action": ["type": "ignore-previous-rules"]]
         }
         guard let encoded = try String(data: JSONSerialization.data(withJSONObject: rules), encoding: .utf8)
         else { throw GatewayBrowserSessionError.invalidSession }

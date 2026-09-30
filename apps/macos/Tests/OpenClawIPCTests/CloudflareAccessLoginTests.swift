@@ -165,6 +165,221 @@ struct CloudflareAccessLoginTests {
             == (mutation == "valid"))
     }
 
+    @MainActor
+    @Test(arguments: [
+        ("https://tenant.cloudflareaccess.com/cdn-cgi/access/login/embed.example.net", true),
+        ("https://tenant.cloudflareaccess.com/cdn-cgi/access/login/embed.example.net?redirect_url=%2F", true),
+        ("https://other.cloudflareaccess.com/cdn-cgi/access/login/embed.example.net", false),
+        ("https://tenant.cloudflareaccess.com/other/embed.example.net", false),
+        ("https://tenant.cloudflareaccess.com/cdn-cgi/access/login/gateway.example.net", false),
+        ("https://tenant.cloudflareaccess.com/cdn-cgi/access/login/-embed.example.net", false),
+        ("https://tenant.cloudflareaccess.com/cdn-cgi/access/login/embed..example.net", false),
+        ("https://tenant.cloudflareaccess.com/cdn-cgi/access/login/embed.example.net/extra", false),
+        ("https://tenant.cloudflareaccess.com/cdn-cgi/access/login/embed%2Eexample.net", false),
+        ("https://tenant.cloudflareaccess.com/cdn-cgi/access/login/127.0.0.1", false),
+        ("https://user@tenant.cloudflareaccess.com/cdn-cgi/access/login/embed.example.net", false),
+        ("https://tenant.cloudflareaccess.com:8443/cdn-cgi/access/login/embed.example.net", false),
+        ("http://tenant.cloudflareaccess.com/cdn-cgi/access/login/embed.example.net", false),
+        ("https://tenant.cloudflareaccess.com/cdn-cgi/access/login/embed.example.net#fragment", false),
+    ])
+    func `embedded login detection requires the current issuer and a DNS application`(
+        _ value: String, _ accepted: Bool) throws
+    {
+        let gateway = try self.session(host: "gateway.example.net")
+        let detected = try CloudflareAccessEmbedLogin.applicationURL(
+            loginURL: #require(URL(string: value)), gateway: gateway, now: self.now)
+        #expect((detected != nil) == accepted)
+        if accepted { #expect(detected?.absoluteString == "https://embed.example.net/") }
+        #expect(try CloudflareAccessEmbedLogin.applicationURL(
+            loginURL: #require(URL(string: value)),
+            gateway: gateway,
+            now: self.now.addingTimeInterval(3601)) == nil)
+    }
+
+    @MainActor
+    @Test func `concurrent embedded requests share one helper and cooldown recovers after success`() async throws {
+        let gateway = try self.session(host: "gateway.example.net")
+        let embed = try self.session(host: "embed.example.net")
+        let app = try self.embedApplication()
+        var clock = self.now
+        var runs = 0
+        var pending: CheckedContinuation<Void, Never>?
+        var started: CheckedContinuation<Void, Never>?
+        let owner = CloudflareAccessEmbedLogin(
+            discover: { _ in app },
+            signIn: { _, _ in
+                runs += 1
+                if runs == 1 {
+                    await withCheckedContinuation { continuation in
+                        pending = continuation
+                        started?.resume()
+                    }
+                    throw CloudflareAccessLogin.LoginError.timedOut
+                }
+                return embed
+            },
+            now: { clock })
+        let first = Task { try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) }
+        await withCheckedContinuation { continuation in started = continuation }
+        let second = Task { @MainActor in
+            // Resume the suspended helper on this actor, then join its flight before it resumes.
+            pending?.resume()
+            return try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true })
+        }
+        for task in [first, second] {
+            await #expect(throws: CloudflareAccessLogin.LoginError.self) { try await task.value }
+        }
+        #expect(runs == 1)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == nil)
+        #expect(runs == 1)
+        clock.addTimeInterval(120)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == embed)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == embed)
+        #expect(runs == 3)
+    }
+
+    @MainActor
+    @Test func `a previous account failure does not delay the new account`() async throws {
+        let firstGateway = try self.session(host: "gateway.example.net")
+        let nextGateway = try self.session(host: "gateway.example.net", subject: "next-user")
+        let nextEmbed = try self.session(host: "embed.example.net", subject: "next-user")
+        let app = try self.embedApplication()
+        var runs = 0
+        let owner = CloudflareAccessEmbedLogin(
+            discover: { _ in app },
+            signIn: { _, _ in
+                runs += 1
+                if runs == 1 { throw CloudflareAccessLogin.LoginError.loginFailed }
+                return nextEmbed
+            },
+            now: { self.now })
+        await #expect(throws: CloudflareAccessLogin.LoginError.self) {
+            try await owner.signIn(appURL: nextEmbed.origin, gateway: firstGateway, isCurrent: { true })
+        }
+        #expect(try await owner.signIn(
+            appURL: nextEmbed.origin, gateway: firstGateway, isCurrent: { true }) == nil)
+        #expect(try await owner.signIn(
+            appURL: nextEmbed.origin, gateway: nextGateway, isCurrent: { true }) == nextEmbed)
+        #expect(runs == 2)
+    }
+
+    @MainActor
+    @Test(arguments: ["issuer", "subject", "cancelled", "superseded"])
+    func `embedded results cannot cross an account or cancelled authority`(_ mutation: String) async throws {
+        let gateway = try self.session(host: "gateway.example.net")
+        let embed = try self.session(
+            host: "embed.example.net",
+            subject: mutation == "subject" ? "other-user" : "user-42",
+            issuer: mutation == "issuer" ? "https://other.cloudflareaccess.com" : "https://tenant.cloudflareaccess.com")
+        let app = try self.embedApplication()
+        var current = true
+        var runs = 0
+        let owner = CloudflareAccessEmbedLogin(
+            discover: { _ in app },
+            signIn: { _, _ in
+                runs += 1
+                if mutation == "cancelled" { throw CancellationError() }
+                if mutation == "superseded" { current = false }
+                return embed
+            },
+            now: { self.now })
+        await #expect(throws: (any Error).self) {
+            try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { current })
+        }
+        current = true
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { current }) == nil)
+        #expect(runs == 1)
+    }
+
+    @MainActor
+    @Test func `another discovered issuer never opens browser sign in`() async throws {
+        let gateway = try self.session(host: "gateway.example.net")
+        let app = try self.embedApplication(issuerHost: "other.cloudflareaccess.com")
+        var runs = 0
+        let owner = CloudflareAccessEmbedLogin(
+            discover: { _ in app },
+            signIn: { _, _ in
+                runs += 1
+                throw CloudflareAccessLogin.LoginError.loginFailed
+            },
+            now: { self.now })
+        #expect(try await owner.signIn(
+            appURL: #require(URL(string: "https://embed.example.net/")), gateway: gateway, isCurrent: { true }) == nil)
+        #expect(runs == 0)
+    }
+
+    @MainActor
+    @Test func `a new account signs in while the previous account helper is still running`() async throws {
+        let gatewayA = try self.session(host: "gateway.example.net")
+        let gatewayB = try self.session(host: "gateway.example.net", subject: "user-b")
+        let embedA = try self.session(host: "embed.example.net")
+        let embedB = try self.session(host: "embed.example.net", subject: "user-b")
+        let app = try self.embedApplication()
+        var currentA = true
+        var runs = 0
+        var pendingA: CheckedContinuation<Void, Never>?
+        var startedA: CheckedContinuation<Void, Never>?
+        let owner = CloudflareAccessEmbedLogin(
+            discover: { _ in app },
+            signIn: { _, _ in
+                runs += 1
+                if runs == 1 {
+                    await withCheckedContinuation { continuation in
+                        pendingA = continuation
+                        startedA?.resume()
+                    }
+                    return embedA
+                }
+                return embedB
+            },
+            now: { self.now })
+        let first = Task {
+            try await owner.signIn(appURL: embedA.origin, gateway: gatewayA, isCurrent: { currentA })
+        }
+        await withCheckedContinuation { continuation in startedA = continuation }
+        currentA = false
+        let second: Result<GatewayBrowserSession?, Error>
+        do {
+            second = try await .success(owner.signIn(
+                appURL: embedB.origin, gateway: gatewayB, isCurrent: { true }))
+        } catch {
+            second = .failure(error)
+        }
+        #expect(runs == 2)
+        pendingA?.resume()
+        await #expect(throws: CancellationError.self) { try await first.value }
+        #expect(try second.get() == embedB)
+    }
+
+    private func embedApplication(issuerHost: String = "tenant.cloudflareaccess.com") throws
+        -> CloudflareAccessLogin.Application
+    {
+        var metadata = self.metadataClaims
+        metadata["hostname"] = "embed.example.net"
+        metadata["auth_domain"] = issuerHost
+        return try CloudflareAccessLogin.application(
+            gatewayURL: #require(URL(string: "https://embed.example.net/")),
+            metadata: self.jwt(metadata),
+            now: self.now)
+    }
+
+    private func session(
+        host: String,
+        subject: String = "user-42",
+        issuer: String = "https://tenant.cloudflareaccess.com") throws -> GatewayBrowserSession
+    {
+        var claims = self.tokenClaims
+        claims["sub"] = subject
+        claims["iss"] = issuer
+        return try GatewayBrowserSession(
+            origin: #require(URL(string: "https://\(host)/")),
+            issuer: #require(URL(string: issuer)),
+            audience: "application-123",
+            subject: subject,
+            token: self.jwt(claims),
+            expiresAt: self.now.addingTimeInterval(3600))
+    }
+
     private var metadataClaims: [String: Any] {
         [
             "type": "match",

@@ -81,10 +81,7 @@ extension ControlUIDocumentHost {
         else {
             return false
         }
-        let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
-        return url.path(percentEncoded: true) == "/mcp-app-sandbox" || (components.count == 4 &&
-            components[0] == "embed" &&
-            (components[1] == "channel" || components[1] == "thread"))
+        return true
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
@@ -224,6 +221,17 @@ extension ControlUIDocumentHost {
                 decisionHandler: decisionHandler)
             return
         }
+        let trustedMainFrame = navigationAction.sourceFrame.isMainFrame &&
+            Self.isTrustedLinkSource(navigationAction.sourceFrame.request.url, dashboardURL: self.currentURL)
+        if navigationAction.targetFrame?.isMainFrame == false, trustedMainFrame,
+           self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
+           let session = self.browserSession,
+           let applicationURL = CloudflareAccessEmbedLogin.applicationURL(loginURL: url, gateway: session)
+        {
+            decisionHandler(.cancel)
+            self.signInEmbed(applicationURL)
+            return
+        }
         if ControlUIDocumentHost.shouldAllowIdentityNavigation(
             to: url,
             auth: self.auth,
@@ -241,10 +249,7 @@ extension ControlUIDocumentHost {
             to: url,
             dashboardURL: self.currentURL,
             isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
-            isTrustedDashboardSource: navigationAction.sourceFrame.isMainFrame &&
-                ControlUIDocumentHost.isTrustedLinkSource(
-                    navigationAction.sourceFrame.request.url,
-                    dashboardURL: self.currentURL))
+            isTrustedDashboardSource: trustedMainFrame)
         {
             decisionHandler(.allow)
             return
@@ -264,6 +269,33 @@ extension ControlUIDocumentHost {
             self.openExternal(url)
         }
         decisionHandler(.cancel)
+    }
+
+    private func signInEmbed(_ applicationURL: URL) {
+        guard let lease = self.browserSessionLease else { return }
+        let generation = self.generation
+        Task { @MainActor [weak self] in
+            guard await (try? lease.signInEmbed(appURL: applicationURL)) == true,
+                  let self, self.generation == generation, self.isAvailable(),
+                  self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
+                  Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            else { return }
+            // The iframe's src retains its original path through server redirects.
+            // Reset it from the trusted parent so the reload obeys the same policy
+            // as initial creation; a child-initiated location.replace is untrusted.
+            _ = try? await self.webView.callAsyncJavaScript(
+                """
+                for (const frame of document.querySelectorAll('iframe[src]')) {
+                    const url = new URL(frame.src, document.baseURI);
+                    if (url.origin === new URL(origin).origin && !url.username && !url.password) {
+                        frame.src = url.href;
+                    }
+                }
+                """,
+                arguments: ["origin": applicationURL.absoluteString],
+                in: nil,
+                contentWorld: .defaultClient)
+        }
     }
 
     func decideTargetlessNavigation(
