@@ -1123,7 +1123,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         resources: ["docker", "npm", "service"],
         stateScenario: "upgrade-survivor",
         timeoutMs: 3_500_000,
-        weight: 1,
+        weight: 2,
       })),
     ]);
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).toEqual(["plugins"]);

@@ -104,12 +104,15 @@ First-hop compatibility lanes share a 3,200-second inner container budget and a
 seconds before its final candidate hop; another 560 seconds for that hop and about
 five seconds for assertions project roughly 2,125 seconds for a complete lane.
 A roughly 1.5× slow-host margin gives 3,200 seconds, with another 300 seconds for
-host-side work. The self-upgrade job allows 130 minutes: six first-hop source
-versions need two 3,500-second waves under the unchanged npm weight limit of five;
-the 20-minute, weight-three survivor overlaps those waves. Adding ten minutes for
-job setup and artifacts gives about 127 minutes, rounded to 130. Targeted
-first-hop jobs retain their 60-minute job budget. Phase and update-step durations
-are printed in the lane log.
+host-side work. Targeted runs measured roughly 540–720 seconds per update; each
+lane performs multiple updates, so that is not the complete lane duration.
+First-hop lanes have weight two under the unchanged npm weight limit of five,
+admitting at most two at once to reduce npm and disk contention. The 20-minute,
+weight-three survivor can overlap one first-hop lane. The self-upgrade job allows
+210 minutes: three 3,500-second waves plus a conservative 20 minutes for the
+survivor and ten minutes for setup and artifacts total 205 minutes, rounded up.
+Targeted first-hop jobs retain their 60-minute job budget. Phase and update-step
+durations are printed in the lane log.
 
 Authenticated update restart uses a 2,280-second container budget and a
 2,580-second (43-minute) lane budget: hosted run `36506342273` exceeded 1,515
