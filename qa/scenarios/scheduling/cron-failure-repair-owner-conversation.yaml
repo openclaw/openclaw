@@ -1,0 +1,245 @@
+title: Cron failure repair in the owner conversation
+
+scenario:
+  id: cron-failure-repair-owner-conversation
+  surface: cron
+  coverage:
+    primary:
+      - automation.failure-destinations
+    secondary:
+      - automation.agent-cron-tool
+      - automation.manual-cron-runs
+      - automation.isolated-cron-execution
+  gatewayConfigPatch:
+    tools:
+      # Keep automations directly declared so the owner turn's tool calls are observable.
+      toolSearch: false
+  objective: Verify a job past its failure-alert threshold wakes its owner conversation to repair it instead of alerting.
+  successCriteria:
+    - Two consecutive failed runs of an owned job send no failure alert.
+    - The owner conversation is woken with the repair request for that job.
+    - Its ordinary turn fixes the workspace step file the job follows.
+    - The repair reply lands in the owner conversation.
+    - The same failures on a job without an owner conversation still send the failure alert.
+  docsRefs:
+    - docs/automation/cron-jobs/delivery.md
+  codeRefs:
+    - src/cron/service/failure-alerts.ts
+    - src/cron/service/failure-repair-brief.ts
+    - src/cron/service/wake.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-cron-failure-repair.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Forces failing and repaired cron runs whose alerts and repair replies share one owner conversation.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 360000
+    summary: Fail an owned announce job twice with mock-openai, then prove the owner conversation repairs it instead of receiving the failure alert.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-cron-failure-repair
+      controlConversationId: qa-cron-failure-repair-control
+      ownerMarker: QA-CRON-REPAIR-OWNER-READY
+      brokenMessage: "Cron failure repair QA check: broken step. Follow `cron-repair-step.md`."
+      stepFile: cron-repair-step.md
+      fixedStep: Sync step fixed by the owner conversation.
+      repairMarker: QA-CRON-REPAIR-FIXED
+      repairBriefNeedle: "Automation repair request from the scheduler"
+
+flow:
+  steps:
+    - name: owner conversation creates a failing owned job
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: cron failure repair proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: ownerSessionKey
+          value:
+            expr: "`agent:qa:qa-channel:group:group:${config.conversationId}`"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: group
+            senderId: qa-driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw Cron failure repair QA check: owner ready. Reply exactly \\`${config.ownerMarker}\\`.`"
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.some((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.conversationId && message.text.includes(config.ownerMarker)) || undefined"
+            - 60000
+            - 100
+        - call: env.gateway.call
+          saveAs: added
+          args:
+            - cron.add
+            - agentId: qa
+              owner:
+                agentId: qa
+                sessionKey:
+                  ref: ownerSessionKey
+              name:
+                expr: "`qa-cron-failure-repair-${randomUUID()}`"
+              enabled: true
+              deleteAfterRun: false
+              schedule:
+                kind: at
+                at:
+                  expr: "new Date(Date.now() + 10 * 60 * 1000).toISOString()"
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                message:
+                  ref: config.brokenMessage
+              delivery:
+                mode: announce
+                channel: qa-channel
+                to:
+                  expr: "`group:${config.conversationId}`"
+            - timeoutMs: 30000
+        - set: jobId
+          value:
+            expr: added.id
+        - assert:
+            expr: "Boolean(jobId) && added.owner?.sessionKey === ownerSessionKey"
+            message:
+              expr: "`owned job was not created as requested: ${JSON.stringify(added)}`"
+
+    - name: two consecutive failures wake the owner conversation, which repairs the job
+      actions:
+        - forEach:
+            items:
+              expr: "[1, 2]"
+            item: attempt
+            actions:
+              - set: runStartedAt
+                value:
+                  expr: "Date.now()"
+              - call: env.gateway.call
+                args:
+                  - cron.run
+                  - id:
+                      ref: jobId
+                    mode: force
+                  - timeoutMs: 30000
+              - call: waitForCronRunCompletion
+                saveAs: failedRun
+                args:
+                  - callGateway:
+                      expr: "env.gateway.call.bind(env.gateway)"
+                    jobId:
+                      ref: jobId
+                    afterTs:
+                      ref: runStartedAt
+                    timeoutMs:
+                      expr: "liveTurnTimeoutMs(env, 90000)"
+              - assert:
+                  expr: "failedRun.status === 'error'"
+                  message:
+                    expr: "`expected failed run ${attempt}, got ${JSON.stringify(failedRun)}`"
+        # The owner conversation's ordinary turn fixes the workspace step file the job follows.
+        - call: waitForCondition
+          saveAs: repairReplies
+          args:
+            - lambda:
+                expr: "(() => { const matches = state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.conversationId && (message.text.includes(config.repairMarker) || message.text.includes('BUG-CRON-REPAIR'))); return matches.length > 0 ? matches : undefined; })()"
+            - expr: "liveTurnTimeoutMs(env, 120000)"
+            - 250
+        - set: repairRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.prompt ?? '').includes(config.repairBriefNeedle) && String(request.prompt ?? '').includes(jobId))"
+        - assert:
+            expr: "repairRequests.length > 0 && repairReplies.length === 1 && repairReplies[0].text.includes(config.repairMarker)"
+            message:
+              expr: "`owner conversation did not repair the job: ${JSON.stringify(repairReplies.map((message) => message.text))}`"
+        - set: stepFile
+          value:
+            expr: "await fs.readFile(path.join(env.gateway.workspaceDir, config.stepFile), 'utf8').catch(() => '')"
+        - assert:
+            expr: "stepFile.includes(config.fixedStep)"
+            message:
+              expr: "`owner conversation did not fix the step file: ${JSON.stringify(stepFile)}`"
+      detailsExpr: "`job=${jobId} repairRequests=${repairRequests.length} stepFile=${JSON.stringify(stepFile)} reply=${JSON.stringify(repairReplies[0].text)}`"
+
+    - name: an unowned job with the same failures still alerts
+      actions:
+        - call: env.gateway.call
+          saveAs: control
+          args:
+            - cron.add
+            - agentId: qa
+              name:
+                expr: "`qa-cron-failure-repair-control-${randomUUID()}`"
+              enabled: true
+              deleteAfterRun: false
+              schedule:
+                kind: at
+                at:
+                  expr: "new Date(Date.now() + 10 * 60 * 1000).toISOString()"
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                message:
+                  ref: config.brokenMessage
+              delivery:
+                mode: announce
+                channel: qa-channel
+                to:
+                  expr: "`group:${config.controlConversationId}`"
+            - timeoutMs: 30000
+        - forEach:
+            items:
+              expr: "[1, 2]"
+            item: attempt
+            actions:
+              - set: runStartedAt
+                value:
+                  expr: "Date.now()"
+              - call: env.gateway.call
+                args:
+                  - cron.run
+                  - id:
+                      expr: control.id
+                    mode: force
+                  - timeoutMs: 30000
+              - call: waitForCronRunCompletion
+                args:
+                  - callGateway:
+                      expr: "env.gateway.call.bind(env.gateway)"
+                    jobId:
+                      expr: control.id
+                    afterTs:
+                      ref: runStartedAt
+                    timeoutMs:
+                      expr: "liveTurnTimeoutMs(env, 90000)"
+        - call: waitForCondition
+          saveAs: controlAlerts
+          args:
+            - lambda:
+                expr: '(() => { const matches = state.getSnapshot().messages.filter((message) => message.direction === ''outbound'' && !message.deleted && message.conversation.id === config.controlConversationId && message.text.startsWith(`Automation "${control.name}" failed 2 times`)); return matches.length > 0 ? matches : undefined; })()'
+            - 30000
+            - 250
+        # This alert went through the same notification path after the repair; the repaired
+        # job must still have none.
+        - assert:
+            expr: '!state.getSnapshot().messages.some((message) => message.direction === ''outbound'' && message.text.includes(`Automation "${added.name}"`))'
+            message:
+              expr: "`the repaired job alerted: ${JSON.stringify(state.getSnapshot().messages.filter((message) => message.text.includes(added.name)).map((message) => message.text))}`"
+      detailsExpr: "`control alert=${JSON.stringify(controlAlerts.map((message) => message.text))}`"

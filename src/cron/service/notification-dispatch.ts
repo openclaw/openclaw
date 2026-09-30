@@ -36,6 +36,23 @@ export function dispatchCronNotification(
   }
   if (notification.kind === "auto-disabled") {
     enqueueCronNotification(state, notification.job, notification.text, notification.kind, routing);
+  } else if (notification.kind === "failure-repair") {
+    // Wake the conversation that owns the job now. If the request is lost (job removed or
+    // unowned since, or the session refuses it), the next failure sends the normal alert.
+    const owner = state.store?.jobs.find((job) => job.id === notification.job.id)?.owner;
+    if (owner?.sessionKey?.trim()) {
+      enqueueCronNotification(
+        state,
+        notification.job,
+        notification.text,
+        notification.kind,
+        routing,
+        {
+          sessionKey: owner.sessionKey,
+          agentId: owner.agentId,
+        },
+      );
+    }
   } else {
     transportFailureAlert(state, notification, routing);
   }
