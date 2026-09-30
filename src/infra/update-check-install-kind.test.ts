@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -38,6 +39,7 @@ describe("resolveUpdateInstallKind", () => {
           timeoutMs: 5000,
         });
         expect(observed.code, observed.stderr).toBe(0);
+        const probeStarted = createDeferredCore();
         vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
           if (!argv.includes("--show-toplevel")) {
             return await runCommand(argv, options);
@@ -48,6 +50,7 @@ describe("resolveUpdateInstallKind", () => {
           }
           await new Promise<void>((resolve) => {
             setTimeout(resolve, Math.min(discoveryMs, allowance));
+            probeStarted.resolve();
           });
           return allowance < discoveryMs
             ? {
@@ -76,6 +79,7 @@ describe("resolveUpdateInstallKind", () => {
           (value) => ({ value }),
           (error: unknown) => ({ error }),
         );
+        await probeStarted.promise;
         await vi.advanceTimersByTimeAsync(discoveryMs);
         if (timeoutMs !== undefined && timeoutMs < discoveryMs) {
           expect(await outcome).toMatchObject({

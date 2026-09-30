@@ -60,7 +60,7 @@ describe("QA child service identity", () => {
         expect(env[key], key).toBeUndefined();
       }
       expect(env.OPENCLAW_NO_RESPAWN).toBe("1");
-      expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
+      expect(env.OPENCLAW_GATEWAY_HOST_LIFELINE).toBe("stdin");
       expect(env.OPENCLAW_PROFILE).toMatch(/^[a-z0-9][a-z0-9_-]{0,63}$/u);
       expect(env.OPENCLAW_PROFILE).not.toBe("operator");
       expect(env.OPENCLAW_PROFILE).not.toBe("default");

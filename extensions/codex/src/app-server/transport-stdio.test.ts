@@ -93,18 +93,29 @@ describe("createStdioTransport", () => {
     ).rejects.toThrow("owner closed");
     expect(spawnMock).not.toHaveBeenCalled();
   });
-  it("spawns a compatibility endpoint in its configured working directory", async () => {
-    await createStdioTransport({
-      ...startOptions("codex"),
-      cwd: "/srv/codex-project",
-    });
+  it.each([
+    { lifeline: undefined, detached: true },
+    { lifeline: "stdin", detached: false },
+    { lifeline: " stdin ", detached: false },
+    { lifeline: "unsupported", detached: true },
+  ])(
+    "spawns an endpoint in its working directory with host lifeline $lifeline",
+    async ({ lifeline, detached }) => {
+      await createStdioTransport(
+        { ...startOptions("codex"), cwd: "/srv/codex-project" },
+        { OPENCLAW_GATEWAY_HOST_LIFELINE: lifeline },
+      );
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "codex",
-      ["app-server", "--listen", "stdio://"],
-      expect.objectContaining({ cwd: "/srv/codex-project" }),
-    );
-  });
+      expect(spawnMock).toHaveBeenCalledWith(
+        "codex",
+        ["app-server", "--listen", "stdio://"],
+        expect.objectContaining({
+          cwd: "/srv/codex-project",
+          detached: process.platform !== "win32" && detached,
+        }),
+      );
+    },
+  );
 
   it("preserves wrapper prefixes, root option values, and raw override ordering", async () => {
     const overrides = ["-c", 'developer_instructions="app-server = literal"'];

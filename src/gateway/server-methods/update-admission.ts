@@ -7,7 +7,9 @@ import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-aut
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
@@ -37,6 +39,24 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
     return null;
   }
   const authority = readGatewayRequestMutationAuthority(request);
+  const installOwner = await readInstallOwner(
+    await resolveOpenClawPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    }),
+  );
+  if (installOwner) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, formatInstallOwnerMessage(installOwner), {
+        details: { reason: "host-owned-install", installOwner },
+        retryable: false,
+      }),
+    );
+    return null;
+  }
   const channel = params.requester?.channel;
   const manager =
     !channel || isInternalMessageChannel(channel) ? await resolveOcmUpdateManager() : null;
@@ -106,7 +126,9 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   );
   recordUpdateRunPhase(runId, "requested", {
     target: {
-      ...(status.installKind === "unknown" ? {} : { kind: status.installKind }),
+      ...(status.installKind === "git" || status.installKind === "package"
+        ? { kind: status.installKind }
+        : {}),
       ...(status.installKind === "git" ? { installationMethod: "git-checkout" } : {}),
     },
   });

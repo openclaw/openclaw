@@ -13,7 +13,7 @@ import { gatewayWorkAdmissionActual, runLoopFixture } from "./run-loop-mocks.tes
 import { registerGatewayRequestTests } from "./run-loop-request.test-support.js";
 import { registerShutdownBudgetTests } from "./run-loop-shutdown-budget.test-support.js";
 import {
-  registerGracefulGatewayShutdownTest,
+  registerGracefulGatewayShutdownTests,
   registerShutdownCompletionTests,
 } from "./run-loop-shutdown-completion.test-support.js";
 import { registerGatewayStartupFailureTests } from "./run-loop-startup.test-support.js";
@@ -583,7 +583,13 @@ describe("runGatewayLoop", () => {
 
   registerGatewayStartupFailureTests(gatewayLog);
 
-  registerGracefulGatewayShutdownTest({
+  registerGracefulGatewayShutdownTests({
+    consumeGatewayRestartIntentPayloadSync,
+    consumeGatewaySuspendHandoff,
+    restartGatewayProcessWithFreshPid,
+    respawnGatewayProcessForUpdate,
+    waitForGatewayActiveWork,
+    gatewayLog,
     acquireGatewayLock,
     createSignaledLoopHarness,
     hasManagedProviderLocalServices,
@@ -965,30 +971,6 @@ describe("runGatewayLoop", () => {
     waitForGatewayActiveWork,
     gatewayLog,
     writeDiagnosticStabilityBundleForFailureSync,
-  });
-
-  it("still closes and exits when the direct-shutdown active-work drain fails", async () => {
-    vi.clearAllMocks();
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      waitForGatewayActiveWork.mockRejectedValueOnce(new Error("active-work drain unavailable"));
-      const { close, runtime, exited } = await createSignaledLoopHarness();
-
-      captureSignal("SIGTERM")();
-
-      await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
-        onSnapshot: expect.any(Function),
-      });
-      expect(gatewayLog.warn).toHaveBeenCalledWith(
-        "gateway active-work drain failed; proceeding with shutdown: active-work drain unavailable",
-      );
-      expect(close).toHaveBeenCalledWith({
-        reason: "gateway stopping",
-        restartExpectedMs: null,
-      });
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-    });
   });
 
   registerShutdownCompletionTests({

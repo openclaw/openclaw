@@ -9,6 +9,12 @@ read_when:
 Checks 8-17 cover gateway service migrations, device pairing, security
 warnings, workspace status, gateway auth and health, and supervisors.
 
+A valid `openclaw-install-owner.json` marker at the package root identifies an
+app-owned installation. Doctor reports the host's name and update hint and leaves
+package, bundled UI, and runtime replacement to that host, including when a
+standalone CLI inspects an app-owned Gateway service. For OpenClaw.app payloads,
+update the app to update the Gateway; normal config and state checks still apply.
+
 ## Checks 8-17
 
 <AccordionGroup>

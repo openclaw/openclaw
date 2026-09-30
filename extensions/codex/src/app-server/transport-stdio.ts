@@ -25,7 +25,6 @@ const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
   "LD_LIBRARY_PATH",
   "LD_PRELOAD",
 ]);
-const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
 
 /** Resolves the concrete command/argv/shell settings used to spawn Codex app-server. */
 export function resolveCodexAppServerSpawnInvocation(
@@ -152,8 +151,9 @@ export async function createStdioTransport(
       // config discovery may depend on the endpoint's process working directory.
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       env,
-      // QA children stay inside the Gateway's process-group cleanup boundary.
-      detached: process.platform !== "win32" && !env[QA_PARENT_PID_ENV]?.trim(),
+      // Hosted children stay inside the Gateway's process-group cleanup boundary.
+      detached:
+        process.platform !== "win32" && env.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim() !== "stdin",
       shell: invocation.shell,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: invocation.windowsHide,

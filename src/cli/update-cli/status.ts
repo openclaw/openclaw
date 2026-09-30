@@ -262,11 +262,13 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
   const tableWidth = getTerminalTableWidth();
   const installLabel =
-    update.installKind === "git"
-      ? `git (${update.root ?? "unknown"})`
-      : update.installKind === "package"
-        ? update.packageManager
-        : "unknown";
+    update.installKind === "host"
+      ? (update.installOwner?.displayName ?? "host-managed")
+      : update.installKind === "git"
+        ? `git (${update.root ?? "unknown"})`
+        : update.installKind === "package"
+          ? update.packageManager
+          : "unknown";
 
   const rows = [
     { Item: "Install", Value: installLabel },

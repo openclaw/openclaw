@@ -27,6 +27,16 @@ It does not yet start the Gateway inside its private runtime; bundled Gateway
 hosting is a separate, subsequent change. Packaging the runtime never installs,
 updates, or restarts a Gateway service.
 
+For an app-owned full Gateway payload, packaging writes
+`openclaw-install-owner.json` at the OpenClaw package root with `schemaVersion: 1`,
+`owner: "macos-app"`, `displayName: "OpenClaw.app"`, and
+`updateHint: "Update OpenClaw.app to update this Gateway."`. This contract keeps
+payload and runtime updates with the app updater (Sparkle): core reports the
+owner, skips package-registry update checks, and refuses self-update and runtime
+migration. A launching host can set `OPENCLAW_GATEWAY_HOST_LIFELINE=stdin` and
+retain the stdin pipe writer; EOF or a pipe error requests graceful Gateway
+shutdown. These contracts are opt-in and do not change the app's current launch behavior.
+
 The private worker validates core and node configuration through a read-only
 bootstrap, without Gateway-wide Doctor preflight or channel-schema validation.
 Node plugins still validate their own settings before publishing commands, and

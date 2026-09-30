@@ -6,10 +6,52 @@ import {
   exitAfterSignalExitBarriers,
   registerSignalExitBarrier,
   registerSignalExitGate,
+  registerSignalExitOwner,
   waitForCliSignalExit,
 } from "./signal-exit-barrier.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+
+it("retains an exclusive process exit owner until its exact release", () => {
+  const owner = vi.fn();
+  const other = vi.fn();
+  const release = registerSignalExitOwner(owner);
+  const exited = new Error("Process exited");
+  const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+    throw exited;
+  });
+  try {
+    expect(() => registerSignalExitOwner(other)).toThrow("already registered");
+    exitAfterSignalExitBarriers(7);
+    expect(owner).toHaveBeenCalledExactlyOnceWith(7);
+    expect(other).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+    release();
+    const releaseOther = registerSignalExitOwner(other);
+    try {
+      release();
+      exitAfterSignalExitBarriers(9);
+      expect(other).toHaveBeenCalledExactlyOnceWith(9);
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      releaseOther();
+    }
+    const releaseSame = registerSignalExitOwner(owner);
+    try {
+      release();
+      exitAfterSignalExitBarriers(11);
+      expect(owner).toHaveBeenLastCalledWith(11);
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      releaseSame();
+    }
+    expect(() => exitAfterSignalExitBarriers(0)).toThrow(exited);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+  } finally {
+    release();
+    exit.mockRestore();
+  }
+});
 
 it.each([
   { owner: "mutation", code: 0, failed: true, expected: 1 },
