@@ -54,6 +54,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
+    refreshableInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,
@@ -447,15 +448,14 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   // Observability view of the whole developer surface the model sees (reports,
   // trajectory, size estimates). The lifecycle receives the generic policy and the
-  // skill catalog separately; joining them here must never feed thread requests.
+  // refreshable instructions separately; joining them here must never feed thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
       turnState.promptBuild.developerInstructions,
-      parentLocalEgress ? undefined : skillsInstructions,
+      parentLocalEgress ? undefined : refreshableInstructions,
       (parentLocalEgress
         ? buildCodexParentLocalInstructions(params, { ...parentLocalContext, skillsInstructions })
-        : buildTurnCollaborationMode(params, parentLocalContext).settings.developer_instructions) ??
-        undefined,
+        : buildTurnCollaborationMode(params).settings.developer_instructions) ?? undefined,
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async () => {
     turnState.promptBuild = await buildPromptFromCurrentInputs();

@@ -196,8 +196,6 @@ export async function prepareCodexAttemptTurnRequest(
             model: resourceState.thread.model,
             modelProvider: resourceState.thread.modelProvider,
           }),
-      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       preserveNativeTurnSettings: usesSupervisionConnection,
       parentLocalEgress: inferenceRoute !== undefined,
       messageToolAvailable: toolBridge.availableTools.some((tool) => tool.name === "message"),
@@ -281,22 +279,6 @@ export async function prepareCodexAttemptTurnRequest(
         ...turnStartParams.responsesapiClientMetadata,
         [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
       };
-    } else if (!usesSupervisionConnection) {
-      embeddedAgentLog.warn(
-        "Codex parent-local egress workaround is unavailable for this connection or native network profile; legacy collaboration delivery is not guaranteed.",
-      );
-      prompt.systemPromptReport.source = "estimate";
-      prompt.systemPromptReport.injectedWorkspaceFiles =
-        prompt.systemPromptReport.injectedWorkspaceFiles.map((file) =>
-          ["SOUL.MD", "IDENTITY.MD", "USER.MD"].includes(file.name.toUpperCase())
-            ? {
-                ...file,
-                injectionStatus: "native_unverified",
-                injectedChars: null,
-                truncated: null,
-              }
-            : file,
-        );
     }
     const continuation = await prepareCodexProviderReviewContinuation({
       acknowledgment: params.providerReviewAcknowledgment,

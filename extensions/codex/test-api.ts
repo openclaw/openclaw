@@ -113,7 +113,6 @@ export function buildCodexHarnessPromptSnapshot(params: {
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
-      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
       parentLocalEgress: true,
       messageToolAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
         (tool) => tool.name === "message",
