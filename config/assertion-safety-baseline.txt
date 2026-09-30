@@ -1979,7 +1979,7 @@ src/commands/doctor/shared/codex-route-config-repair.ts	1
 src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
 src/commands/doctor/shared/empty-allowlist-policy.ts	12
-src/commands/doctor/shared/empty-allowlist-scan.ts	17
+src/commands/doctor/shared/empty-allowlist-scan.ts	4
 src/commands/doctor/shared/legacy-config-compat.ts	1
 src/commands/doctor/shared/legacy-config-core-migrate.ts	1
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	11
