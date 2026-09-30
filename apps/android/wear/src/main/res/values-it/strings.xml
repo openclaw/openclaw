@@ -74,6 +74,8 @@
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway connesso"</string>
     <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway offline"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Riconnetti il Gateway in OpenClaw sul telefono associato."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Apri OpenClaw sul telefono"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"L\'orologio non avvia né autentica mai direttamente il Gateway."</string>
     <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefono non raggiungibile"</string>
     <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tieni vicino il telefono associato e installa l\'app OpenClaw corrispondente."</string>
     <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"La selezione non è più disponibile"</string>

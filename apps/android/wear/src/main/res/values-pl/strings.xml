@@ -74,6 +74,8 @@
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Połączono z Gateway"</string>
     <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway jest offline"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Połącz ponownie Gateway w OpenClaw na sparowanym telefonie."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Otwórz OpenClaw na telefonie"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zegarek nigdy samodzielnie nie uruchamia ani nie uwierzytelnia Gateway."</string>
     <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon jest nieosiągalny"</string>
     <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Trzymaj sparowany telefon w pobliżu i zainstaluj odpowiednią aplikację OpenClaw."</string>
     <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wybrana pozycja nie jest już dostępna"</string>

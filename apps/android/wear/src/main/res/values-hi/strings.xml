@@ -74,6 +74,8 @@
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway कनेक्ट हो गया"</string>
     <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ऑफ़लाइन है"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पेयर किए गए फ़ोन पर OpenClaw में Gateway को फिर से कनेक्ट करें."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन पर OpenClaw खोलें"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"घड़ी कभी भी खुद Gateway को शुरू या प्रमाणित नहीं करती।"</string>
     <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन से संपर्क नहीं हो पा रहा है"</string>
     <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पेयर किए गए फ़ोन को पास रखें और उससे मेल खाने वाला OpenClaw ऐप इंस्टॉल करें."</string>
     <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चयन अब उपलब्ध नहीं है"</string>

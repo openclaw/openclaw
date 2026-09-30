@@ -74,6 +74,8 @@
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway bağlandı"</string>
     <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway çevrimdışı"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eşleştirilmiş telefondaki OpenClaw\'da Gateway\'e yeniden bağlanın."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw\'ı telefonda aç"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Saat, Gateway\'i hiçbir zaman kendisi başlatmaz veya Gateway\'de kimlik doğrulaması yapmaz."</string>
     <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefona erişilemiyor"</string>
     <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eşleştirilmiş telefonu yakında tutun ve uyumlu OpenClaw uygulamasını yükleyin."</string>
     <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Seçim artık kullanılamıyor"</string>

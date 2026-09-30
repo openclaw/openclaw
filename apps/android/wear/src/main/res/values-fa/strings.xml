@@ -74,6 +74,8 @@
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway متصل شد"</string>
     <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway آفلاین است"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در OpenClaw روی تلفن جفت‌شده، دوباره به Gateway متصل شوید."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"باز کردن OpenClaw در تلفن"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ساعت هرگز خود Gateway را راه‌اندازی یا احراز هویت نمی‌کند."</string>
     <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گوشی در دسترس نیست"</string>
     <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تلفن جفت‌شده را نزدیک نگه دارید و برنامهٔ سازگار OpenClaw را نصب کنید."</string>
     <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مورد انتخاب‌شده دیگر در دسترس نیست"</string>
