@@ -35,6 +35,7 @@ import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
+import { connectShellViewport } from "./shell-viewport.ts";
 
 type FocusDashboardRouteState =
   | { kind: "loading" }
@@ -64,6 +65,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private focusDashboardRoute: FocusDashboardRouteState = { kind: "loading" };
 
   private runtime: ApplicationRuntime | undefined;
+  private disconnectViewport: (() => void) | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
   });
@@ -118,6 +120,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    this.disconnectViewport?.();
+    this.disconnectViewport = connectShellViewport();
     const embedHost = nativeEmbedHost();
     this.ownerDocument.documentElement.classList.toggle(
       "openclaw-native-embed",
@@ -174,6 +178,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
   override disconnectedCallback() {
     // Stop reactive subscriptions before disposing their application sources.
     this.subscriptions.clear();
+    this.disconnectViewport?.();
+    this.disconnectViewport = undefined;
     this.focusDashboardAbort?.abort();
     this.focusDashboardAbort = null;
     this.lazyCustomElements.abandon();
@@ -438,6 +444,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     return html`
       <openclaw-board-document
         .gatewaySnapshot=${gatewaySnapshot}
+        .sessions=${this.context?.sessions}
         .sessionKey=${route.data.sessionKey}
         .preparedSession=${
           route.data.agentId
@@ -560,6 +567,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       return html`
         <openclaw-desktop-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
+          .sessions=${context.sessions}
           .available=${desktopAvailable}
           .documentMode=${true}
           .requestedSource=${source}
@@ -636,6 +644,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
             mascot: context.theme.branding.mascot,
             connected: gatewayConnected,
             lastError: gatewaySnapshot.lastError,
+            reconnectAt: gatewaySnapshot.reconnectAt,
             reconnectPending:
               gatewaySnapshot.lastError !== null &&
               (gatewaySnapshot.phase === "connecting" || gatewaySnapshot.phase === "reconnecting"),

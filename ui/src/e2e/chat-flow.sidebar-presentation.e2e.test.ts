@@ -16,6 +16,7 @@ import {
   requireRecord,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
 import { closeSidebarMenu, openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -246,6 +247,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
         );
       }
+      await waitForSessionRosterHydration(page);
       await gateway.setSessionsListResponse(completed);
       const listCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("session.message", {

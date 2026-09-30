@@ -31,13 +31,13 @@ const childScript = `
   try {
     await runGatewayLoop({
       ownsProcessLifecycle: true,
-      onRestartStartupFailure: async () => {
-        process.stdout.write("waiting:" + starts + "\\n");
-      },
       start: async () => {
         const attempt = ++starts;
         process.stdout.write("start:" + attempt + "\\n");
-        if (fs.existsSync(faultPath)) throw new Error("fixture startup refused");
+        if (fs.existsSync(faultPath)) {
+          process.stdout.write("waiting:" + starts + "\\n");
+          throw new Error("fixture startup refused");
+        }
         const server = http.createServer((_request, response) => response.end("ready"));
         await new Promise((resolve, reject) => {
           server.once("error", reject);

@@ -35,7 +35,9 @@ export function readSidebarToolActivity(
     // the run, while the retained item/call identity owns withdrawal.
     return sameActivity ? null : undefined;
   }
-  const name = typeof data?.name === "string" ? data.name.trim() : "";
+  const name =
+    (typeof data?.name === "string" ? data.name.trim() : "") ||
+    (sameActivity ? previous?.name : undefined);
   if (!name) {
     return undefined;
   }

@@ -92,7 +92,12 @@ export function registerActivitySummaryPublicationTests(
             reason: "activity-summary",
             session: expect.objectContaining({ key: target.key, sessionId: "recap" }),
           }),
-          { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
+          {
+            sessionKeys: [target.key],
+            agentId: target.agentId,
+            dropIfSlow: true,
+            prepareSessionProjection: expect.any(Function),
+          },
         );
         expect(projection.needsMaterialization).toBe(true);
       } finally {

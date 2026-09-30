@@ -1,0 +1,26 @@
+diff --git a/dist/ghostty-web.js b/dist/ghostty-web.js
+index a4ca427b95288e70c782ce303013cd644893dcec..88d8695b55b99205767c45fe455effae48474cc1 100644
+--- a/dist/ghostty-web.js
++++ b/dist/ghostty-web.js
+@@ -1900,6 +1900,9 @@ const L = class Y {
+    * Cleanup resources
+    */
+   dispose() {
++    document.removeEventListener("mousedown", this.boundDocumentMouseDownHandler);
++    this.boundDocumentMouseDownHandler = null;
++    this.mouseDownTarget = null;
+     this.selectionChangedEmitter.dispose(), this.stopAutoScroll(), this.boundMouseUpHandler && (document.removeEventListener("mouseup", this.boundMouseUpHandler), this.boundMouseUpHandler = null), this.boundDocumentMouseMoveHandler && (document.removeEventListener("mousemove", this.boundDocumentMouseMoveHandler), this.boundDocumentMouseMoveHandler = null), this.boundContextMenuHandler && (this.renderer.getCanvas().removeEventListener("contextmenu", this.boundContextMenuHandler), this.boundContextMenuHandler = null), this.boundClickHandler && (document.removeEventListener("click", this.boundClickHandler), this.boundClickHandler = null);
+   }
+   // ==========================================================================
+@@ -1940,9 +1943,9 @@ const L = class Y {
+           this.selectionEnd = { col: i.col, absoluteRow: w }, this.requestRender();
+         }
+       }
+-    }, document.addEventListener("mousemove", this.boundDocumentMouseMoveHandler), document.addEventListener("mousedown", (B) => {
++    }, document.addEventListener("mousemove", this.boundDocumentMouseMoveHandler), this.boundDocumentMouseDownHandler = (B) => {
+       this.mouseDownTarget = B.target;
+-    }), this.boundMouseUpHandler = (B) => {
++    }, document.addEventListener("mousedown", this.boundDocumentMouseDownHandler), this.boundMouseUpHandler = (B) => {
+       if (this.isSelecting) {
+         this.isSelecting = !1, this.stopAutoScroll();
+         const g = this.getSelection();

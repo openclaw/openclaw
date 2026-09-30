@@ -27,13 +27,14 @@ import {
   handleChatAttachmentMenuSelection,
   renderChatAttachmentMenuOptions,
   renderChatAttachmentMenuTrigger,
-} from "./chat-attachments.ts";
+} from "./chat-attachment-inputs.ts";
 import {
   handleComposerLibrarySelection,
   renderComposerLibraryMenu,
 } from "./chat-composer-library-menu.ts";
 import {
   renderBackRow,
+  renderCapabilityMenuState,
   renderCapabilityToggleRow,
   menuDivider,
 } from "./chat-composer-menu-rows.ts";
@@ -243,17 +244,11 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
 function renderSkillView(props: ChatComposerPlusMenuProps) {
   const disabledReason = props.mutationBlockedReason;
   const rows = props.skillsLoading
-    ? html`<div class="agent-chat__capability-menu-state" role="status">
-        ${t("chat.composer.menu.loadingSkills")}
-      </div>`
+    ? renderCapabilityMenuState(t("chat.composer.menu.loadingSkills"), "status")
     : props.skillsError
-      ? html`<div class="agent-chat__capability-menu-state" role="alert">
-          ${t("chat.composer.menu.skillsLoadFailed")}
-        </div>`
+      ? renderCapabilityMenuState(t("chat.composer.menu.skillsLoadFailed"), "alert")
       : !props.skills || props.skills.length === 0
-        ? html`<div class="agent-chat__capability-menu-state">
-            ${t("chat.composer.menu.noSkills")}
-          </div>`
+        ? renderCapabilityMenuState(t("chat.composer.menu.noSkills"))
         : props.skills.map((skill, index) => {
             const title = skill.missingDeps
               ? t("chat.composer.menu.depsMissing")
@@ -284,9 +279,7 @@ function renderConnectorView(props: ChatComposerPlusMenuProps) {
   const disabledReason = props.mutationBlockedReason;
   const rows =
     props.mcpServers.length === 0
-      ? html`<div class="agent-chat__capability-menu-state">
-          ${t("chat.composer.menu.noConnectors")}
-        </div>`
+      ? renderCapabilityMenuState(t("chat.composer.menu.noConnectors"))
       : props.mcpServers.map((server, index) => {
           const override = readOwnEntry(props.toolOverrides?.mcpServers, server.name);
           const enabled = resolveToolOverrideState(server.enabled, override);
@@ -391,21 +384,13 @@ function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: stri
     { enabled: String(enabledCount), total: String(tools.length) },
   );
   const rows = props.toolsEffectiveLoading
-    ? html`<div class="agent-chat__capability-menu-state" role="status">
-        ${t("chat.composer.menu.toolAccess.loading")}
-      </div>`
+    ? renderCapabilityMenuState(t("chat.composer.menu.toolAccess.loading"), "status")
     : props.toolsEffectiveError
-      ? html`<div class="agent-chat__capability-menu-state" role="alert">
-          ${t("chat.composer.menu.toolAccess.loadFailed")}
-        </div>`
+      ? renderCapabilityMenuState(t("chat.composer.menu.toolAccess.loadFailed"), "alert")
       : discoveryNotice
-        ? html`<div class="agent-chat__capability-menu-state" role="status">
-            ${formatUiExternalText(discoveryNotice.message)}
-          </div>`
+        ? renderCapabilityMenuState(formatUiExternalText(discoveryNotice.message), "status")
         : tools.length === 0
-          ? html`<div class="agent-chat__capability-menu-state">
-              ${t("chat.composer.menu.toolAccess.noTools")}
-            </div>`
+          ? renderCapabilityMenuState(t("chat.composer.menu.toolAccess.noTools"))
           : tools.map((tool, index) => {
               const rawToolName = tool.mcpToolName;
               const label = tool.label?.trim();

@@ -91,6 +91,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
     rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: () =>
       createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
+    resolvePluginMetadataSnapshotAsync: async () =>
+      createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
   };
 });
 

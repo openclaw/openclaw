@@ -41,9 +41,6 @@ function groupCommandsByCategory(
   commands: ChatCommandDefinition[],
 ): Map<DisplayCategory, ChatCommandDefinition[]> {
   const grouped = new Map<DisplayCategory, ChatCommandDefinition[]>();
-  for (const category of CATEGORY_ORDER) {
-    grouped.set(category, []);
-  }
   for (const command of commands) {
     const category = command.category === "docks" ? "tools" : (command.category ?? "tools");
     const list = grouped.get(category) ?? [];
@@ -141,13 +138,8 @@ function buildCommandItems(
   const items: CommandsListItem[] = [];
 
   for (const category of CATEGORY_ORDER) {
-    const categoryCommands = grouped.get(category) ?? [];
-    if (categoryCommands.length === 0) {
-      continue;
-    }
-    const label = CATEGORY_LABELS[category];
-    for (const command of categoryCommands) {
-      items.push({ label, text: formatCommandEntry(command) });
+    for (const command of grouped.get(category) ?? []) {
+      items.push({ label: CATEGORY_LABELS[category], text: formatCommandEntry(command) });
     }
   }
 
@@ -186,8 +178,7 @@ export function buildCommandsMessage(
   skillCommands?: SkillCommandSpec[],
   options?: CommandsMessageOptions,
 ): string {
-  const result = buildCommandsMessagePaginated(cfg, skillCommands, options);
-  return result.text;
+  return buildCommandsMessagePaginated(cfg, skillCommands, options).text;
 }
 
 /** Builds `/commands` text and pagination metadata for surfaces with native list controls. */

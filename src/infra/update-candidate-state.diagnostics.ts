@@ -141,9 +141,9 @@ export function createUpdateStateInspectionDiagnostics(params: {
       const elapsed = Math.max(0, Date.now() - startedAt) / 1000;
       const scope = params.paths.slice(0, 3).join(", ");
       const source =
-        progress.path ?? `database scope [${scope}${params.paths.length > 3 ? ", …" : ""}]`;
+        progress.path ?? `source scope [${scope}${params.paths.length > 3 ? ", …" : ""}]`;
       return new Error(
-        `${params.operation} failed${termination ? ` (${termination})` : ""} after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} database paths): ${detail}. Check database access, free space, and storage performance, then retry the update.`,
+        `${params.operation} failed${termination ? ` (${termination})` : ""} after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}. Check access to the reported source, free space, and storage performance, then retry the update.`,
         reason instanceof Error ? { cause: reason } : undefined,
       );
     },

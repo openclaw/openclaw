@@ -18,7 +18,6 @@ type SidebarSessionSubtitle = {
 export function resolveSidebarSessionSubtitle(params: {
   session: SidebarRecentSession;
   hasDisplay: boolean;
-  displaySubtitle: string | undefined;
   sidebarLiveActivity: boolean;
   showPreview: boolean;
   narrationLine: string | undefined;
@@ -82,16 +81,16 @@ export function resolveSidebarSessionSubtitle(params: {
     attention || agentStatus || observer || !params.sidebarLiveActivity || !running
       ? undefined
       : params.narrationLine;
-  const workSubtitle = params.hasDisplay
-    ? params.displaySubtitle
-    : session.subtitle && session.workSession && session.subtitle !== session.label
+  const workSubtitle =
+    !params.hasDisplay &&
+    session.subtitle &&
+    session.workSession &&
+    session.subtitle !== session.label
       ? session.subtitle
       : undefined;
   const finalReply =
     !running && !params.hasDisplay ? session.lastMessagePreview?.trim() || undefined : undefined;
-  const subtitle = running
-    ? (attention ?? agentStatus ?? observer ?? narration ?? workSubtitle)
-    : (attention ?? agentStatus ?? observer ?? finalReply ?? workSubtitle);
+  const subtitle = attention ?? agentStatus ?? observer ?? narration ?? finalReply ?? workSubtitle;
   return { subtitle, narration };
 }
 

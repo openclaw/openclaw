@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -52,25 +53,12 @@ function normalizeThreadId(value: unknown): string | undefined {
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const values = Array.from(
-    new Set(
-      value.flatMap((item) => {
-        const normalized = normalizeRunId(item);
-        return normalized ? [normalized] : [];
-      }),
-    ),
-  );
+  const values = normalizeUniqueTrimmedStringList(value);
   return values.length > 0 ? values : undefined;
 }
 
 function normalizePresentStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  return normalizeStringArray(value) ?? [];
+  return Array.isArray(value) ? normalizeUniqueTrimmedStringList(value) : undefined;
 }
 
 function normalizeHarnessCompletionRecovery(value: unknown): HarnessCompletionRecovery | undefined {
@@ -321,19 +309,16 @@ export function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[]
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const runIds: string[] = [];
+  const runIds = new Set<string>();
   for (const item of value) {
     const runId = normalizeRunId(item);
     if (!runId) {
       continue;
     }
-    const previousIndex = runIds.indexOf(runId);
-    if (previousIndex >= 0) {
-      runIds.splice(previousIndex, 1);
-    }
-    runIds.push(runId);
+    runIds.delete(runId);
+    runIds.add(runId);
   }
-  const bounded = runIds.slice(-MAX_TERMINAL_RUN_IDS);
+  const bounded = [...runIds].slice(-MAX_TERMINAL_RUN_IDS);
   return bounded.length > 0 ? bounded : undefined;
 }
 
@@ -378,14 +363,12 @@ export function normalizeRestartRecoveryEntryFields(
       ? entry.restartRecoveryDeliveryMediaUrls
       : deliveryMediaUrls,
   );
-  assign(
+  for (const key of [
     "restartRecoveryDisableMessageTool",
-    entry.restartRecoveryDisableMessageTool === true ? true : undefined,
-  );
-  assign(
     "restartRecoverySuppressTextDelivery",
-    entry.restartRecoverySuppressTextDelivery === true ? true : undefined,
-  );
+  ] as const) {
+    assign(key, entry[key] === true ? true : undefined);
+  }
   assign(
     "restartRecoveryBeforeAgentReplyState",
     entry.restartRecoveryBeforeAgentReplyState === "admitted" ||

@@ -150,10 +150,18 @@ When reconfiguring an existing trusted-proxy setup, the prompt defaults to the e
 With live configuration reload enabled, changes to `gateway.trustedProxies`,
 `gateway.allowRealIpFallback`, `gateway.auth.allowTailscale`,
 `gateway.auth.identityScopes`, and `gateway.auth.trustedProxy` apply without a
-Gateway restart. Gateway clients reconnect under the new policy. A configuration
-writer receives its accepted result before its connection closes. Pending
-handshakes and HTTP requests cannot retain old policy authority through an
-asynchronous wait; already-admitted work follows its existing completion lifecycle.
+Gateway restart. Transport policy changes require clients to reconnect while
+preserving accepted runs and queued inputs whose access grants are unchanged.
+This includes proxy headers, OIDC mapping, device auto-approval, and trusted proxy
+addresses. Removing a connected identity from `allowUsers`, disabling its auth
+method, or changing its own identity-scope grant still revokes accepted work.
+Restoring the grant does not revive revoked work. Identity-scope edits for other
+identities leave existing connections and work unchanged; clients without verified
+operator identities also ignore those edits. HTTP requests and plugin auth cookies
+do not use identity-scope grants and are unaffected by those scope edits.
+A configuration writer receives its accepted result before its connection closes.
+Pending handshakes and HTTP requests recheck the policy applicable to their authority
+after asynchronous waits.
 
 ## Per-identity scope grants
 

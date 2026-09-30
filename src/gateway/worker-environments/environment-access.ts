@@ -95,16 +95,10 @@ type WorkerEnvironmentAccessOptions = {
 };
 
 export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOptions) {
-  const { store } = options;
+  const { store, now, inState, providerFor, identityResolverFor, serviceError, withLock } = options;
   const tunnels = options.tunnelManager;
   const nodeTunnels = options.nodeTunnelManager;
   const nodeDesktop = options.nodeDesktopCarrier;
-  const now = options.now;
-  const inState = options.inState;
-  const providerFor = options.providerFor;
-  const identityResolverFor = options.identityResolverFor;
-  const serviceError = options.serviceError;
-  const withLock = options.withLock;
   let desktopEnabled = options.getConfig().cloudWorkers?.desktop === true;
   let desktopPolicy = new AbortController();
 
@@ -175,7 +169,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             },
           }
         : {}),
-      ...((record.state === "failed" || record.state === "orphaned") && record.lastError
+      ...((record.state === "failed" ||
+        record.state === "orphaned" ||
+        (record.destroyRequestedAtMs !== null && record.state !== "destroyed")) &&
+      record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
       ...(cleanupError ? { error: cleanupError } : {}),
@@ -279,8 +276,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> => {
-    const stopping = options.isStopping();
-    if (stopping) {
+    if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
     if (!tunnels && !nodeTunnels) {

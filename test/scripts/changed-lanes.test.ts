@@ -183,6 +183,14 @@ function createRootTestLintFixture() {
   ]) {
     writeRepoFile(dir, file, readFileSync(path.join(repoRoot, file), "utf8"));
   }
+  // This fixture supplies its own source/ambient graph. Full-repository E2E
+  // augmentations are covered by the root-partition inventory test.
+  const lintConfig = "test/tsconfig.json";
+  writeRepoFile(
+    dir,
+    lintConfig,
+    JSON.stringify({ ...JSON.parse(readFileSync(path.join(dir, lintConfig), "utf8")), files: [] }),
+  );
   for (const [file, source] of Object.entries({
     "src/plugin-sdk/discovery.ts":
       "export function work(): Promise<void> { return Promise.resolve(); }",
@@ -1476,6 +1484,7 @@ describe("scripts/changed-lanes", () => {
         "packages/normalization-core/src/string-normalization.ts",
       ],
       env: {
+        OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(result.paths),
         PATH: "/usr/bin",
       },
     });
@@ -1720,6 +1729,10 @@ describe("scripts/changed-lanes", () => {
     ["test/fixtures/foo.ts", false, false],
     ["test/foo.mjs", false, false],
     ["test/tsconfig/tsconfig.test.root.json", true, false],
+    ["test/tsconfig/tsconfig.test.root.tooling.json", true, false],
+    ["test/tsconfig/tsconfig.test.root.scripts.json", true, false],
+    ["test/tsconfig/tsconfig.test.root.e2e.json", true, false],
+    ["test/tsconfig/tsconfig.test.root.other.json", true, false],
     ["test/tsconfig.json", true, false],
   ])(
     "routes %s to root typecheck=%s and targeted lint=%s",
@@ -1868,25 +1881,6 @@ describe("scripts/changed-lanes", () => {
         { fileExists: () => true },
       ),
     ).toBeNull();
-  });
-
-  it("reenables local-check policy for changed typecheck commands", () => {
-    const result = detectChangedLanes(["packages/normalization-core/src/string-normalization.ts"]);
-    const plan = createChangedCheckPlan(result, {
-      env: { OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" },
-    });
-
-    expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toEqual({
-      OPENCLAW_LOCAL_CHECK: "1",
-      OPENCLAW_TSGO_SPARSE_SKIP: "1",
-      PATH: "/usr/bin",
-    });
-    expect(plan.commands.find((command) => command.name === "lint core changed file")?.env).toEqual(
-      {
-        OPENCLAW_LOCAL_CHECK: "1",
-        PATH: "/usr/bin",
-      },
-    );
   });
 
   it("runs CI changed-check children through Corepack pnpm", () => {

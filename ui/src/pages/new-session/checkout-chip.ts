@@ -7,6 +7,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { renderSessionMenuItem } from "./cloud-target.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftBranches } from "./discovery.ts";
+import { renderPickerLabel } from "./picker-label.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -94,10 +95,15 @@ export function resolveCheckoutChip(params: {
   destination: "local" | "remote" | "cloud";
   worktree: boolean;
   worktreeAvailable: boolean;
+  worktreeName: string;
   headBranch?: string;
   baseRef: string;
   repository?: boolean;
 }): CheckoutChipState | null {
+  const worktreeName = params.worktreeName.trim();
+  if (params.worktree && !params.repository && worktreeName) {
+    return { label: t("newSession.checkoutWorktreeNamed", { name: worktreeName }) };
+  }
   if (params.destination === "cloud") {
     return {
       label: params.baseRef
@@ -337,7 +343,7 @@ export function renderCheckoutChip(params: {
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
         }"
-        title=${t("newSession.checkout")}
+        title="${t("newSession.checkout")}: ${params.state.label}"
         aria-label="${t("newSession.checkout")}: ${params.state.label}"
         data-worktree=${String(params.worktree)}
         aria-haspopup="dialog"
@@ -345,18 +351,7 @@ export function renderCheckoutChip(params: {
         ?disabled=${params.submitting || params.pendingPlacement}
         @click=${params.onGuardTransition}
       >
-        <span class="new-session-page__target-icon" aria-hidden="true">${icons.gitBranch}</span>
-        <span class="new-session-page__trigger-label">${params.state.label}</span>
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
-          aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
-          aria-hidden="true"
-          >${icons.chevronsUpDown}</span
-        >
+        ${renderPickerLabel(icons.gitBranch, params.state.label)}
       </button>
     </span>
     <wa-popover

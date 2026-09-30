@@ -28,7 +28,6 @@ import {
   createSubagentSessionListReadView,
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForRead,
-  getSubagentRunsSnapshotForSessions,
   getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListReadSnapshotIdentity,
@@ -802,12 +801,6 @@ it.each(["best effort", "strict refusal", "strict commit", "atomic commit"])(
         model: refused ? "before" : "after",
         execution: { status: refused ? "running" : "terminal" },
       });
-      expect(
-        getSubagentRunsSnapshotForSessions(new Map(), [entry.childSessionKey]).get("one"),
-      ).toMatchObject({
-        model: refused ? "before" : "after",
-        execution: { status: refused ? "running" : "terminal" },
-      });
       const maintenance = getSubagentMaintenanceRunsSnapshotForRead(new Map()).get("one");
       expect(maintenance?.execution.status).toBe(refused ? "running" : "terminal");
       expect(maintenance?.cleanupCompletedAt).toBe(refused ? undefined : 2);
@@ -843,9 +836,6 @@ it("keeps retired publications with their draining source across source switches
     persistSubagentRunsToDiskOrThrow(runs("after"), ["one"]);
     expect(selectedChild().get("one")?.model).toBe("after");
     expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("after");
-    expect(
-      getSubagentRunsSnapshotForSessions(new Map(), ["agent:main:subagent:one"]).get("one")?.model,
-    ).toBe("after");
     await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
       expect(selectedChild().has("one")).toBe(false);
       expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);

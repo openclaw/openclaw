@@ -30,9 +30,10 @@ When you touch tests or want extra confidence:
 
 Oxlint's `max-lines` rule warns when files exceed the per-scope limits in
 `.oxlintrc.json`; these warnings remain visible in lint logs and do not fail CI.
-PR CI and `pnpm check:changed` separately reject new line-cap violations and
-growth in already over-cap files. The suppression baseline ratchet remains a
-required check. See [surface ratchets](/ci/local-proof#surface-ratchets) for
+Local `pnpm check:changed` rejects over-cap changed files and separately checks
+new violations and growth; untouched overages found by broad lint are warnings.
+PR CI reports numeric ratchet violations as warnings too. The suppression
+baseline ratchet remains strict locally. See [surface ratchets](/ci/local-proof#surface-ratchets) for
 comparison bases and shrink-only maintenance.
 
 ## Test suites (what runs where)
@@ -78,6 +79,7 @@ Native dependency policy:
     - Untargeted `pnpm test` runs thirteen smaller shard configs (`core-unit-fast`, `core-unit-src`, `core-unit-security`, `core-unit-ui`, `core-unit-support`, `core-support-boundary`, `core-tooling`, `core-contracts`, `core-bundled`, `core-runtime`, `agentic`, `auto-reply`, `extensions`) instead of one giant native root-project process. This cuts peak RSS on loaded machines and avoids auto-reply/plugin work starving unrelated suites.
     - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
     - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
+    - Non-watch package and agent directory targets, such as `pnpm test packages/gateway-client` or `pnpm test src/agents/tools`, and quoted agent globs such as `pnpm test 'src/agents/failover/**/*.test.ts'`, discover regular `*.test.ts` files and route each to its owning lane. This preserves fast, isolated, harness, and database-worker ownership, shared exclusions, and inherited include limits; ordinary selections do not opt into live or E2E tests.
     - Non-watch root-project runs, such as `node scripts/run-vitest.mjs run src/config`, prepare any built runtime required by their selected tests before starting them.
     - `pnpm test:changed` expands changed git paths into cheap scoped lanes by default: direct test edits, sibling `*.test.ts` files, explicit source mappings, and local import-graph dependents. Config/setup/package edits do not broad-run tests unless you explicitly use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed`.
     - `pnpm check:changed` is the normal smart local check gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck, lint, and guard commands. Selected paths also schedule targeted Vitest owner tests via `pnpm test:serial`; use `pnpm test:changed` or explicit `pnpm test <target>` for additional test proof matching the touched contract. Release metadata-only version bumps run targeted version/config/root-dependency checks, with a guard that rejects package changes outside the top-level version field.
@@ -120,6 +122,10 @@ Native dependency policy:
     - Provider plugin shards reuse workers with the shared cleanup runner.
       Track global replacements with `vi.stubGlobal` so cleanup can restore them
       before the next file.
+    - Before each test attempt and before a file's cleanup, the shared runner
+      waits for agent database closes that earlier teardown scheduled without
+      awaiting, so a Worker lease release never overlaps the next test. A failed
+      close stays with its owner and the file-end drain, as before.
     - Each `pnpm test` shard inherits the platform pool and `isolate: false`
       defaults from the shared Vitest config unless its owner selects otherwise.
     - `scripts/run-vitest.mjs` adds `--no-maglev` for Vitest child Node

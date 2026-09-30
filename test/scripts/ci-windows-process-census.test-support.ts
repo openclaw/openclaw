@@ -60,10 +60,12 @@ export function expectCensusClosed(root: string, actorPids: number[]) {
 }
 
 export function registerWindowsCensusTests() {
+  const censusTestTimeoutMs = 55_000;
   // Exercise the real broker/stdio owner on any platform; only the native sampler
   // is replaced. The concurrent matrix and PID-reuse test retain native API proof.
   it.each([
     "ready",
+    "delayed",
     "startup",
     "query",
     "stderr-reply",
@@ -117,7 +119,20 @@ import fs from "node:fs";
 import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import { tmpdir } from "node:os";
 import path from "node:path";
-const [moduleUrl, fault, sampler] = process.argv.slice(1);
+const [moduleUrl, fault, sampler, deadlineText] = process.argv.slice(1);
+const deadline = Number(deadlineText);
+const succeeds = fault === "ready" || fault === "delayed";
+let now = Date.now(), clockAdvanced = false;
+const timers = new Map();
+if (fault === "delayed" || fault === "late") {
+  Date.now = () => now;
+  globalThis.setTimeout = (callback, milliseconds) => {
+    const timer = { callback, at: now + milliseconds };
+    timers.set(timer, timer);
+    return timer;
+  };
+  globalThis.clearTimeout = timer => timers.delete(timer);
+}
 const root = fs.mkdtempSync(path.join(tmpdir(), "census-"));
 fs.writeFileSync(path.join(root, "lease"), "owned");
 const endpoint = path.join(root, "census.json");
@@ -161,8 +176,18 @@ cp.spawn = (command, args, options) => {
       }
     });
   }
-  if (fault === "late") child.stdout.prependListener("data", chunk => {
-    if (String(chunk).includes('"id"')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_100);
+  if (fault === "delayed" || fault === "late") child.stdout.prependListener("data", chunk => {
+    if (clockAdvanced || !String(chunk).includes('"id"')) return;
+    clockAdvanced = true;
+    // Hold an actual sampler reply across a scheduling stall, without sleeping.
+    // Late delivery exercises reply validation before any timer callback can run.
+    now = fault === "late" ? deadline : now + 1_100;
+    if (fault === "delayed") {
+      assert(now < deadline, "delayed reply must remain inside its owning operation");
+      for (const timer of [...timers.values()]) {
+        if (timer.at <= now && timers.delete(timer)) timer.callback();
+      }
+    }
   });
   if (fault === "lease") {
     const write = child.stdin.write.bind(child.stdin);
@@ -185,7 +210,7 @@ try {
   // A sibling's ingress rejection must not hide stale success from an already
   // admitted lease or stderr-fault request.
   const pids = ["lease", "query", "stderr-reply"].includes(fault) ? [101] : [101, 202];
-  const results = await Promise.all(pids.map(pid => requestWindowsProcessCensus(root, "owned", [pid])));
+  const results = await Promise.all(pids.map(pid => requestWindowsProcessCensus(root, "owned", [pid], deadline)));
   assert.deepEqual(results.map(result => [...result.values()]), pids.map(pid => [
     { pid, alive: true, creationTime: pid === 101 ? "5001" : "6002" },
   ]));
@@ -196,12 +221,16 @@ assert.equal(children.length, 1);
 assert.equal(closes.length, 1, "retirement must join actual child/stdio close");
 assert.equal(closes[0].endpoint, fault !== "startup" && fault !== "retire", "endpoint retired before sampler close");
 assert(!fs.existsSync(endpoint));
-await assert.rejects(async () => requestWindowsProcessCensus(root, "owned", [101]));
-await assert.rejects(async () => owner.read([101]));
-assert.equal(accepted, fault === "ready", rejected);
-if (fault === "ready") assert.deepEqual(failures, []);
+await assert.rejects(async () => requestWindowsProcessCensus(root, "owned", [101], deadline));
+await assert.rejects(async () => owner.read([101], deadline));
+assert.equal(accepted, succeeds, rejected);
+if (succeeds) assert.deepEqual(failures, []);
 else assert(rejected, "fault was accepted");
-if (!["ready", "lease", "retire"].includes(fault)) assert.equal(failures.length, 1);
+if (!["ready", "delayed", "lease", "retire"].includes(fault)) assert.equal(failures.length, 1);
+if (fault === "delayed" || fault === "late") {
+  assert(clockAdvanced, "sampler did not deliver a reply across the scheduling stall");
+  assert.equal(timers.size, 0, "census timers survived retirement");
+}
 const diagnostics = owner.diagnostics();
 if (fault === "startup") assert(diagnostics.includes("injected sampler startup failure"), diagnostics);
 if (fault === "query") assert(diagnostics.includes("injected native query failure"), diagnostics);
@@ -215,13 +244,14 @@ if (fault === "stderr-reply") {
   assert.deepEqual(mixedReply?.observations, [{ pid: 101, alive: true, creationTime: "5001" }],
     "sampler must deliver a valid reply after stderr so rejection is not vacuous");
 }
-if (fault === "late") assert(/Late|ETIMEDOUT/.test(diagnostics));
+if (fault === "late") assert(diagnostics.includes("Census helper reply ETIMEDOUT"), diagnostics);
 console.log(JSON.stringify({ fault, accepted, rejected, diagnostics, closes, stderrObserved, mixedReply }));
 fs.rmSync(root, { recursive: true });
 `,
           new URL("./fixtures/ci-windows-process-census.mjs", import.meta.url).href,
           fault,
           sampler,
+          String(Date.now() + censusTestTimeoutMs),
         ],
         options: { stdio: ["ignore", "pipe", "pipe"] },
       });
@@ -236,9 +266,12 @@ fs.rmSync(root, { recursive: true });
         signal: null,
         groupJoined: process.platform !== "win32",
       });
-      expect(JSON.parse(stdout)).toMatchObject({ fault, accepted: fault === "ready" });
+      expect(JSON.parse(stdout)).toMatchObject({
+        fault,
+        accepted: fault === "ready" || fault === "delayed",
+      });
     },
-    55_000,
+    censusTestTimeoutMs,
   );
 
   it.each(["sentinel", ...(process.platform === "win32" ? ["startup", "query", "lease"] : [])])(

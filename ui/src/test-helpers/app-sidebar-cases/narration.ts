@@ -101,20 +101,15 @@ describe("AppSidebar live narration", () => {
     await sidebar.updateComplete;
 
     await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(1));
-    expect(sessions.subscribeMessages).toHaveBeenCalledWith(key, { agentId: undefined });
+    expect(sessions.subscribeMessages).toHaveBeenCalledWith(key, {
+      agentId: undefined,
+      mode: "narration",
+    });
 
-    gateway.publishEvent("chat", {
+    gateway.publishEvent("session.narration", {
       sessionKey: key,
-      state: "delta",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "# Earlier work\n\nChecked the inputs. Final **verification** is running.",
-          },
-        ],
-      },
+      runId: "narrated-run",
+      text: "# Earlier work\n\nChecked the inputs. Final **verification** is running.",
     });
 
     await waitForFast(() =>
@@ -300,9 +295,11 @@ describe("AppSidebar live narration", () => {
     await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(2));
     expect(sessions.subscribeMessages).toHaveBeenCalledWith(openKey, {
       agentId: undefined,
+      mode: "narration",
     });
     expect(sessions.subscribeMessages).toHaveBeenCalledWith(backgroundKey, {
       agentId: undefined,
+      mode: "narration",
     });
 
     gateway.publish({ phase: "stopped" });
@@ -316,8 +313,8 @@ describe("AppSidebar live narration", () => {
     await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(4));
     expect(sessions.subscribeMessages.mock.calls.slice(2)).toEqual(
       expect.arrayContaining([
-        [backgroundKey, { agentId: undefined }],
-        [openKey, { agentId: undefined }],
+        [backgroundKey, { agentId: undefined, mode: "narration" }],
+        [openKey, { agentId: undefined, mode: "narration" }],
       ]),
     );
   });

@@ -15,7 +15,10 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  seedAttachedPlacementEnvironment,
+} from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-move",
@@ -41,48 +44,11 @@ describe("worker session placement moves", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function advanceToActive() {
-    let placement = await store.startDispatch(SESSION);
-    placement = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: "environment-move" },
-    });
-    placement = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: "/workspace/move",
-      },
-    });
-    seedAttachedPlacementEnvironment(database, {
+  function advanceToActive() {
+    return advancePlacementFixtureToActive(store, database, SESSION, {
       environmentId: "environment-move",
-      sessionId: SESSION.sessionId,
-      ownerEpoch: 7,
+      remoteWorkspaceDir: "/workspace/move",
     });
-    const active = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: 7 },
-    });
-    if (active.state !== "active") {
-      throw new Error("expected active worker placement");
-    }
-    return active;
   }
 
   function seedAttachedEnvironment(input: {
@@ -173,14 +139,11 @@ describe("worker session placement moves", () => {
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
     expect(store.getPlacementMove(SESSION.sessionId)).toEqual(begun.intent);
-    expect(await store.readProjection([SESSION.sessionId])).toMatchObject({
+    expect(await store.readProjection([SESSION.sessionId, "missing"])).toMatchObject({
       placements: new Map([[SESSION.sessionId, begun.placement]]),
       moves: new Map([[SESSION.sessionId, begun.intent]]),
       workspaceResultReconcilingSessionIds: new Set(),
     });
-    expect(store.getPlacementMoves([SESSION.sessionId, "missing"])).toEqual(
-      new Map([[SESSION.sessionId, begun.intent]]),
-    );
 
     expect(
       store.beginPlacementMove({

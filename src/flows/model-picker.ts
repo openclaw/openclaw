@@ -974,6 +974,33 @@ export async function promptModelAllowlist(params: {
     : undefined;
   const loadCatalog = params.loadCatalog ?? true;
 
+  const promptSelection = async (
+    options: WizardSelectOption[],
+    initialKeys: string[],
+    scopeKeys?: string[],
+  ): Promise<PromptModelAllowlistResult> => {
+    if (options.length === 0) {
+      return {};
+    }
+    const selection = await params.prompter.multiselect({
+      message: params.message ?? t("wizard.model.allowlistPicker"),
+      options,
+      initialValues: initialKeys.length > 0 ? initialKeys : undefined,
+      searchable: true,
+    });
+    const selected = normalizeModelKeys(selection);
+    if (selected.length === 0 && (scopeKeys || existingKeys.length > 0)) {
+      const confirmed = await params.prompter.confirm({
+        message: t(scopeKeys ? "wizard.model.removeProviderModels" : "wizard.model.clearAllowlist"),
+        initialValue: false,
+      });
+      if (!confirmed) {
+        return {};
+      }
+    }
+    return { models: selected, ...(scopeKeys ? { scopeKeys } : {}) };
+  };
+
   const scopedFastKeys =
     allowedKeys.length > 0
       ? allowedKeys
@@ -1011,27 +1038,7 @@ export async function promptModelAllowlist(params: {
           allowedKeys.length > 0 ? t("wizard.model.allowed") : t("wizard.model.configured"),
       });
     }
-    if (options.length === 0) {
-      return {};
-    }
-    const selection = await params.prompter.multiselect({
-      message: params.message ?? t("wizard.model.allowlistPicker"),
-      options,
-      initialValues: initialKeys.length > 0 ? initialKeys : undefined,
-      searchable: true,
-    });
-    const selected = normalizeModelKeys(selection);
-    if (selected.length > 0) {
-      return { models: selected, scopeKeys };
-    }
-    const confirmScopedClear = await params.prompter.confirm({
-      message: t("wizard.model.removeProviderModels"),
-      initialValue: false,
-    });
-    if (!confirmScopedClear) {
-      return {};
-    }
-    return { models: [], scopeKeys };
+    return promptSelection(options, initialKeys, scopeKeys);
   }
 
   if (!loadCatalog) {
@@ -1155,41 +1162,7 @@ export async function promptModelAllowlist(params: {
     });
     seen.add(key);
   }
-  if (options.length === 0) {
-    return {};
-  }
-
-  const selection = await params.prompter.multiselect({
-    message: params.message ?? t("wizard.model.allowlistPicker"),
-    options,
-    initialValues: initialKeys.length > 0 ? initialKeys : undefined,
-    searchable: true,
-  });
-  const selected = normalizeModelKeys(selection);
-  if (selected.length > 0) {
-    return { models: selected, ...(scopeKeys ? { scopeKeys } : {}) };
-  }
-  if (scopeKeys) {
-    const confirmScopedClear = await params.prompter.confirm({
-      message: t("wizard.model.removeProviderModels"),
-      initialValue: false,
-    });
-    if (!confirmScopedClear) {
-      return {};
-    }
-    return { models: [], scopeKeys };
-  }
-  if (existingKeys.length === 0) {
-    return { models: [] };
-  }
-  const confirmClear = await params.prompter.confirm({
-    message: t("wizard.model.clearAllowlist"),
-    initialValue: false,
-  });
-  if (!confirmClear) {
-    return {};
-  }
-  return { models: [] };
+  return promptSelection(options, initialKeys, scopeKeys);
 }
 
 export function applyModelAllowlist(
@@ -1307,15 +1280,12 @@ export function applyModelFallbacksFromSelection(
     cfg,
     defaultProvider: resolved.provider,
   });
-  const existingFallbacks =
-    existingModel && typeof existingModel === "object" && Array.isArray(existingModel.fallbacks)
-      ? resolveFallbackModelKeys({
-          cfg,
-          rawFallbacks: existingModel.fallbacks,
-          defaultProvider: resolved.provider,
-          aliasIndex,
-        })
-      : [];
+  const existingFallbacks = resolveFallbackModelKeys({
+    cfg,
+    rawFallbacks: resolveAgentModelFallbackValues(existingModel),
+    defaultProvider: resolved.provider,
+    aliasIndex,
+  });
   const existingFallbackSet = new Set(existingFallbacks);
   const rawSelectedFallbacks = normalized.filter((key) => key !== resolvedKey);
   const selectedFallbacks =

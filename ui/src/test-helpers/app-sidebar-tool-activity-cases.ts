@@ -8,6 +8,17 @@ const controllers: SidebarSessionNarrationController[] = [];
 function gatewayEvent(event: string, payload: unknown): GatewayEventFrame {
   return { type: "event", event, payload };
 }
+function chatDelta(text?: string, deltaText?: string, replace?: boolean): GatewayEventFrame {
+  return gatewayEvent("chat", {
+    sessionKey: "agent:main:run",
+    runId: "run-1",
+    state: "delta",
+    deltaText,
+    replace,
+    ...(text === undefined ? {} : { message: { role: "assistant", content: text } }),
+  });
+}
+
 function createToolController() {
   const tools: Array<ReadonlyMap<string, SidebarToolActivity>> = [];
   const source = {
@@ -32,6 +43,81 @@ function createToolController() {
   return { controller, tools };
 }
 describe("Sidebar tool activity", () => {
+  it("keeps tool identity separate from commentary and clears it with its run", async () => {
+    const subscribeMessages = vi.fn(() =>
+      Promise.resolve({ key: "agent:main:run", agentId: null }),
+    );
+    const unsubscribeMessages = vi.fn(() => Promise.resolve());
+    const source = { subscribeMessages, unsubscribeMessages };
+    const updates: Array<ReadonlyMap<string, string>> = [];
+    const tools: Array<ReadonlyMap<string, SidebarToolActivity>> = [];
+    const controller = new SidebarSessionNarrationController(
+      (lines) => updates.push(lines),
+      undefined,
+      (next) => tools.push(next),
+    );
+    const connectionIdentity = {};
+    controller.sync({
+      enabled: true,
+      connected: true,
+      connectionIdentity,
+      source,
+      openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
+      agentId: "main",
+    });
+    await Promise.resolve();
+
+    controller.handleEvent(chatDelta("**Reading** files.", "**Reading** files."));
+    controller.handleEvent(
+      gatewayEvent("session.tool", {
+        sessionKey: "agent:main:run",
+        runId: "run-1",
+        stream: "tool",
+        data: { phase: "start", name: "read" },
+      }),
+    );
+
+    expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading files.");
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading files.");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading files.");
+    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("read");
+
+    controller.handleEvent(chatDelta("", undefined, true));
+    expect(updates.at(-1)?.size).toBe(0);
+    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("read");
+
+    controller.handleEvent(
+      gatewayEvent("chat", {
+        sessionKey: "agent:main:run",
+        runId: "run-2",
+        state: "delta",
+        message: { role: "assistant", content: "A new run" },
+      }),
+    );
+    expect(tools.at(-1)?.size).toBe(0);
+    controller.handleEvent(
+      gatewayEvent("session.tool", {
+        sessionKey: "agent:main:run",
+        runId: "run-2",
+        stream: "tool",
+        data: { name: "plugin.custom_tool" },
+      }),
+    );
+    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("plugin.custom_tool");
+
+    controller.disconnect();
+    expect(unsubscribeMessages).toHaveBeenCalledWith({
+      key: "agent:main:run",
+      agentId: null,
+    });
+    expect(updates.at(-1)?.size).toBe(0);
+    expect(tools.at(-1)?.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -269,5 +355,46 @@ describe("Sidebar tool activity", () => {
     emit("item", { ...item, progressText: "New public progress" });
     emit("tool", { toolCallId: "call", hideFromChannelProgress: true });
     expect(tools.at(-1)?.has("agent:main:run")).toBe(false);
+  });
+
+  it.each(["tool", "item"])("retains the identified tool name after a %s start", (stream) => {
+    const { controller, tools } = createToolController();
+    const toolCallId = stream === "tool" ? "call" : undefined;
+    const item = { kind: "tool", itemId: "known-item", title: "Read", phase: "update", toolCallId };
+    controller.handleEvent(
+      gatewayEvent("session.tool", {
+        sessionKey: "agent:main:run",
+        runId: "run-2",
+        stream,
+        data: { ...item, phase: "start", name: "read", progressText: "Earlier public progress" },
+      }),
+    );
+    const count = tools.length;
+    controller.handleEvent(
+      gatewayEvent("session.tool", {
+        sessionKey: "agent:main:run",
+        runId: "run-2",
+        stream: "item",
+        data: {
+          ...item,
+          itemId: "other-item",
+          toolCallId: undefined,
+          progressText: "Unrelated unnamed progress",
+        },
+      }),
+    );
+    expect(tools).toHaveLength(count);
+    controller.handleEvent(
+      gatewayEvent("session.tool", {
+        sessionKey: "agent:main:run",
+        runId: "run-2",
+        stream: "item",
+        data: { ...item, progressText: "Updated public progress" },
+      }),
+    );
+    expect(tools.at(-1)?.get("agent:main:run")).toMatchObject({
+      name: "read",
+      text: "Updated public progress",
+    });
   });
 });

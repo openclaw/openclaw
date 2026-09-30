@@ -65,7 +65,6 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
 function buildAgentSessionLines(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
-  targetSessionKey: string;
   targetChannel?: string;
 }): string[] {
   return [
@@ -84,7 +83,6 @@ function buildAgentSessionLines(params: {
 export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
-  targetSessionKey: string;
 }) {
   return ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].join("\n");
 }
@@ -92,7 +90,6 @@ export function buildAgentToAgentMessageContext(params: {
 export function buildAgentToAgentReplyContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
-  targetSessionKey: string;
   targetChannel?: string;
   currentRole: "requester" | "target";
   turn: number;
@@ -112,7 +109,6 @@ export function buildAgentToAgentReplyContext(params: {
 export function buildAgentToAgentAnnounceContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
-  targetSessionKey: string;
   targetChannel?: string;
   originalMessage: string;
   roundOneReply?: string;

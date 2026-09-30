@@ -167,9 +167,7 @@ export class CodexServerRequests {
   }
 }
 
-function defaultServerRequestResponse(
-  request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
-): JsonValue {
+function defaultServerRequestResponse(request: ServerRequest): JsonValue {
   if (request.method === "item/tool/call") {
     return {
       contentItems: [

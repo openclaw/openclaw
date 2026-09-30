@@ -530,17 +530,20 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     return binding.ok ? null : "reason" in binding ? binding.reason : "session-not-attached";
   };
 
+  const validateInferenceRequest = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceStartParams | WorkerInferenceCancelParams,
+  ) =>
+    request.sessionId !== identity.sessionId || request.runId !== identity.runId
+      ? ({ ok: false, reason: "session-not-attached" } as const)
+      : validateAttachedWorkerRequest(identity, request.runEpoch, { kind: "inference" });
+
   const startInference = async (
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceStartParams,
     sink: WorkerInferenceSink,
   ): Promise<WorkerInferenceStartServiceResult> => {
-    if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
-      return { ok: false, reason: "session-not-attached" };
-    }
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-      kind: "inference",
-    });
+    const binding = validateInferenceRequest(identity, request);
     if (!binding.ok) {
       return binding;
     }
@@ -562,12 +565,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceCancelParams,
   ): Promise<WorkerInferenceCancelServiceResult> => {
-    if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
-      return { ok: false, reason: "session-not-attached" };
-    }
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-      kind: "inference",
-    });
+    const binding = validateInferenceRequest(identity, request);
     if (!binding.ok) {
       return binding;
     }

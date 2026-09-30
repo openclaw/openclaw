@@ -20,6 +20,45 @@ const manifest = {
   childRuns: { productPerformance: { conclusion: "success" } },
   validationInputs: { coveragePolicy: "full" },
 };
+const windowsAdvisory = {
+  class: "windows-node-ci",
+  child: "normalCi",
+  job: "checks-windows-node-test-2",
+  conclusion: "failure",
+  runId: "42",
+  url: "https://github.com/openclaw/openclaw/actions/runs/42/job/43",
+};
+const windowsEvidence = {
+  ...manifest,
+  childRuns: { normalCi: "42" },
+  childEvidence: {
+    normalCi: {
+      runId: "42",
+      jobs: [
+        {
+          name: "checks-windows-node-test-2",
+          status: "completed",
+          conclusion: "failure",
+          url: windowsAdvisory.url,
+        },
+      ],
+    },
+  },
+  advisoryJobs: [windowsAdvisory],
+};
+
+it.each([
+  { releaseTag: "v2026.9.5-alpha.1", npmDistTag: "beta" },
+  { releaseTag: "v2026.9.5", npmDistTag: "alpha" },
+])("rejects retired alpha gate input %j", (input) => {
+  const result = evaluateReleasePublishGates({ ...input, manifest: {}, consumer: "publisher" });
+  expect(result).toContainEqual(
+    expect.objectContaining({
+      status: "FAIL",
+      message: "Alpha releases are retired; use a beta prerelease instead.",
+    }),
+  );
+});
 
 describe("release publication control admission", () => {
   it("rejects stable bootstrap approval that cannot cover the candidate package version", () => {
@@ -193,8 +232,9 @@ describe("release publication control admission", () => {
   it.each([
     { validationInputs: { laneWaiver: "2026.9.5 approved" } },
     { publishInputs: { stableSoakWaiver: "2026.9.5 approved" } },
+    { validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } },
     { advisoryJobs: [{ child: "normalCi", job: "tests", conclusion: "failure" }] },
-  ])("rejects recorded waived or advisory evidence: %j", (recorded) => {
+  ])("rejects recorded waiver or unclassified advisory evidence: %j", (recorded) => {
     for (const releaseTag of ["v2026.9.5", "v2026.9.5-beta.1"]) {
       const gates = evaluateReleasePublishGates({
         consumer: "publisher",
@@ -206,6 +246,53 @@ describe("release publication control admission", () => {
         expect.objectContaining({ id: "publisher.selected-lanes", status: "FAIL" }),
       );
     }
+  });
+
+  it.each(["publisher", "core-npm", "stable-closeout"] as const)(
+    "accepts bound Windows Node CI advisories without relaxing other gates at %s",
+    (consumer) => {
+      const evaluate = (overrides = {}) =>
+        evaluateReleasePublishGates({
+          consumer,
+          releaseTag: "v2026.9.5",
+          npmDistTag: "latest",
+          manifest: { ...windowsEvidence, ...overrides },
+        })
+          .filter((gate) => gate.status === "FAIL")
+          .map((gate) => gate.id);
+      expect(evaluate()).toEqual([]);
+      expect(
+        evaluate({
+          controls: { performanceBlocking: false },
+          runReleaseSoak: "false",
+          rerunGroup: "performance",
+        }),
+      ).toEqual([`${consumer}.rerun-group`, `${consumer}.performance`, `${consumer}.soak`]);
+    },
+  );
+
+  it.each([
+    { name: "unknown class", advisoryJobs: [{ ...windowsAdvisory, class: "operator-approved" }] },
+    { name: "macOS job", advisoryJobs: [{ ...windowsAdvisory, job: "macos-node-2" }] },
+    {
+      name: "other child",
+      advisoryJobs: [{ ...windowsAdvisory, child: "releaseChecksCandidate" }],
+    },
+    { name: "other run", advisoryJobs: [{ ...windowsAdvisory, runId: "44" }] },
+    { name: "other conclusion", advisoryJobs: [{ ...windowsAdvisory, conclusion: "timed_out" }] },
+    { name: "missing advisory", advisoryJobs: [] },
+    { name: "missing evidence", childEvidence: {} },
+    { name: "unbound child run", childRuns: { normalCi: "44" } },
+  ])("rejects forged Windows advisory evidence: $name", ({ name: _name, ...overrides }) => {
+    const gates = evaluateReleasePublishGates({
+      consumer: "publisher",
+      releaseTag: "v2026.9.5",
+      npmDistTag: "latest",
+      manifest: { ...windowsEvidence, ...overrides },
+    });
+    expect(gates).toContainEqual(
+      expect.objectContaining({ id: "publisher.selected-lanes", status: "FAIL" }),
+    );
   });
 
   it.each([false, true])(

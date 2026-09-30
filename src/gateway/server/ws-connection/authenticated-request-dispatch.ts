@@ -23,7 +23,7 @@ import {
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
-import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
+import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import {
@@ -79,12 +79,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
   const unauthorizedFloodGuard = new UnauthorizedFloodGuard();
   let deviceCredentialMutationBarrier: Promise<void> | undefined;
 
-  const closeInvalidatedClient = (client: GatewayWsClient, method: string): boolean => {
-    const policyChanged = !isGatewayAuthPolicyCurrent(
-      client.authPolicyGeneration,
-      undefined,
-      client.authenticatedUserId,
-    );
+  const closeInvalidatedClient = (
+    client: GatewayWsClient,
+    method: string,
+    isCommittedGrantCurrent: () => boolean,
+  ): boolean => {
+    const policyChanged = !isGatewayAuthPolicyCurrent(client.authPolicy);
     if (!client.invalidated && !policyChanged) {
       return false;
     }
@@ -99,8 +99,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       code: 4001,
       message: `client invalidated: ${reason}`,
       close: () => close(4001, `client invalidated: ${reason}`),
-      // The mutation owner already decided whether this was a committed revocation.
-      revokeSource: false,
+      // Tentative policy and committed transport changes fence without ending accepted work.
+      revokeSource: policyChanged && !isCommittedGrantCurrent(),
     });
     return true;
   };
@@ -126,23 +126,21 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       return;
     }
     const req = parsed;
-    if (closeInvalidatedClient(client, req.method)) {
+    const context = buildRequestContext();
+    const sourceContext = context.resolveGatewayContext?.() ?? context;
+    const isCommittedGrantCurrent = () =>
+      isGatewayAuthGrantCurrent(
+        client.authPolicy,
+        sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig(),
+      );
+    if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
     const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers);
     logWs("in", "req", { connId, id: req.id, method: req.method });
-    const context = buildRequestContext();
     const generationState = SharedGatewaySessionGenerationState.fromReader(
       getRequiredSharedGatewaySessionGeneration,
     );
-    const sourceContext = context.resolveGatewayContext?.() ?? context;
-    const isCommittedPolicyCurrent = () =>
-      client.authPolicyGeneration === undefined ||
-      isGatewayAuthPolicyCurrent(
-        client.authPolicyGeneration,
-        sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig(),
-        client.authenticatedUserId,
-      );
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
@@ -155,7 +153,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             close: () => close(4001, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE),
           });
         }
-        if (closeInvalidatedClient(client, req.method)) {
+        if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
           return false;
         }
         const requiredGeneration = client.usesSharedGatewayAuth
@@ -183,27 +181,31 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             dependencies: {
               client,
               context: sourceContext,
-              authPolicyGeneration: client.authPolicyGeneration,
+              authPolicyGeneration: client.authPolicy?.grantGeneration,
               sharedGenerationOwner: client.usesSharedGatewayAuth ? generationState : undefined,
               sharedGeneration: client.usesSharedGatewayAuth
                 ? client.sharedGatewaySessionGeneration
                 : undefined,
             },
             isCurrent: () =>
-              hasCurrentGatewayPolicyClientSource(client) && isCommittedPolicyCurrent(),
+              hasCurrentGatewayPolicyClientSource(client) && isCommittedGrantCurrent(),
             subscribe: (onRevoked) => {
               const releaseClient = onGatewayPolicyClientInvalidated(client, onRevoked);
               const releasePolicy = onOperatorRolePolicyChanged((change) => {
                 if (
                   change.kind === "config" &&
                   change.context === sourceContext &&
-                  !isCommittedPolicyCurrent()
+                  !isCommittedGrantCurrent()
                 ) {
                   onRevoked();
                 }
               });
               const releaseGeneration = client.usesSharedGatewayAuth
-                ? generationState?.onInvalidated(client.sharedGatewaySessionGeneration, onRevoked)
+                ? generationState?.onInvalidated(
+                    client.sharedGatewaySessionGeneration,
+                    onRevoked,
+                    client.authPolicy,
+                  )
                 : undefined;
               return () => {
                 releaseClient();

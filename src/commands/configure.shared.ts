@@ -13,34 +13,22 @@ import {
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
 
-export const CONFIGURE_WIZARD_SECTIONS = [
-  "workspace",
-  "model",
-  "web",
-  "gateway",
-  "daemon",
-  "channels",
-  "plugins",
-  "skills",
-  "health",
-] as const;
-
-export type WizardSection = (typeof CONFIGURE_WIZARD_SECTIONS)[number];
-
 /** Parse repeated `--section` values into known configure wizard sections and invalid entries. */
 export function parseConfigureWizardSections(raw: unknown): {
   sections: WizardSection[];
   invalid: string[];
 } {
-  const sectionsRaw = Array.isArray(raw) ? raw.map((section) => String(section).trim()) : [];
-  if (sectionsRaw.length === 0) {
-    return { sections: [], invalid: [] };
+  const sections: WizardSection[] = [];
+  const invalid: string[] = [];
+  for (const value of Array.isArray(raw) ? raw : []) {
+    const section = String(value).trim();
+    const known = CONFIGURE_WIZARD_SECTIONS.find((candidate) => candidate === section);
+    if (known) {
+      sections.push(known);
+    } else {
+      invalid.push(section);
+    }
   }
-
-  const invalid = sectionsRaw.filter((s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never));
-  const sections = sectionsRaw.filter((s): s is WizardSection =>
-    CONFIGURE_WIZARD_SECTIONS.includes(s as never),
-  );
   return { sections, invalid };
 }
 
@@ -51,11 +39,7 @@ export type ConfigureWizardParams = {
   sections?: WizardSection[];
 };
 
-export const CONFIGURE_SECTION_OPTIONS: Array<{
-  value: WizardSection;
-  label: string;
-  hint: string;
-}> = [
+export const CONFIGURE_SECTION_OPTIONS = [
   { value: "workspace", label: "Workspace", hint: "Set workspace + sessions" },
   { value: "model", label: "Model", hint: "Pick provider + credentials" },
   { value: "web", label: "Web tools", hint: "Configure web search (Perplexity/Brave) + fetch" },
@@ -77,7 +61,10 @@ export const CONFIGURE_SECTION_OPTIONS: Array<{
     label: "Health check",
     hint: "Run gateway + channel checks",
   },
-];
+] as const;
+
+export type WizardSection = (typeof CONFIGURE_SECTION_OPTIONS)[number]["value"];
+export const CONFIGURE_WIZARD_SECTIONS = CONFIGURE_SECTION_OPTIONS.map((option) => option.value);
 
 /** Styled configure wizard intro wrapper. */
 export const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);

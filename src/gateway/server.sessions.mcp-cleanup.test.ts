@@ -4,7 +4,10 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { startCatalogRecoveryMcpServer } from "../agents/agent-bundle-mcp-catalog-recovery.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -45,13 +48,9 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
       await import("../agents/agent-bundle-mcp-manager.js");
     const { SESSION_MCP_RUNTIME_MANAGER_KEY } =
       await import("../agents/agent-bundle-mcp-runtime-shared.js");
-    let nowMs = Date.now();
-    const scheduler = createTestGatewayScheduler();
-    const manager = createSessionMcpRuntimeManager({
-      scheduler,
-      now: () => nowMs,
-      enableIdleSweepTimer: false,
-    });
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const manager = createSessionMcpRuntimeManager({ scheduler });
     const terminate = createDeferred();
     const server = await startCatalogRecoveryMcpServer("idle-session-cleanup", {
       holdTermination: terminate.promise,
@@ -98,7 +97,7 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
       } finally {
         await releaseSessionMcpRuntime(lease);
       }
-      nowMs = lease.runtime.lastUsedAt + 1;
+      clock.setTime(lease.runtime.lastUsedAt + 1);
       sweep = manager.sweepIdleRuntimes();
       await withTestTimeout(server.terminationStarted, 2_000, "MCP idle disposal did not start");
       expect(manager.peekSession({ sessionId })).toBeUndefined();

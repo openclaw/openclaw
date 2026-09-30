@@ -135,10 +135,12 @@ function isLoopbackNpmRegistry(raw: string): boolean {
   }
 }
 
-function resolveExtendedStableRegistryTarget(params: {
-  packageName?: string;
-  env?: NodeJS.ProcessEnv;
-}): { registryUrl: string; packageName: string } {
+export function resolveUpdateRegistryTarget(
+  params: {
+    packageName?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): { registryUrl: string; packageName: string } {
   const env = params.env ?? process.env;
   const packageName = params.packageName?.trim() || PUBLIC_NPM_PACKAGE_NAME;
   const packageSpecOverride = env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim();
@@ -167,7 +169,7 @@ export async function resolveExtendedStablePackage(params: {
   }
 
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
-  const registryTarget = resolveExtendedStableRegistryTarget(params);
+  const registryTarget = resolveUpdateRegistryTarget(params);
   const selector = await fetchNpmPackageTargetStatus({
     target: "extended-stable",
     timeoutMs,
@@ -516,12 +518,15 @@ async function checkDepsStatus(params: {
 
 export async function fetchNpmTagVersion(params: {
   tag: string;
+  registryUrl?: string;
+  packageName?: string;
   timeoutMs?: number;
   spec?: string;
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
+  signal?: AbortSignal;
 }): Promise<NpmTagStatus> {
   const { tag, ...options } = params;
   const res = await fetchNpmPackageTargetStatus({
@@ -538,11 +543,14 @@ export async function fetchNpmTagVersion(params: {
 
 export async function resolveNpmChannelTag(params: {
   channel: UpdateChannel;
+  registryUrl?: string;
+  packageName?: string;
   timeoutMs?: number;
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
+  signal?: AbortSignal;
 }): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
   const { channel, ...options } = params;
   const channelTag = channelToNpmTag(channel);

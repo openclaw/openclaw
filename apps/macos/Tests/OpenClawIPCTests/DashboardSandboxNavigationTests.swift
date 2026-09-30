@@ -4,7 +4,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardSandboxNavigationTests {
     @Test(arguments: [
@@ -24,10 +24,10 @@ struct DashboardSandboxNavigationTests {
         let dashboardURL = try #require(URL(string: "https://gateway.example/control/"))
         let url = try #require(URL(string: address))
         let sourceURL = try #require(URL(string: source, relativeTo: dashboardURL)?.absoluteURL)
-        #expect(DashboardWindowController.shouldHandleAppLinkNavigation(
+        #expect(ControlUIDocumentHost.shouldHandleAppLinkNavigation(
             url, navigationType: .linkActivated, buttonNumber: button,
             sourceURL: sourceURL, sourceIsMainFrame: mainFrame, dashboardURL: dashboardURL) == allowed)
-        #expect(!DashboardWindowController.shouldHandleAppLinkNavigation(
+        #expect(!ControlUIDocumentHost.shouldHandleAppLinkNavigation(
             url, navigationType: .other, buttonNumber: button,
             sourceURL: sourceURL, sourceIsMainFrame: mainFrame, dashboardURL: dashboardURL))
     }
@@ -41,9 +41,9 @@ struct DashboardSandboxNavigationTests {
     func `dashboard origins match browser normalization`(address: String, expectedOrigin: String) throws {
         let url = try #require(URL(string: address))
         let browserURL = try #require(URL(string: expectedOrigin + "/control/chat"))
-        #expect(DashboardWindowController.originString(for: url) == expectedOrigin)
-        #expect(DashboardWindowController.isTrustedLinkSource(browserURL, dashboardURL: url))
-        #expect(DashboardWindowController.shouldAllowNavigation(
+        #expect(ControlUIDocumentHost.originString(for: url) == expectedOrigin)
+        #expect(ControlUIDocumentHost.isTrustedLinkSource(browserURL, dashboardURL: url))
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
             to: browserURL, dashboardURL: url, isMainFrame: true))
     }
 
@@ -58,16 +58,16 @@ struct DashboardSandboxNavigationTests {
     {
         let url = try #require(URL(string: address))
         let browserAuth = DashboardWindowAuth.browserIdentity(gatewayUrl: "wss://gateway.example/control/")
-        #expect(DashboardWindowController.shouldAllowIdentityNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowIdentityNavigation(
             to: url, auth: browserAuth, isMainFrame: true,
             sourceIsDashboard: true, navigationType: .other) == allowed)
-        #expect(!DashboardWindowController.shouldAllowIdentityNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowIdentityNavigation(
             to: url, auth: DashboardWindowAuth(gatewayUrl: nil, token: "fixture", password: nil),
             isMainFrame: true, sourceIsDashboard: true, navigationType: .other))
-        #expect(!DashboardWindowController.shouldAllowIdentityNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowIdentityNavigation(
             to: url, auth: browserAuth, isMainFrame: true,
             sourceIsDashboard: true, navigationType: .linkActivated))
-        #expect(DashboardWindowController.shouldAllowIdentityNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowIdentityNavigation(
             to: url, auth: browserAuth, isMainFrame: true,
             sourceIsDashboard: false, navigationType: .formSubmitted) == allowed)
     }
@@ -136,16 +136,11 @@ struct DashboardSandboxNavigationTests {
         url: URL,
         ready: String = "document.readyState === 'complete'") async throws
     {
-        let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline {
-            if controller.webView.url == url, !controller.webView.isLoading, controller.canDeliverNativeCommands,
-               try await controller.webView.evaluateJavaScript(ready) as? Bool == true
-            {
-                return
-            }
-            try await Task.sleep(for: .milliseconds(20))
+        try await DashboardTestWait.document(controller, "document at \(url.path)") { controller.webView.url == url }
+        // Callers pass page-script facts that can settle after the load completes.
+        try await DashboardTestWait.state("\(ready) at \(url.path)") {
+            try await controller.webView.evaluateJavaScript(ready) as? Bool == true
         }
-        Issue.record("The dashboard did not finish loading \(url)")
     }
 
     @Test func `same URL sign in retains commands until the current document installs its shell`() async throws {
@@ -213,12 +208,12 @@ struct DashboardSandboxNavigationTests {
         try await self.waitForDocument(controller, url: blobURL)
         // Blob URLs keep their creator's origin; origin equality alone is not document trust.
         #expect(try await controller.webView.evaluateJavaScript("location.origin") as? String ==
-            DashboardWindowController.originString(for: dashboardURL))
+            ControlUIDocumentHost.originString(for: dashboardURL))
         #expect(try await controller.webView.evaluateJavaScript("""
         [window.__OPENCLAW_NATIVE_CONTROL_AUTH__, window.__OPENCLAW_NATIVE_WEB_CHROME__,
          window.__OPENCLAW_NATIVE_HISTORY__].every(value => value === undefined)
         """) as? Bool == true)
-        #expect(!DashboardWindowController.isTrustedLinkSource(blobURL, dashboardURL: dashboardURL))
+        #expect(!ControlUIDocumentHost.isTrustedLinkSource(blobURL, dashboardURL: dashboardURL))
     }
 
     @Test(arguments: [
@@ -228,11 +223,11 @@ struct DashboardSandboxNavigationTests {
     func `sandbox navigation requires a trusted dashboard subframe`(_ address: String) throws {
         let dashboard = try #require(URL(string: "https://openclaw.example/control/"))
         let sandbox = try #require(URL(string: address))
-        #expect(DashboardWindowController.shouldAllowNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
             to: sandbox, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: sandbox, dashboardURL: dashboard, isMainFrame: true, isTrustedDashboardSource: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: sandbox, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
     }
 
@@ -248,7 +243,7 @@ struct DashboardSandboxNavigationTests {
     func `sandbox navigation rejects noncanonical or unsafe URLs`(_ address: String) throws {
         let dashboard = try #require(URL(string: "https://openclaw.example/control/"))
         let sandbox = try #require(URL(string: address))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: sandbox, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
     }
 
@@ -256,11 +251,11 @@ struct DashboardSandboxNavigationTests {
         let dashboard = try #require(URL(string: "https://openclaw.example/control/"))
         var sandbox = try #require(URLComponents(string: "https://widgets.example/mcp-app-sandbox"))
         sandbox.user = "fixture-user"
-        #expect(try !DashboardWindowController.shouldAllowNavigation(
+        #expect(try !ControlUIDocumentHost.shouldAllowNavigation(
             to: #require(sandbox.url), dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
         sandbox.user = nil
         sandbox.password = "fixture-password"
-        #expect(try !DashboardWindowController.shouldAllowNavigation(
+        #expect(try !ControlUIDocumentHost.shouldAllowNavigation(
             to: #require(sandbox.url), dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
     }
 
@@ -268,11 +263,11 @@ struct DashboardSandboxNavigationTests {
     func `dashboard source trust preserves the browser pathname`(_ mountPath: String) throws {
         let dashboard = try #require(URL(string: "https://openclaw.example\(mountPath)"))
         let descendant = try #require(URL(string: "chat", relativeTo: dashboard)?.absoluteURL)
-        #expect(DashboardWindowController.allowedPath(for: dashboard) == mountPath)
-        #expect(DashboardWindowController.isTrustedLinkSource(dashboard, dashboardURL: dashboard))
-        #expect(DashboardWindowController.isTrustedLinkSource(descendant, dashboardURL: dashboard))
+        #expect(ControlUIDocumentHost.allowedPath(for: dashboard) == mountPath)
+        #expect(ControlUIDocumentHost.isTrustedLinkSource(dashboard, dashboardURL: dashboard))
+        #expect(ControlUIDocumentHost.isTrustedLinkSource(descendant, dashboardURL: dashboard))
         let encodedSeparator = try #require(URL(string: "https://openclaw.example\(mountPath.dropLast())%2Fchat"))
-        #expect(!DashboardWindowController.isTrustedLinkSource(encodedSeparator, dashboardURL: dashboard))
+        #expect(!ControlUIDocumentHost.isTrustedLinkSource(encodedSeparator, dashboardURL: dashboard))
     }
 
     @Test func `dashboard WebKit loads the isolated sandbox and its inner document`() async throws {
@@ -326,16 +321,11 @@ struct DashboardSandboxNavigationTests {
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         controller.loadInBackground(url: dashboardURL, auth: controller.auth)
-        let deadline = ContinuousClock.now + .seconds(10)
         var rendered = false
-        while ContinuousClock.now < deadline {
-            if await (try? controller.webView.evaluateJavaScript("document.body.dataset.appReady")) as? String ==
-                "true"
-            {
-                rendered = true
-                break
-            }
-            try await Task.sleep(for: .milliseconds(20))
+        try await DashboardTestWait.state("sandbox inner document handshake") {
+            rendered = await (try? controller.webView.evaluateJavaScript(
+                "document.body.dataset.appReady")) as? String == "true"
+            return rendered
         }
         #expect(rendered, "The real navigation delegate must admit the outer sandbox and nested srcdoc handshake")
         #expect(controller.webView.url == dashboardURL)

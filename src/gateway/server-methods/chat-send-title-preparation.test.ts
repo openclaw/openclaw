@@ -60,13 +60,16 @@ it.each([
       const reads = observeSqliteReadSql(StatementSync.prototype);
       let released: Promise<void> | undefined;
       try {
-        scheduleChatDashboardSessionTitle({
-          ...scope,
-          admittedSessionId: scope.sessionId,
-          cfg,
-          context,
-          request: { rawMessage: "A later follow-up", normalizedAttachments: [] },
-        });
+        scheduleChatDashboardSessionTitle(
+          {
+            ...scope,
+            admittedSessionId: scope.sessionId,
+            cfg,
+            context,
+            request: { rawMessage: "A later follow-up", normalizedAttachments: [] },
+          },
+          Promise.resolve(),
+        );
         await Promise.race([started.promise, failed.promise]);
         released = getSessionWorkAdmissionRelease({
           scope: scope.storePath,

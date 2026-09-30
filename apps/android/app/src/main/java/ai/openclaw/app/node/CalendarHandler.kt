@@ -230,52 +230,31 @@ class CalendarHandler internal constructor(
 ) {
   fun handleCalendarEvents(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasReadPermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "CALENDAR_PERMISSION_REQUIRED",
-        message = "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
-      )
+      return nodeInvokeError("CALENDAR_PERMISSION_REQUIRED", "grant Calendar permission")
     }
     val request =
       parseEventsRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     return try {
       val events = dataSource.events(appContext, request)
       GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("events" to events)))
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "CALENDAR_UNAVAILABLE",
-        message = "CALENDAR_UNAVAILABLE: ${err.message ?: "calendar query failed"}",
-      )
+      nodeInvokeError("CALENDAR_UNAVAILABLE", err.message ?: "calendar query failed")
     }
   }
 
   fun handleCalendarAdd(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasWritePermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "CALENDAR_PERMISSION_REQUIRED",
-        message = "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
-      )
+      return nodeInvokeError("CALENDAR_PERMISSION_REQUIRED", "grant Calendar permission")
     }
     val request =
       parseAddRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     if (request.title.isEmpty()) {
-      return GatewaySession.InvokeResult.error(
-        code = "CALENDAR_INVALID",
-        message = "CALENDAR_INVALID: title required",
-      )
+      return nodeInvokeError("CALENDAR_INVALID", "title required")
     }
     if (request.endMs <= request.startMs) {
-      return GatewaySession.InvokeResult.error(
-        code = "CALENDAR_INVALID",
-        message = "CALENDAR_INVALID: endISO must be after startISO",
-      )
+      return nodeInvokeError("CALENDAR_INVALID", "endISO must be after startISO")
     }
     return try {
       val event = dataSource.add(appContext, request)
@@ -285,10 +264,7 @@ class CalendarHandler internal constructor(
       val code = if (msg.startsWith("CALENDAR_NOT_FOUND")) "CALENDAR_NOT_FOUND" else "CALENDAR_INVALID"
       GatewaySession.InvokeResult.error(code = code, message = msg)
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "CALENDAR_UNAVAILABLE",
-        message = "CALENDAR_UNAVAILABLE: ${err.message ?: "calendar add failed"}",
-      )
+      nodeInvokeError("CALENDAR_UNAVAILABLE", err.message ?: "calendar add failed")
     }
   }
 

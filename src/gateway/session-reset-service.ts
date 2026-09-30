@@ -1132,7 +1132,7 @@ export async function performGatewaySessionReset(params: {
 
       const { prepareSubagentSessionCleanupRevocation } =
         await import("../agents/subagents/registry/subagent-registry.js");
-      const revokeSessionCleanup = prepareSubagentSessionCleanupRevocation(target.canonicalKey);
+      const revokeCleanup = await prepareSubagentSessionCleanupRevocation(target.canonicalKey);
       const commitGuard = () => {
         assertCompletionAuthorized?.();
         const current = loadSessionEntryReadOnly({
@@ -1147,7 +1147,7 @@ export async function performGatewaySessionReset(params: {
         ) {
           // Revoke durably before publishing the successor. A later reset failure may
           // retain the old session, but must never restore its stale deletion authority.
-          revokeSessionCleanup();
+          revokeCleanup();
         }
       };
 

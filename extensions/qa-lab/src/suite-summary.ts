@@ -11,7 +11,8 @@ import {
   type QaEvidenceTiming,
 } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
-import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityResult } from "./runtime-parity.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 

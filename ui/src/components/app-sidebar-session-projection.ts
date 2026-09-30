@@ -355,7 +355,6 @@ export class SidebarSessionProjection {
     const params = {
       session,
       hasDisplay: false,
-      displaySubtitle: undefined,
       sidebarLiveActivity: environment.sidebarLiveActivity,
       showPreview: environment.showPreview,
       narrationLine: environment.narrationLines.get(session.key),

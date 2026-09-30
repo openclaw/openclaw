@@ -29,14 +29,13 @@ import type {
   ChatSelectionSource,
   ChatStreamSegment,
 } from "../../../lib/chat/chat-types.ts";
-import { buildCompanionQuestionPrefill } from "../../../lib/chat/companion-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
-import type { ChatTypingActorView } from "../chat-typing-presence.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
@@ -79,6 +78,7 @@ export type ChatThreadState = {
   searchReturnFocusOwner: HTMLElement | null;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
+    onRequestUpdate?: () => void;
     turnVideoMessages?: ReadonlyMap<
       string,
       readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
@@ -176,6 +176,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   typingActors?: readonly ChatTypingActorView[];
+  typingOverflow?: ChatTypingOverflow;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
@@ -195,7 +196,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   commentAttachments?: readonly ChatAttachment[];
   commentsDisabled?: boolean;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-  onCompanionPrefill?: (question: string) => void;
+  onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
@@ -211,7 +212,7 @@ type TranscriptInteractionProps = Pick<
   | "onForkMessage"
   | "onFocusComposer"
   | "onAddToChat"
-  | "onCompanionPrefill"
+  | "onCompanionSelection"
 >;
 
 function createTranscriptState(): ChatThreadState {
@@ -464,18 +465,13 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
 
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
   toggleTouchMessageMeta(event);
-  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionPrefill !== "function") {
+  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionSelection !== "function") {
     return;
   }
   handleChatSelectionPointerUp(event, {
     paneId: props.paneId,
     onAddToChat: props.onAddToChat,
-    onAskSideChat: (selection) => {
-      const question = buildCompanionQuestionPrefill(selection);
-      if (question) {
-        props.onCompanionPrefill?.(question);
-      }
-    },
+    onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
   });
 }
 

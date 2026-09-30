@@ -1,4 +1,3 @@
-/** Commands for listing, adding, and removing model aliases. */
 import { formatCliCommand } from "../../cli/command-format.js";
 import { DEFAULT_MODEL_ALIASES } from "../../config/defaults.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -13,7 +12,6 @@ import {
   updateConfig,
 } from "./shared.js";
 
-/** Lists configured model aliases as JSON, plain pairs, or human-readable rows. */
 export async function modelsAliasesListCommand(
   opts: { json?: boolean; plain?: boolean },
   runtime: RuntimeEnv,
@@ -52,7 +50,6 @@ export async function modelsAliasesListCommand(
   }
 }
 
-/** Adds or replaces an alias for a resolved provider/model target. */
 export async function modelsAliasesAddCommand(
   aliasRaw: string,
   modelRaw: string,
@@ -94,7 +91,6 @@ export async function modelsAliasesAddCommand(
   runtime.log(`Alias ${alias} -> ${target}`);
 }
 
-/** Removes a configured alias by name. */
 export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: RuntimeEnv) {
   const alias = normalizeAlias(aliasRaw);
   const normalizedAlias = alias.toLowerCase();

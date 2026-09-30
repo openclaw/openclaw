@@ -35,6 +35,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   measureLaunchTurn,
+  readLaunchToolNames,
   placements,
   seedActivePlacement,
   setupWorkerTurnLauncherTest,
@@ -73,6 +74,7 @@ describe("cloud worker run ownership", () => {
           reconcileWorkspace: vi.fn(),
           stop: vi.fn(),
           measureLaunchTurn,
+          readLaunchToolNames,
           launchTurn: async (request) => {
             request.onDispatchReady?.();
             workerSignal = request.signal;

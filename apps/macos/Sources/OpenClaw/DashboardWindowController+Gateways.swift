@@ -16,10 +16,6 @@ enum DashboardGatewaysRequest: Equatable {
 extension DashboardWindowController {
     static let gatewaysMessageHandlerName = "openclawGateways"
 
-    func hasTLSParams(_ params: GatewayTLSParams?) -> Bool {
-        self.tlsParams == params
-    }
-
     func webView(
         _ webView: WKWebView,
         didReceive challenge: URLAuthenticationChallenge,
@@ -27,43 +23,11 @@ extension DashboardWindowController {
             URLSession.AuthChallengeDisposition,
             URLCredential?) -> Void)
     {
-        guard webView === self.webView,
-              challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
-        else {
+        guard webView === self.webView else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        guard let params = self.tlsParams else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        guard Self.isExpectedTLSAuthority(
-            host: challenge.protectionSpace.host,
-            port: challenge.protectionSpace.port,
-            dashboardURL: self.currentURL)
-        else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        guard let trust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
-            return
-        }
-        switch GatewayTLSServerTrust.evaluate(
-            trust: trust,
-            host: challenge.protectionSpace.host,
-            port: challenge.protectionSpace.port,
-            params: params)
-        {
-        case .accept:
-            completionHandler(.useCredential, URLCredential(trust: trust))
-        case .reject:
-            completionHandler(.cancelAuthenticationChallenge, nil)
-        }
-    }
-
-    static func isExpectedTLSAuthority(host: String, port: Int, dashboardURL: URL) -> Bool {
-        GatewayTLSAuthority(url: dashboardURL)?.matches(host: host, port: port) == true
+        self.documentHost.authenticationChallenge(challenge, completionHandler: completionHandler)
     }
 
     static func gatewaysRequest(from body: Any) -> DashboardGatewaysRequest? {
@@ -101,7 +65,8 @@ extension DashboardWindowController {
         if let payload = message.body as? [String: Any],
            payload["type"] as? String == "connection-state-changed"
         {
-            guard Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL) else { return }
+            guard ControlUIDocumentHost
+                .isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL) else { return }
             self.refreshGatewayHealth()
             return
         }
@@ -116,14 +81,15 @@ extension DashboardWindowController {
         // The recovery capability belongs to the native failure document, never a loaded Gateway page.
         if case .reconnectBrowser = request, !isSignedOutDocument { return }
         guard isSignedOutDocument ||
-            Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL) else { return }
+            ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
+        else { return }
         DashboardManager.shared.handleGatewayRequest(request, from: self)
     }
 
     func updateGatewaySnapshot(_ snapshot: DashboardGatewaySnapshot) {
         self.gatewaySnapshot = snapshot
         self.refreshNativeScripts()
-        self.webView.evaluateJavaScript(Self.scopedDashboardScript(
+        self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
             Self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: true), url: self.currentURL))
     }
 
@@ -134,7 +100,7 @@ extension DashboardWindowController {
     {
         let snapshotScript = snapshot.map { self.nativeGatewaysScriptSource(snapshot: $0, dispatch: false) } ?? ""
         userContentController.addUserScript(WKUserScript(
-            source: self.scopedDashboardScript(
+            source: ControlUIDocumentHost.scopedDashboardScript(
                 """
                 \(snapshotScript)
                 window.addEventListener('openclaw:native-gateway-health-changed', () => {

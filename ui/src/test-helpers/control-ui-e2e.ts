@@ -19,13 +19,13 @@ import type {
   UpdateAvailable,
   UpdateScheduleState,
 } from "../api/types.ts";
-import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiAttachmentFacts } from "./control-ui-attachment-fixtures.ts";
 import { createControlUiE2eBuildPublication } from "./control-ui-e2e-build-publication.ts";
 import type {
   ControlUiMockGateway,
+  ControlUiMockPresenceUser,
   ControlUiMockRequestHandler,
   MockGatewayControls,
   MockGatewayRequest,
@@ -34,14 +34,17 @@ import type {
 import { createMockGatewayControls } from "./control-ui-e2e-controls.ts";
 import {
   defaultControlUiFeatureMethods,
-  createControlUiThemeResponses,
+  createControlUiDefaultResponses,
 } from "./control-ui-e2e-defaults.ts";
 import {
   installControlUiE2ePageDiagnosticRing,
   installControlUiE2eUnhandledRejectionRing,
 } from "./control-ui-e2e-diagnostics.ts";
 import { resolveAvailableLoopbackPort } from "./control-ui-e2e-port.ts";
-import { controlUiE2eWaitTimeoutMs } from "./control-ui-e2e-readiness.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  waitForControlUiInitialRoster,
+} from "./control-ui-e2e-readiness.ts";
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { createControlUiMockResponses } from "./control-ui-mock-responses.ts";
 import { createControlUiMockSessionSubscriptions } from "./control-ui-mock-session-subscriptions.ts";
@@ -383,6 +386,8 @@ const json5BrowserSource = readFileSync(require.resolve("json5/dist/index.min.js
 export { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 
 export type ControlUiMockGatewayScenario = {
+  /** Auto-wait for sidebar rosters unless startup is held or connect fails; true overrides those skips, false disables the wait. */
+  awaitInitialRoster?: boolean;
   nativePlugins?: readonly NativeControlUiPluginFixture[];
   pluginAssetsRequireAuth?: boolean;
   attachmentMaxBytes?: number;
@@ -463,26 +468,7 @@ export type ControlUiMockGatewayScenario = {
   /** Online users included in the connect snapshot's presence list. The entry
    * flagged `self` adopts the connecting client's instanceId so presence
    * surfaces (footer facepile, who's-online roster) resolve "you". */
-  presenceUsers?: Array<{
-    self?: boolean;
-    id: string;
-    identity?: AuthenticatedUser["identity"];
-    name?: string;
-    email?: string;
-    avatarUrl?: string;
-    deviceFamily?: string;
-    host?: string;
-    ip?: string;
-    instanceId?: string;
-    lastInputSeconds?: number;
-    onlineSince?: number;
-    lastActivityAt?: number;
-    timeZone?: string;
-    mode?: string;
-    platform?: string;
-    ts?: number;
-    watchedSessions?: string[];
-  }>;
+  presenceUsers?: ControlUiMockPresenceUser[];
   /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
   repeatingSessionEvents?: {
     events: Array<{ event: "agent" | "session.observer" | "session.tool"; payload: unknown }>;
@@ -514,7 +500,7 @@ export type ControlUiMockGatewayScenario = {
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<
-  Omit<ControlUiMockGatewayScenario, "nativePlugins">
+  Omit<ControlUiMockGatewayScenario, "nativePlugins" | "awaitInitialRoster">
 >;
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
@@ -952,7 +938,7 @@ function normalizeScenario(
     sessionTranscripts: scenario.sessionTranscripts ?? {},
     maxPayload: scenario.maxPayload ?? DEFAULT_MOCK_MAX_PAYLOAD_BYTES,
     mainSessionKey,
-    methodResponses: { ...createControlUiThemeResponses(), ...scenario.methodResponses },
+    methodResponses: { ...createControlUiDefaultResponses(scenario), ...scenario.methodResponses },
     webSocketPassthroughPrefixes: scenario.webSocketPassthroughPrefixes ?? [],
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
@@ -1581,18 +1567,9 @@ function installControlUiMockGateway(
     ) {
       sessions.trackRun(params.sessionKey, response.runId, "running");
     }
-    if (
-      method === "chat.abort" &&
-      isRecord(params) &&
-      typeof params.sessionKey === "string" &&
-      isRecord(response) &&
-      response.aborted === true
-    ) {
-      return sessions.abortRuns(
-        params.sessionKey,
-        typeof params.runId === "string" ? params.runId : undefined,
-        response,
-      );
+    const abortReceipt = sessions.commitAbort(method, params, response);
+    if (abortReceipt) {
+      return abortReceipt;
     }
     if (
       method === "sessions.catalog.startTerminal" &&
@@ -2097,7 +2074,9 @@ function installControlUiMockGateway(
       case "artifacts.download":
         return null;
       case "sessions.resolve":
-        return sessions.resolve(isRecord(params) ? params : {});
+      case "sessions.describe":
+      case "session.members.listEvidence":
+        return sessions.readResponse(method, params, scenario);
       case "chat.history":
       case "chat.startup": {
         const resolution =
@@ -2132,7 +2111,10 @@ function installControlUiMockGateway(
         return {
           ...(resolution ? { resolution } : {}),
           sessionId: row.sessionId,
-          ...(info || override ? { sessionInfo: { ...info, ...override } } : {}),
+          // Committed lifecycle writes, such as Stop, outrank the static scenario row.
+          ...(info || override
+            ? { sessionInfo: sessions.list([{ ...info, ...override }])[0] }
+            : {}),
           thinkingLevel: null,
           ...transcript,
           ...(transcriptRun ? { inFlightRun } : {}),
@@ -2145,11 +2127,6 @@ function installControlUiMockGateway(
               }
             : {}),
         };
-      }
-      case "sessions.describe": {
-        const key =
-          isRecord(params) && typeof params.key === "string" ? params.key : scenario.sessionKey;
-        return { session: sessions.sessionInfo(key) ?? null };
       }
       case "chat.metadata":
         return {
@@ -2628,11 +2605,26 @@ function installControlUiMockGateway(
       if (this.readyState !== MockWebSocket.OPEN) {
         return;
       }
+      if (isRecord(frame) && frame.type === "res" && frame.ok === true) {
+        const request = requests.findLast((candidate) => candidate.id === frame.id);
+        if (
+          request?.method === "sessions.list" &&
+          isRecord(request.params) &&
+          request.params.includeGlobal === true &&
+          !request.params.spawnedBy
+        ) {
+          exposed.initialRosterDelivered = true;
+        }
+      }
       this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
     }
   }
 
   const exposed: ControlUiMockGateway = {
+    get online() {
+      return online;
+    },
+    initialRosterDelivered: false,
     closeLatest(code, reason) {
       MockWebSocket.latest?.close(code ?? 1006, reason ?? "mock close");
     },
@@ -2892,6 +2884,42 @@ export async function installMockGateway(
   );
   await installControlUiE2eUnhandledRejectionRing(page);
   await page.addInitScript({ content: createControlUiMockGatewayInitScript(normalizedScenario) });
+  const rosterGates = new Set([
+    "connect",
+    "agents.list",
+    "sessions.resolve",
+    "chat.startup",
+    "chat.history",
+    "sessions.list",
+    "sessions.messages.subscribe",
+  ]);
+  const connectResponse = normalizedScenario.methodResponses.connect;
+  const connectFails =
+    connectResponse !== null &&
+    typeof connectResponse === "object" &&
+    "__mockError" in connectResponse;
+  if (
+    scenario.awaitInitialRoster ??
+    (!connectFails &&
+      ![...normalizedScenario.heldMethods, ...normalizedScenario.deferredMethods].some((method) =>
+        rosterGates.has(method),
+      ))
+  ) {
+    // Startup renders the selected descriptor before releasing the automatic roster.
+    // Keep navigation's Response, but give ordinary scenarios the fully rendered roster.
+    const goto = page.goto.bind(page);
+    const reload = page.reload.bind(page);
+    page.goto = async (...args) => {
+      const response = await goto(...args);
+      await waitForControlUiInitialRoster(page);
+      return response;
+    };
+    page.reload = async (...args) => {
+      const response = await reload(...args);
+      await waitForControlUiInitialRoster(page);
+      return response;
+    };
+  }
   return createMockGatewayControls(
     page,
     normalizedScenario.sessionKey,

@@ -145,8 +145,12 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
 
 function cloneRegisteredAgentDatabases(
   entries: readonly OpenClawRegisteredAgentDatabase[],
+  options: AgentDatabaseRegistryListOptions,
 ): OpenClawRegisteredAgentDatabase[] {
-  return entries.map((entry) => ({ ...entry }));
+  const cloned = entries.map((entry) => ({ ...entry }));
+  return options.includeIncompatibleSchemaVersions
+    ? cloned
+    : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
 }
 
 function hasUnavailableMissingSqlitePath(pathname: string): boolean {
@@ -246,10 +250,7 @@ export function listOpenClawRegisteredAgentDatabases(
     { ...options, includeIncompatibleSchemaVersions: true },
     false,
   ));
-  const cloned = cloneRegisteredAgentDatabases(entries);
-  return options.includeIncompatibleSchemaVersions
-    ? cloned
-    : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
+  return cloneRegisteredAgentDatabases(entries, options);
 }
 
 /** Capture authority now, but activate the canonical memo only if discovery needs it. */
@@ -319,15 +320,10 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
           }
           memo.entries ??= result?.entries ?? [];
         }
-        const entries = cloneRegisteredAgentDatabases(memo.entries);
+        const entries = cloneRegisteredAgentDatabases(memo.entries, options);
         assertCurrent();
         return {
-          result: {
-            status: "available",
-            entries: options.includeIncompatibleSchemaVersions
-              ? entries
-              : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION),
-          },
+          result: { status: "available", entries },
           assertCurrent,
           followRegistration,
         };

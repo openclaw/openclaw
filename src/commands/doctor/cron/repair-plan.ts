@@ -1,5 +1,6 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
 import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
@@ -7,10 +8,6 @@ import {
 import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
-
-function pluralize(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
 
 function formatJobNameList(names: string[]): string {
   const preview = names.slice(0, 5).map((name) => `\`${name}\``);
@@ -104,7 +101,6 @@ export function formatIncompleteInheritedAuthorityAdvisory(names: string[]): str
   ].join("\n");
 }
 
-/** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const descriptions: Record<string, string> = {
     jobId: "still uses legacy `jobId`",
@@ -174,7 +170,6 @@ export function mergeLegacyCronJobs(params: {
   return { jobs: merged, importedCount };
 }
 
-/** Attach runtime SQLite state columns back onto a config-defined cron job row. */
 export function mergeRuntimeEntryIntoConfigJob(params: {
   job: Record<string, unknown>;
   runtimeEntry?: { updatedAtMs?: number; state?: Record<string, unknown> };

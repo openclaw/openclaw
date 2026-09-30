@@ -1,8 +1,3 @@
-/**
- * Channel allowlist matching primitives.
- *
- * Compiles normalized allowlists and records match metadata for diagnostics.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

@@ -1,4 +1,3 @@
-// Session and transcript event subscription handlers.
 import {
   ErrorCodes,
   errorShape,
@@ -155,7 +154,12 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
             const rollbackSubscription = context.subscribeSessionMessageEvents(
               connId,
               subscriptionKey,
-              { includeApprovals: true, provisional: true },
+              {
+                includeApprovals: true,
+                provisional: true,
+                mode: p.mode,
+                subscriptionId: p.subscriptionId,
+              },
             );
             try {
               prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
@@ -210,6 +214,8 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           } else {
             const rollback = context.subscribeSessionMessageEvents(connId, subscriptionKey, {
               provisional: true,
+              mode: p.mode,
+              subscriptionId: p.subscriptionId,
             });
             try {
               read?.assertCurrent();
@@ -225,6 +231,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
             {
               subscribed: true,
               key: canonicalKey,
+              agentId: requestedAgentId,
               ...(p.includeApprovals === true
                 ? {
                     approvalReplay,
@@ -235,7 +242,11 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        respond(true, { subscribed: false, key: canonicalKey }, undefined);
+        respond(
+          true,
+          { subscribed: false, key: canonicalKey, agentId: requestedAgentId },
+          undefined,
+        );
       } catch (error) {
         if (!(error instanceof SessionMutationAuthorizationChangedError)) {
           throw error;
@@ -271,7 +282,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       });
       const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
       if (connId) {
-        context.unsubscribeSessionMessageEvents(connId, subscriptionKey);
+        context.unsubscribeSessionMessageEvents(connId, subscriptionKey, p.subscriptionId);
       }
       respond(true, { subscribed: false, key: canonicalKey }, undefined);
     },

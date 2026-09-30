@@ -171,6 +171,7 @@ function renderSidebarSessionIndicators(
   host: SessionListHost,
   session: SidebarRecentSession,
   display?: CatalogBackingSessionDisplay,
+  icon?: TemplateResult,
 ) {
   const team = host.sidebarAgentsMode === "roster";
   const ownAttention = session.ownAttention ?? session.attention;
@@ -239,6 +240,7 @@ function renderSidebarSessionIndicators(
     ownerViewing,
     channelAvatarAuth,
     team,
+    icon,
   );
   const stateDescription = describeSessionState(session);
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
@@ -326,8 +328,9 @@ export function renderRecentSession(params: {
   session: SidebarRecentSession;
   display?: CatalogBackingSessionDisplay;
   listItem?: boolean;
+  icon?: TemplateResult;
 }) {
-  const { host, session, display, listItem = true } = params;
+  const { host, session, display, listItem = true, icon } = params;
   const pinAccess = host.readSessionMutationAccess({
     method: "sessions.patch",
     params: { key: session.key, pinned: !session.pinned },
@@ -360,14 +363,13 @@ export function renderRecentSession(params: {
   const { subtitle, narration, toolName } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,
-    displaySubtitle: display?.subtitle,
     sidebarLiveActivity: host.sidebarLiveActivity,
     showPreview: host.sessionsShowPreview,
     narrationLine: host.sidebarNarrationLines.get(session.key),
     toolActivity,
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
   });
-  const indicators = renderSidebarSessionIndicators(host, session, display);
+  const indicators = renderSidebarSessionIndicators(host, session, display, icon);
   const { running, stateId, metaId, pullRequest, persistentIndicator, childrenExpanded } =
     indicators;
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
@@ -638,8 +640,9 @@ export function renderSessionTree(params: {
   host: SessionListHost;
   session: SidebarRecentSession;
   listItem?: boolean;
+  icon?: TemplateResult;
 }): TemplateResult {
-  const { host, session, listItem = true } = params;
+  const { host, session, listItem = true, icon } = params;
   const expanded = host.isSessionChildrenExpanded(session);
   const visibleChildren = visibleSessionChildren({
     session,
@@ -651,7 +654,7 @@ export function renderSessionTree(params: {
     data-session-tree=${session.key}
     role=${ifDefined(listItem ? "listitem" : undefined)}
   >
-    ${renderRecentSession({ host, session, listItem: false })}
+    ${renderRecentSession({ host, session, listItem: false, icon })}
     ${
       expanded
         ? html`<div class="sidebar-session-tree__children">

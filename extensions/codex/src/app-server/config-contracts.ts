@@ -16,7 +16,6 @@ export {
   type CodexPluginMarketplaceName,
   type OpenClawExecApprovalFloorsForCodexAppServer,
   type OpenClawExecMode,
-  type OpenClawExecPolicy,
   type OpenClawExecPolicyForCodexAppServer,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,

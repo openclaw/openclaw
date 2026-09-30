@@ -1,11 +1,11 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isOpenAIResponsesReplayContext } from "./openai-responses-compaction-replay.js";
 import {
   responsesContinuationPrefixFingerprint,
   responsesContinuationRequestFingerprint,
   type ResponsesContinuationRequest,
 } from "./openai-responses-continuation.js";
+import { readResponsesInputReplayState } from "./openai-responses-input-replay.js";
 import {
   isConfigurationUpdate,
   replayResponsesReasoningUpdates,
@@ -13,16 +13,11 @@ import {
 } from "./openai-responses-reasoning-update.js";
 import {
   buildProviderReplayContext,
+  isProviderReplayContext,
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
 
 type ReplayIdentity = { sessionId?: string; authProfileId?: string };
-
-function inputReplay(message: AssistantMessage) {
-  const value =
-    "openclawResponsesInputReplay" in message ? message.openclawResponsesInputReplay : undefined;
-  return isRecord(value) ? value : undefined;
-}
 
 /** Save only admitted settings and hashes, never another copy of the conversation. */
 export function recordResponsesReasoningState(
@@ -53,7 +48,9 @@ export function recordResponsesReasoningState(
     prefixHash: responsesContinuationPrefixFingerprint(request.input, output),
     requestHash: responsesContinuationRequestFingerprint(request),
   };
-  Object.assign(message, { openclawResponsesInputReplay: { ...inputReplay(message), reasoning } });
+  Object.assign(message, {
+    openclawResponsesInputReplay: { ...readResponsesInputReplayState(message), reasoning },
+  });
 }
 
 /** A cold transport can replay controls, but cannot resurrect a server response handle. */
@@ -64,13 +61,13 @@ export function restoreResponsesReasoningState(
   request: ResponsesContinuationRequest,
 ): ResponsesContinuationRequest {
   const latest = context.messages.findLast((message) => message.role === "assistant");
-  const state = latest ? inputReplay(latest)?.reasoning : undefined;
+  const state = latest ? readResponsesInputReplayState(latest)?.reasoning : undefined;
   if (!isRecord(state)) {
     return request;
   }
   const { effort, inputLength, outputLength, controls, prefixHash, requestHash } = state;
   if (
-    !isOpenAIResponsesReplayContext(state) ||
+    !isProviderReplayContext(state) ||
     !providerReplayContextMatches(state, buildProviderReplayContext(model, identity)) ||
     latest?.providerReplay ||
     !supportsResponsesReasoningUpdate(request) ||

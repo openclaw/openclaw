@@ -11,6 +11,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import MarkdownIt from "markdown-it";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -573,7 +574,10 @@ export function renderTranscripts(props: TranscriptsViewProps) {
   const selected = Boolean(new URLSearchParams(props.search).get("selector"));
   const captureTarget = SETTINGS_SEARCH_TARGETS.meetingCapture;
   return html`<section class="transcripts-workspace">
-    <header class="content-header content-header--page">
+    <header
+      class="content-header content-header--page"
+      ${shellLayoutTraits({ toolbarHeader: true })}
+    >
       <div>
         <h1 class="page-title">${t("tabs.meetings")}</h1>
         <p class="page-sub">${t("subtitles.meetings")}</p>

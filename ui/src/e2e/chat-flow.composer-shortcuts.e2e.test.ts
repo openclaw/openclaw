@@ -320,7 +320,9 @@ suite.define(() => {
             ? "Steer ⏎ · Queue ⌘/Ctrl+Enter"
             : "Queue ⏎ · Steer ⌘/Ctrl+Enter";
         const tooltipContent = primary.locator("..").locator("wa-tooltip .tooltip-content");
-        await expect.poll(() => tooltipContent.textContent()).toBe(tooltip);
+        await expect
+          .poll(async () => (await tooltipContent.textContent())?.replace(/\s+/gu, ""))
+          .toBe(tooltip.replace(/\s+/gu, ""));
         await tooltipContent.waitFor({ state: "visible" });
         await composer.press("Control+Enter");
 

@@ -1,6 +1,6 @@
 import { svg, type TemplateResult } from "lit";
 import { githubMark } from "./github-mark.ts";
-import { strokeIcon, toolIcons } from "./icons-tools.ts";
+import { keyboardIconShapes, strokeIcon, toolIcons } from "./icons-tools.ts";
 
 // Lucide-style SVG icons rendered through the shared strokeIcon() shell,
 // which carries the stroke presentation attributes inline (see icons-tools.ts).
@@ -14,6 +14,9 @@ export const icons = {
     svg`<path d="m12 3 10 5-10 5L2 8Z"/><path d="m2 12 10 5 10-5M2 16l10 5 10-5"/>`,
   ),
   // Navigation icons
+  messageCircle: strokeIcon(svg`<path
+    d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"
+  />`),
   messageSquare: strokeIcon(svg` <path
     d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
   />`),
@@ -321,23 +324,20 @@ export const icons = {
     <circle cx="15" cy="6" r="1.1" fill="currentColor" stroke="none" />
     <circle cx="15" cy="12" r="1.1" fill="currentColor" stroke="none" />
     <circle cx="15" cy="18" r="1.1" fill="currentColor" stroke="none" />`),
-  arrowDown: strokeIcon(svg`<path d="M12 5v14m7-7-7 7-7-7" />`),
-  arrowUp: strokeIcon(svg`<path d="M12 19V5m-7 7 7-7 7 7" />`),
+  arrowDown: strokeIcon(keyboardIconShapes["↓"]),
+  arrowUp: strokeIcon(keyboardIconShapes["↑"]),
   audioLines: strokeIcon(svg`<path d="M2 10v3" />
     <path d="M6 6v11" />
     <path d="M10 3v18" />
     <path d="M14 8v7" />
     <path d="M18 5v13" />
     <path d="M22 10v3" />`),
-  chevronUp: strokeIcon(svg`<path d="m18 15-6-6-6 6" />`),
+  chevronUp: strokeIcon(keyboardIconShapes["⌃"]),
   chevronsUpDown: strokeIcon(svg`<path d="m7 15 5 5 5-5" />
     <path d="m7 9 5-5 5 5" />`),
-  arrowRight: strokeIcon(svg` <path d="M5 12h14" />
-    <path d="m12 5 7 7-7 7" />`),
-  arrowLeft: strokeIcon(svg` <path d="m12 19-7-7 7-7" />
-    <path d="M19 12H5" />`),
-  cornerDownLeft: strokeIcon(svg` <polyline points="9 10 4 15 9 20" />
-    <path d="M20 4v7a4 4 0 0 1-4 4H4" />`),
+  arrowRight: strokeIcon(keyboardIconShapes["→"]),
+  arrowLeft: strokeIcon(keyboardIconShapes["←"]),
+  cornerDownLeft: strokeIcon(keyboardIconShapes["⏎"]),
   cornerDownRight: strokeIcon(svg` <polyline points="15 10 20 15 15 20" />
     <path d="M4 4v7a4 4 0 0 0 4 4h12" />`),
   copy: strokeIcon(svg` <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />

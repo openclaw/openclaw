@@ -31,7 +31,7 @@ import {
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
-import { renderWelcomeState } from "./chat-welcome.ts";
+import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
@@ -72,40 +72,45 @@ function renderTranscriptShell(
         height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
       }
     : null;
-  const transcriptContents =
-    props.routeLoadingSkeleton && projection.showLoadingSkeleton
-      ? renderLoadingState()
-      : projection.showLoadingSkeleton || projection.isEmpty
-        ? html`
-            <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
-              ${historySentinel}
-              ${
-                projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
-                  ? historyHeader.template
-                  : nothing
-              }
-              ${
-                projection.showLoadingSkeleton
-                  ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
-                  : nothing
-              }
-              ${
-                projection.isEmpty && !projection.searchOpen
-                  ? renderWelcomeState({ ...props, onModelSetup: undefined })
-                  : nothing
-              }
-              ${
-                projection.isEmpty && projection.searchOpen
-                  ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
-                  : nothing
-              }
-            </div>
-          `
-        : projection.renderRows(historySentinel, historyHeader);
+  const routeLoading = props.routeLoadingSkeleton && projection.showLoadingSkeleton;
+  const commentPins = props.commentAttachments?.some(
+    (attachment) => attachment.selectionAnnotation,
+  );
+  const transcriptContents = routeLoading
+    ? renderLoadingState()
+    : projection.showLoadingSkeleton || projection.isEmpty
+      ? html`
+          <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
+            ${historySentinel}
+            ${
+              projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
+                ? historyHeader.template
+                : nothing
+            }
+            ${
+              projection.showLoadingSkeleton
+                ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+                : nothing
+            }
+            ${
+              projection.isEmpty && !projection.searchOpen
+                ? renderWelcomeState({ ...props, onModelSetup: undefined })
+                : nothing
+            }
+            ${
+              projection.isEmpty && projection.searchOpen
+                ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
+                : nothing
+            }
+          </div>
+        `
+      : projection.renderRows(historySentinel, historyHeader);
   return html`
     <div class="chat-thread-viewport">
       <div
-        class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
+        class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""} ${
+          routeLoading ? "chat-thread--route-loading" : ""
+        } ${commentPins ? "chat-thread--comment-pins" : ""}"
         ${markdownBlocks(props.transcriptVisible ?? true)}
         ${linkReaderPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected))}
         ${ref((element) => {
@@ -169,11 +174,12 @@ function renderTranscriptShell(
         ${renderChatPositionRail({
           positions: projection.positionIndex,
           transcript,
+          assistant: { ...resolveAssistantDisplayAvatar(props), name: props.assistantName },
           requestUpdate: props.onRequestUpdate ?? (() => {}),
         })}
         ${transcriptContents}
         ${
-          props.commentAttachments?.some((attachment) => attachment.selectionAnnotation)
+          commentPins
             ? html`<openclaw-chat-comment-pins
                 .attachments=${props.commentAttachments}
                 .sessionKey=${props.sessionKey}

@@ -1,10 +1,6 @@
 import type { CronJob } from "../types.js";
 import { emit, type CronServiceState } from "./state.js";
 
-function durableNextRunsFromJobs(jobs: readonly CronJob[]) {
-  return new Map(jobs.map((job) => [job.id, job.state.nextRunAtMs] as const));
-}
-
 export function publishDurableNextRunChanges(params: {
   state: CronServiceState;
   storeJobs: readonly CronJob[];
@@ -12,7 +8,9 @@ export function publishDurableNextRunChanges(params: {
   suppressScheduledJobId?: string;
 }) {
   const previous = params.state.durableNextRunAtMsByJobId;
-  const next = params.stateOnly ? new Map(previous) : durableNextRunsFromJobs(params.storeJobs);
+  const next = params.stateOnly
+    ? new Map(previous)
+    : new Map(params.storeJobs.map((job) => [job.id, job.state.nextRunAtMs] as const));
 
   if (params.stateOnly) {
     const currentJobsById = new Map(params.storeJobs.map((job) => [job.id, job] as const));

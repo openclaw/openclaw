@@ -337,7 +337,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
     // Use registry cancellation without aborting the Gateway signal: the successor
     // ownership fence, not a generic aborted-signal check, must stop dispatch.
     expect(
-      markSubagentRunTerminated({
+      await markSubagentRunTerminated({
         runId: proof.runId,
         reason: "killed",
         suppressTaskDelivery: true,

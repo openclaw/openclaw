@@ -35,6 +35,11 @@ export function expectSubagentFollowupReactivation(params: {
       runtimeMs: 10,
     }),
     new Set(["conn-1"]),
-    { agentId: "main", dropIfSlow: true, sessionKeys: [params.childSessionKey] },
+    {
+      agentId: "main",
+      dropIfSlow: true,
+      sessionKeys: [params.childSessionKey],
+      prepareSessionProjection: expect.any(Function),
+    },
   );
 }

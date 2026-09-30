@@ -12,6 +12,7 @@ scenario:
   successCriteria:
     - image_generate appears in the effective tool inventory.
     - Agent triggers native image_generate.
+    - Persisted history records exactly one successful generation action, independently of status queries.
     - Tool output returns a saved MEDIA path and the file exists.
     - The generated-media completion produces exactly one outbound channel delivery containing the saved PNG bytes.
   docsRefs:
@@ -41,7 +42,7 @@ flow:
           args:
             - ref: env
             - Image generation
-            - agent:qa:image-generate
+            - expr: "`agent:qa:image-generate:${randomUUID()}`"
         - call: readEffectiveTools
           saveAs: tools
           args:
@@ -63,14 +64,35 @@ flow:
                 expr: config.prompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 45000)
+        - set: mediaCompletionDeadline
+          value:
+            expr: Date.now() + liveTurnTimeoutMs(env, 45000)
         - call: waitForOutboundMessage
           saveAs: outbound
           args:
             - ref: state
             - lambda:
                 params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator'"
-            - expr: liveTurnTimeoutMs(env, 45000)
+                expr: "candidate.conversation.id === 'qa-operator' && candidate.attachments?.length > 0"
+            - expr: Math.max(0, mediaCompletionDeadline - Date.now())
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: >-
+                  await (async () => {
+                    const result = await env.gateway.call('tools.invoke', {
+                      name: 'image_generate', args: { action: 'status' }, sessionKey, agentId: 'qa'
+                    });
+                    const details = result.output?.details;
+                    if (result.ok !== true || result.toolName !== 'image_generate'
+                        || result.output?.isError === true || details?.action !== 'status'
+                        || typeof details.active !== 'boolean') {
+                      throw new Error('image generation status could not establish completion');
+                    }
+                    return details.active ? undefined : true;
+                  })()
+            - expr: Math.max(0, mediaCompletionDeadline - Date.now())
         - assert:
             expr: "!env.mock || ((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))?.plannedToolName === 'image_generate')"
             message:
@@ -99,32 +121,62 @@ flow:
           saveAs: generatedImageBytes
           args:
             - ref: generatedPath
-        - call: sleep
-          args:
-            - 3000
-        - set: outboundMessages
-          value:
-            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator')"
-        - assert:
-            expr: >-
-              outboundMessages.length === 1
-              && Array.isArray(outboundMessages[0].attachments)
-              && outboundMessages[0].attachments.length === 1
-              && outboundMessages[0].attachments[0].kind === 'image'
-              && outboundMessages[0].attachments[0].mimeType === 'image/png'
-              && typeof outboundMessages[0].attachments[0].contentBase64 === 'string'
-              && Buffer.from(outboundMessages[0].attachments[0].contentBase64, 'base64').equals(generatedImageBytes)
-            message:
-              expr: "`expected exactly one generated-image delivery with bytes matching ${generatedPath}; saw ${outboundMessages.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-operator' })}`"
         - call: readSessionTranscriptSummary
           saveAs: generatedImageTranscript
           args:
             - ref: env
             - ref: sessionKey
+        - set: imageHistory
+          value:
+            expr: "await env.gateway.call('chat.history', { sessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) })"
+        - set: imageToolMessages
+          value:
+            expr: "projectQaToolMessages(imageHistory.messages ?? [])"
+        - set: generationCalls
+          value:
+            expr: >-
+              imageToolMessages.flatMap((message, messageIndex) =>
+                message.role === 'assistant' && Array.isArray(message.content)
+                  ? message.content.flatMap((item) =>
+                      ['toolCall', 'toolUse', 'tool_use'].includes(item?.type)
+                      && item.name === 'image_generate'
+                      && typeof item.id === 'string' && item.id.length > 0
+                      && (normalizeLowercaseStringOrEmpty((item.arguments ?? item.input)?.action) || 'generate') === 'generate'
+                        ? [{ callId: item.id, messageIndex }] : [])
+                  : [])
+        - set: completedGenerations
+          value:
+            expr: >-
+              generationCalls.filter((call) => imageToolMessages.some((message, messageIndex) =>
+                messageIndex > call.messageIndex && message.role === 'toolResult'
+                && message.toolName === 'image_generate' && message.toolCallId === call.callId
+                && message.isError === false))
+        - set: outboundMessages
+          value:
+            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator')"
+        - set: mediaDeliveries
+          value:
+            expr: "outboundMessages.filter((candidate) => candidate.attachments?.length > 0)"
         - assert:
             expr: >-
-              generatedImageTranscript.successfulToolCallCounts.image_generate === 1
+              mediaDeliveries.length === 1
+              && !mediaDeliveries[0].deleted
+              && mediaDeliveries[0].attachments.length === 1
+              && mediaDeliveries[0].attachments[0].kind === 'image'
+              && mediaDeliveries[0].attachments[0].mimeType === 'image/png'
+              && typeof mediaDeliveries[0].attachments[0].contentBase64 === 'string'
+              && Buffer.from(mediaDeliveries[0].attachments[0].contentBase64, 'base64').equals(generatedImageBytes)
+            message:
+              expr: "`expected exactly one generated-image delivery with bytes matching ${generatedPath}; saw ${mediaDeliveries.length} media deliveries in ${outboundMessages.length} messages; transcript=${formatTransportTranscript(state, { conversationId: 'qa-operator' })}`"
+        - set: persistedReply
+          value:
+            expr: "(await qaImport('openclaw/plugin-sdk/channel-outbound')).createOutboundPayloadPlan([{ text: generatedImageTranscript.finalText }])[0]?.parts.text"
+        - assert:
+            expr: >-
+              completedGenerations.length === 1
               && typeof generatedImageTranscript.finalText === 'string'
               && generatedImageTranscript.finalText.trim().length > 0
-            message: generated image completion was not persisted to the requester session
+              && persistedReply === mediaDeliveries[0].text
+            message:
+              expr: "`generated image completion was not persisted to the requester session: ${JSON.stringify({ completedGenerations: completedGenerations.length, persistedReply, deliveredReply: mediaDeliveries[0].text })}`"
       detailsExpr: "`${outbound.text}\\nIMAGE_PATH:${generatedPath}`"

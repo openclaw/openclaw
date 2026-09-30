@@ -1,5 +1,3 @@
-import crypto from "node:crypto";
-import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import {
   readDeferredPluginMigrations,
   readDeferredPluginMigrationsAsync,
@@ -22,7 +20,6 @@ import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
 import { isInvalidConfigError } from "./io.invalid-config.js";
 import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
-import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import {
   resolveConfigWidePluginMetadataSnapshot,
   resolveConfigWidePluginMetadataSnapshotAsync,
@@ -34,8 +31,6 @@ import {
   resolveConfigIncludesForRead,
   resolveConfigPathForDeps,
 } from "./io.read-helpers.js";
-import type { NormalizedConfigIoDeps } from "./io.read.types.js";
-import { autoOwnerDisplaySecretByPath } from "./io.state.js";
 import type {
   ConfigIoFactoryOptions,
   ConfigRecoveryCandidate,
@@ -77,47 +72,12 @@ type ValidationPluginMetadataSnapshotLoader = {
   getSnapshot: () => PluginMetadataSnapshot | undefined;
 };
 
-export type ConfigIoContext = {
-  deps: NormalizedConfigIoDeps;
-  pathResolution: { env: NodeJS.ProcessEnv; homedir?: () => string };
-  configPath: string;
-  options: ConfigIoFactoryOptions;
-  transformRecoveryCandidate?: ConfigRecoveryCandidateTransform;
-  resolveDeferredPluginMigrations: () => readonly DeferredPluginMigration[];
-  resolveDeferredPluginMigrationsAsync: () => Promise<readonly DeferredPluginMigration[]>;
-  observeLoadConfigSnapshot: (snapshot: ConfigFileSnapshot) => ConfigFileSnapshot;
-  observeLoadConfigSnapshotAsync: (
-    snapshot: ConfigFileSnapshot,
-    assertCurrent?: () => void,
-  ) => Promise<ConfigFileSnapshot>;
-  finalizeLoadedRuntimeConfig: (config: OpenClawConfig) => OpenClawConfig;
-  finalizeLoadedRuntimeConfigAsync: (
-    config: OpenClawConfig,
-    metadata: ValidationPluginMetadataSnapshotLoader,
-    assertCurrent?: () => void,
-  ) => Promise<OpenClawConfig>;
-  createValidationPluginMetadataSnapshotLoader: (params: {
-    env: NodeJS.ProcessEnv;
-    allowCurrentPluginMetadata?: boolean;
-  }) => ValidationPluginMetadataSnapshotLoader;
-  resolveRuntimePreflightSourceConfig: (
-    candidate: OpenClawConfig,
-    includeFileHashes?: Record<string, string>,
-    includeFileTargets?: Record<string, string>,
-    baseEnv?: NodeJS.ProcessEnv,
-  ) => OpenClawConfig;
-  prepareRecoveryBackupCandidateAsync: (
-    candidate: ConfigRecoveryCandidate,
-  ) => Promise<ConfigRecoveryCandidatePreparation>;
-  prepareRecoveryBackupCandidate: (
-    candidate: ConfigRecoveryCandidate,
-  ) => ConfigRecoveryCandidatePreparation;
-};
+export type ConfigIoContext = ReturnType<typeof createConfigIoContext>;
 
 export function createConfigIoContext(
   options: ConfigIoFactoryOptions = {},
   transformRecoveryCandidate?: ConfigRecoveryCandidateTransform,
-): ConfigIoContext {
+) {
   const deps = normalizeConfigIoDeps(options);
   const configPath = resolveConfigPathForDeps(deps);
   // The normalized default homedir already applies OPENCLAW_HOME. Path
@@ -213,19 +173,7 @@ export function createConfigIoContext(
         timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
       });
     }
-    const pendingValue = autoOwnerDisplaySecretByPath.get(configPath);
-    const { config: resolvedConfig, generatedSecret } = ensureOwnerDisplaySecret(
-      cfg,
-      () => pendingValue ?? crypto.randomBytes(32).toString("hex"),
-    );
-    const finalized = applyConfigOverrides(
-      retainGeneratedOwnerDisplaySecret({
-        config: resolvedConfig,
-        configPath,
-        generatedSecret,
-        state: { pendingByPath: autoOwnerDisplaySecretByPath },
-      }),
-    );
+    const finalized = applyConfigOverrides(cfg);
     const inherited = inheritLegacyDefaultAgentId(cfg, finalized);
     copyConfigResolutionFacts(cfg, inherited);
     return inherited;

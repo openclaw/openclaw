@@ -53,7 +53,7 @@ it.each(["closed-scope", "released-source"] as const)(
       );
       expect(configuredFactory).not.toHaveBeenCalled();
       expect(fallbackFactory).not.toHaveBeenCalled();
-      expect(listContextEngineQuarantines()).toEqual([]);
+      expect(await listContextEngineQuarantines()).toEqual([]);
       expect(log).not.toHaveBeenCalled();
       if (mode === "closed-scope") {
         // The same registration remains usable by a fresh caller, without reactivation.
@@ -87,7 +87,7 @@ it("still quarantines a factory that itself throws the host admission error text
   expect((await resolve()).info.id).toBe("legacy");
   expect((await resolve()).info.id).toBe("legacy");
   expect(factory).toHaveBeenCalledOnce();
-  expect(listContextEngineQuarantines()).toEqual([
+  expect(await listContextEngineQuarantines()).toEqual([
     expect.objectContaining({ engineId: selectedId, operation: "factory" }),
   ]);
 });
@@ -146,13 +146,13 @@ it.each(["reason", "wrapped-reason", "abort-error", "unrelated-error"] as const)
       const outcome = await result;
       if (mode === "unrelated-error") {
         expect(fallback).toHaveBeenCalledOnce();
-        expect(listContextEngineQuarantines()).toMatchObject([
+        expect(await listContextEngineQuarantines()).toMatchObject([
           { engineId: "cancelled-factory", operation: "factory", reason: failure.message },
         ]);
       } else {
         expect(outcome).toEqual({ error: failure });
         expect(fallback).not.toHaveBeenCalled();
-        expect(listContextEngineQuarantines()).toEqual([]);
+        expect(await listContextEngineQuarantines()).toEqual([]);
       }
       if ("engine" in outcome) {
         await outcome.engine.dispose?.();

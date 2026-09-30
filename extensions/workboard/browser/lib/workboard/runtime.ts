@@ -125,9 +125,7 @@ function createDefaultState(): WorkboardUiState {
     collapsedStatuses: new Set(),
     expandedEmptyStatuses: new Set(),
     lastRefreshAt: null,
-    lastRefreshStartedAt: null,
     lastRefreshError: null,
-    lastRefreshSource: null,
     draftOpen: false,
     draftDiscardOpen: false,
     draftSaving: false,
@@ -154,7 +152,6 @@ function createDefaultState(): WorkboardUiState {
     draggedCardId: null,
     dragOverStatus: null,
     dragBeforeCardId: null,
-    capturingSessionKeys: new Set(),
   };
 }
 
@@ -178,10 +175,5 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 }
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
-  return Boolean(
-    state.bulkSaving ||
-    state.draftSaving ||
-    state.busyCardIds.size ||
-    state.capturingSessionKeys.size,
-  );
+  return Boolean(state.bulkSaving || state.draftSaving || state.busyCardIds.size);
 }

@@ -67,3 +67,22 @@ export function isRequesterSettleWakeForRun(params: {
     }).runId
   );
 }
+
+/** Immutable run and requester bindings, distinct from mutable wake progress. */
+export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
+  return {
+    runId: entry.runId,
+    createdAt: entry.createdAt,
+    generation: entry.generation,
+    taskRunId: entry.taskRunId,
+    childSessionKey: entry.childSessionKey,
+    requesterSessionKey: entry.requesterSessionKey,
+    requesterAgentId: entry.requesterAgentId,
+    requesterStorePath: entry.requesterStorePath,
+    controllerSessionKey: entry.controllerSessionKey,
+    controllerStorePath: entry.controllerStorePath,
+    requesterTurnRunId: entry.requesterTurnRunId,
+    completionRequesterSessionId: entry.completionRequesterSessionId,
+    completionRequesterLifecycleRevision: entry.completionRequesterLifecycleRevision,
+  };
+}

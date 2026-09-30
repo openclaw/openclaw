@@ -7,19 +7,15 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.js";
-
-type ProviderModelRef = {
-  provider: string;
-  model: string;
-};
+import type { ModelRef } from "./model-ref-shared.js";
 
 /** Resolve the first configured provider/model that can replace a missing default. */
 export function resolveConfiguredProviderFallback(params: {
   cfg: Pick<OpenClawConfig, "models">;
   defaultProvider: string;
   defaultModel: string | undefined;
-  excludedModel?: ProviderModelRef;
-}): ProviderModelRef | null {
+  excludedModel?: ModelRef;
+}): ModelRef | null {
   const configuredProviders = params.cfg.models?.providers;
   if (!configuredProviders || typeof configuredProviders !== "object") {
     return null;

@@ -25,6 +25,7 @@ import type {
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
+import { publishModelCatalogPair } from "./lib/publish-model-catalog-files.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 type ModelCatalogManifestInput = {
@@ -1194,15 +1195,20 @@ export async function runPublishModelCatalog(
     throw new Error("output path is required outside dry-run mode");
   }
   const outputFile = path.resolve(rootDir, args.out);
-  fs.mkdirSync(path.dirname(outputFile), { recursive: true });
-  fs.writeFileSync(outputFile, serialized);
   if (args.outV2 && serializedV2) {
-    const outputV2File = path.resolve(rootDir, args.outV2);
-    fs.mkdirSync(path.dirname(outputV2File), { recursive: true });
-    fs.writeFileSync(outputV2File, serializedV2);
+    await publishModelCatalogPair(
+      [
+        { file: outputFile, content: serialized },
+        { file: path.resolve(rootDir, args.outV2), content: serializedV2 },
+      ],
+      (message) => process.stderr.write(`[${SCRIPT_LABEL}] warning: ${message}\n`),
+    );
     process.stdout.write(
       `[${SCRIPT_LABEL}] published schemaVersion=2 models=${summary.models} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
     );
+  } else {
+    fs.mkdirSync(path.dirname(outputFile), { recursive: true });
+    fs.writeFileSync(outputFile, serialized);
   }
   process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}`);
   return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };

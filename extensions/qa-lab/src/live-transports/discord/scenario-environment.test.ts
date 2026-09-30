@@ -1,9 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  discordQaScenarioSupport,
-  discordQaVoiceAutojoinScenario,
-} from "./discord-live.runtime.js";
+import * as testing from "./discord-live.runtime.js";
+import { discordQaVoiceAutojoinScenario } from "./discord-live.runtime.js";
 import { discordQaTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
 import { createDiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
@@ -74,7 +72,7 @@ describe("Discord QA scenario environment", () => {
 
   it("rejects transcript capture without an explicit destination before discovery or gateway access", async () => {
     const resolveVoiceChannel = vi
-      .spyOn(discordQaScenarioSupport.testing, "resolveDiscordQaVoiceChannel")
+      .spyOn(testing, "resolveDiscordQaVoiceChannel")
       .mockRejectedValue(new Error("must not discover a voice destination"));
     const { call, configureScenario } = await prepareScenario();
 

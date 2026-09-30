@@ -7,6 +7,7 @@ import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { killPidIfAlive } from "../../../test-utils/process-tree.js";
+import { mockProcessPlatform } from "../../../test-utils/vitest-spies.js";
 import * as relayIntegration from "../../spawn-broker/relay-integration.js";
 import { createProcessSupervisor } from "../supervisor.js";
 import { createChildAdapter } from "./child.js";
@@ -182,6 +183,8 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       activePids.add(descendantPid);
       expect(isAlive(rootPid) && isAlive(descendantPid)).toBe(true);
       await vi.advanceTimersByTimeAsync(100);
+      // Deadline decisions wait one timer turn for pending child exit notifications.
+      await vi.advanceTimersToNextTimerAsync();
       const exit = await run.wait();
       expect(exit.reason).toBe(timing.reason);
       expect(parsePidPair(exit.stdout)).toEqual([rootPid, descendantPid]);
@@ -228,6 +231,8 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       activePids.add(startedPid);
       expect(isAlive(startedPid)).toBe(true);
       await vi.advanceTimersByTimeAsync(500);
+      // Let the deferred construction deadline decide before awaiting startup settlement.
+      await vi.advanceTimersToNextTimerAsync();
       const run = await pendingRun;
       await expect(run.wait()).resolves.toMatchObject({
         reason: "overall-timeout",
@@ -648,9 +653,16 @@ describeSpawnTransports("service-managed child lifecycle", () => {
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });
 
-  it.each(["SIGTERM", "SIGKILL"] as const)(
-    "keeps cleanup uncertain after %s when an escaped group retains the lineage descriptor",
-    async (signal) => {
+  it.each(
+    (["SIGTERM", "SIGKILL"] as const).flatMap((signal) =>
+      (process.platform === "linux" && !process.versions.bun
+        ? ["process-group", "linux-subreaper"]
+        : ["process-group"]
+      ).map((ownership) => ({ signal, ownership })),
+    ),
+  )(
+    "uses $ownership custody after $signal when an escaped descendant retains lineage",
+    async ({ signal, ownership }) => {
       const descendantScript = `process.send("ready"); setInterval(() => {}, 1000);`;
       const rootScript = `
       const { spawn } = require("node:child_process");
@@ -674,6 +686,9 @@ describeSpawnTransports("service-managed child lifecycle", () => {
           relay.child.once("exit", () => relayExited.resolve());
           return relay;
         });
+      // Select the retained POSIX group contract only for its escape-limit case.
+      const groupPlatform =
+        ownership === "process-group" ? mockProcessPlatform("darwin") : undefined;
       let adapter: Awaited<ReturnType<typeof startChildAdapter>>;
       try {
         adapter = await startChildAdapter({
@@ -683,6 +698,7 @@ describeSpawnTransports("service-managed child lifecycle", () => {
         });
       } finally {
         observeRelay.mockRestore();
+        groupPlatform?.mockRestore();
       }
       let output = "";
       adapter.onStdout((chunk) => {
@@ -707,6 +723,13 @@ describeSpawnTransports("service-managed child lifecycle", () => {
         adapter.kill(signal);
         // Real relay exit follows the closing acknowledgement; its host deadline is now armed.
         await relayExited.promise;
+        if (ownership === "linux-subreaper") {
+          // Kernel adoption, unlike PGID membership, retains an escaped child.
+          await expect(extinction).resolves.toBeUndefined();
+          expect(isAlive(descendantPid)).toBe(false);
+          await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+          return;
+        }
         expect(isAlive(descendantPid)).toBe(true);
         expect(settled).toBe(false);
         await vi.advanceTimersByTimeAsync(4_999);

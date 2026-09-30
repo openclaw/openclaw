@@ -15,15 +15,14 @@ import { CronService } from "../service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import {
-  claimCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import {
+  claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob,
 } from "../store/run-receipt-store.test-support.js";
-import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import * as serviceState from "./state.js";
 import { onTimer } from "./timer.test-support.js";
@@ -98,15 +97,15 @@ it("lists behind healthy recovery while a writer is held, and retires a waiting 
     for (const job of jobs.slice(0, 16)) {
       const startedAtMs = nowMs - 100;
       const prepared = prepareCronRunReceiptClaim({
+        observed: undefined,
         storePath,
         job,
         agentId: "alpha",
         startedAtMs,
       });
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({
+        claimCronRunReceiptInDatabaseForTest({
           database: db,
-          receiptSchema: prepareCronRunReceiptWriteSchema(db),
           prepared,
           resolveAgentId: () => "alpha",
         }),

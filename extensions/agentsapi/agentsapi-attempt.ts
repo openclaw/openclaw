@@ -31,6 +31,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { collectOutputs, prepareInputs, uploadInputs } from "./agentsapi-files.js";
+import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
 import { buildAgentsApiInstructions, buildAgentsApiTurnContext } from "./agentsapi-prompt.js";
 import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
@@ -38,6 +39,7 @@ import { createAgentsApiSession } from "./agentsapi-session.js";
 import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
+import { resolveAgentsApiEnvironment } from "./config.js";
 
 export async function runAgentsApiAttempt(
   params: AgentHarnessAttemptParamsV2,
@@ -46,6 +48,7 @@ export async function runAgentsApiAttempt(
   assertOwnerCurrent: () => void,
   assertHarnessCurrent: () => void,
   target: ReturnType<typeof requireAgentsApiSessionTarget>,
+  readPluginConfig: () => unknown,
 ): Promise<EmbeddedRunAttemptResult> {
   const startedAtMs = Date.now();
   const cancellationState = {
@@ -212,6 +215,7 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
+    const environment = resolveAgentsApiEnvironment(readPluginConfig(), params.workspaceDir);
     const surface = buildAgentsApiToolSurface(
       runParams,
       controller.signal,
@@ -219,32 +223,45 @@ export async function runAgentsApiAttempt(
       (cleanup) => toolCleanups.push(cleanup),
     );
     toolSurface = surface;
-    const inputs = await prepareInputs(
-      params.media,
-      params.workspaceDir,
-      assertCurrent,
-      controller.signal,
-    );
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify([params.model.id, params.resolvedApiKey]))
-      .digest("hex");
+    const mcpTools = await buildAgentsApiMcpTools(params);
+    assertCurrent();
+    const sessionIdentity = [
+      params.model.id,
+      params.resolvedApiKey,
+      // Preserve existing hosted identities only when no network policy is configured.
+      ...(environment.type === "self_hosted" || environment.network != null ? [environment] : []),
+      ...(mcpTools.length ? [mcpTools] : []),
+    ];
+    const fingerprint = createHash("sha256").update(JSON.stringify(sessionIdentity)).digest("hex");
     if (binding && binding.authFingerprint !== fingerprint) {
       // Normalize bindings created by the unmerged tools implementation.
       const toolsFingerprint = createHash("sha256")
         .update(JSON.stringify([params.model.id, params.resolvedApiKey, surface.declarations]))
         .digest("hex");
-      if (binding.authFingerprint !== toolsFingerprint) {
+      if (
+        environment.type !== "openai_hosted" ||
+        environment.network != null ||
+        mcpTools.length > 0 ||
+        binding.authFingerprint !== toolsFingerprint
+      ) {
         throw new Error(
-          "Agents API model or credential changed; reset the OpenClaw session before continuing",
+          "Agents API model, credential, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
         );
       }
       await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
     }
+    if (environment.type === "self_hosted" && params.media?.length) {
+      throw new Error("Agents API file transfers require an OpenAI-hosted environment");
+    }
+    const inputs =
+      environment.type === "openai_hosted"
+        ? await prepareInputs(params.media, params.workspaceDir, assertCurrent, controller.signal)
+        : { files: [], mappingText: "" };
     const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);
     const creatingSession = !remoteSessionId;
     const instructions = creatingSession
-      ? await buildAgentsApiInstructions(params, surface.declarations)
+      ? await buildAgentsApiInstructions(params, surface.declarations, environment)
       : "";
     assertCurrent();
     const admittedMessage =
@@ -287,7 +304,9 @@ export async function runAgentsApiAttempt(
         params.model.id,
         {
           functions: surface.declarations,
+          mcpTools,
           files: inputs.files,
+          environment,
           reasoning: {
             effort: reasoningEffort,
             ...(params.reasoningLevel && params.reasoningLevel !== "off"
@@ -420,14 +439,16 @@ export async function runAgentsApiAttempt(
       const items = await client.items(remoteSessionId, result.turn.id, controller.signal);
       assertCurrent();
       try {
-        outputMedia = await collectOutputs(
-          client,
-          remoteSessionId,
-          result.turn.id,
-          assertCurrent,
-          controller.signal,
-          params.hostCapabilities.prepareReplyMedia,
-        );
+        if (environment.type === "openai_hosted") {
+          outputMedia = await collectOutputs(
+            client,
+            remoteSessionId,
+            result.turn.id,
+            assertCurrent,
+            controller.signal,
+            params.hostCapabilities.prepareReplyMedia,
+          );
+        }
       } finally {
         // Transfer failure must not discard the completed reply. The projection
         // still requires current authority before publishing or persisting it.

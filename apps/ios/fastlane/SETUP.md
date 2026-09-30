@@ -126,17 +126,18 @@ Generate deterministic App Store screenshots:
 pnpm ios:screenshots
 ```
 
-The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it chooses one available large iPhone simulator and one available 13-inch iPad simulator from the installed Xcode runtime; override devices with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
+The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it chooses an available large iPhone model and a 13-inch iPad model from the installed Xcode runtime; override the model selection with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
 
-The lane builds the UI-test products once, boots each selected simulator once, and runs each screenshot in an independent `xcodebuild test-without-building` session against those products. This avoids repeated Fastlane build-settings discovery and simulator reboots between captures. Xcode command logs stay in `apps/ios/build/SnapshotLogs`; result bundles and the capture-attempt ledger stay in `apps/ios/build/SnapshotTestResults`.
+The lane builds the UI-test products once, creates a fresh simulator for each selected model and runtime, and runs each screenshot in an independent `xcodebuild test-without-building` session against those products. It shuts down and deletes each owned simulator before creating the next, including the final Watch capture, and refuses to start while another simulator is running. Xcode command logs stay in `apps/ios/build/SnapshotLogs`; result bundles and the capture-attempt ledger stay in `apps/ios/build/SnapshotTestResults`. See [screenshot-only validation](../VERSIONING.md#screenshot-only-validation) for hosted branch runs and opt-in sanitized diagnostics.
 
 Each screenshot gets one capture attempt. A failed capture or Xcode test result stops the lane, retaining its attempt record and any result bundle for diagnosis. CI rejects replacement captures as passing release evidence.
 
 Screenshot tests disable Xcode's verbose failure diagnostics, such as sysdiagnose, while retaining command logs, screenshots, and per-attempt result bundles.
 
-CI pins SimSlim 0.8.0 for the selected iPhone test simulator and iPhone/iPad
-screenshot devices. It disables only search and family services. Preparation
-must succeed before capture; Watch and default local runs remain stock.
+CI pins SimSlim 0.10.0 for the `ios-build` iPhone test simulator and the SimSlim
+arms of [native release qualification](#native-release-qualification) compare mode.
+It disables only search and family services, and preparation must succeed before
+tests run. Screenshot capture, Watch, and default local runs use stock simulators.
 
 From a clean local `main` matching `origin/main`, upload to App Store Connect:
 
@@ -171,10 +172,47 @@ that supports the test device and architecture, and records that runtime in its 
 It builds the Gateway runtime and ad-hoc-signed
 Debug `OpenClawUITests` simulator products once. Ad-hoc signing preserves Keychain
 entitlements without certificates or provisioning profiles; this is not a signed
-Release build. Each of the two live Gateway UI tests gets a new simulator, isolated real
-Gateway, and fresh setup code. Chat uses the deterministic local
-`openai/ios-e2e` provider fixture. Native Overview runs with Control UI disabled;
-this is not screenshot mode or a substitute for external-provider validation.
+Release build. Each arm starts an isolated real Gateway, then prepares its setup
+handler and state worker with `device.pair.setupStatus` before booting one new
+simulator. This status preparation prunes expired completion records without issuing
+a credential. After boot, the same Gateway issues the fresh setup code consumed by
+the app. The live test pairs a fresh install and
+verifies the `first` and `second` message round trips. It then terminates and
+relaunches the app, verifies the `relaunch` message on the restored connection,
+and opens native Overview. Each message must reach the deterministic local
+`openai/ios-e2e` provider fixture as the latest user request.
+
+The harness then stops the Gateway and provider fixture and runs the deterministic
+keyboard/transcript reader test on the same simulator. Its first fixture send checks
+that the transcript remains rendered above the open keyboard and follows the new
+reply. Its second, multiline send checks keyboard dismissal, retained draft text,
+reply anchoring, jumping to the latest reply, and returning after manual scrolling.
+Control UI is disabled; this does not replace external-provider validation.
+
+To reuse native products for another complete qualification at the same source and
+toolchain, pass `--build-dir /absolute/path/to/ios-e2e-build` to both invocations.
+The build owner verifies the source, toolchain, build arguments, and product integrity
+before reuse. Each qualification still creates fresh simulator and Gateway resources.
+The explicit build directory retains native products and their receipt; it does not
+retain raw XCTest results.
+
+For a narrower local diagnostic, use either:
+
+```bash
+# Prepare native products without starting a simulator or Gateway.
+node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
+  --mode stock --target-sha "$(git rev-parse HEAD)" \
+  --build-dir /tmp/ios-e2e-build --build-only --output /tmp/ios-e2e-build.json
+
+# Exercise Gateway startup, setup-status preparation, and code issuance without native resources.
+node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
+  --mode stock --target-sha "$(git rev-parse HEAD)" \
+  --gateway-only --output /tmp/ios-e2e-gateway.json
+```
+
+These diagnostics produce `native-build`/`built` or `gateway-probe`/`probe-passed`
+proofs, respectively. Neither is release qualification. Gateway runtime preparation
+continues to use the existing build owner's cache in every mode.
 
 The stock gate runs in **iOS Store Release** after native tool setup and before signing
 assets are accessed. It qualifies the checked-out `main` commit used for release
@@ -191,10 +229,13 @@ it does not accept an alternate target SHA. CI callers must also use their own
 revision.
 
 Compare runs four serial matched pairs in stock/slim, slim/stock, stock/slim,
-slim/stock order, with both tests fresh in every arm. SimSlim keeps the existing
-conservative search/family-only profile. Neither failures nor skipped tests are
-retried or dropped. JSON reports preparation, test, arm, build, and overall
-durations; the workflow additionally records shared toolchain installation time.
+slim/stock order, for eight independently prepared arms. SimSlim keeps the existing
+conservative search/family-only profile. A preparation or live-test failure stops
+that arm before the reader test; a reader failure also fails the arm. Neither
+failures nor skipped tests are retried or dropped. Cleanup runs once per arm,
+and unconfirmed cleanup stops the run. JSON retains each attempted test's outcome
+and duration, plus preparation, arm, build, and overall durations; the workflow
+also records shared toolchain installation time.
 
 Qualification tests disable Xcode's verbose failure diagnostics, such as sysdiagnose,
 while retaining ordinary XCTest output, result inspection, and sanitized proof.
@@ -207,7 +248,9 @@ seconds fail measurement. A stock gate without the meter requires no measurement
 Raw XCTest bundles and fixture logs stay private and are cleaned with owned
 resources. If owned cleanup cannot be confirmed, the working root is retained.
 Only sanitized JSON proof is uploaded, including on failure, with fixed operation
-labels and bounded exit/error diagnostics rather than raw logs or setup codes.
+labels, phase durations, setup RPC progress, and bounded exit/error diagnostics.
+Raw logs and setup codes are excluded. Setup-code timeouts are preparation failures
+and prevent native test execution.
 
 ## GitHub Actions
 

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DeviceAuthToken } from "../../../infra/device-pairing.types.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
+import type { GatewayAuthPolicy } from "../../auth-policy.types.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
@@ -130,6 +131,7 @@ export type GatewayConnectPhaseContext = {
 };
 
 export type AuthenticatedGatewayConnect = {
+  authPolicy: GatewayAuthPolicy;
   resolvedAuth: ResolvedGatewayAuth;
   minProtocol: number;
   maxProtocol: number;

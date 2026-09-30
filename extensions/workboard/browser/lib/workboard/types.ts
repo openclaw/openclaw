@@ -25,8 +25,6 @@ type WorkboardLifecycleState =
 export type WorkboardLifecycle = {
   session: GatewaySessionRow | null;
   state: WorkboardLifecycleState;
-  targetStatus?: WorkboardStatus;
-  sourceUpdatedAt?: number;
 };
 
 type WorkboardDependencyParent = {
@@ -99,9 +97,7 @@ export type WorkboardUiState = {
   collapsedStatuses: Set<WorkboardStatus>;
   expandedEmptyStatuses: Set<WorkboardStatus>;
   lastRefreshAt: number | null;
-  lastRefreshStartedAt: number | null;
   lastRefreshError: string | null;
-  lastRefreshSource: WorkboardRefreshSource | null;
   draftOpen: boolean;
   draftDiscardOpen: boolean;
   draftSaving: boolean;
@@ -128,5 +124,4 @@ export type WorkboardUiState = {
   draggedCardId: string | null;
   dragOverStatus: WorkboardStatus | null;
   dragBeforeCardId: string | null;
-  capturingSessionKeys: Set<string>;
 };

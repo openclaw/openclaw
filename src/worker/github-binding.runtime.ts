@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import {
   managedGitHubIdentityEnvironment,
+  removeManagedGitHubProfile,
   writeManagedGitHubProfileFiles,
   type PreparedGitHubToolEnvironment,
 } from "../agents/github-tool-identity.js";
@@ -13,6 +13,12 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { WorkerGitHubLaunchBinding } from "./launch-descriptor.js";
 
 const log = createSubsystemLogger("worker/github");
+
+export function disposeWorkerGitHubEnvironment(stateDir: string, turnId: string) {
+  return removeManagedGitHubProfile(
+    path.join(stateDir, "github-profiles", sha256HexPrefixCore(turnId, 16)),
+  );
+}
 
 async function bindWorkerGitHubCheckout(
   cwd: string,
@@ -52,11 +58,8 @@ async function bindWorkerGitHubCheckout(
       await requireGit(["update-ref", branch, "HEAD"]);
       await requireGit(["symbolic-ref", "HEAD", branch]);
     }
-    // Reconciliation returns files, not commits; origin holds this session's own pushed history.
-    // A fast-forward only adds session commits while preserving reconciled working-tree bytes.
-    // Leave divergence for the agent to resolve. Only the verified GitHub origin the Gateway
-    // named may receive the token-bound fetch; a binding without one keeps its checkout as is.
-    // A fenced turn has lost its authority: never start the credentialed fetch for it.
+    // Reconciliation returns files, not commits. Fetch only the admitted origin;
+    // fast-forward session commits without overwriting reconciled working bytes.
     if (!binding.remoteUrl || signal?.aborted) {
       return;
     }
@@ -103,19 +106,16 @@ async function bindWorkerGitHubCheckout(
 export async function prepareWorkerGitHubEnvironment(params: {
   binding: WorkerGitHubLaunchBinding;
   stateDir: string;
-  runId: string;
+  turnId: string;
   cwd: string;
   signal?: AbortSignal;
 }): Promise<PreparedGitHubToolEnvironment | undefined> {
-  const { binding, stateDir, runId, cwd, signal } = params;
+  const { binding, stateDir, turnId, cwd, signal } = params;
   registerSecretValueForRedaction(binding.token);
-  const profilesRoot = path.join(stateDir, "github-profiles");
-  const profileDir = path.join(profilesRoot, sha256HexPrefixCore(runId, 16));
+  const profileDir = path.join(stateDir, "github-profiles", sha256HexPrefixCore(turnId, 16));
   try {
-    // Retained workers reuse state across turns, but each turn owns one profile path.
-    // Remove earlier profiles first so an inherited path cannot expose a later credential;
-    // an earlier process keeps only the token in its own environment.
-    await fs.rm(profilesRoot, { recursive: true, force: true });
+    // Each turn owns its path; retained commands keep their existing credentials.
+    await removeManagedGitHubProfile(profileDir);
     await writeManagedGitHubProfileFiles(profileDir, binding);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

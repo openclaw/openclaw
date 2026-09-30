@@ -6,6 +6,10 @@ import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts"
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeGitFixtureFactory } from "./pr-merge-fixture-git.test-support.js";
+import {
+  createPriorCiFixtureState,
+  priorCiSecurityFixtureSource,
+} from "./pr-merge-prior-ci.test-support.js";
 import { landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
@@ -163,15 +167,28 @@ export function createMergeOutcomeFixtureHarness() {
         main: string;
       },
       restObservation: null as null | {
+        main?: string;
         pr?: Record<string, unknown>;
         advanceMain?: boolean;
         gates?: string;
+        restPolicy?: string;
+        priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
+        postAuthorityRestBoundary?: "start" | "complete";
+        afterPolicyRead?: boolean;
       },
+      restObservationAppliedAt: 0,
+      restObservations: [] as Array<{
+        main?: string;
+        advanceMain?: boolean;
+        pr?: Record<string, unknown>;
+        priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
+      }>,
       restMergePayload: null as null | {
         sha: string;
         merge_method: string;
         commit_message: string;
       },
+      restMergeRefusal: "",
       graphqlMergePayloads: [] as Array<{
         pullRequestId: string;
         expectedHeadOid: string;
@@ -181,20 +198,27 @@ export function createMergeOutcomeFixtureHarness() {
       landing: "requested",
       reads: 0,
       observationReads: 0,
+      graphqlMergeProjection: null as null | {
+        mergeable?: string;
+        mergeStateStatus?: string;
+      },
       settlementSleeps: [] as number[],
       observations: [] as Array<{
         pr?: Record<string, unknown>;
+        priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
         main?: string;
         invalid?: boolean;
         unavailable?: boolean;
         advanceMain?: boolean;
         advanceAfterRead?: boolean;
         reportedMain?: string;
+        tamperProviderCapture?: boolean;
       }>,
       mainAdvances: [] as string[],
       calls: [] as string[][],
       nodeArgs: [] as string[],
       mutations: 0,
+      providerCaptureTampered: false,
       cancellations: 0,
       cancellation: "success",
       mergeBody: null as string | null,
@@ -227,24 +251,9 @@ export function createMergeOutcomeFixtureHarness() {
       crash: "",
       comment: "success",
       admin: false,
-      priorCi: {
-        enabled: false,
-        head: sourceCommits[0]!,
-        runHead: sourceCommits[0]!,
-        event: "workflow_dispatch",
-        branch: "topic",
-        workflowPath: ".github/workflows/ci.yml",
-        missingCheck: "",
-        reviewDecision: "APPROVED" as string | null,
-        reviewCount: 1,
-        requireThreads: false,
-        resolved: true,
-        membership: "admin",
-        evidencePath: "",
-        mutateEvidence: false,
-        otherCheck: "",
-      },
+      priorCi: createPriorCiFixtureState(sourceCommits[0]!),
       audit: false,
+      auditParent: "",
       gates: "pass",
       requiredCheckName: "CI",
       refusalCapture: "error: string rewrite protection blocked unsafe input\n",
@@ -286,6 +295,7 @@ export function createMergeOutcomeFixtureHarness() {
       "gh.mjs",
       `
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 const [route,...args]=process.argv.slice(2);
 const file=process.env.FIXTURE_STATE;
@@ -337,7 +347,7 @@ if(s.restMainReads>0&&args[0]==="api"&&args.includes("repos/fixture/repo/pulls/1
 }
 const quotaRead=s.quotaAt==="checks"&&args[0]==="pr"&&args[1]==="checks"||
   s.quotaAt==="preview"&&args.some(arg=>arg.includes("viewerMergeBodyText"))||
-  s.quotaAt==="observe"&&s.observationReads>=s.quotaAfterObservations&&args.includes("graphql")&&!args.includes("--input")&&!args.some(arg=>arg.includes("viewerMergeBodyText"));
+  s.quotaAt==="observe"&&s.observationReads>=s.quotaAfterObservations&&args.includes(${JSON.stringify(landingSnapshotQuery)});
 if(quotaRead&&s.quotaFailuresRemaining!==0) {
   if(s.quotaFailuresRemaining!==null) s.quotaFailuresRemaining--;
   quota();
@@ -380,7 +390,18 @@ const advanceMain=()=>{
   git(["--git-dir="+process.env.FIXTURE_REMOTE,"update-ref","refs/heads/main",next,parent]);
   s.mainAdvances.push(next);
 };
-if(args[0]==="browse") out(s.repo.url);
+const applyRestObservation=(next=s.restObservation)=>{
+  if(next.main) git(["push","-q","--force","origin",next.main+":refs/heads/main"]);
+  if(next.pr) Object.assign(s.pr,next.pr);
+  if(next.advanceMain) advanceMain();
+  if(next.gates) s.gates=next.gates;
+  if(next.restPolicy) s.restPolicy=next.restPolicy;
+  if(next.priorCi) Object.assign(s.priorCi,next.priorCi);
+  s.restObservationAppliedAt=s.restMainReads;s.restObservation=null;save();
+};
+${priorCiSecurityFixtureSource}
+if(securityResponse()) {}
+else if(args[0]==="browse") out(s.repo.url);
 else if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
 else if(args[0]==="api"&&args.includes("rate_limit")) out({resources:{graphql:{remaining:0,limit:5000,reset:1900000000},core:{remaining:4999,limit:5000,reset:1900000000}}});
 else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(arg))) {
@@ -403,9 +424,15 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("orgs/fixture/memberships/"))) {
   out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({state:"active",role:s.priorCi.membership,user:{login:s.operator}}));
 }
-else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/501/attempts/2"))) {
-  if(args.some(arg=>arg.includes("/jobs?"))) out([{total_count:1,jobs:[{name:"openclaw/ci-gate",status:"completed",conclusion:"success",head_sha:s.priorCi.runHead,run_id:501}]}]);
-  else out({id:501,run_attempt:2,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:{full_name:s.repo.nameWithOwner},status:"completed",conclusion:"success",pull_requests:s.priorCi.event==="pull_request"?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
+else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/501"))) {
+  const jobs=s.priorCi.jobs??[{name:"openclaw/ci-gate",status:"completed",conclusion:"success",head_sha:s.priorCi.runHead,run_id:501}];
+  if(args.some(arg=>arg.includes("/jobs?"))) out([{total_count:jobs.length,jobs}]);
+  else out({id:501,run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
+}
+else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/check-runs/601"))) {
+  if(!args.includes("Cache-Control: max-age=0")) fail("missing live deadline header");
+  const annotations=args.some(arg=>arg.includes("/annotations?"));
+  out(annotations?[s.priorCi.deadline.annotations]:s.priorCi.deadline.check);
 }
 else if(args.includes("graphql")&&args.some(arg=>arg.includes("reviewThreads("))) {
   out({data:{repository:{pullRequest:{headRefOid:s.pr.headRefOid,reviewDecision:s.priorCi.reviewDecision,reviewThreads:{nodes:[{isResolved:s.priorCi.resolved}],pageInfo:{hasNextPage:false}}}}}});
@@ -417,23 +444,23 @@ else if(args[0]==="api"&&args.includes("user")) {
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
   if(s.repoAuthorityUnavailable) fail("repository metadata unavailable");
-  if(s.restObservation&&s.quotaTriggered) {
-    if(s.restObservation.pr) Object.assign(s.pr,s.restObservation.pr);
-    if(s.restObservation.advanceMain) advanceMain();
-    if(s.restObservation.gates) s.gates=s.restObservation.gates;
-    s.restObservation=null;save();
+  if(s.restObservation&&!s.restObservation.afterPolicyRead&&s.restObservation.postAuthorityRestBoundary===undefined&&
+    (s.quotaTriggered||(s.graphqlMergeProjection&&s.observationReads>0))) {
+    applyRestObservation();
   }
   const record={node_id:s.pr.id,number:s.pr.number,html_url:s.pr.url,title:"Fixture repair",body:s.previewBody,
     state:s.pr.state==="OPEN"?"open":"closed",merged:s.pr.state==="MERGED",merged_at:s.pr.state==="MERGED"?"2026-09-20T00:00:00Z":null,
     merge_commit_sha:s.pr.mergeCommit?.oid??null,draft:s.pr.isDraft,
     auto_merge:s.pr.autoMergeRequest?{merge_method:s.pr.autoMergeRequest.mergeMethod.toLowerCase()}:null,
-    head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.repoAuthority},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
-    user:{login:s.pr.author.login,type:s.pr.author.__typename},
+    head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.priorCi.enabled?{...s.repoAuthority,...s.priorCi.sourceRepository}:s.repoAuthority},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
+    user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",
     mergeable:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",
     mergeable_state:s.pooledMergeBlocked&&!args.includes("--include")?"blocked":s.pr.mergeStateStatus.toLowerCase()};
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(record):record);
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main")) {
+  if(s.restMainReads%2===0&&s.restObservations.length) applyRestObservation(s.restObservations.shift());
+  if(s.restObservation?.main&&!s.restObservation.afterPolicyRead&&s.restMainReads===0&&s.observationReads>0) applyRestObservation();
   s.restMainReads++;
   if(s.restMainAdvance&&s.pr.state==="OPEN") {
     const retained=spawnSync("git",["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"],{cwd:process.env.FIXTURE_REPO,encoding:"utf8"});
@@ -453,8 +480,18 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main"))
     if(s.restMainFault==="wrong-type") reference.object.type="tag";
     if(s.restMainFault==="missing-object") delete reference.object;
     if(s.restMainFault==="invalid-sha") reference.object.sha="not-a-commit";
+    if(s.restMainFault==="unavailable-sha-once") {reference.object.sha="f".repeat(40);s.restMainFault="";save();}
   }
   out(reference);
+  if(s.restObservation?.postAuthorityRestBoundary) {
+    const isMainRead=(call)=>call.includes("repos/fixture/repo/git/ref/heads/main");
+    const authority=s.calls.findLastIndex((call)=>call.includes("orgs/fixture/memberships/fixture-operator"));
+    // The initial authority read precedes REST selection; target the next observation after revalidation.
+    if(authority>=0&&s.calls.slice(0,authority).some(isMainRead)) {
+      const reads=s.calls.slice(authority+1).filter(isMainRead).length;
+      if(reads===(s.restObservation.postAuthorityRestBoundary==="start"?1:2)) applyRestObservation();
+    }
+  }
   if(s.pr.state==="MERGED"&&s.restAdvanceMain) {s.restAdvanceMain=false;advanceMain();}
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/branches/main/protection")) {
@@ -464,9 +501,10 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/branches/main/protect
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/rules/branches/main?"))) {
   out(s.restPolicy==="missing"?[null]:[[
     {type:"required_status_checks",parameters:{required_status_checks:s.restContexts.map(context=>({context,integration_id:s.restRequiredApp}))}},
-    ...(s.priorCi.enabled?[{type:"pull_request",parameters:{required_approving_review_count:s.priorCi.reviewCount,require_code_owner_review:false,require_last_push_approval:false,required_review_thread_resolution:s.priorCi.requireThreads}}]:[]),
+    ...(s.priorCi.enabled?[{type:"pull_request",parameters:{required_approving_review_count:s.priorCi.reviewCount,require_code_owner_review:s.priorCi.requireCodeOwners,require_last_push_approval:s.priorCi.requireLastPush,required_review_thread_resolution:s.priorCi.requireThreads}}]:[]),
     ...(s.restPolicy==="queue"?[{type:"merge_queue"}]:s.restPolicy==="unsupported"?[{type:"workflows"}]:[])
   ]]);
+  if(s.restObservation?.afterPolicyRead&&s.restMainReads>0) applyRestObservation();
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/check-suites/"))) {
   const endpoint=args.find(arg=>arg.startsWith("repos/fixture/repo/check-suites/"));
@@ -533,6 +571,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
     s.restMergePayload=JSON.parse(fs.readFileSync(0,"utf8"));
     if(s.restMergePayload.sha!==s.pr.headRefOid||s.restMergePayload.merge_method!=="squash") fail("unpinned REST merge request");
     s.mergeBody=s.restMergePayload.commit_message;
+    if(s.restMergeRefusal) {save();process.stdout.write(s.restMergeRefusal);process.exit(1);}
   }
   if(graphqlMerge) {
     const payload=JSON.parse(fs.readFileSync(0,"utf8"));
@@ -610,14 +649,21 @@ else if(args[0]==="pr"&&args[1]==="view") {
     s.observationReads++;
     const step=s.observations.shift();
     if(step?.pr) Object.assign(s.pr,step.pr);
+    if(step?.priorCi) Object.assign(s.priorCi,step.priorCi);
     if(step?.main) git(["push","-q","--force","origin",step.main+":refs/heads/main"]);
     if(step?.advanceMain) advanceMain();
     if(step?.unavailable) fail("metadata unavailable");
     if(step?.invalid) {save();out({data:{repository:{}}});process.exit(0);}
     const {headRefName,...pr}=s.pr;if(s.drift&&s.reads%2===0) pr.baseRefName="changed";
+    if(s.pr.state==="OPEN"&&s.graphqlMergeProjection) Object.assign(pr,s.graphqlMergeProjection);
     if(s.pooledMergeBlocked&&!args.includes("--include")) pr.mergeStateStatus="BLOCKED";
     const repository={...s.repoGraphql,ref:{target:{oid:step?.reportedMain??main()}},pullRequest:pr};
     out({data:{repository}});
+    if(step?.tamperProviderCapture) {
+      const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
+      for(const name of fs.readdirSync(local).filter(name=>/^merge-output\\..+\\.log$/.test(name))) fs.appendFileSync(local+name,"changed\\n");
+      s.providerCaptureTampered=true;
+    }
     if(step?.advanceAfterRead) advanceMain();
   }
 } else if(args.some(x=>x.includes("/comments"))) {
@@ -642,7 +688,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
   out(commits.map(oid=>({sha:oid,commit:{author:{name:git(["show","-s","--format=%an",oid]),email:git(["show","-s","--format=%ae",oid])}},author:{login:s.pr.author.login,type:"User"}})));
 } else if(args.some(x=>x.includes("/commits/"))) {
   if(s.audit) fail("audit unavailable");
-  out({parents:[{sha:git(["rev-parse",s.pr.mergeCommit.oid+"^1"])}]});
+  out({parents:[{sha:s.auditParent||git(["rev-parse",s.pr.mergeCommit.oid+"^1"])}]});
 } else fail("unexpected gh "+args.join(" "));
 save();
 `,
@@ -686,6 +732,14 @@ verify_crabbox_admin_merge_bypass() {
 # Fault the Git boundary, not the outcome owner: crash after intent CAS, or
 # reject later receipt writes. All successful object/ref operations are real.
 pr_git() {
+  if [ "$1" = --no-lazy-fetch ] &&
+    [ "$(command jq -r .priorCi.unsupportedNoLazy "$FIXTURE_STATE")" = true ]; then return 129; fi
+  if [ "$1" = fetch ] && [ "\${2:-}" = --no-tags ] && [ "\${3:-}" = --no-write-fetch-head ] &&
+    [ "$(command jq -r .priorCi.revokeAdminOnMainFetch "$FIXTURE_STATE")" = true ]; then
+    command git "$@" || return
+    command node -e 'const fs=require("node:fs");const path=process.env.FIXTURE_STATE;const state=JSON.parse(fs.readFileSync(path,"utf8"));state.priorCi.membership="member";state.priorCi.revokeAdminOnMainFetch=false;state.priorCi.adminRevokedDuringMainFetch=true;fs.writeFileSync(path,JSON.stringify(state));'
+    return
+  fi
   if [ "$1" = update-ref ] && [ "\${3-}" = refs/openclaw/pr-merge-outcomes/123 ]; then
     local crash
     crash=$(command jq -r .crash "$FIXTURE_STATE")
@@ -898,13 +952,28 @@ fi
             "123",
             head,
             state().operator,
+            git(["--git-dir=" + remote, "rev-parse", "refs/heads/main"]),
           ],
           { cwd: worktree, env, encoding: "utf8" },
         );
         return { ...result, output: result.stdout + result.stderr };
       },
-      adminPriorCi: (path: string) =>
-        run(false, repo, "squash", "", "", "", "", "", false, "", false, path, true),
+      adminPriorCi: (path: string, confirmed = true, recoveryOid = "", replacementHead = "") =>
+        run(
+          false,
+          repo,
+          "squash",
+          recoveryOid,
+          replacementHead,
+          "",
+          "",
+          "",
+          false,
+          "",
+          false,
+          path,
+          confirmed,
+        ),
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),

@@ -208,7 +208,7 @@
   text-transform: uppercase;
   padding: 2px 7px;
   border-radius: 999px;
-  color: hsl(var(--logbook-hue, 200) 70% 70%);
+  color: var(--text);
   background: hsl(var(--logbook-hue, 200) 60% 50% / 0.15);
 }
 

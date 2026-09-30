@@ -240,10 +240,8 @@ export async function executeFollowupTurn(params: {
             if (!draftOwnsPreamble && !shouldEmitStructuredProgress()) {
               return false;
             }
-            const visible = (
-              await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item))
-            ).visible;
-            return visible;
+            return (await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item)))
+              .visible;
           })
       : undefined,
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
@@ -283,9 +281,6 @@ export async function executeFollowupTurn(params: {
             if (visible) {
               return true;
             }
-            if (!forceToolResultProgress && !verboseToolResult) {
-              return false;
-            }
           }
           if (!forceToolResultProgress && !verboseToolResult) {
             return false;
@@ -305,12 +300,10 @@ export async function executeFollowupTurn(params: {
         ) {
           return false;
         }
-        const visible =
-          transientToolResultProgress && !verboseToolResult
-            ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
-                .visible
-            : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
-        return visible;
+        return transientToolResultProgress && !verboseToolResult
+          ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
+              .visible
+          : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
       });
     },
   };
@@ -392,7 +385,7 @@ export async function executeFollowupTurn(params: {
           getActiveSessionEntry: turn.session.current,
           activeSessionStore: turn.sessionStore,
           storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-          resolvedVerboseLevel: currentVerboseLevel() ?? "off",
+          resolvedVerboseLevel: currentVerboseLevel(),
           toolProgressDetail: defaults.toolProgressDetail,
           onCompactionNoticePayload: async (payload) => {
             await enqueueProgressResult(async () => {

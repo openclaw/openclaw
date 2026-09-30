@@ -6,6 +6,7 @@ struct DebugSettings: View {
     @Bindable var state: AppState
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let labelColumnWidth: CGFloat = 140
+    @AppStorage(nativeConversationForcedKey) private var useNativeConversation = false
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
     private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
@@ -19,11 +20,11 @@ struct DebugSettings: View {
     @State private var debugSendError: String?
     @State private var testNotificationOutcome: TestNotificationOutcome?
     @State private var portCheckInFlight = false
-    @State private var portReports: [DebugActions.PortReport] = []
+    @State private var portReports: [PortGuardian.PortReport] = []
     @State private var portKillStatus: String?
     @State private var tunnelResetInFlight = false
     @State private var tunnelResetStatus: String?
-    @State private var pendingKill: DebugActions.PortListener?
+    @State private var pendingKill: PortGuardian.ReportListener?
     @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
     @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
 
@@ -603,9 +604,8 @@ struct DebugSettings: View {
                 }
                 GridRow {
                     self.gridLabel("Chat")
-                    Text("Native SwiftUI")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    Toggle("Use native conversation view", isOn: self.$useNativeConversation)
+                        .help("Use the Swift conversation view in newly opened chat windows.")
                 }
             }
         }
@@ -636,7 +636,7 @@ struct DebugSettings: View {
     }
 
     @MainActor
-    private func requestKill(_ listener: DebugActions.PortListener) {
+    private func requestKill(_ listener: PortGuardian.ReportListener) {
         if listener.expected {
             self.pendingKill = listener
         } else {
@@ -657,24 +657,20 @@ struct DebugSettings: View {
     }
 
     private func sendVoiceDebug() async {
-        await MainActor.run {
-            self.debugSendInFlight = true
-            self.debugSendError = nil
-            self.debugSendStatus = nil
-        }
+        self.debugSendInFlight = true
+        self.debugSendError = nil
+        self.debugSendStatus = nil
 
         let result = await DebugActions.sendDebugVoice()
 
-        await MainActor.run {
-            self.debugSendInFlight = false
-            switch result {
-            case let .success(message):
-                self.debugSendStatus = message
-                self.debugSendError = nil
-            case let .failure(error):
-                self.debugSendStatus = nil
-                self.debugSendError = error.localizedDescription
-            }
+        self.debugSendInFlight = false
+        switch result {
+        case let .success(message):
+            self.debugSendStatus = message
+            self.debugSendError = nil
+        case let .failure(error):
+            self.debugSendStatus = nil
+            self.debugSendError = error.localizedDescription
         }
     }
 
@@ -682,7 +678,7 @@ struct DebugSettings: View {
     private func sendTestNotification() async {
         guard self.testNotificationOutcome != .pending else { return }
         self.testNotificationOutcome = .pending
-        self.testNotificationOutcome = await DebugActions.sendTestNotification()
+        self.testNotificationOutcome = await TestNotificationAction.send()
     }
 
     private func revealApp() {

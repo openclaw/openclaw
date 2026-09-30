@@ -22,6 +22,77 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 
 export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact };
 
+// CI's dependency-free shell gate is pinned to this class by its workflow tests.
+export const WINDOWS_NODE_CI_ADVISORY = Object.freeze({
+  id: "windows-node-ci",
+  child: "normalCi",
+  jobNamePattern: /^checks-windows-node-.+$/u,
+  aggregateJob: "checks-windows",
+});
+
+function isAdvisoryJob(child, job) {
+  return (
+    child.key === WINDOWS_NODE_CI_ADVISORY.child &&
+    typeof job.name === "string" &&
+    WINDOWS_NODE_CI_ADVISORY.jobNamePattern.test(job.name) &&
+    job.status === "completed" &&
+    ["failure", "timed_out"].includes(job.conclusion)
+  );
+}
+
+export function releaseAdvisoryJobs(children) {
+  return children.flatMap((child) =>
+    child.jobs
+      .filter((job) => isAdvisoryJob(child, job))
+      .map((job) => ({
+        class: WINDOWS_NODE_CI_ADVISORY.id,
+        child: child.key,
+        job: job.name,
+        conclusion: job.conclusion,
+        runId: child.runId,
+        url: job.html_url ?? job.url ?? "",
+      })),
+  );
+}
+
+function validateReleaseAdvisoryJobs(value, children) {
+  const expected = releaseAdvisoryJobs(children);
+  const recorded = value === undefined ? [] : value;
+  if (!Array.isArray(recorded) || jsonSha256(recorded) !== jsonSha256(expected)) {
+    throw new Error("Release advisory jobs differ from the windows-node-ci policy evidence");
+  }
+  return expected;
+}
+
+export function validateReleaseManifestAdvisoryJobs(manifest) {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new Error("Release advisory manifest is invalid");
+  }
+  if (
+    manifest.childEvidence !== undefined &&
+    (!manifest.childEvidence ||
+      typeof manifest.childEvidence !== "object" ||
+      Array.isArray(manifest.childEvidence))
+  ) {
+    throw new Error("Release advisory child evidence is invalid");
+  }
+  const children = Object.entries(manifest.childEvidence ?? {}).map(([key, child]) => {
+    if (!child || !Array.isArray(child.jobs)) {
+      throw new Error("Release advisory child evidence is invalid");
+    }
+    if (
+      key === WINDOWS_NODE_CI_ADVISORY.child &&
+      (typeof child.runId !== "string" ||
+        !/^[1-9][0-9]*$/u.test(child.runId) ||
+        child.runId !== manifest.childRuns?.normalCi)
+    ) {
+      throw new Error("Release advisory child run differs from the manifest");
+    }
+    return { key, runId: child.runId, jobs: child.jobs };
+  });
+  return validateReleaseAdvisoryJobs(manifest.advisoryJobs, children);
+}
+
 export function buildReleaseValidationManifest({ plan, drain, context }) {
   const childEvidence = Object.fromEntries(
     Object.entries(drain?.children ?? {}).map(([key, child]) => [
@@ -62,6 +133,13 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     candidateBinding: plan.candidate,
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     publishInputs: context.publishInputs,
+    advisoryJobs: releaseAdvisoryJobs(
+      Object.entries(childEvidence).map(([key, child]) => ({
+        key,
+        runId: child.runId,
+        jobs: child.jobs,
+      })),
+    ),
     childEvidence,
     executionPlanSha256: plan.sha256,
     sourceParentRunAttempt: Number(plan.parentRunAttempt),
@@ -258,6 +336,11 @@ const REVIEWED_TELEGRAM_WAIVERS = new Map([
   ["2026.8.1-owner-approved", ["telegram"]],
   ["2026.9.1-owner-approved", ["telegram"]],
   ["2026.9.5-owner-approved", ["telegram", "matrix"]],
+  // Peter approved waiving minor live-channel QA for 2026.9.7 (2026-09-29 00:40 PT) when
+  // repair is not possible before release: QA Live Matrix 7/24 deterministic on
+  // 01d71319 (FRV 36534008742, jobs 109299525565 and rerun 109316259401) and Telegram
+  // QA 4/25 on 56fb8872 and e61efb6c (job 109279074202).
+  ["2026.9.7-owner-approved", ["telegram", "matrix"]],
 ]);
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
@@ -988,12 +1071,6 @@ export function buildReleaseExecutionPlan(input) {
       result: stringValue(input.resolveTargetResult, "missing"),
     },
     {
-      name: "Verify Docker runtime image assets",
-      required:
-        !reused && rerunGroup === "all" && stringValue(input.targetVersion).includes("-alpha."),
-      result: stringValue(input.dockerPreflightResult, "skipped"),
-    },
-    {
       name: phasedChildren ? "Acquire full release candidate" : "Prepare shared release candidate",
       required: phasedChildren
         ? !reused && booleanValue(input.candidateRequired)
@@ -1522,10 +1599,16 @@ function isFailedJob(job) {
 }
 
 export function terminalPolicyPass(child) {
+  const failures = child.jobs.filter(isFailedJob);
+  const advisoryOnly = failures.length > 0 && failures.every((job) => isAdvisoryJob(child, job));
+  const gates = child.jobs.filter((job) => job.name === "openclaw/ci-gate");
   return (
     child.status === "completed" &&
-    child.conclusion === "success" &&
-    child.jobs.filter(isFailedJob).length === 0
+    (child.conclusion === "success" || (child.conclusion === "failure" && advisoryOnly)) &&
+    failures.every((job) => isAdvisoryJob(child, job)) &&
+    // The gate owns selected-vs-skipped coverage, which the jobs API cannot prove.
+    (!advisoryOnly ||
+      (gates.length === 1 && gates[0].status === "completed" && gates[0].conclusion === "success"))
   );
 }
 
@@ -1582,18 +1665,20 @@ export function classifyReleaseSnapshot({
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
   const childJobBlockers = selected.flatMap((child) =>
-    child.jobs.filter(isFailedJob).map((job) => ({
-      child: child.key,
-      conclusion: job.conclusion,
-      job: job.name,
-      kind: "job_failure",
-      message: `${child.key} job failed policy`,
-      primaryAt: stringValue(
-        job.completed_at ?? job.completedAt ?? job.started_at ?? job.startedAt,
-      ),
-      runId: child.runId,
-      url: job.html_url ?? job.url ?? child.url,
-    })),
+    child.jobs
+      .filter((job) => isFailedJob(job) && !isAdvisoryJob(child, job))
+      .map((job) => ({
+        child: child.key,
+        conclusion: job.conclusion,
+        job: job.name,
+        kind: "job_failure",
+        message: `${child.key} job failed policy`,
+        primaryAt: stringValue(
+          job.completed_at ?? job.completedAt ?? job.started_at ?? job.startedAt,
+        ),
+        runId: child.runId,
+        url: job.html_url ?? job.url ?? child.url,
+      })),
   );
   const childJobBlockerKeys = new Set(
     childJobBlockers.map((blocker) => `${blocker.child}:${blocker.runId}`),
@@ -1633,6 +1718,7 @@ export function classifyReleaseSnapshot({
     .toSorted((left, right) => String(left.primaryAt).localeCompare(String(right.primaryAt), "en"));
   return {
     activeRunIds,
+    advisoryJobs: releaseAdvisoryJobs(selected),
     blockerCount: rawBlockers.length,
     blockerIndex: blockerIndex(rawBlockers),
     blockers,
@@ -1734,6 +1820,7 @@ export function buildReleaseStateArtifact({
     rerunGroup,
     executionPlanSha256: executionPlan.sha256,
     state: decision.state,
+    advisoryJobs: decision.advisoryJobs ?? [],
     activeRunIds,
     blockerCount: decision.blockerCount ?? completeBlockerIndex.length,
     blockerIndex: completeBlockerIndex,
@@ -2129,6 +2216,14 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
   return {
     ...payload,
     activeRunIds,
+    advisoryJobs: validateReleaseAdvisoryJobs(
+      payload.advisoryJobs,
+      Object.entries(children).map(([key, child]) => ({
+        key,
+        runId: child.runId,
+        jobs: child.timing.jobs,
+      })),
+    ),
     blockerCount: machineEvidence ? payload.blockerCount : null,
     blockerIndex: completeBlockerIndex,
     blockers,
@@ -2476,6 +2571,9 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
   }
   for (const error of payload.errors.slice(0, normalizedMax)) {
     lines.push(issueSummary("Collector error", error));
+  }
+  for (const advisory of payload.advisoryJobs ?? []) {
+    lines.push(issueSummary(`Advisory [${advisory.class}]`, advisory));
   }
   const omitted =
     Math.max(0, payload.blockers.length - normalizedMax) +

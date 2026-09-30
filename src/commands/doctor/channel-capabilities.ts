@@ -1,6 +1,5 @@
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { findBundledChannelCatalogMetadata } from "../../channels/bundled-channel-catalog-read.js";
-// Doctor capability lookup for channel-specific policy and migration behavior.
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import type { ChannelDmAllowFromMode } from "../../channels/plugins/dm-access.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -50,7 +49,6 @@ function getCatalogDoctorCapabilities(
   return findBundledChannelCatalogMetadata(channelId)?.doctorCapabilities;
 }
 
-/** Resolve doctor behavior capabilities from channel metadata, plugin runtime, or defaults. */
 export function getDoctorChannelCapabilities(channelName?: string): DoctorChannelCapabilities {
   if (!channelName) {
     return DEFAULT_DOCTOR_CHANNEL_CAPABILITIES;

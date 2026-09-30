@@ -18,12 +18,11 @@ import { loadCronJobsStoreWithConfigJobs, loadCronStore, saveCronStore } from ".
 import { cronStoreKey } from "../store/key.js";
 import {
   assertCronRunReceiptCurrent,
-  claimCronRunReceiptInDatabase,
   CronRunReceiptRevisionError,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
+import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
@@ -184,6 +183,7 @@ describe("cron runtime row publication", () => {
     await saveCronStore(storePath, { version: 1, jobs });
     const job = jobs[64]!;
     const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
       storePath,
       job,
       agentId: "main",
@@ -191,9 +191,8 @@ describe("cron runtime row publication", () => {
     });
     const reads = trackCronRowReads();
     const handle = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({
+      claimCronRunReceiptInDatabaseForTest({
         database: db,
-        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         prepared,
         resolveAgentId: (current) => current.agentId ?? "main",
       }),
@@ -213,7 +212,7 @@ describe("cron runtime row publication", () => {
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(3);
     } finally {
       reads.restore();
-      finishCronRunReceipt({ handle, status: "superseded", finishedAtMs: now + 1 });
+      await finishCronRunReceiptAsync({ handle, status: "superseded", finishedAtMs: now + 1 });
     }
   });
 

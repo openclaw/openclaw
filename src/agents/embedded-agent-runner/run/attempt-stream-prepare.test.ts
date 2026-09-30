@@ -63,7 +63,8 @@ vi.mock("../runs.js", () => ({
   clearActiveEmbeddedRun: mocks.clearActiveRun,
   setActiveEmbeddedRun: mocks.setActiveRun,
 }));
-vi.mock("./tool-activity-heartbeat.js", () => ({
+vi.mock("../../../shared/tool-activity-heartbeat.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../shared/tool-activity-heartbeat.js")>()),
   notifyToolActivity: mocks.notifyToolActivity,
 }));
 vi.mock("../../harness/lifecycle-hook-helpers.js", () => ({

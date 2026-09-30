@@ -73,7 +73,8 @@ function redactObservationText(text: string | undefined): string | undefined {
     return text;
   }
   // Observation logs must stay redacted even when operators disable general-purpose
-  // log redaction, otherwise raw provider payloads leak back into always-on logs.
+  // log redaction, otherwise raw provider payloads leak back into always-on logs. The default
+  // policy includes its programmatic matchers, not only the configurable string sources.
   const configuredPatterns = resolveConfiguredRedactPatterns();
   return redactSensitiveText(text, {
     mode: "tools",

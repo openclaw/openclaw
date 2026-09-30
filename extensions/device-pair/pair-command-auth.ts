@@ -106,15 +106,3 @@ export function resolvePairingCommandAuthState(
     approvalCallerScopes: undefined,
   };
 }
-
-export function buildMissingPairingScopeReply(): { text: string } {
-  return {
-    text: "⚠️ This command requires operator.pairing.",
-  };
-}
-
-export function buildMissingSetupHandoffScopeReply(): { text: string } {
-  return {
-    text: "⚠️ Setup code handoff includes Talk secrets and requires operator.talk.secrets.",
-  };
-}

@@ -22,6 +22,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -72,12 +73,17 @@ it("creates with prepared label facts, header and atomic owner without host data
     let assertCreation: () => void = () => {
       throw new Error("Creation has not bound its owner");
     };
-    writeSessionEntry(database, "agent:main:sibling", {
-      sessionId: "sibling",
-      label: "taken",
-      updatedAt: 1,
-      skillsSnapshot: { prompt: "unrelated".repeat(1024), skills: [] },
-    });
+    runOpenClawAgentWriteTransaction(
+      (db) => {
+        writeSessionEntry(db, "agent:main:sibling", {
+          sessionId: "sibling",
+          label: "taken",
+          updatedAt: 1,
+          skillsSnapshot: { prompt: "unrelated".repeat(1024), skills: [] },
+        });
+      },
+      { agentId: database.agentId, path: database.path },
+    );
     const env = { ...process.env };
     const originalStateDir = env.OPENCLAW_STATE_DIR;
     const order: string[] = [];
@@ -526,13 +532,13 @@ it("keeps native alias deletion rollback and creation notifications with the ori
     const alias = sessionKey.toLowerCase();
     const original = { sessionId: "native-alias", updatedAt: 1, agentHarnessId: "alias-owner" };
     const repositories = createSessionRepositoryWorkspaceStore();
-    const workspace = repositories.create({
+    const workspace = await repositories.create({
       agentId: "main",
       sessionKey: alias,
       url: "https://github.com/example/alias.git",
       assertCurrent: () => {},
     });
-    const siblingWorkspace = repositories.create({
+    const siblingWorkspace = await repositories.create({
       agentId: "other",
       sessionKey: alias,
       url: "https://github.com/example/sibling.git",
@@ -607,7 +613,7 @@ it("keeps native alias deletion rollback and creation notifications with the ori
     try {
       await expect(create()).rejects.toThrow("native alias failure");
       expect(order).toEqual(["prepare", "native", "rollback"]);
-      expect(repositories.get(workspace.workspaceId)).toEqual(workspace);
+      expect(await repositories.get(workspace.workspaceId)).toEqual(workspace);
       expect(readExactSessionEntryRow(database, alias)?.entry).toMatchObject(original);
       expect(readExactSessionEntryRow(database, sessionKey)).toBeUndefined();
       order.length = 0;
@@ -616,8 +622,8 @@ it("keeps native alias deletion rollback and creation notifications with the ori
       expect(order).toEqual(["prepare", "native", "committed", "published", "followup", "release"]);
       expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
       expect(readExactSessionEntryRow(database, sessionKey)?.entry).toMatchObject(original);
-      expect(repositories.get(workspace.workspaceId)).toBeUndefined();
-      expect(repositories.get(siblingWorkspace.workspaceId)).toEqual(siblingWorkspace);
+      expect(await repositories.get(workspace.workspaceId)).toBeUndefined();
+      expect(await repositories.get(siblingWorkspace.workspaceId)).toEqual(siblingWorkspace);
     } finally {
       stop();
       markPluginRegistryRetired(registry);

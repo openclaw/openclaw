@@ -547,6 +547,10 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public internal(set) var provenance: OpenClawChatInputProvenance?
     public internal(set) var historyMarker: OpenClawChatHistoryMarker?
 
+    var isToolResult: Bool {
+        ["toolresult", "tool_result"].contains(self.role.lowercased())
+    }
+
     var footerSourceIdentity: [AnyCodable] {
         let source = self.sourceMetadata
         let label = ChatPayloadDecoding.trimmedNonEmptyString(self.senderLabel)
@@ -573,8 +577,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
 
     var streamSegmentID: String? {
         guard self.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant" else { return nil }
-        let itemID = self.streamFallback?.itemId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return itemID?.isEmpty == false ? itemID : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(self.streamFallback?.itemId)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -766,17 +769,11 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         errorMessage: String?) -> String
     {
         let text = contentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let errorText = Self.errorDisplayText(
+        guard text.isEmpty || text == Self.streamErrorFallbackText else { return text }
+        return Self.errorDisplayText(
             role: role,
             stopReason: stopReason,
-            errorMessage: errorMessage)
-        else {
-            return text
-        }
-        if text.isEmpty || text == Self.streamErrorFallbackText {
-            return errorText
-        }
-        return text
+            errorMessage: errorMessage) ?? text
     }
 
     static func errorDisplayText(role: String, stopReason: String?, errorMessage: String?) -> String? {
@@ -862,7 +859,7 @@ extension OpenClawChatMessage.OpenClawMetadata {
         // Optional media must not invalidate a history/cache row. Keep nil holes
         // so inline-image layout indices still identify the original media facts.
         self.media = (try? container.decode([AnyCodable].self, forKey: .media))?.map {
-            try? ChatPayloadDecoding.decode($0, as: OpenClawChatMessage.MediaFact.self)
+            try? GatewayPayloadDecoding.decode($0, as: OpenClawChatMessage.MediaFact.self)
         }
         self.mediaImageLayout = try? container.decode(
             OpenClawChatMessage.MediaImageLayout.self,
@@ -1164,7 +1161,7 @@ public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
     public let args: AnyCodable?
     public let startedAt: Double?
     public let isError: Bool?
-    let diffStat: ChatToolDiffStat?
+    var diffStat: ChatToolDiffStat?
     var activity: OpenClawAgentActivityItem?
     var isComplete: Bool = false
     var runID: String?

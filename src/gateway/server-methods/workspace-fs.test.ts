@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { open, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -84,7 +85,8 @@ describe("readWorkspaceFilePrefix", () => {
 
     const result = await readWorkspaceFilePrefix(tempDir, "notes.txt", 100);
 
-    expect(result?.buffer).toEqual(content);
+    assert(result && result !== "unsupported");
+    expect(result.buffer).toEqual(content);
     expect(result?.canonicalPath).toBe("notes.txt");
     expect(result?.stat.size).toBe(content.length);
   });
@@ -113,7 +115,8 @@ describe("readWorkspaceFilePrefix", () => {
 
     const result = await readWorkspaceFilePrefix(tempDir, "notes.txt", 100);
 
-    expect(result?.buffer.toString()).toBe("pre");
+    assert(result && result !== "unsupported");
+    expect(result.buffer.toString()).toBe("pre");
     expect(readCount).toBe(2);
   });
 
@@ -123,6 +126,7 @@ describe("readWorkspaceFilePrefix", () => {
 
     const result = await readWorkspaceFilePrefix(tempDir, "notes.txt", 7);
 
-    expect(result?.buffer.toString()).toBe("bounded");
+    assert(result && result !== "unsupported");
+    expect(result.buffer.toString()).toBe("bounded");
   });
 });

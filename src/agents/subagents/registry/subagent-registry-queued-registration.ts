@@ -13,7 +13,11 @@ import {
   hasPendingSubagentRetirementPublication,
   waitForSubagentRetirementPublication,
 } from "./subagent-registry-memory.js";
-import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import {
+  SubagentRegistryWriteError,
+  assertSubagentRegistryWriteOutcomeKnown,
+  waitForPendingSubagentKillClaim,
+} from "./subagent-registry-persistence.js";
 import { waitForQueuedSubagentClaim } from "./subagent-registry-queued-registration-wait.js";
 import { createQueuedRegistrationSettlement } from "./subagent-registry-queued-settlement.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
@@ -68,6 +72,7 @@ export function registerRequiredQueuedSubagent(params: {
     );
   const assertRegistryCurrent = () => {
     context.admission.assertCurrent();
+    assertSubagentRegistryWriteOutcomeKnown([runId], context.admission);
     if (
       captureOpenClawStateWorkerContext().admission.identity.key !==
         context.admission.identity.key ||
@@ -89,7 +94,11 @@ export function registerRequiredQueuedSubagent(params: {
     (entry.execution.status !== "queued" &&
       entry.execution !== publishedTerminalExecution &&
       !entry.killIntent);
-  const pendingClaim = () => exactEntry() && Boolean(entry.killIntent) && !confirmedTakeover();
+  const pendingClaim = () =>
+    registryCurrent() &&
+    exactEntry() &&
+    !confirmedTakeover() &&
+    Boolean(entry.killIntent || waitForPendingSubagentKillClaim(entry, context.admission));
   const waitForClaim = (): Promise<void> | undefined => {
     if (!pendingClaim()) {
       return undefined;
@@ -97,6 +106,15 @@ export function registerRequiredQueuedSubagent(params: {
     return (async () => {
       try {
         while (pendingClaim()) {
+          const pending = waitForPendingSubagentKillClaim(entry, context.admission);
+          if (pending) {
+            await pending;
+            assertRegistryCurrent();
+            if (!exactEntry()) {
+              return;
+            }
+            continue;
+          }
           await waitForQueuedSubagentClaim({
             assertCurrent: assertRegistryCurrent,
             pending: pendingClaim,
@@ -120,11 +138,19 @@ export function registerRequiredQueuedSubagent(params: {
     entry.execution.status === "queued" &&
     entry.execution.endedAt === undefined &&
     !entry.killIntent &&
+    !waitForPendingSubagentKillClaim(entry, context.admission) &&
     !entry.killReconciliation;
   const assertLaunchCurrent = () => {
     if (!ownsQueuedIntent()) {
       throw new Error("Queued registration lost its original run owner");
     }
+  };
+  const assertRegistrationCurrent = () => {
+    params.assertCurrent?.();
+    if (!gatewayCurrent()) {
+      throw new Error("Queued registration lost its original Gateway owner");
+    }
+    assertLaunchCurrent();
   };
   const settlement = createQueuedRegistrationSettlement({
     entry,
@@ -281,8 +307,6 @@ export function registerRequiredQueuedSubagent(params: {
       message: error instanceof Error ? error.message : String(error),
     };
     const { endedAt, message, error: cause } = failureFact;
-    const terminalEndedAt = endedAt;
-    const terminalError = message;
     try {
       if (!(await clearDurableLaunchDescriptor())) {
         return;
@@ -293,16 +317,16 @@ export function registerRequiredQueuedSubagent(params: {
         terminal.execution = {
           ...terminal.execution,
           status: "terminal",
-          endedAt: terminalEndedAt,
-          outcome: { status: "error", error: terminalError, endedAt: terminalEndedAt },
+          endedAt,
+          outcome: { status: "error", error: message, endedAt },
           ...(!ownedSession ? { suppressSessionEffects: true } : {}),
         };
         terminal.queuedLaunch = undefined;
         terminal.collectorLaunchCleanupPending = true;
         terminal.completion = {
           required: false,
-          resultText: terminalError ?? null,
-          capturedAt: terminalEndedAt,
+          resultText: message,
+          capturedAt: endedAt,
         };
         updateSwarmCollectorCompletion(terminal, manager.getRuntimeConfig());
         return terminal;
@@ -354,13 +378,7 @@ export function registerRequiredQueuedSubagent(params: {
         await manager.persistAsyncOrThrow(
           context,
           {
-            assertCurrent: () => {
-              params.assertCurrent?.();
-              if (!gatewayCurrent()) {
-                throw new Error("Queued registration lost its original Gateway owner");
-              }
-              assertLaunchCurrent();
-            },
+            assertCurrent: assertRegistrationCurrent,
           },
           runId,
           ...Array.from(originals.keys(), (previous) => previous.runId),
@@ -428,13 +446,7 @@ export function registerRequiredQueuedSubagent(params: {
           publication = manager.persistAsyncOrThrow(
             context,
             {
-              assertCurrent: () => {
-                params.assertCurrent?.();
-                if (!gatewayCurrent()) {
-                  throw new Error("Queued registration lost its original Gateway owner");
-                }
-                assertLaunchCurrent();
-              },
+              assertCurrent: assertRegistrationCurrent,
               onCommitted: () => {
                 descriptorCommitted = true;
                 if (ownsQueuedIntent()) {

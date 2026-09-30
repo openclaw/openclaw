@@ -11,6 +11,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -328,11 +329,14 @@ it.each(["sharing", "list"] as const)(
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
       const sessionKey = "agent:main:retained-header";
       seedRetainedSessionHeader(database, sessionKey, "retained-session");
-      writeSessionEntry(database, "agent:main:ordinary", {
-        sessionId: "ordinary-session",
-        updatedAt: 1,
-        skillsSnapshot: { prompt: "saved prompt stays in storage", skills: [] },
-      });
+      replaceSessionEntrySync(
+        { agentId: "main", env, sessionKey: "agent:main:ordinary" },
+        {
+          sessionId: "ordinary-session",
+          updatedAt: 1,
+          skillsSnapshot: { prompt: "saved prompt stays in storage", skills: [] },
+        },
+      );
       const result = await readSessionEntriesFromStoreInWorker({
         agentId: "main",
         storePath: database.path,
@@ -569,8 +573,13 @@ it.each(["durable", "incognito"] as const)(
         });
         try {
           replay.assertCurrent();
-          deleteSessionEntryRows(database, sessionKey);
-          writeSessionEntry(database, sessionKey, { sessionId: "replacement", updatedAt: 3 });
+          runOpenClawAgentWriteTransaction(
+            (writer) => {
+              deleteSessionEntryRows(writer, sessionKey);
+              writeSessionEntry(writer, sessionKey, { sessionId: "replacement", updatedAt: 3 });
+            },
+            toDatabaseOptions(resolveSqliteScope(scope)),
+          );
           expect(replay.assertCurrent).toThrow(
             expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
           );

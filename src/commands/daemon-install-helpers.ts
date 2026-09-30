@@ -632,6 +632,7 @@ export async function buildGatewayInstallPlan(params: {
   port: number;
   allowUnconfigured?: boolean;
   runtime: GatewayDaemonRuntime;
+  runtimeExplicit?: boolean;
   existingEnvironment?: Record<string, string | undefined>;
   existingCommand?: GatewayServiceCommandConfig | null;
   devMode?: boolean;
@@ -670,13 +671,15 @@ export async function buildGatewayInstallPlan(params: {
   const wrapperPath = wrapperPointsAtGeneratedScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
-  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
+    runtimeExplicit: params.runtimeExplicit,
     devMode: params.devMode,
     runtimePath: params.runtimePath,
     pinnedRuntimePath: params.pinnedRuntimePath,
     wrapperPath,
+    warn: params.warn,
   });
   const serviceInputEnv = { ...params.env };
   if (wrapperPath) {
@@ -693,14 +696,14 @@ export async function buildGatewayInstallPlan(params: {
           "--allow-unconfigured",
         ) === true),
     dev: devMode,
-    runtime: params.runtime,
+    runtime,
     runtimePath,
     wrapperPath,
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({
     env: params.env,
-    runtime: params.runtime,
+    runtime,
     nodeProgram: programArguments[0],
     warn: params.warn,
     title: "Gateway runtime",
@@ -708,7 +711,7 @@ export async function buildGatewayInstallPlan(params: {
   const serviceEnvironment = buildServiceEnvironment({
     env: serviceInputEnv,
     port: params.port,
-    runtime: params.runtime,
+    runtime,
     existingNodeOptions: resolveManagedGatewayServiceCommand(params.existingCommand)?.environment
       ?.NODE_OPTIONS,
     launchdLabel:
@@ -736,6 +739,7 @@ export async function buildGatewayInstallPlan(params: {
 
   // Lowest to highest: preserved custom vars, durable config, SecretRef env, generated service env.
   return {
+    runtime,
     programArguments,
     workingDirectory:
       workingDirectory ||

@@ -27,6 +27,7 @@ import {
   rowToSubagentRunRecord,
 } from "../registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import { mutateSubagentCompletionInDatabase } from "./subagent-completion-mutation.kernel.js";
 
@@ -59,18 +60,10 @@ export function admitSubagentCompletionInWorker(
   });
   const expectedPayload = bindSubagentRunRecord(expected).payload_json;
   const boundSubagent = bindSubagentRunRecord(subagent);
-  const readRow = () =>
-    executeSqliteQuerySync(
-      database.db,
-      query(database.db)
-        .selectFrom("subagent_runs")
-        .selectAll()
-        .where("run_id", "=", expected.runId),
-    ).rows[0];
   return runOpenClawStateWriteTransaction(
     () => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-      const originalRow = readRow();
+      const originalRow = readSubagentRunRow(database, expected.runId);
       const current = originalRow && rowToSubagentRunRecord(originalRow);
       if (
         !current ||
@@ -134,7 +127,7 @@ export function admitSubagentCompletionInWorker(
           throw new Error(`session delivery queue conflict for ${queueEntry.id}`);
         }
       }
-      const row = readRow();
+      const row = readSubagentRunRow(database, expected.runId);
       if (!row) {
         throw new Error("subagent completion owner disappeared during admission");
       }

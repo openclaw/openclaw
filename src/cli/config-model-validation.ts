@@ -76,11 +76,15 @@ function collectTextModelConfigRefs(params: {
   const { primary, fallbacks } = model as { primary?: unknown; fallbacks?: unknown };
   const refs: TouchedModelRef[] = [];
   if (typeof primary === "string") {
+    const value = primary.trim();
+    // Runtime preserves auth-profile suffixes for primaries, never fallback candidates.
+    const authProfileId = splitTrailingAuthProfile(value).profile;
     refs.push({
       path: stringModel ? params.path : `${params.path}.primary`,
-      value: primary.trim(),
+      value,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       fallback: false,
+      ...(authProfileId ? { authProfileId } : {}),
     });
   }
   if (Array.isArray(fallbacks)) {
@@ -116,17 +120,6 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
       }),
     );
   }
-  for (const ref of refs) {
-    // Runtime preserves an auth-profile suffix only for configured primaries. Fallback
-    // candidates carry provider/model pairs, so validation must mirror that behavior.
-    if (ref.fallback) {
-      continue;
-    }
-    const authProfileId = splitTrailingAuthProfile(ref.value).profile;
-    if (authProfileId) {
-      ref.authProfileId = authProfileId;
-    }
-  }
   return refs;
 }
 
@@ -137,6 +130,17 @@ function modelRefComparisonKey(ref: TouchedModelRef): string {
     return `agent:${normalizeAgentId(ref.agentId)}:${relativePath}`;
   }
   return `path:${ref.path}`;
+}
+
+function inheritsDefaultModelRef(
+  config: OpenClawConfig,
+  agentId: string,
+  ref: TouchedModelRef,
+): boolean {
+  const resolveOverride = ref.fallback
+    ? resolveAgentModelFallbacksOverride
+    : resolveAgentExplicitModelPrimary;
+  return resolveOverride(config, agentId) === undefined;
 }
 
 function collectTouchedTextModelRefs(params: {
@@ -173,10 +177,10 @@ function collectTouchedTextModelRefs(params: {
   const touchedRefs = refs.filter((ref) => {
     if (ref.fallback && defaultPrimaryProviderChanged) {
       const previousRef = previousRefsByIdentity?.get(modelRefComparisonKey(ref));
-      const nextResolved = resolveCanonicalFallbackRef(params.config, ref.value);
+      const nextResolved = resolveFallbackRef(params.config, ref.value)?.ref;
       const previousResolved =
         params.previousConfig && previousRef
-          ? resolveCanonicalFallbackRef(params.previousConfig, previousRef.value)
+          ? resolveFallbackRef(params.previousConfig, previousRef.value)?.ref
           : undefined;
       if (
         !nextResolved ||
@@ -221,18 +225,14 @@ function collectTouchedTextModelRefs(params: {
       continue;
     }
     for (const defaultRef of defaultRefs) {
-      const inherits = defaultRef.fallback
-        ? resolveAgentModelFallbacksOverride(params.config, agentId) === undefined
-        : resolveAgentExplicitModelPrimary(params.config, agentId) === undefined;
+      const inherits = inheritsDefaultModelRef(params.config, agentId, defaultRef);
       const previousAgentExists = (
         params.previousConfig ? listAgentEntries(params.previousConfig) : []
       ).some((previousEntry) => normalizeAgentId(previousEntry.id) === normalizeAgentId(agentId));
       const previouslyInherited =
-        previousAgentExists && params.previousConfig
-          ? defaultRef.fallback
-            ? resolveAgentModelFallbacksOverride(params.previousConfig, agentId) === undefined
-            : resolveAgentExplicitModelPrimary(params.previousConfig, agentId) === undefined
-          : false;
+        previousAgentExists &&
+        params.previousConfig &&
+        inheritsDefaultModelRef(params.previousConfig, agentId, defaultRef);
       if (inherits && !previouslyInherited) {
         touchedRefs.push({ ...defaultRef, agentId, dependency: true });
       }
@@ -296,23 +296,15 @@ function resolveFallbackRef(
   });
 }
 
-function resolveCanonicalFallbackRef(
-  config: OpenClawConfig,
-  value: string,
-  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
-  agentId?: string,
-): { provider: string; model: string } | undefined {
-  return resolveFallbackRef(config, value, manifestPlugins, agentId)?.ref;
-}
-
 function resolveCanonicalModelRef(
   config: OpenClawConfig,
   ref: TouchedModelRef,
   manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
 ) {
   const agentId = ref.agentId ?? tryResolveLegacyCompatibilityAgentId(config);
-  const resolveRef = ref.fallback ? resolveCanonicalFallbackRef : resolveCanonicalPrimaryRef;
-  return resolveRef(config, ref.value, manifestPlugins, agentId);
+  return ref.fallback
+    ? resolveFallbackRef(config, ref.value, manifestPlugins, agentId)?.ref
+    : resolveCanonicalPrimaryRef(config, ref.value, manifestPlugins, agentId);
 }
 
 function scopedModelRefComparisonKey(config: OpenClawConfig, ref: TouchedModelRef): string {
@@ -373,10 +365,7 @@ function expandInheritedDefaultRefs(
         (entry) => normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId),
       );
       const defaultAgentInherits =
-        !defaultAgentConfigured ||
-        (ref.fallback
-          ? resolveAgentModelFallbacksOverride(config, defaultAgentId) === undefined
-          : resolveAgentExplicitModelPrimary(config, defaultAgentId) === undefined);
+        !defaultAgentConfigured || inheritsDefaultModelRef(config, defaultAgentId, ref);
       if (defaultAgentInherits) {
         push(ref);
       }
@@ -385,10 +374,7 @@ function expandInheritedDefaultRefs(
       if (defaultAgentId && normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId)) {
         continue;
       }
-      const inherits = ref.fallback
-        ? resolveAgentModelFallbacksOverride(config, agentId) === undefined
-        : resolveAgentExplicitModelPrimary(config, agentId) === undefined;
-      if (inherits) {
+      if (inheritsDefaultModelRef(config, agentId, ref)) {
         push({ ...ref, agentId });
       }
     }
