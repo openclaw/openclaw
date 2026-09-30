@@ -134,8 +134,9 @@ function installSkillLibraryMock(
     if (method === "skills.library.read") {
       const read = params.sessionKey
         ? pins(params.sessionKey).find(
-            (read) =>
-              read.entry.skillId === params.skillId && read.entry.revision === params.revision,
+            (candidate) =>
+              candidate.entry.skillId === params.skillId &&
+              candidate.entry.revision === params.revision,
           )
         : params.skillId && visible().some((entry) => entry.skillId === params.skillId)
           ? params.revision
