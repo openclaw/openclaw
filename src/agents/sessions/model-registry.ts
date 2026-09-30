@@ -100,7 +100,6 @@ export type ResolvedRequestAuth =
       error: string;
     };
 
-/** Result of loading custom models from models.json */
 interface CustomModelsResult {
   providers: RegistryProviderSources;
   error: string | undefined;
@@ -162,9 +161,6 @@ function mergeCompat(
   };
 }
 
-/**
- * Model registry - loads and manages models, resolves API keys via AuthStorage.
- */
 export class ModelRegistry {
   private models: Model[] = [];
   private config: OpenClawConfig | undefined;
@@ -615,15 +611,12 @@ export class ModelRegistry {
         );
       }
       for (const modelDef of models) {
-        const hasModelApi = Boolean(modelDef.api);
-
-        if (!hasProviderApi && !hasModelApi) {
+        if (!hasProviderApi && !modelDef.api) {
           throw new Error(
             `Provider ${providerName}, model ${modelDef.id}: no "api" specified. Set at provider or model level.`,
           );
         }
 
-        // Validate contextWindow/maxTokens only if provided (they have defaults)
         if (modelDef.contextWindow !== undefined && modelDef.contextWindow <= 0) {
           throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);
         }
@@ -638,12 +631,7 @@ export class ModelRegistry {
     const models: Model[] = [];
 
     for (const [providerName, providerConfig] of Object.entries(providers)) {
-      const modelDefs = providerConfig.models ?? [];
-      if (modelDefs.length === 0) {
-        continue;
-      }
-
-      for (const modelDef of modelDefs) {
+      for (const modelDef of providerConfig.models ?? []) {
         const api = modelDef.api ?? providerConfig.api;
         if (!api) {
           continue;
@@ -961,7 +949,6 @@ export class ModelRegistry {
 
   private applyProviderConfig(providerName: string, config: ProviderConfigInput): void {
     if (config.oauth) {
-      // Ensure the OAuth provider ID matches the provider name
       const oauthProvider: OAuthProviderInterface = {
         ...config.oauth,
         id: providerName,
@@ -985,7 +972,6 @@ export class ModelRegistry {
     this.storeProviderRequestConfig(providerName, config);
 
     if (config.models && config.models.length > 0) {
-      // Full replacement: remove existing models for this provider
       this.models = this.models.filter((m) => m.provider !== providerName);
 
       for (const modelDef of config.models) {
@@ -1023,9 +1009,6 @@ export class ModelRegistry {
   }
 }
 
-/**
- * Input type for registerProvider API.
- */
 export interface ProviderConfigInput extends ProviderConfigBase {
   auth?: ProviderAuthMode;
   /** OAuth provider for /login support */

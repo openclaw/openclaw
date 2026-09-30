@@ -112,7 +112,6 @@ export abstract class AgentSessionBase {
 
   protected sessionModelRegistry: ModelRegistry;
 
-  // Tool registry for extension getTools/setTools
   protected toolRegistry: Map<string, AgentTool> = new Map();
   protected toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
   protected toolPromptSnippets: Map<string, string> = new Map();
@@ -197,10 +196,6 @@ export abstract class AgentSessionBase {
     return this.withExternalSessionWriteSettlement
       ? await this.withExternalSessionWriteSettlement(run)
       : await run();
-  }
-
-  private eventMayWriteSession(event: AgentEvent): boolean {
-    return event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type);
   }
 
   /**
@@ -334,7 +329,7 @@ export abstract class AgentSessionBase {
         reason !== null &&
         (reason as { turnHandoff?: unknown }).turnHandoff === true;
     }
-    if (this.eventMayWriteSession(event)) {
+    if (event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type)) {
       await this.runWithSessionWriteSettlement(
         async () => await this.handleAgentEventUnlocked(event),
       );
@@ -560,7 +555,7 @@ export abstract class AgentSessionBase {
   protected reconnectToAgent(): void {
     if (this.unsubscribeAgent) {
       return;
-    } // Already connected
+    }
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
   }
 
@@ -583,9 +578,7 @@ export abstract class AgentSessionBase {
       }
     }
 
-    this.currentExtensionRunner.invalidate(
-      "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
-    );
+    this.currentExtensionRunner.invalidate();
     this.disconnectFromAgent();
     this.eventListeners = [];
     if (this.cleanupProviderSessionResourcesOnDispose) {
