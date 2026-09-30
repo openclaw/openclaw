@@ -4,25 +4,16 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../../agents/cli-execution-auth.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
-import {
-  clearCliSessionInStore,
-  persistCliSessionBindingResult,
-  settleCliSessionResult,
-} from "../../agents/cli-session-store.js";
-import {
-  getCliSessionBinding,
-  shouldClearFailedCliSessionBinding,
-} from "../../agents/cli-session.js";
+import { clearCliSessionInStore, settleCliSessionResult } from "../../agents/cli-session-store.js";
+import { shouldClearFailedCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
+import { withAdmittedCliCandidate } from "../../agents/embedded-agent-runner/run-entry-cli.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { createAgentRunSupersededAbortError } from "../../agents/run-termination.js";
-import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -142,37 +133,30 @@ export async function runCliFallbackCandidate(
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
   const toolAuthorityFingerprint = turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   const result = await params.timing.measure("cli_run", () =>
-    withLocalSessionPlacementTurnSettlement(
+    withAdmittedCliCandidate(
       {
-        sessionId: turn.followupRun.run.sessionId,
-        sessionKey,
-        agentId: turn.followupRun.run.agentId,
-        runId: params.runId,
+        claim: {
+          sessionId: turn.followupRun.run.sessionId,
+          sessionKey,
+          agentId: turn.followupRun.run.agentId,
+          runId: params.runId,
+        },
+        admission: {
+          preparedRunAdmission: params.preparedRunAdmission,
+          lifecycleGeneration: params.lifecycleGeneration,
+          isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+          abortSignal: params.runAbortSignal,
+          trigger: turn.isHeartbeat ? "heartbeat" : "user",
+          inputProvenance: turn.followupRun.run.inputProvenance,
+        },
+        provider: params.cliExecutionProvider,
+        sessionTarget,
+        expectedLifecycleRevision,
+        readMode: "read-only",
+        getSessionEntry: () => turn.getActiveSessionEntry(),
+        classifyResult: params.classifyResult,
       },
-      async (assertSettlementCurrent) => {
-        // Placement admission may wait behind an older turn. Snapshot placement,
-        // permission, and native resume identity only after this turn owns it.
-        const sessionEntry = sessionTarget
-          ? await withSessionEntryReadOnlyInWorker(
-              sessionTarget,
-              assertSettlementCurrent,
-              async (read) => {
-                if (!read.ok) {
-                  throw read.error;
-                }
-                return read.value;
-              },
-            )
-          : turn.getActiveSessionEntry();
-        assertSettlementCurrent();
-        if (
-          sessionTarget &&
-          (sessionEntry?.sessionId !== sessionTarget.sessionId ||
-            sessionEntry.lifecycleRevision !== expectedLifecycleRevision)
-        ) {
-          throw createAgentRunSupersededAbortError();
-        }
-        const cliSessionBinding = getCliSessionBinding(sessionEntry, params.cliExecutionProvider);
+      async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
         // The CLI owner must see explicit pins before provider scoping can discard them.
         const authProfileId = allowCliAuthProfileForwarding
           ? resolveCliExecutionAuthProfileId({
@@ -475,34 +459,14 @@ export async function runCliFallbackCandidate(
             params.classifyResult(candidateResult);
           });
         }
-        const classification = params.classifyResult(candidateResult);
-        if (
-          (!classification || candidateResult.meta.agentMeta?.clearCliSessionBinding === true) &&
-          !shouldPreserveUserFacingSessionStateForInputProvenance(
+        return settleResult({
+          result: candidateResult,
+          expectedSession: sessionEntry,
+          sessionStore: turn.activeSessionStore,
+          preserveBinding: shouldPreserveUserFacingSessionStateForInputProvenance(
             turn.followupRun.run.inputProvenance,
-          )
-        ) {
-          return await persistCliSessionBindingResult({
-            agentId: turn.followupRun.run.agentId,
-            provider: params.cliExecutionProvider,
-            result: candidateResult,
-            sessionKey,
-            storePath: turn.storePath,
-            sessionStore: turn.activeSessionStore,
-            expectedSession: sessionEntry,
-            assertSettlementCurrent,
-            abortSignal: params.runAbortSignal,
-          });
-        }
-        return candidateResult;
-      },
-      {
-        preparedRunAdmission: params.preparedRunAdmission,
-        lifecycleGeneration: params.lifecycleGeneration,
-        isFinalFallbackAttempt: params.isFinalFallbackAttempt,
-        abortSignal: params.runAbortSignal,
-        trigger: turn.isHeartbeat ? "heartbeat" : "user",
-        inputProvenance: turn.followupRun.run.inputProvenance,
+          ),
+        });
       },
     ),
   );
