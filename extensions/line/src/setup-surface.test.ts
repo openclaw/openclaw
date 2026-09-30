@@ -20,15 +20,15 @@ import { stubLineApiFetch } from "./probe.test-support.js";
 import { setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
-const monitorLineProvider = vi.hoisted(() =>
+const monitorLineProviderMock = vi.hoisted(() =>
   vi.fn<
     (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => Promise<void>
   >(),
 );
-vi.mock("./monitor.js", () => ({ monitorLineProvider }));
+vi.mock("./monitor.js", () => ({ monitorLineProvider: monitorLineProviderMock }));
 
 afterEach(() => {
-  monitorLineProvider.mockReset();
+  monitorLineProviderMock.mockReset();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -147,7 +147,7 @@ describe("linePlugin status.probeAccount", () => {
 
 function createRuntime() {
   const providerStarted = createDeferred<void>();
-  monitorLineProvider.mockImplementation(async (opts) => {
+  monitorLineProviderMock.mockImplementation(async (opts) => {
     providerStarted.resolve();
     await waitForAbortSignal(opts.abortSignal);
   });
@@ -158,7 +158,11 @@ function createRuntime() {
     },
   } as unknown as PluginRuntime;
 
-  return { runtime, monitorLineProvider, providerStarted: providerStarted.promise };
+  return {
+    runtime,
+    monitorLineProvider: monitorLineProviderMock,
+    providerStarted: providerStarted.promise,
+  };
 }
 
 function createAccount(params: { token: string; secret: string }): ResolvedLineAccount {

@@ -127,16 +127,12 @@ it("sends oversized tables in source order with quick replies on the final card"
   await send({ text: markdown, line: { quickReplies: ["Continue"] } });
   expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
   const oversized = mocks.pushMessageLine.mock.calls.flatMap((args, index) =>
-    String(args[1]).includes("Large")
-      ? [mocks.pushMessageLine.mock.invocationCallOrder[index]]
-      : [],
+    args[1].includes("Large") ? [mocks.pushMessageLine.mock.invocationCallOrder[index]] : [],
   );
   expect(oversized).toHaveLength(1);
   expect(oversized[0]).toBeGreaterThan(order(mocks.pushFlexMessage));
   expect(oversized[0]).toBeLessThan(order(mocks.pushMessagesLine));
-  expect(mocks.pushMessageLine.mock.calls.every((args) => String(args[1]).length <= 5000)).toBe(
-    true,
-  );
+  expect(mocks.pushMessageLine.mock.calls.every((args) => args[1].length <= 5000)).toBe(true);
   expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
     to,
     [expect.objectContaining({ altText: "Code", quickReply: createQuickReply("Continue") })],
