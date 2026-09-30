@@ -227,3 +227,85 @@ it("keeps discovery conservative after partial scans exhaust the kind cache", as
     expect(getSkillsSourceVersion(workspaceDir)).toBeGreaterThan(before);
   }
 });
+
+it("closes only the deleted workspace skill watchers", async () => {
+  const otherWorkspaceDir = await fixture.createFixtureDirectory("other-workspace");
+  await fixture.createFixtureDirectory("other-workspace/skills");
+  refresh.ensureSkillsWatcher({ workspaceDir: fixture.workspaceDir });
+  refresh.ensureSkillsWatcher({ workspaceDir: otherWorkspaceDir });
+  await observer.readyAll();
+  const deletedWorkspaceWatch = observer.forRoot(path.join(fixture.workspaceDir, "skills"));
+  const otherWorkspaceWatch = observer.forRoot(path.join(otherWorkspaceDir, "skills"));
+  let releaseClose: (() => void) | undefined;
+  const closeBarrier = new Promise<void>((resolve) => {
+    releaseClose = resolve;
+  });
+  deletedWorkspaceWatch.holdClose(closeBarrier);
+  let settled = false;
+
+  const close = refresh.closeSkillsWatchersForWorkspace(fixture.workspaceDir).then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+
+  expect(deletedWorkspaceWatch.close).toHaveBeenCalledOnce();
+  expect(otherWorkspaceWatch.close).not.toHaveBeenCalled();
+  expect(settled).toBe(false);
+  releaseClose?.();
+  await close;
+  expect(settled).toBe(true);
+});
+
+it("rejects workspace drainage when its physical watcher cannot close", async () => {
+  const otherWorkspaceDir = await fixture.createFixtureDirectory("other-workspace");
+  await fixture.createFixtureDirectory("other-workspace/skills");
+  refresh.ensureSkillsWatcher({ workspaceDir: otherWorkspaceDir });
+  await observer.readyAll();
+  const otherWorkspaceWatch = observer.forRoot(path.join(otherWorkspaceDir, "skills"));
+  const registry = await import("./refresh-watch-registry.js");
+  const targetPath = path.join(fixture.workspaceDir, "skills");
+  const watcherKey = JSON.stringify([fixture.workspaceDir, undefined, undefined]);
+  const closeFailure = Promise.reject(new Error("synthetic watcher close failure"));
+  void closeFailure.catch(() => {});
+  const close = vi.fn(() => closeFailure);
+  registry.pathWatchers.set(targetPath, {
+    closed: false,
+    close,
+    refreshScope: vi.fn(async () => {}),
+    depth: 7,
+    initialScan: "ready",
+    unavailable: false,
+    verified: true,
+    failed: false,
+    recovering: false,
+    replacing: false,
+    subscribers: new Set([watcherKey]),
+  });
+  registry.workspaceWatchOwners.set(watcherKey, {
+    workspaceDir: fixture.workspaceDir,
+    sourceScope: {},
+    sharedScanPending: false,
+    unavailable: false,
+  });
+  registry.workspaceWatchTargets.set(watcherKey, [
+    { path: targetPath, authorityPath: fixture.workspaceDir, depth: 7 },
+  ]);
+
+  await expect(refresh.closeSkillsWatchersForWorkspace(fixture.workspaceDir)).rejects.toThrow(
+    "synthetic watcher close failure",
+  );
+
+  expect(registry.pathWatchers.get(targetPath)).toMatchObject({
+    failed: true,
+  });
+  expect(
+    Array.from(registry.workspaceWatchOwners.values()).some(
+      (owner) => owner.workspaceDir === fixture.workspaceDir,
+    ),
+  ).toBe(true);
+  await expect(refresh.closeSkillsWatchersForWorkspace(fixture.workspaceDir)).rejects.toThrow(
+    "synthetic watcher close failure",
+  );
+  expect(close).toHaveBeenCalledTimes(2);
+  expect(otherWorkspaceWatch.close).not.toHaveBeenCalled();
+});

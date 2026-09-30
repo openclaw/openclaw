@@ -24,6 +24,7 @@ import {
 } from "../cron/store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import * as skillsRefresh from "../skills/runtime/refresh.js";
 import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
@@ -480,6 +481,31 @@ describe("Claw serving monitor cleanup", () => {
       ).rejects.toThrow("deletion fence");
     },
   );
+
+  it("does not acknowledge drainage when a workspace watcher cannot close", async () => {
+    const current = await fixture(false);
+    const plan = await current.plan();
+    const watcherFailure = vi
+      .spyOn(skillsRefresh, "closeSkillsWatchersForWorkspace")
+      .mockRejectedValueOnce(new Error("synthetic watcher close failure"));
+    let result: Awaited<ReturnType<typeof current.apply>>;
+    try {
+      result = await current.apply(plan);
+    } finally {
+      watcherFailure.mockRestore();
+    }
+
+    expect(result).toMatchObject({
+      status: "partial",
+      agentRemoved: true,
+      error: {
+        code: "monitor_cleanup_failed",
+        message: expect.stringContaining("synthetic watcher close failure"),
+      },
+    });
+    expect(readAgentDeletionJournal("worker")).toBeDefined();
+    expect(await current.apply(await current.plan())).toMatchObject({ status: "complete" });
+  });
 
   it("rejects source drift after preview before creating a deletion fence", async () => {
     const current = await fixture(false);

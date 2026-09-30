@@ -8,6 +8,7 @@ import {
 } from "@openclaw/fs-safe/watch";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRealpathOrAbsolute } from "../../infra/boundary-path.js";
 import {
   resolveFsObservationMode,
   resolveFsObservationIntervalMs,
@@ -507,17 +508,30 @@ function subscribeWorkspaceToPath(
 function disposeWorkspaceWatchState(
   watcherKey: string,
   watchTargets: readonly WatchTarget[] = workspaceWatchTargets.get(watcherKey) ?? [],
-): void {
+  options: { rejectCloseFailure?: boolean } = {},
+): Promise<void> {
   disposeRemoteSkillsWatcher(watcherKey);
-  for (const watchTarget of watchTargets) {
-    unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
+  const teardowns = watchTargets.map((watchTarget) =>
+    unsubscribeWorkspaceFromPath(watcherKey, watchTarget, options),
+  );
+  const forgetWorkspace = () => {
+    workspaceWatchTargets.delete(watcherKey);
+    workspaceWatchOwners.delete(watcherKey);
+    workspaceWatchTargetCache.delete(watcherKey);
+    workspaceWatchLastEnsuredAt.delete(watcherKey);
+  };
+  if (!options.rejectCloseFailure) {
+    forgetWorkspace();
   }
-  workspaceWatchTargets.delete(watcherKey);
-  workspaceWatchOwners.delete(watcherKey);
-  workspaceWatchTargetCache.delete(watcherKey);
-  workspaceWatchLastEnsuredAt.delete(watcherKey);
   // Reacquisition invalidates after an unwatched interval. Disposal itself does
   // not change skills, including for other subscriptions sharing this workspace.
+  return Promise.all(teardowns).then(() => {
+    forgetWorkspace();
+  });
+}
+
+function disposeWorkspaceWatchStateDetached(watcherKey: string): void {
+  void disposeWorkspaceWatchState(watcherKey);
 }
 
 export function ensureSkillsWatcher(params: {
@@ -558,15 +572,15 @@ export function ensureSkillsWatcher(params: {
   const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
   if (!watchEnabled) {
-    disposeWorkspaceWatchState(watcherKey);
-    evictWorkspaceWatchStates(now, disposeWorkspaceWatchState);
+    disposeWorkspaceWatchStateDetached(watcherKey);
+    evictWorkspaceWatchStates(now, disposeWorkspaceWatchStateDetached);
     return;
   }
 
   // Map order breaks equal-clock ties and promotes reuse without adding a generation.
   workspaceWatchLastEnsuredAt.delete(watcherKey);
   workspaceWatchLastEnsuredAt.set(watcherKey, now);
-  evictWorkspaceWatchStates(now, disposeWorkspaceWatchState);
+  evictWorkspaceWatchStates(now, disposeWorkspaceWatchStateDetached);
   if (!isCurrent()) {
     return;
   }
@@ -636,7 +650,7 @@ export function ensureSkillsWatcher(params: {
     const nextTargetKeys = new Set(watchTargets.map((target) => target.path));
     for (const watchTarget of previousTargets) {
       if (!nextTargetKeys.has(watchTarget.path)) {
-        unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
+        void unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
       }
     }
     // A replacement notification can synchronously dispose or re-ensure this owner.
@@ -714,6 +728,19 @@ export function reconcileSkillsWatcherCoverage(
   return covered;
 }
 
+/** Releases Gateway-owned skill watchers before an agent workspace is removed. */
+export async function closeSkillsWatchersForWorkspace(workspaceDir: string): Promise<void> {
+  const canonicalWorkspaceDir = resolveRealpathOrAbsolute(workspaceDir);
+  const watcherKeys = Array.from(workspaceWatchOwners)
+    .filter(([, owner]) => resolveRealpathOrAbsolute(owner.workspaceDir) === canonicalWorkspaceDir)
+    .map(([watcherKey]) => watcherKey);
+  await Promise.all(
+    watcherKeys.map((watcherKey) =>
+      disposeWorkspaceWatchState(watcherKey, undefined, { rejectCloseFailure: true }),
+    ),
+  );
+}
+
 export async function closeSkillsWatchers(resetState = false): Promise<void> {
   watchersClosing = true;
   if (resetState) {
@@ -740,3 +767,5 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
   }
   watchersClosing = false;
 }
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
