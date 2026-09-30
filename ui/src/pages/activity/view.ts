@@ -4,7 +4,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsStatus, renderSettingsToggle } from "../../components/settings-ui.ts";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -110,12 +110,6 @@ function renderStatusFilter(props: ActivityProps, status: ActivityStatus) {
   `;
 }
 
-function setLiveFilterExpanded(event: Event, expanded: boolean) {
-  if (event.currentTarget instanceof Element) {
-    event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", String(expanded));
-  }
-}
-
 function renderToolFilter(props: ActivityProps, toolNames: string[]) {
   const active = Boolean(props.toolFilter);
   return html`
@@ -137,8 +131,8 @@ function renderToolFilter(props: ActivityProps, toolNames: string[]) {
       aria-label=${t("activity.filters")}
       placement="bottom-end"
       without-arrow
-      @wa-show=${(event: Event) => setLiveFilterExpanded(event, true)}
-      @wa-hide=${(event: Event) => setLiveFilterExpanded(event, false)}
+      @wa-show=${syncPopoverExpanded}
+      @wa-hide=${syncPopoverExpanded}
     >
       <div class="activity-live-filter-popover__panel">
         <label class="field">
