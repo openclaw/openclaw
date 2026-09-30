@@ -93,12 +93,13 @@ export async function completeCleanupBookkeeping(
         );
       });
     };
-    if (postBookkeepingEffectsAllowed() && !cleanupParams.preserveTranscript) {
+    // The admitted tails report their own failures after bookkeeping has committed.
+    if (!cleanupParams.preserveTranscript) {
       runCleanupTail("session cleanup", () =>
         removeInternalSessionEffectsSession(cleanupParams.entry.execution.transcriptTarget),
       );
     }
-    if (postBookkeepingEffectsAllowed() && cleanupParams.entry.spawnMode !== "session") {
+    if (cleanupParams.entry.spawnMode !== "session") {
       runCleanupTail("bundle MCP cleanup", () =>
         retireSessionMcpRuntimeForSessionKey({
           sessionKey: cleanupParams.entry.childSessionKey,
@@ -120,7 +121,6 @@ export async function completeCleanupBookkeeping(
     }
     if (
       !cleanupParams.provisionalKill &&
-      postBookkeepingEffectsAllowed() &&
       (options.isDeleteCleanup || !cleanupParams.entry.collect)
     ) {
       runCleanupTail("context-engine cleanup", () =>

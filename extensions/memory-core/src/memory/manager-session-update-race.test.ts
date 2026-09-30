@@ -627,6 +627,8 @@ describe("memory session update sync", () => {
           { role: "user", timestamp: Date.now(), content: "Private violet alpha fragment." },
         ],
       });
+      const embeddingEntered = createDeferred<void>();
+      fixture.provider.providerRuntimeBatchEntered = () => embeddingEntered.resolve();
       let releaseEmbedding = () => {};
       fixture.provider.providerRuntimeBatchGate = new Promise<void>((resolve) => {
         releaseEmbedding = resolve;
@@ -636,7 +638,13 @@ describe("memory session update sync", () => {
         ...(force ? { force: true } : { sessions: [{ agentId: "main", sessionId, sessionKey }] }),
       });
       try {
-        await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1));
+        await Promise.race([
+          embeddingEntered.promise,
+          activeSync.then(() => {
+            throw new Error("memory sync completed before the embedding batch entered");
+          }),
+        ]);
+        expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);
         await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
         releaseEmbedding();
         await expect(activeSync).rejects.toThrow("forgotten while memory indexing");
@@ -652,6 +660,7 @@ describe("memory session update sync", () => {
         releaseEmbedding();
         await activeSync.catch(() => undefined);
         fixture.provider.providerRuntimeBatchGate = null;
+        fixture.provider.providerRuntimeBatchEntered = null;
       }
     },
   );

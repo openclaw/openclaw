@@ -123,6 +123,13 @@ not prompt after rollback.
 
 Update completion prints the terminal outcome and a local Markdown report path before exiting, including unexpected failures. Failed runs keep rollback-facing diagnostic JSON within the released 8 KiB limit. That file links a separate artifact containing every individually bounded Doctor finding; the Markdown report also retains the complete inventory. JSON output includes `reportPath`; a report-write failure prints a warning and preserves the update outcome.
 
+Exit always waits for accepted state operations, pending database opens, and live
+worker references to settle. After settlement, retained-worker native close and
+thread termination have a ten-second grace period. Expiry records a warning,
+keeps the retained runtime for later cleanup, and preserves the command's exit
+status. This protection belongs to the installed updater: installing a release
+with the fix enables it for the next update that release performs.
+
 When a Dashboard update fails while the Gateway handles the request, the Gateway
 logs a warning with the public reason and a safe error summary. Successful and
 intentional no-op update logs are unchanged. This only affects Gateway logging,

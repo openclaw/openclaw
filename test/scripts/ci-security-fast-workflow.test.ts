@@ -246,30 +246,62 @@ describe("security-fast workflow", () => {
     },
   );
 
-  it.each([0, 1, 130])("propagates audit exit %s in ordinary and scheduled CI", (auditExit) => {
-    const repo = tempDirs.make("openclaw-audit-ci-");
-    mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
-    writeFileSync(
-      join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
-      `process.exit(${auditExit});\n`,
-    );
-    const result = runStep(securityStep("Audit production dependencies"), repo, {});
-    expect(result.status).toBe(auditExit);
-    expect(result.stdout).toBe("");
-    const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
-      jobs: { audit: { steps: WorkflowStep[] } };
-    };
-    const strictStep = scheduled.jobs.audit.steps.find(
-      (step) => step.name === "Audit production dependencies",
-    );
-    if (!strictStep) {
-      throw new Error("scheduled production audit step is missing");
-    }
-    const summary = join(repo, "summary.md");
-    const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
-    expect(strict.status).toBe(auditExit);
-    expect(readFileSync(summary, "utf8")).toContain("Triage owner: @steipete");
-  });
+  it.each([0, 1, 130])(
+    "propagates audit exit %s in ordinary and scheduled CI but not release CI",
+    (auditExit) => {
+      const repo = tempDirs.make("openclaw-audit-ci-");
+      mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
+      mkdirSync(join(repo, ".ci-harness", "scripts"), { recursive: true });
+      writeFileSync(
+        join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
+        `process.exit(${auditExit});\n`,
+      );
+      writeFileSync(
+        join(repo, ".ci-harness", "scripts", "ci-production-audit.mjs"),
+        readFileSync("scripts/ci-production-audit.mjs"),
+      );
+      expect(securityStep("Checkout trusted CI harness").with?.["sparse-checkout"]).toContain(
+        "scripts/ci-production-audit.mjs",
+      );
+      const audit = securityStep("Audit production dependencies");
+      const runAudit = (eventName: string, dispatchId: string) => {
+        const eventPath = join(repo, "event.json");
+        writeFileSync(eventPath, JSON.stringify({ inputs: { dispatch_id: dispatchId } }));
+        return runStep(audit, repo, { GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath });
+      };
+      for (const [eventName, dispatchId] of [
+        ["pull_request", "full-release-validation-1-1-ci"],
+        ["workflow_dispatch", ""],
+        ["workflow_dispatch", "manual-ci"],
+      ]) {
+        const result = runAudit(eventName!, dispatchId!);
+        expect(result.status).toBe(auditExit);
+        expect(result.stdout).toBe("");
+      }
+      for (const dispatchId of ["full-release-validation-1-1-ci", "release-native-android-1-1-a"]) {
+        const release = runAudit("workflow_dispatch", dispatchId);
+        expect(release.status).toBe(0);
+        expect(release.stdout).toBe(
+          auditExit === 0
+            ? ""
+            : `::warning title=Dependency advisories do not block releases::Production dependency audit exited ${auditExit}. Release CI records this without failing; queue the dependency bump on main after publication.\n`,
+        );
+      }
+      const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
+        jobs: { audit: { steps: WorkflowStep[] } };
+      };
+      const strictStep = scheduled.jobs.audit.steps.find(
+        (step) => step.name === "Audit production dependencies",
+      );
+      if (!strictStep) {
+        throw new Error("scheduled production audit step is missing");
+      }
+      const summary = join(repo, "summary.md");
+      const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
+      expect(strict.status).toBe(auditExit);
+      expect(readFileSync(summary, "utf8")).toContain("Triage owner: @steipete");
+    },
+  );
 
   it("generates the exact local-only scanner contract from trusted policy", () => {
     const job = securityJob();

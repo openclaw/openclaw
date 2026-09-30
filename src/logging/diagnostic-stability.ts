@@ -13,14 +13,12 @@ export {
   normalizeDiagnosticStabilityQuery,
 } from "./diagnostic-stability-query.js";
 
-// Ring-buffer recorder for stability diagnostics and support-bundle snapshots.
 const MAX_DIAGNOSTIC_EXPORTER_STATES = 16;
 const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const SAFE_EXPORTER_CODE = /^[A-Za-z0-9_-]{1,120}$/u;
 
-/** Sanitized diagnostic event record retained in the stability ring buffer. */
 export type DiagnosticStabilityEventRecord = {
   seq: number;
   ts: number;
@@ -103,7 +101,6 @@ export type DiagnosticStabilityEventRecord = {
   };
 };
 
-/** Point-in-time stability snapshot with records and derived summaries. */
 export type DiagnosticStabilitySnapshot = {
   generatedAt: string;
   capacity: number;
@@ -726,7 +723,6 @@ function selectRecords(
   };
 }
 
-/** Starts the process-wide diagnostic event recorder if it is not already active. */
 export function startDiagnosticStabilityRecorder(): void {
   const state = getDiagnosticStabilityState();
   if (state.unsubscribe) {
@@ -751,14 +747,12 @@ export function startDiagnosticStabilityRecorder(): void {
   );
 }
 
-/** Stops the process-wide diagnostic event recorder. */
 export function stopDiagnosticStabilityRecorder(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();
   state.unsubscribe = null;
 }
 
-/** Returns a sanitized stability snapshot from the process-wide ring buffer. */
 export function getDiagnosticStabilitySnapshot(options?: {
   limit?: number;
   type?: string;
@@ -802,7 +796,6 @@ export function selectDiagnosticStabilitySnapshot(
   };
 }
 
-/** Resets recorder state and subscriptions for isolated tests. */
 export function resetDiagnosticStabilityRecorderForTest(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();

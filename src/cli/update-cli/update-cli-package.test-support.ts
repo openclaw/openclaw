@@ -377,19 +377,6 @@ export function createUpdateCliPackageFixtures({
     });
   };
 
-  const mockPackageReplacementFailure = (message: string, beforeFailure?: () => Promise<void>) => {
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
-      if (argv[1] === "--version") {
-        return commandResult({ stdout: "12.0.0\n" });
-      }
-      if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
-        await beforeFailure?.();
-        throw new Error(message);
-      }
-      return commandResult();
-    });
-  };
-
   const mockGatewayInstallFailure = (entrypoint: string, stderr = "launchctl bootstrap failed") => {
     const message =
       "Service definition refresh failed; the previous definition was restored: Error: launchctl bootstrap failed";
@@ -420,7 +407,6 @@ export function createUpdateCliPackageFixtures({
     mockRunningManagedGateway,
     mockStoppedManagedGitGateway,
     mockNpmGlobalRoot,
-    mockPackageReplacementFailure,
     mockGatewayInstallFailure,
   };
 }

@@ -23,18 +23,8 @@ export function compareSessionEntryPairs(
       return bPinnedAt - aPinnedAt;
     }
   }
-  const aTimestamp =
-    sortBy === "activity"
-      ? sessionActivityTimestamp(a[1])
-      : sortBy === "lastInteractionAt"
-        ? a[1]?.lastInteractionAt
-        : a[1]?.updatedAt;
-  const bTimestamp =
-    sortBy === "activity"
-      ? sessionActivityTimestamp(b[1])
-      : sortBy === "lastInteractionAt"
-        ? b[1]?.lastInteractionAt
-        : b[1]?.updatedAt;
+  const aTimestamp = sortBy === "activity" ? sessionActivityTimestamp(a[1]) : a[1]?.[sortBy];
+  const bTimestamp = sortBy === "activity" ? sessionActivityTimestamp(b[1]) : b[1]?.[sortBy];
   const byTimestamp = (bTimestamp ?? 0) - (aTimestamp ?? 0);
   if (byTimestamp !== 0) {
     return byTimestamp;

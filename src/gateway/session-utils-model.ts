@@ -414,9 +414,6 @@ function resolveGatewayProviderStaticModel(params: {
     return undefined;
   }
 
-  if (isGatewayModelExplicitlyConfiguredTextOnly(params)) {
-    return undefined;
-  }
   const configuredProvider = findNormalizedProviderValue(
     params.snapshot.config.models?.providers,
     params.provider,
@@ -425,6 +422,9 @@ function resolveGatewayProviderStaticModel(params: {
   const configuredModel = configuredProvider?.models?.find(
     (model) => normalizeLowercaseStringOrEmpty(model.id) === normalizedModelId,
   );
+  if (configuredModel?.input !== undefined && !configuredModel.input.includes("image")) {
+    return undefined;
+  }
   const configuredApi = configuredModel?.api ?? configuredProvider?.api;
   if (configuredApi && configuredApi !== staticEntry.api) {
     return undefined;

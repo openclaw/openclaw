@@ -4,11 +4,13 @@ import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronCompletionStatus } from "../completion-status.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import type { CronRunHistorySource } from "../store/run-history.js";
 import {
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import { ownsStreamSource } from "../stream-schedule.js";
 import type {
   CronFailureNotificationDetail,
   CronJob,
@@ -20,7 +22,7 @@ import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { findJobOrThrow, hasActiveCronRun, isJobDue, isJobEnabled } from "./jobs-scheduling.js";
 import { assertSupportedJobSpec } from "./jobs-validation.js";
 import { locked } from "./locked.js";
-import { markManualCronJobActive, ownsStreamSource } from "./ops-shared.js";
+import { markManualCronJobActive } from "./ops-shared.js";
 import {
   activateQueuedCronRun,
   cleanupQueuedCronRunReservations,
@@ -106,6 +108,7 @@ export async function emitCronRunFinished(
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     errorClassification?: CronRunErrorClassification;
     failureNotificationDetail?: CronFailureNotificationDetail;
+    historySource?: CronRunHistorySource;
   },
 ): Promise<void> {
   const event = {
@@ -118,10 +121,12 @@ export async function emitCronRunFinished(
     taskRunId,
     job: evt.job,
     event,
+    historySource: details?.historySource,
     errorClassification: details?.errorClassification,
     ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
     ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
   });
+  details?.historySource?.assertCurrent();
   emit(state, event, cronFailureNotificationEventContext(details?.failureNotificationDetail));
   if (tracker) {
     tracker.emitted = true;

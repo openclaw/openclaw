@@ -8,10 +8,6 @@ export function isRouteBinding(binding: AgentBinding): binding is AgentRouteBind
   return binding.type !== "acp";
 }
 
-function isAcpBinding(binding: AgentBinding): binding is AgentAcpBinding {
-  return binding.type === "acp";
-}
-
 /** Returns the configured binding list, treating missing/non-array config as empty. */
 export function listConfiguredBindings(cfg: OpenClawConfig): AgentBinding[] {
   return Array.isArray(cfg.bindings) ? cfg.bindings : [];
@@ -24,5 +20,5 @@ export function listRouteBindings(cfg: OpenClawConfig): AgentRouteBinding[] {
 
 /** Lists ACP conversation bindings only. */
 export function listAcpBindings(cfg: OpenClawConfig): AgentAcpBinding[] {
-  return listConfiguredBindings(cfg).filter(isAcpBinding);
+  return listConfiguredBindings(cfg).filter((binding) => binding.type === "acp");
 }

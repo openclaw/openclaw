@@ -1,5 +1,4 @@
-// TTS config helpers read and normalize text-to-speech provider settings.
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   asNonArrayRecord,
@@ -128,9 +127,6 @@ export type TtsUserPrefs = {
 
 export function readTtsPrefs(prefsPath: string): TtsUserPrefs {
   try {
-    if (!existsSync(prefsPath)) {
-      return {};
-    }
     return asNonArrayRecord(JSON.parse(readFileSync(prefsPath, "utf8"))) as TtsUserPrefs;
   } catch {
     return {};
@@ -179,13 +175,9 @@ export function shouldAttemptTtsPayload(params: {
 }
 
 /** Return whether TTS directive markup should be stripped from user-visible text. */
-export function shouldCleanTtsDirectiveText(params: {
-  cfg: OpenClawConfig;
-  ttsAuto?: string;
-  agentId?: string;
-  channelId?: string;
-  accountId?: string;
-}): boolean {
+export function shouldCleanTtsDirectiveText(
+  params: Parameters<typeof shouldAttemptTtsPayload>[0],
+): boolean {
   if (!shouldAttemptTtsPayload(params)) {
     return false;
   }

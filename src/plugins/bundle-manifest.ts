@@ -174,16 +174,11 @@ function resolveBundleComponentPaths(
 }
 
 function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
-  const capabilities: string[] = [];
-  if (resolveCursorSkillDirs(raw, rootDir).length > 0) {
-    capabilities.push("skills");
-  }
-  if (resolveCursorCommandRootDirs(raw, rootDir).length > 0) {
-    capabilities.push("commands");
-  }
-  if (resolveCursorAgentDirs(raw, rootDir).length > 0) {
-    capabilities.push("agents");
-  }
+  const capabilities = [
+    ...(resolveCursorSkillDirs(raw, rootDir).length > 0 ? ["skills"] : []),
+    ...(resolveCursorCommandRootDirs(raw, rootDir).length > 0 ? ["commands"] : []),
+    ...(resolveCursorAgentDirs(raw, rootDir).length > 0 ? ["agents"] : []),
+  ];
   for (const [capability, defaultPath] of [
     ["hooks", ".cursor/hooks.json"],
     ["rules", ".cursor/rules"],
@@ -344,37 +339,24 @@ function resolveClaudeComponents(
     ? ["settings.json"]
     : [];
   const hooks = resolveBundleComponentPaths(raw.hooks, rootDir, ["hooks/hooks.json"]);
-  const capabilities: string[] = [];
-  if (skills.length > 0) {
-    capabilities.push("skills");
-  }
-  if (commands.length > 0) {
-    capabilities.push("commands");
-  }
-  if (agents.length > 0) {
-    capabilities.push("agents");
-  }
-  if (hasInlineCapabilityValue(raw.hooks) || hooks.length > 0) {
-    capabilities.push("hooks");
-  }
-  if (
-    hasInlineCapabilityValue(raw.mcpServers) ||
+  const capabilities = [
+    ...(skills.length > 0 ? ["skills"] : []),
+    ...(commands.length > 0 ? ["commands"] : []),
+    ...(agents.length > 0 ? ["agents"] : []),
+    ...(hasInlineCapabilityValue(raw.hooks) || hooks.length > 0 ? ["hooks"] : []),
+    ...(hasInlineCapabilityValue(raw.mcpServers) ||
     resolveBundleComponentPaths(raw.mcpServers, rootDir, [".mcp.json"]).length > 0
-  ) {
-    capabilities.push("mcpServers");
-  }
-  if (
-    hasInlineCapabilityValue(raw.lspServers) ||
+      ? ["mcpServers"]
+      : []),
+    ...(hasInlineCapabilityValue(raw.lspServers) ||
     resolveBundleComponentPaths(raw.lspServers, rootDir, [".lsp.json"]).length > 0
-  ) {
-    capabilities.push("lspServers");
-  }
-  if (hasInlineCapabilityValue(raw.outputStyles) || outputStyles.length > 0) {
-    capabilities.push("outputStyles");
-  }
-  if (settingsFiles.length > 0) {
-    capabilities.push("settings");
-  }
+      ? ["lspServers"]
+      : []),
+    ...(hasInlineCapabilityValue(raw.outputStyles) || outputStyles.length > 0
+      ? ["outputStyles"]
+      : []),
+    ...(settingsFiles.length > 0 ? ["settings"] : []),
+  ];
   return { skills, settingsFiles, hooks, capabilities };
 }
 
