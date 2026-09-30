@@ -201,12 +201,7 @@ function applyProviderConfigWithMergedModels(
   });
 }
 
-function createProviderPresetAppliers<
-  TArgs extends unknown[],
-  TParams extends {
-    primaryModelRef?: string;
-  },
->(params: {
+function createProviderPresetAppliers<TArgs extends unknown[], TParams extends object>(params: {
   resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => TParams | null | undefined;
   applyPreset: (cfg: OpenClawConfig, preset: TParams) => OpenClawConfig;
   primaryModelRef: string;
