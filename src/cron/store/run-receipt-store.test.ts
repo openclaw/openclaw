@@ -28,7 +28,6 @@ import {
   bindCronSelfRemovalCommitGuard,
   captureCronJobMessageActionAuthority,
   captureCronJobMessageSourceAuthority,
-  clearCronJobActive,
   markCronJobActive,
   noteActiveCronJobRemoval,
   requestActiveCronJobCancellation,
@@ -51,7 +50,6 @@ import { cronStoreKey } from "./key.js";
 import { bindCronRunReceiptExecution } from "./run-receipt-execution-binding.js";
 import {
   readCronRunReceiptCurrentJob,
-  assertCronRunReceiptCurrentInDatabase,
   activateCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
@@ -110,61 +108,6 @@ it.each(["implicit", "supplied"] as const)(
     expect(connections).toBe(0);
   },
 );
-
-it("rechecks unrepaired delivery in the current row before activating a prepared run", async () => {
-  const job = makeCronReceiptJob("delivery-changed-after-claim");
-  job.delivery = { mode: "announce", channel: "telegram", to: "synthetic-target" };
-  const { storePath } = await storeJob(job);
-  const handle = claimCronRunReceiptForTest(storePath, job, 1);
-  const state = makeState(storePath);
-  const marker = markServiceCronJobActive(state, job, handle);
-  const context = captureOpenClawStateReadWorkerContext();
-  try {
-    await expect(
-      assertServiceCronRunReceiptCurrent(state, handle, marker, context),
-    ).resolves.toBeUndefined();
-    const db = openOpenClawStateDatabase().db;
-    db.prepare(
-      "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.delivery.mode') WHERE store_key = ? AND job_id = ?",
-    ).run(cronStoreKey(storePath), job.id);
-    const before = db
-      .prepare("SELECT job_json, state_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
-      .get(cronStoreKey(storePath), job.id);
-    await expect(
-      assertServiceCronRunReceiptCurrent(state, handle, marker, context),
-    ).rejects.toThrow("openclaw doctor --fix");
-    expect(() =>
-      runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
-        activateCronRunReceiptInDatabase({
-          database: transactionDb,
-          handle,
-          startedAtMs: 2,
-          resolveAgentId: (current) => current.agentId!,
-        }),
-      ),
-    ).toThrow(CronRunReceiptRevisionError);
-    expect(() =>
-      runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
-        assertCronRunReceiptCurrentInDatabase({
-          database: transactionDb,
-          handle,
-          resolveAgentId: (current) => current.agentId!,
-        }),
-      ),
-    ).not.toThrow();
-    expect(
-      db
-        .prepare("SELECT job_json, state_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
-        .get(cronStoreKey(storePath), job.id),
-    ).toEqual(before);
-    expect(
-      findActiveCronRunReceiptInDatabase({ database: db, storePath, jobId: job.id }),
-    ).toMatchObject({ receiptId: handle.receiptId, startedAtMs: 1 });
-  } finally {
-    clearCronJobActive(job.id, marker);
-    await finishCronRunReceiptAsync({ handle, status: "skipped", finishedAtMs: 3 });
-  }
-});
 
 async function storeJob(job: CronJob) {
   const { storePath } = await makeStorePath();

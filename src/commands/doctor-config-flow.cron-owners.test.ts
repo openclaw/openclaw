@@ -13,7 +13,10 @@ import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution
 import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -86,12 +89,14 @@ function createCron(
   defaultAgentId = "research",
   legacyDefaultAgentId: string | null = "ops",
 ) {
-  const scheduler = createTestGatewayScheduler();
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
   const execute = vi.fn(async () => ({ status: "ok" as const }));
   const cron = new CronService({
     scheduler,
     storePath,
     cronEnabled: true,
+    nowMs: clock.clock.now,
     defaultAgentId,
     legacyDefaultAgentId: legacyDefaultAgentId ?? undefined,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -99,7 +104,7 @@ function createCron(
     requestHeartbeat() {},
     runIsolatedAgentJob: execute,
   });
-  return { cron, scheduler, execute };
+  return { cron, scheduler, execute, clock };
 }
 
 it.each(["retains", "removes"])(
@@ -332,6 +337,14 @@ it("keeps a due legacy one-shot pending until Doctor repairs its owner, then run
       const repaired = createCron(storePath, "research", null);
       try {
         await repaired.cron.start();
+        expect(repaired.execute).not.toHaveBeenCalled();
+        expect(readReceipts()).toEqual([]);
+        const nextWakeAtMs = expectDefined(
+          (await repaired.cron.status()).nextWakeAtMs,
+          "repaired one-shot catch-up wake",
+        );
+        expect(nextWakeAtMs).toBeGreaterThan(repaired.clock.clock.now());
+        await repaired.clock.advanceTo(nextWakeAtMs);
         expect(repaired.execute).toHaveBeenCalledOnce();
         expect(repaired.cron.getJob("pending-one-shot")).toMatchObject({
           agentId: "ops",

@@ -7,12 +7,101 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import * as nativeWorkers from "../infra/worker-native-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { clearCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
+import {
+  assertServiceCronRunReceiptCurrent,
+  markServiceCronJobActive,
+} from "./service/run-receipts.js";
+import { createCronServiceState } from "./service/state.js";
+import { saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
+import {
+  activateCronRunReceiptInDatabase,
+  assertCronRunReceiptCurrentInDatabase,
+  CronRunReceiptRevisionError,
+  findActiveCronRunReceiptInDatabase,
+  finishCronRunReceiptAsync,
+} from "./store/run-receipt-store.js";
+import {
+  claimCronRunReceiptForTest,
+  makeCronReceiptJob,
+} from "./store/run-receipt-store.test-support.js";
+
+it("rechecks unrepaired delivery in the current row before activating a prepared run", async () => {
+  await withOpenClawTestState({ label: "cron-receipt-delivery" }, async (fixture) => {
+    const job = makeCronReceiptJob("delivery-changed-after-claim");
+    job.delivery = { mode: "announce", channel: "telegram", to: "synthetic-target" };
+    const storePath = fixture.statePath("cron", "jobs.json");
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const handle = claimCronRunReceiptForTest(storePath, job, 1);
+    const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
+      storePath,
+      cronEnabled: true,
+      log: createNoopLogger(),
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+    const marker = markServiceCronJobActive(state, job, handle);
+    const context = captureOpenClawStateReadWorkerContext();
+    try {
+      await expect(
+        assertServiceCronRunReceiptCurrent(state, handle, marker, context),
+      ).resolves.toBeUndefined();
+      const db = openOpenClawStateDatabase().db;
+      db.prepare(
+        "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.delivery.mode') WHERE store_key = ? AND job_id = ?",
+      ).run(cronStoreKey(storePath), job.id);
+      const before = db
+        .prepare("SELECT job_json, state_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+        .get(cronStoreKey(storePath), job.id);
+      await expect(
+        assertServiceCronRunReceiptCurrent(state, handle, marker, context),
+      ).rejects.toThrow("openclaw doctor --fix");
+      expect(() =>
+        runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
+          activateCronRunReceiptInDatabase({
+            database: transactionDb,
+            handle,
+            startedAtMs: 2,
+            resolveAgentId: (current) => current.agentId!,
+          }),
+        ),
+      ).toThrow(CronRunReceiptRevisionError);
+      expect(() =>
+        runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
+          assertCronRunReceiptCurrentInDatabase({
+            database: transactionDb,
+            handle,
+            resolveAgentId: (current) => current.agentId!,
+          }),
+        ),
+      ).not.toThrow();
+      expect(
+        db
+          .prepare("SELECT job_json, state_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+          .get(cronStoreKey(storePath), job.id),
+      ).toEqual(before);
+      expect(
+        findActiveCronRunReceiptInDatabase({ database: db, storePath, jobId: job.id }),
+      ).toMatchObject({ receiptId: handle.receiptId, startedAtMs: 1 });
+    } finally {
+      clearCronJobActive(job.id, marker);
+      await finishCronRunReceiptAsync({ handle, status: "skipped", finishedAtMs: 3 });
+    }
+  });
+});
 
 it.each(["payload", "webhook"] as const)(
   "rejects the main-session %s effect when removal commits after its native receipt snapshot",

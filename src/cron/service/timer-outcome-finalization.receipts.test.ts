@@ -171,21 +171,18 @@ describe("cron outcome receipt finalization", () => {
           expect(persisted?.state.runningAtMs).toBeUndefined();
         }
         expect(state.store?.jobs.find((job) => job.id === retired.id)).toEqual(persisted);
-        expect(readDefinitions()).toEqual(
-          definitionsBefore.map((row) => {
-            if (replaced || row.job_id !== retired.id) {
-              return row;
-            }
-            if (typeof row.job_json !== "string") {
-              throw new Error("Expected persisted cron definition JSON.");
-            }
-            return {
-              ...row,
-              enabled: 0,
-              job_json: JSON.stringify({ ...JSON.parse(row.job_json), enabled: false }),
-            };
-          }),
-        );
+        const expectedDefinitions = structuredClone(definitionsBefore);
+        for (const row of expectedDefinitions) {
+          if (replaced || row.job_id !== retired.id) {
+            continue;
+          }
+          if (typeof row.job_json !== "string") {
+            throw new Error("Expected persisted cron definition JSON.");
+          }
+          row.enabled = 0;
+          row.job_json = JSON.stringify({ ...JSON.parse(row.job_json), enabled: false });
+        }
+        expect(readDefinitions()).toEqual(expectedDefinitions);
         expect(
           database
             .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
