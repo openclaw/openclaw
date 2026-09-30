@@ -20,6 +20,7 @@ import {
   type TrialDependencies,
 } from "../../scripts/ios-release-e2e.js";
 import { createNativeDependencies } from "../../scripts/lib/ios-release-e2e-native.js";
+import { ensureGatewaySupportsRequiredFeatures } from "../../src/gateway/call-required-features.js";
 import { GatewayTransportError } from "../../src/gateway/transport-error.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
@@ -27,6 +28,7 @@ import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 const nativeMocks = vi.hoisted(() => ({
   command: vi.fn(),
   build: vi.fn(),
+  install: vi.fn(),
   gateway: vi.fn(),
   rpc: vi.fn(),
 }));
@@ -36,6 +38,9 @@ vi.mock("../../scripts/lib/managed-child-process.mjs", async (importOriginal) =>
 }));
 vi.mock("../../scripts/lib/ios-release-e2e-build.js", () => ({
   prepareIOSReleaseNativeBuild: nativeMocks.build,
+}));
+vi.mock("../../scripts/lib/ios-release-gateway.js", () => ({
+  prepareIOSReleaseGateway: nativeMocks.install,
 }));
 vi.mock("../helpers/openclaw-test-instance.js", () => ({
   createOpenClawTestInstance: nativeMocks.gateway,
@@ -49,6 +54,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   nativeMocks.command.mockReset();
   nativeMocks.build.mockReset();
+  nativeMocks.install.mockReset();
   nativeMocks.gateway.mockReset();
   nativeMocks.rpc.mockReset();
 });
@@ -171,7 +177,7 @@ it("writes a failure proof when the real CLI rejects an impossible target", () =
     trials: [],
     errors: ["gate-setup-failed"],
   });
-  expect(proof.gatewayBuildMs).toBeUndefined();
+  expect(proof.gatewayInstallMs).toBeUndefined();
   expect(proof.nativeBuildMs).toBeUndefined();
 });
 
@@ -425,6 +431,94 @@ describe("release qualification workflow authority", () => {
   const workflow = parse(readFileSync(".github/workflows/ios-release-e2e.yml", "utf8"));
   const release = parse(readFileSync(".github/workflows/ios-store-release.yml", "utf8"));
   const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+  const selectionArtifact = {
+    id: 456,
+    name: "ios-release-gateway-selection-123",
+    expired: false,
+    workflow_run: { id: 123, head_sha: "a".repeat(40) },
+  };
+  async function findGatewaySelection(
+    attempt: number,
+    artifacts: (typeof selectionArtifact)[],
+    outputs: Map<string, string>,
+    apiFailure?: Error,
+  ) {
+    const { runInNewContext } = await import("node:vm");
+    const step = workflow.jobs.qualify.steps.find(
+      (candidate: { id?: string }) => candidate.id === "gateway-selection",
+    );
+    const listWorkflowRunArtifacts = vi.fn();
+    const paginate = apiFailure
+      ? vi.fn().mockRejectedValue(apiFailure)
+      : vi.fn().mockResolvedValue(artifacts);
+    const execution: unknown = runInNewContext(`(async () => { ${step.with.script} })()`, {
+      github: { rest: { actions: { listWorkflowRunArtifacts } }, paginate },
+      context: { repo: { owner: "openclaw", repo: "openclaw" }, runId: 123 },
+      core: { setOutput: (name: string, value: string) => outputs.set(name, value) },
+      process: {
+        env: {
+          GITHUB_RUN_ATTEMPT: String(attempt),
+          TARGET_SHA: selectionArtifact.workflow_run.head_sha,
+        },
+      },
+    });
+    await execution;
+    expect(paginate).toHaveBeenCalledWith(listWorkflowRunArtifacts, {
+      owner: "openclaw",
+      repo: "openclaw",
+      run_id: 123,
+      name: selectionArtifact.name,
+      per_page: 100,
+    });
+  }
+  it.each([
+    ["new workflow run", 1, [], { create: "true", "artifact-id": "" }],
+    [
+      "existing first-attempt selection",
+      1,
+      [selectionArtifact],
+      { create: "false", "artifact-id": "456" },
+    ],
+    ["workflow rerun", 2, [selectionArtifact], { create: "false", "artifact-id": "456" }],
+  ])("preserves the Gateway selection for %s", async (_name, attempt, artifacts, expected) => {
+    const outputs = new Map<string, string>();
+    await findGatewaySelection(attempt, artifacts, outputs);
+    expect(Object.fromEntries(outputs)).toEqual(expected);
+  });
+  it.each([
+    ["missing rerun pin", [], "no saved stable Gateway selection"],
+    [
+      "expired pin",
+      [{ ...selectionArtifact, expired: true }],
+      "expired or belongs to another source/run",
+    ],
+    [
+      "duplicate pins",
+      [selectionArtifact, selectionArtifact],
+      "Multiple stable Gateway selections",
+    ],
+    [
+      "different source",
+      [{ ...selectionArtifact, workflow_run: { id: 123, head_sha: "b".repeat(40) } }],
+      "expired or belongs to another source/run",
+    ],
+    [
+      "different run",
+      [{ ...selectionArtifact, workflow_run: { ...selectionArtifact.workflow_run, id: 124 } }],
+      "expired or belongs to another source/run",
+    ],
+  ])("rejects %s without authorizing a new selection", async (_name, artifacts, error) => {
+    const outputs = new Map<string, string>();
+    await expect(findGatewaySelection(2, artifacts, outputs)).rejects.toThrow(error);
+    expect(outputs.size).toBe(0);
+  });
+  it("fails artifact lookup errors without treating the pin as missing", async () => {
+    const outputs = new Map<string, string>();
+    await expect(
+      findGatewaySelection(1, [], outputs, new Error("artifact API unavailable")),
+    ).rejects.toThrow("artifact API unavailable");
+    expect(outputs.size).toBe(0);
+  });
   it.each([
     ["manual current revision", {}, true],
     ["CI current revision", { caller: "ci" }, true],
@@ -459,6 +553,9 @@ describe("release qualification workflow authority", () => {
       },
     });
     expect(execution.status === 0).toBe(admitted);
+    expect(readFileSync(path.join(root, "env"), "utf8")).toContain(
+      `GATEWAY_SELECTION_DIR=${root}/ios-release-gateway-selection\n`,
+    );
     const proof = JSON.parse(readFileSync(path.join(root, "ios-release-e2e-proof.json"), "utf8"));
     expect(proof).toMatchObject({
       status: "failed",
@@ -470,7 +567,7 @@ describe("release qualification workflow authority", () => {
     const qualification = release.jobs[releaseJob.needs];
     expect(qualification).toMatchObject({
       uses: "./.github/workflows/ios-release-e2e.yml",
-      permissions: { contents: "read" },
+      permissions: { actions: "read", contents: "read" },
       with: { target_sha: "${{ github.sha }}", mode: "stock" },
     });
     expect(qualification.if).toBe(releaseJob.if);
@@ -510,7 +607,8 @@ describe("release qualification workflow authority", () => {
       ).toBe(outcome !== "skipped");
     }
     expect(recovery.with["if-no-files-found"]).toBe("error");
-    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
+    expect(ci.jobs["ios-release-e2e"].permissions).toEqual({ actions: "read", contents: "read" });
     expect(workflow.jobs.qualify["runs-on"]).toBe("xcode-27-xlarge");
     expect(workflow.jobs.qualify.environment).toBeUndefined();
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
@@ -528,11 +626,14 @@ describe("release qualification workflow authority", () => {
     expect(verify.run).toContain("test -f scripts/ios-release-e2e.ts");
     expect(verify.if).toBeUndefined();
     expect(workflow.jobs.qualify.env.OPENCLAW_CI_SIMSLIM_BINARY).toBeUndefined();
-    const upload = steps.find((step: { uses?: string }) =>
-      step.uses?.startsWith("actions/upload-artifact@"),
+    const upload = steps.find(
+      (step: { name: string }) => step.name === "Upload sanitized proof only",
     );
     expect(upload.if).toBe("always()");
     expect(upload.with.path).toBe("${{ runner.temp }}/ios-release-e2e-proof.json");
+    expect(upload.with.name).toBe(
+      "ios-release-e2e-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
   });
   it.each([
     ["full", "a".repeat(40), true],
@@ -587,6 +688,10 @@ describe("native command adapter", () => {
     "unsupported-runtime-architecture",
     "non-ios-runtime",
     "cleanup-failure",
+    "gateway-install-failure",
+    "gateway-install-unjoined",
+    "gateway-preflight-failure",
+    "gateway-preflight-cleanup-failure",
     "build-unjoined",
     "build-exit",
     "boot-timeout",
@@ -598,6 +703,7 @@ describe("native command adapter", () => {
     "gateway-exit-during-boot",
     "cancel-during-boot",
     "gateway-only",
+    "native-build-only",
     "setup-code-timeout",
     "setup-code-rpc-timeout",
     "test-unjoined",
@@ -631,6 +737,42 @@ describe("native command adapter", () => {
     vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
     const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
     const lifecycle: string[] = [];
+    const gatewayIdentity = {
+      version: "2026.9.29",
+      integrity: "sha512-YQ==",
+      sourceSha: "2".repeat(40),
+      lockSha256: "3".repeat(64),
+      nodeVersion: process.version,
+      npmVersion: "11.6.2",
+    };
+    let installedGatewayPath = "";
+    nativeMocks.install.mockImplementation(async (options) => {
+      lifecycle.push("gateway-install");
+      if (scenario.startsWith("gateway-install-")) {
+        throw Object.assign(
+          new Error("private package installation failure"),
+          scenario === "gateway-install-unjoined"
+            ? { code: "ETIMEDOUT", processTreeState: "live" }
+            : {},
+        );
+      }
+      installedGatewayPath = path.join(options.installDir, "node_modules/openclaw");
+      return {
+        cwd: installedGatewayPath,
+        entrypoint: ["openclaw.mjs"],
+        identity: gatewayIdentity,
+      };
+    });
+    const preflightCleanup = vi.fn(async () => {
+      lifecycle.push("gateway-preflight-cleanup");
+      if (scenario === "gateway-preflight-cleanup-failure") {
+        throw new Error("private preflight cleanup failure");
+      }
+    });
+    const fixtureRpcCalls = () =>
+      nativeMocks.rpc.mock.calls.filter(
+        ([options]) => options.configPath !== "/private/preflight/config.json",
+      );
     let simulatorReady = false;
     let sourceChanged = false;
     let exitMock: (() => void) | undefined;
@@ -649,6 +791,20 @@ describe("native command adapter", () => {
     let nativeCommandActive = false;
     let historyReadBeforeCommandExit = false;
     nativeMocks.rpc.mockImplementation(async (options) => {
+      if (options.configPath === "/private/preflight/config.json") {
+        expect(options).toMatchObject({
+          method: "device.pair.setupStatus",
+        });
+        lifecycle.push("gateway-preflight-rpc");
+        expect(nativeMocks.build).not.toHaveBeenCalled();
+        ensureGatewaySupportsRequiredFeatures({
+          required: options.requiredMethods,
+          supported: scenario === "gateway-preflight-failure" ? [] : ["chat.send", "chat.history"],
+          kind: "method",
+          attemptedMethod: options.method,
+        });
+        return {};
+      }
       if (options.method === "chat.history") {
         historyReadBeforeCommandExit = nativeCommandActive;
         if (scenario === "reply-failure-history-error") {
@@ -707,7 +863,23 @@ describe("native command adapter", () => {
       }
       return { setupCode: `synthetic-code-${instances.length}` };
     });
-    nativeMocks.gateway.mockImplementation(async () => {
+    nativeMocks.gateway.mockImplementation(async (options) => {
+      expect(options).toMatchObject({
+        cwd: installedGatewayPath,
+        entrypoint: ["openclaw.mjs"],
+      });
+      if (options.name === "ios-release-e2e-preflight") {
+        lifecycle.push("gateway-preflight-create");
+        return {
+          url: "ws://127.0.0.1:19999",
+          gatewayToken: "synthetic-preflight-token",
+          configPath: "/private/preflight/config.json",
+          startGateway: vi.fn(async () => {
+            lifecycle.push("gateway-preflight-start");
+          }),
+          cleanup: preflightCleanup,
+        };
+      }
       expect(simulatorReady).toBe(false);
       lifecycle.push("gateway-create");
       const index = instances.length + 1;
@@ -879,6 +1051,10 @@ describe("native command adapter", () => {
       } else if (args.includes("delete")) {
         lifecycle.push("simulator-delete");
       } else if (args.includes("build-for-testing")) {
+        if (scenario !== "native-build-only") {
+          expect(preflightCleanup).toHaveBeenCalledOnce();
+          expect(lifecycle).toContain("gateway-preflight-rpc");
+        }
         appContainer = path.join(
           path.dirname(args[args.indexOf("-derivedDataPath") + 1]!),
           "app-container",
@@ -1082,6 +1258,8 @@ describe("native command adapter", () => {
       targetSha: "1".repeat(40),
       signal: abort.signal,
       gatewayOnly: scenario === "gateway-only",
+      buildOnly: scenario === "native-build-only",
+      gatewaySelectionDir: path.join(temp, "selection"),
       proof,
       onProgress: async () => {
         progressSnapshots.push(JSON.stringify(proof));
@@ -1127,6 +1305,38 @@ describe("native command adapter", () => {
       expect(proof.resourcesPreserved).toBe(scenario === "build-unjoined" ? true : undefined);
       return;
     }
+    if (scenario.startsWith("gateway-install-")) {
+      await expect(admission).rejects.toMatchObject({
+        diagnostic: {
+          operation: "gateway-install",
+          code: scenario === "gateway-install-unjoined" ? "timeout" : "failed",
+        },
+      });
+      expect(nativeMocks.gateway).not.toHaveBeenCalled();
+      expect(nativeMocks.build).not.toHaveBeenCalled();
+      expect(readdirSync(temp)).toHaveLength(scenario === "gateway-install-unjoined" ? 1 : 0);
+      expect(proof.resourcesPreserved).toBe(
+        scenario === "gateway-install-unjoined" ? true : undefined,
+      );
+      return;
+    }
+    if (scenario.startsWith("gateway-preflight-")) {
+      await expect(admission).rejects.toMatchObject({
+        diagnostic:
+          scenario === "gateway-preflight-cleanup-failure"
+            ? { operation: "cleanup", code: "cleanup-unconfirmed" }
+            : { operation: "gateway-preflight", code: "failed" },
+      });
+      expect(nativeMocks.build).not.toHaveBeenCalled();
+      expect(preflightCleanup).toHaveBeenCalledOnce();
+      expect(instances).toEqual([]);
+      expect(created).toBe(0);
+      expect(lifecycle).not.toContain("mock-start");
+      expect(readdirSync(temp)).toHaveLength(
+        scenario === "gateway-preflight-cleanup-failure" ? 1 : 0,
+      );
+      return;
+    }
     const native = await admission;
     expect(proof).toMatchObject({
       xcode: scenario === "different-xcode" ? "26.6" : "27.0",
@@ -1150,6 +1360,24 @@ describe("native command adapter", () => {
             : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
     });
     try {
+      if (scenario === "native-build-only") {
+        expect(nativeMocks.build).toHaveBeenCalledOnce();
+        expect(nativeMocks.install).not.toHaveBeenCalled();
+        expect(nativeMocks.gateway).not.toHaveBeenCalled();
+        expect(nativeMocks.rpc).not.toHaveBeenCalled();
+        expect(created).toBe(0);
+        expect(proof.gateway).toBeUndefined();
+        expect(proof.gatewayInstallMs).toBeUndefined();
+        return;
+      }
+      expect(nativeMocks.install).toHaveBeenCalledExactlyOnceWith({
+        selectionDir: path.join(temp, "selection"),
+        installDir: expect.stringMatching(/\/openclaw-ios-release-e2e-[^/]+\/gateway$/u),
+        targetSha: "1".repeat(40),
+        signal: abort.signal,
+      });
+      expect(proof.gateway).toEqual(gatewayIdentity);
+      expect(proof.gatewayInstallMs).toEqual(expect.any(Number));
       if (scenario === "gateway-only") {
         const gatewayProbe = await native.dependencies.create("stock", 1);
         try {
@@ -1158,6 +1386,11 @@ describe("native command adapter", () => {
           await gatewayProbe.cleanup();
         }
         expect(lifecycle).toEqual([
+          "gateway-install",
+          "gateway-preflight-create",
+          "gateway-preflight-start",
+          "gateway-preflight-rpc",
+          "gateway-preflight-cleanup",
           "mock-start",
           "gateway-create",
           "gateway-start",
@@ -1170,7 +1403,7 @@ describe("native command adapter", () => {
         expect(nativeMocks.build).not.toHaveBeenCalled();
         expect(created).toBe(0);
         expect(joinedMocks).toBe(1);
-        expect(nativeMocks.rpc.mock.calls.map(([options]) => options.method)).toEqual([
+        expect(fixtureRpcCalls().map(([options]) => options.method)).toEqual([
           "device.pair.setupStatus",
           "device.pair.setupCode",
         ]);
@@ -1281,7 +1514,7 @@ describe("native command adapter", () => {
           expect(lifecycle.at(-1)).toBe("simulator-delete");
         } else {
           expect(created).toBe(0);
-          expect(nativeMocks.rpc).not.toHaveBeenCalled();
+          expect(fixtureRpcCalls()).toHaveLength(0);
         }
         return;
       }
@@ -1309,7 +1542,7 @@ describe("native command adapter", () => {
             ],
           },
         ]);
-        expect(nativeMocks.rpc).toHaveBeenCalledOnce();
+        expect(fixtureRpcCalls()).toHaveLength(1);
         expect(created).toBe(0);
         expect(lifecycle).not.toContain("setup-code");
         expect(lifecycle).not.toContain("live-test");
@@ -1337,7 +1570,7 @@ describe("native command adapter", () => {
           },
         ]);
         expect(proof.resourcesPreserved).toBe(true);
-        expect(nativeMocks.rpc).toHaveBeenCalledOnce();
+        expect(fixtureRpcCalls()).toHaveLength(1);
         expect(created).toBe(0);
         expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
         expect(joinedMocks).toBe(1);
@@ -1510,9 +1743,8 @@ describe("native command adapter", () => {
       expect(created).toBe(1);
       expect(joinedMocks).toBe(1);
       for (const [index, instance] of instances.entries()) {
-        expect(nativeMocks.rpc).toHaveBeenCalledTimes(2);
-        expect(nativeMocks.rpc).toHaveBeenNthCalledWith(
-          1,
+        expect(fixtureRpcCalls()).toHaveLength(2);
+        expect(fixtureRpcCalls()[0]?.[0]).toEqual(
           expect.objectContaining({
             method: "device.pair.setupStatus",
             params: {
@@ -1524,7 +1756,7 @@ describe("native command adapter", () => {
             url: `ws://127.0.0.1:${20001 + index}`,
           }),
         );
-        expect(nativeMocks.rpc).toHaveBeenNthCalledWith(2, {
+        expect(fixtureRpcCalls()[1]?.[0]).toEqual({
           config: {},
           configPath: `/private/fixture-${index + 1}/config.json`,
           url: `ws://127.0.0.1:${20001 + index}`,
@@ -1627,7 +1859,7 @@ describe("native command adapter", () => {
       expect(
         commands.filter(({ args }) => args.includes("delete")).map(({ args }) => args.at(-1)),
       ).toEqual(["11111111-2222-3333-4444-000000000001"]);
-      expect(nativeMocks.gateway.mock.calls[0]?.[0]).toMatchObject({
+      expect(nativeMocks.gateway.mock.calls[1]?.[0]).toMatchObject({
         config: {
           gateway: { controlUi: { enabled: false } },
           agents: { defaults: { model: { primary: "openai/ios-e2e" } } },

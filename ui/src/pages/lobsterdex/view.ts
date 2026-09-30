@@ -114,16 +114,9 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
               <h3>${name}</h3>
               <p class="lobsterdex-page__lore">${seen ? lore.flavor : lore.hint}</p>
               <div class="lobsterdex-page__dates">
-                ${
-                  firstSeen
-                    ? html`<p class="lobsterdex-page__date"><time>${firstSeen}</time></p>`
-                    : nothing
-                }
-                ${
-                  shinySeen
-                    ? html`<p class="lobsterdex-page__date"><time>${shinySeen}</time></p>`
-                    : nothing
-                }
+                ${[firstSeen, shinySeen].map((date) =>
+                  date ? html`<p class="lobsterdex-page__date"><time>${date}</time></p>` : nothing,
+                )}
               </div>
             </article>
           `;

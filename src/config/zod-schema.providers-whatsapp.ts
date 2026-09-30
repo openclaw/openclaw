@@ -1,4 +1,3 @@
-// Defines WhatsApp provider schema fragments for config parsing.
 import { z } from "zod";
 import { buildGroupEntrySchema, refineChannelDmPolicy } from "../channels/plugins/config-schema.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";

@@ -312,17 +312,10 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   /** `undefined` = baseline not yet observed; `null` = no public revision token. */
   private lastCatalogConfigRevision: string | null | undefined;
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => (this.context?.gateway ? voiceWakeOwner(this.context.gateway) : undefined),
-      (owner, notify) => owner.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.nativeDeviceSettings,
-      (capability, notify) => capability.subscribe(notify),
-    )
-    .watch(
+    .watchStore(() => (this.context?.gateway ? voiceWakeOwner(this.context.gateway) : undefined))
+    .watchStore(() => this.context?.nativeDeviceSettings)
+    .watchStore(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       (gateway) =>
         this.syncCatalog(
           gateway.connection.gatewayUrl,
@@ -332,9 +325,8 @@ class TalkSettingsPage extends OpenClawLightDomElement {
             isGatewayMethodAdvertised(gateway.snapshot, "voicewake.set") === true,
         ),
     )
-    .watch(
+    .watchStore(
       () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
       (runtimeConfig) => this.refreshCatalogOnConfigChange(runtimeConfig.state),
     );
 

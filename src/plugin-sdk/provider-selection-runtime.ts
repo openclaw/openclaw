@@ -1,4 +1,3 @@
-// Provider selection runtime helpers resolve plugin/provider choices from config and CLI input.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 
 /** Provider descriptor fields needed for explicit or automatic selection. */

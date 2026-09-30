@@ -1,4 +1,3 @@
-// Normalizes agent binding config for channels, routes, and ACP sessions.
 import type { AgentAcpBinding, AgentBinding, AgentRouteBinding } from "./types.agents.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 

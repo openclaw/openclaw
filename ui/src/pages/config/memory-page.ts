@@ -124,24 +124,20 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         return undefined;
       },
     )
-    .watch(
+    .watchStore(
       () => this.context?.settingsAgentSelection,
-      (selection, notify) => selection.subscribe(notify),
       (selection) => this.selectAgent(selection.state.selectedId),
     )
-    .watch(
+    .watchStore(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.syncGateway(gateway.snapshot),
     )
-    .watch(
+    .watchStore(
       () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
       (runtimeConfig) => this.syncSupport(runtimeConfig),
     )
-    .watch(
+    .watchStore(
       () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
       () => void this.loadOverviewStatus(),
     );
 

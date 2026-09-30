@@ -1,4 +1,3 @@
-// Defines ACP session and runtime configuration types.
 import type { AcpSessionUpdateTag } from "@openclaw/acp-core/runtime/types";
 import type { z } from "zod";
 import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";

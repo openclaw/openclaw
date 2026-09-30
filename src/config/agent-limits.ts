@@ -1,4 +1,3 @@
-// Resolves per-agent runtime limits from config.
 import os from "node:os";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "./types.js";

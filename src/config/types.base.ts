@@ -1,4 +1,3 @@
-// Defines base configuration types shared by multiple config sections.
 import type { z } from "zod";
 import type {
   ChannelPreviewStreamingConfigSchema,

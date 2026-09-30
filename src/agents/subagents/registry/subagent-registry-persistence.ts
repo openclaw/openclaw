@@ -354,6 +354,10 @@ export async function persistSubagentRegistryChangesAsync(
 export function captureSubagentRunMutationSnapshot(entry: SubagentRunRecord): SubagentRunRecord {
   const snapshot = structuredClone(entry);
   snapshot.execution = entry.execution;
+  // Announcements retain this immutable fact while unrelated completion fields are staged.
+  if (snapshot.completion && entry.completion?.terminalReply) {
+    snapshot.completion.terminalReply = entry.completion.terminalReply;
+  }
   // An absent optional owner must remain absent for exact preimage comparison.
   if (Object.hasOwn(entry, "killIntent")) {
     snapshot.killIntent = entry.killIntent;

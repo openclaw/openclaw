@@ -22,24 +22,14 @@ function slackHuddleOrigin(meetingUrl: string): string | undefined {
   return normalizeSlackHuddleUrlForReuse(meetingUrl) ? "https://app.slack.com" : undefined;
 }
 
-function classifyManualActionReason(reason: string): MeetingManualActionCategory {
-  switch (reason) {
-    case "slack-login-required":
-      return "login-required";
-    case "slack-admission-required":
-      return "admission-required";
-    case "slack-permission-required":
-      return "permission-required";
-    case "slack-audio-choice-required":
-      return "audio-choice-required";
-    case "slack-session-conflict":
-      return "session-conflict";
-    case "browser-control-unavailable":
-      return "browser-control-unavailable";
-    default:
-      return "custom";
-  }
-}
+const manualActionCategories = new Map<string, MeetingManualActionCategory>([
+  ["slack-login-required", "login-required"],
+  ["slack-admission-required", "admission-required"],
+  ["slack-permission-required", "permission-required"],
+  ["slack-audio-choice-required", "audio-choice-required"],
+  ["slack-session-conflict", "session-conflict"],
+  ["browser-control-unavailable", "browser-control-unavailable"],
+]);
 
 export const SLACK_HUDDLES_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
   MeetingBrowserJoinSession<SlackHuddlesMode>,
@@ -136,7 +126,7 @@ export const SLACK_HUDDLES_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     },
   },
   parsing: {
-    classifyManualActionReason,
+    classifyManualActionReason: (reason) => manualActionCategories.get(reason) ?? "custom",
     displayName: "Slack huddle",
     invalidTranscriptMessage: "Slack huddle transcript payload is invalid.",
     malformedStatusMessage: "Slack huddle browser status JSON is malformed.",

@@ -140,6 +140,8 @@ access. On plain HTTP LAN addresses or browsers without the camera API, choose
 mobile camera capture without silently substituting a picker for the preview;
 your browser decides whether it shows a camera or a file picker. If access is denied,
 allow the site in your browser and operating-system camera settings and retry.
+The explicit **Use device camera** option also remains available after a preview
+request fails, including permission denial; it never opens automatically.
 If no camera is available, choose **Upload photo** instead.
 
 The camera stops when you capture a photo, close the dialog, or leave its draft.

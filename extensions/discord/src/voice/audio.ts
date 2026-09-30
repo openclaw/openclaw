@@ -312,10 +312,6 @@ class DiscordOpusEncodeStream extends Duplex {
   }
 }
 
-function pcmInt16ToBuffer(pcm: Int16Array): Buffer {
-  return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-}
-
 export async function decodeOpusStreamChunks(
   stream: Readable,
   params: OpusDecodeCallbacks & {
@@ -356,7 +352,10 @@ async function* decodeOpusFrames(
       }
       const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_MAX_DECODE_FRAME_SIZE });
       if (decoded.length > 0) {
-        yield { pcm: pcmInt16ToBuffer(decoded), packet: chunk };
+        yield {
+          pcm: Buffer.from(decoded.buffer, decoded.byteOffset, decoded.byteLength),
+          packet: chunk,
+        };
       }
     }
   } catch (err) {

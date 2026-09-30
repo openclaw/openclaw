@@ -73,24 +73,15 @@ describe("getReplyFromConfig workspace failures", () => {
     vi.unstubAllEnvs();
   });
 
-  it("turns a repointed workspace alias into a visible terminal reply", async () => {
-    (await workspaceMock()).mockRejectedValueOnce(repointedAliasError());
-
-    const reply = await getReplyFromConfig(buildGetReplyCtx(), undefined, {});
-
-    expect(reply).toMatchObject({
-      text: expect.stringContaining("openclaw doctor"),
-    });
-    expect((reply as { text: string }).text).toContain("⚠️");
-  });
-
-  it("never sends workspace paths to the channel", async () => {
+  it("returns a visible repair notice without sending workspace paths to the channel", async () => {
     (await workspaceMock()).mockRejectedValueOnce(repointedAliasError());
 
     const reply = (await getReplyFromConfig(buildGetReplyCtx(), undefined, {})) as {
       text: string;
     };
 
+    expect(reply.text).toContain("openclaw doctor");
+    expect(reply.text).toContain("⚠️");
     // The typed error message embeds absolute host paths; the channel reply
     // must stay a fixed repair notice with no filesystem layout in it.
     expect(reply.text).not.toContain("/home/user");

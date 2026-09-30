@@ -1,6 +1,5 @@
 // Tests compact-command session authority across awaited lifecycle transitions.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   abortEmbeddedAgentRun,
   buildCompactParams,
@@ -15,6 +14,17 @@ import {
 } from "./commands-compact.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { createReplyOperation } from "./reply-run-registry.js";
+
+function buildLifecycleParams(overrides: Partial<HandleCommandsParams> = {}): HandleCommandsParams {
+  return {
+    ...buildCompactParams("/compact", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    }),
+    sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
+    ...overrides,
+  };
+}
 
 describe("handleCompactCommand lifecycle authority", () => {
   beforeEach(resetCompactCommandMocks);
@@ -49,19 +59,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     vi.mocked(resolveCurrentSessionEntry).mockReturnValueOnce(undefined);
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
 
-    const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
+    const result = await handleCompactCommand(buildLifecycleParams(), true);
 
     expect(result?.sessionCompaction).toEqual({
       compacted: false,
@@ -80,19 +78,7 @@ describe("handleCompactCommand lifecycle authority", () => {
       compacted: false,
     });
 
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
+    await handleCompactCommand(buildLifecycleParams(), true);
 
     expect(vi.mocked(abortEmbeddedAgentRun)).toHaveBeenCalledWith("session-1");
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenCalledWith("session-1", 15_000);
@@ -112,20 +98,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     });
 
     try {
-      await handleCompactCommand(
-        {
-          ...buildCompactParams("/compact", {
-            commands: { text: true },
-            channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig),
-          opts: { replyOperation },
-          sessionEntry: {
-            sessionId: "session-1",
-            updatedAt: Date.now(),
-          },
-        } as HandleCommandsParams,
-        true,
-      );
+      await handleCompactCommand(buildLifecycleParams({ opts: { replyOperation } }), true);
 
       expect(replyOperation.phase).toBe("running");
     } finally {
@@ -137,19 +110,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
     vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValueOnce(false);
 
-    const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
+    const result = await handleCompactCommand(buildLifecycleParams(), true);
 
     expect(result).toEqual({
       shouldContinue: false,
@@ -271,13 +232,7 @@ describe("handleCompactCommand lifecycle authority", () => {
       });
 
       const result = await handleCompactCommand(
-        {
-          ...buildCompactParams("/compact", {
-            commands: { text: true },
-            channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig),
-          sessionEntry: initial,
-        } as HandleCommandsParams,
+        buildLifecycleParams({ sessionEntry: initial }),
         true,
         () => {
           if (!ownerCurrent) {

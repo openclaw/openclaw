@@ -45,6 +45,7 @@ import {
   prepareSubagentSessionRunReadSnapshot,
   type PreparedSubagentRunsRead,
   type SubagentRunReadSelection,
+  type SubagentRunReadScope,
 } from "./subagent-registry-read-snapshot.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
@@ -469,6 +470,7 @@ export async function withSubagentRunReadSnapshot<S extends SubagentRunReadSelec
   inMemoryRuns: Map<string, SubagentRunRecord>,
   select: (snapshot: Map<string, SubagentRunReadRecord>) => S,
   consume: (selection: S, runs: ReadonlyMap<string, SubagentRunRecord>) => T,
+  readScope: SubagentRunReadScope,
 ): Promise<T> {
   for (;;) {
     const prepared = await prepareSubagentRunReadSnapshot({
@@ -476,6 +478,7 @@ export async function withSubagentRunReadSnapshot<S extends SubagentRunReadSelec
       fullCache: persistedSubagentRunsReadCache,
       compactCache: persistedSubagentSessionListRunsReadCache,
       select,
+      readScope,
     });
     const result = prepared.consume(consume);
     if (result.ready) {
@@ -506,7 +509,7 @@ export async function prepareSubagentRunsSnapshotForRunIds(
     inMemoryRuns,
     fullCache: persistedSubagentRunsReadCache,
     compactCache: persistedSubagentSessionListRunsReadCache,
-    requestedRunIds: requested,
+    readScope: { runIds: requested },
     select: (snapshot) => ({
       runIds: [...snapshot.values()].filter(matches).map((entry) => entry.runId),
       sessionKeys: [],
