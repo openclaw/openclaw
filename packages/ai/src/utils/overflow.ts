@@ -19,6 +19,8 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
   /exceeds the limit of \d+/i, // GitHub Copilot
   /(?:exceeds the available context size|context size has been exceeded)/i, // llama.cpp server
+  /`?inputs`? tokens \+ `?max_new_tokens`? must be <= [\d,]+/i, // Hugging Face TGI
+  /`?inputs`? must have less than [\d,]+ tokens/i, // Hugging Face TGI
   /greater than the context length/i, // LM Studio
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
@@ -57,6 +59,8 @@ const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
   /413[\s\S]*too large/i,
   /context_window_exceeded/i,
   /input length [\d,]+\s+tokens? exceeds the model limit/i,
+  /`?inputs`? tokens \+ `?max_new_tokens`? must be <= [\d,]+/i, // Hugging Face TGI
+  /`?inputs`? must have less than [\d,]+ tokens/i, // Hugging Face TGI
   /上下文过长|上下文超出|上下文长度超|超出最大上下文|请压缩上下文/,
 ];
 

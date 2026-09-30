@@ -63,6 +63,24 @@ describe("isContextOverflowError with provider patterns", () => {
     ).toBe(true);
   });
 
+  it("detects Hugging Face TGI input validation overflow", () => {
+    // TGI wraps router/src/validation.rs errors as "Input validation error: ..." with HTTP 422.
+    const tgi = (message: string) => `422 Input validation error: ${message}`;
+    expect(
+      isContextOverflowError(
+        tgi(
+          "`inputs` tokens + `max_new_tokens` must be <= 32768. Given: 28897 `inputs` tokens and 3872 `max_new_tokens`",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isContextOverflowError(tgi("`inputs` must have less than 32768 tokens. Given: 40000")),
+    ).toBe(true);
+    expect(isContextOverflowError(tgi("`max_new_tokens` must be <= 4096. Given: 8192"))).toBe(
+      false,
+    );
+  });
+
   it("detects DS4 configured context size overflow", () => {
     expect(
       isContextOverflowError(

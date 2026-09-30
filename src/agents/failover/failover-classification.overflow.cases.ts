@@ -141,6 +141,22 @@ export const overflowCases = [
         message: "400 Prompt has 256468 tokens, but the configured context size is 256000 tokens",
       },
     ],
+    [
+      "patterns-context-tgi-total",
+      {
+        status: 422,
+        message:
+          "422 Input validation error: `inputs` tokens + `max_new_tokens` must be <= 32768. Given: 28897 `inputs` tokens and 3872 `max_new_tokens`",
+      },
+    ],
+    [
+      "patterns-context-tgi-input",
+      {
+        status: 422,
+        message:
+          "422 Input validation error: `inputs` must have less than 32768 tokens. Given: 40000",
+      },
+    ],
   ]),
   ...failoverSignalRows(structuredSource, contextOverflow, [
     [
