@@ -33,27 +33,18 @@ failures remain recorded in the decision, GitHub step summary, and release
 evidence manifest. It is policy-derived, never an operator input or waiver.
 Ordinary PR, push, scheduled, and main CI keep Windows blocking.
 
-Every failed test needs an explicit blocker-or-flake decision. Flakes get at most
-two reruns on the same Release SHA and a fix-in-parallel issue/PR on `main`.
-Classify eligible still-failing `normalCi` jobs through the trusted-main
-`full-release-flake-classification.yml` workflow. Its `recorded-flake` receipt
-binds the exact parent, child/job attempt, SHA, reason, and tracking link; failures
-stay visible in summaries, the manifest, and release notes. Never re-cut, change
-tooling, or start another FRV for a flake. Follow the
-[CI skill](../release-openclaw-ci/SKILL.md#publication-requirements) for recovery.
-
-Other children stay strict in v1; extending classification is follow-up work.
-Never classify CI coverage gates, seal/evidence, Build Artifacts, install smoke,
-survivor lanes, `update-first-hop-compat*`, pack/npm
-qualification, package integrity, and Linux/Windows/macOS Gateway checks,
-including Windows packaged install/upgrade checks in Release Checks. A cancelled
-run still blocks. Preserve first failures and classify each one as below
-before recovery. Stable publication requires stable/full
-evidence, soak, and blocking performance. Beta-profile evidence cannot authorize
-stable publication. No lane or soak waiver can bypass these requirements.
-All nine Gateway install/upgrade combinations across Linux, Windows, and macOS
-are required for all-group qualification. Preserve identity, provenance,
-complete evidence, and existing publication approvals.
+Every other selected validation lane must succeed unless it is a recorded
+flake (below): macOS Node and other normal CI jobs, install smoke, survivor
+lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
+and Linux/Windows/macOS Gateway checks, including Windows packaged
+install/upgrade checks in Release Checks. A cancelled run still blocks. Preserve
+first failures and classify each one as below before recovery. Stable
+publication requires stable/full evidence, soak, and blocking performance.
+Beta-profile evidence cannot authorize stable publication. No lane or soak
+waiver can bypass these requirements. All nine Gateway install/upgrade
+combinations across Linux, Windows, and macOS are required for all-group
+qualification. Preserve identity, provenance, complete evidence, and existing
+publication approvals.
 
 Every failed test gets an explicit lead decision, real release blocker or
 flake, recorded in the handoff with its evidence: the same SHA passing
@@ -66,8 +57,18 @@ the same Release SHA with at most two recorded reruns by default, and file a
 fix-in-parallel issue or PR on `main` with the evidence. Never re-cut, change
 tooling, or start a new FRV for a flake. Main-only failures and infrastructure
 failures (runner outages, GitHub ghost jobs, hosted-runner offload) count as
-flakes for the release. The publish gate does not yet accept a recorded flake
-classification, so a flake still red after its reruns goes to the operator.
+flakes for the release.
+
+A flake still red after its reruns in an eligible FRV `normalCi` job gets a
+`recorded-flake` receipt from the trusted-main
+`full-release-flake-classification.yml` workflow (exact job URL, tracking
+issue/PR, reason), then the parent decision reruns per the
+[CI skill](../release-openclaw-ci/SKILL.md#publication-requirements). The
+receipt binds the exact parent run and attempt, job and attempt, and Release
+SHA; the failure stays visible in the step summary, manifest, and release notes.
+Other children stay strict for now. Never classifiable: the CI gate,
+seal/evidence jobs, Build Artifacts, install smoke, survivor lanes,
+`update-first-hop-compat*`, pack/npm qualification, and package integrity.
 
 Dependency advisories never delay a release. A newly published advisory is
 never a reason to re-cut, change tooling, or rerun validation. Record it in the
