@@ -98,9 +98,7 @@ function verificationWithAdvisories(verification: string, manifest: unknown) {
     .filter((line) => !line.startsWith(ADVISORY_LINE_PREFIX))
     .join("\n")
     .trimEnd();
-  return lines.length > 0
-    ? [proof || `${RELEASE_VERIFICATION_HEADING}\n`, ...lines].join("\n")
-    : proof;
+  return lines.length > 0 ? [proof || RELEASE_VERIFICATION_HEADING, ...lines].join("\n") : proof;
 }
 
 function extendedStableReleaseNotice({

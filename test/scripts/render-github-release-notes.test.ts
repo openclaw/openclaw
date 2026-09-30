@@ -674,6 +674,11 @@ describe("GitHub release-note rendering", () => {
       "- Advisory job (windows-node-ci): normalCi / checks-windows-node-test-2 (failure)",
     );
     expect(verifyGithubReleaseNotes({ ...target, body: rendered.body }).matches).toBe(true);
+    const advisoryOnly = renderGithubReleaseNotes(target);
+    expect(advisoryOnly.body).toContain(
+      "### Release verification\n- Advisory job (recorded-flake)",
+    );
+    expect(verifyGithubReleaseNotes({ ...target, body: advisoryOnly.body }).matches).toBe(true);
     for (const body of [
       rendered.body.replace(receipt.reason, "Unrecorded reason."),
       rendered.body.replace(receipt.trackingUrl, "https://github.com/openclaw/openclaw/issues/999"),
