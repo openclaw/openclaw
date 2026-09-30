@@ -67,8 +67,10 @@ export function createToolCallLookup<Value>() {
 }
 
 export function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {
-  const item = items.findLast((item) => item.kind === "message" && chatItemStartsUserTurn(item));
-  return item ? { afterKey: item.key } : null;
+  const userTurn = items.findLast(
+    (item) => item.kind === "message" && chatItemStartsUserTurn(item),
+  );
+  return userTurn ? { afterKey: userTurn.key } : null;
 }
 
 export function createRunTurnLookup(items: ChatItem[]) {
