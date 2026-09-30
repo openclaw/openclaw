@@ -208,7 +208,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         // their exact still-current row and cannot recreate a deleted owner.
         return null;
       }
-      return preserveUserFacingRunState
+      const patch: Partial<SessionEntry> = preserveUserFacingRunState
         ? metadataPatch
         : projectSessionSnapshotChanges({
             initial: entry,
@@ -216,6 +216,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
             current: currentEntry,
             reassertAbortedLastRun: result.meta.aborted === true,
           });
+      if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
+        // Clear the current snooze, including one set while this run was in flight.
+        patch.snoozedUntil = undefined;
+        patch.snoozedAt = undefined;
+      }
+      return patch;
     },
     {
       ...(preserveUserFacingRunState || params.compactionAccounting

@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  type ErrorShape,
   type SessionOperationEvent,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -174,4 +175,18 @@ export function isAgentMainSessionKey(cfg: OpenClawConfig, sessionKey: string): 
     return false;
   }
   return sessionKey === resolveAgentMainSessionKey({ cfg, agentId: parsed.agentId });
+}
+
+export function resolveProtectedSessionVisibilityError(
+  cfg: OpenClawConfig,
+  canonicalKey: string,
+  action: "archive" | "snooze",
+): ErrorShape | undefined {
+  if (canonicalKey === "unknown") {
+    return errorShape(ErrorCodes.INVALID_REQUEST, `Cannot ${action} the unknown session sentinel.`);
+  }
+  if (canonicalKey === "global" || isAgentMainSessionKey(cfg, canonicalKey)) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, `Cannot ${action} an agent's main session.`);
+  }
+  return undefined;
 }

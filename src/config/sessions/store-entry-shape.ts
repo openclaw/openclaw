@@ -151,6 +151,14 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     delete canonicalValue.archivedBy;
     delete canonicalValue.archiveReason;
   }
+  if (
+    typeof canonicalValue.snoozedUntil !== "number" ||
+    !Number.isFinite(canonicalValue.snoozedUntil) ||
+    canonicalValue.snoozedUntil <= 0
+  ) {
+    delete canonicalValue.snoozedUntil;
+    delete canonicalValue.snoozedAt;
+  }
   return canonicalValue as unknown as SessionEntry;
 }
 

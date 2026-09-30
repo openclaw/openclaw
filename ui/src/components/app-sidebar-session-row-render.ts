@@ -21,6 +21,7 @@ import type {
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
+import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type {
   CatalogBackingSessionDisplay,
@@ -233,7 +234,12 @@ function renderSidebarSessionIndicators(
     icon,
   );
   const stateDescription = describeSessionState(session);
-  const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
+  const snoozed =
+    !session.isChild &&
+    (host.sessionsStatusFilter === "snoozed" || host.sessionsStatusFilter === "all") &&
+    isSessionSnoozed(session, Date.now());
+  const hasTrail =
+    snoozed || (session.isChild && (session.runtimeMs != null || session.startedAt != null));
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
   const stateId = !team && stateDescription ? sidebarSessionStateId(session.key) : undefined;
   const persistentIndicator = html`<span class="sidebar-session-indicator"
@@ -250,16 +256,20 @@ function renderSidebarSessionIndicators(
   const trail = hasTrail
     ? html`<span class="session-row-trail" id=${metaId}
         >${
-          session.runtimeMs != null
-            ? session.hasActiveRun
-              ? html`<openclaw-elapsed-time
-                  .startMs=${session.runtimeSampledAt! - session.runtimeMs}
+          snoozed
+            ? t("sessionsView.snoozeWakes", {
+                time: formatSessionSnoozeWakeTime(session.snoozedUntil!),
+              })
+            : session.runtimeMs != null
+              ? session.hasActiveRun
+                ? html`<openclaw-elapsed-time
+                    .startMs=${session.runtimeSampledAt! - session.runtimeMs}
+                  ></openclaw-elapsed-time>`
+                : (formatDurationCompact(session.runtimeMs) ?? "0ms")
+              : html`<openclaw-elapsed-time
+                  .startMs=${session.startedAt!}
+                  .endMs=${session.endedAt ?? null}
                 ></openclaw-elapsed-time>`
-              : (formatDurationCompact(session.runtimeMs) ?? "0ms")
-            : html`<openclaw-elapsed-time
-                .startMs=${session.startedAt!}
-                .endMs=${session.endedAt ?? null}
-              ></openclaw-elapsed-time>`
         }</span
       >`
     : nothing;

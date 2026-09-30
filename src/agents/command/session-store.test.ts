@@ -22,6 +22,7 @@ import {
   recordCliCompactionInStore,
 } from "./session-store.js";
 import {
+  createRunResult,
   loadPersistedSessionEntry,
   loadPersistedSessionStore,
   seedSessionStore,
@@ -47,13 +48,6 @@ function acpMeta() {
     state: "idle" as const,
     lastActivityAt: Date.now(),
   };
-}
-
-function createRunResult(
-  agentMeta: NonNullable<EmbeddedAgentRunResult["meta"]["agentMeta"]>,
-  meta: Partial<Omit<EmbeddedAgentRunResult["meta"], "agentMeta">> = {},
-): EmbeddedAgentRunResult {
-  return { meta: { durationMs: 1, ...meta, agentMeta } };
 }
 
 function contextBudgetStatus(

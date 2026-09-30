@@ -63,6 +63,32 @@ it("keeps only recognized archive reasons on archived rows", () => {
   ).toMatchObject({ archivedBy: { type: "human", id: "operator-1" } });
 });
 
+it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1])(
+  "drops malformed snooze wake time %j and its orphan timestamp",
+  (snoozedUntil) => {
+    const entry = normalizePersistedSessionEntryShape({
+      sessionId: "snoozed-session",
+      updatedAt: 42,
+      snoozedUntil,
+      snoozedAt: 41,
+    });
+    expect(entry).toBeDefined();
+    expect(entry).not.toHaveProperty("snoozedUntil");
+    expect(entry).not.toHaveProperty("snoozedAt");
+  },
+);
+
+it("retains valid snooze metadata without turning it into a work-admission barrier", () => {
+  const entry = normalizePersistedSessionEntryShape({
+    sessionId: "snoozed-session",
+    updatedAt: 42,
+    snoozedUntil: 100,
+    snoozedAt: 41,
+  });
+  expect(entry).toMatchObject({ snoozedUntil: 100, snoozedAt: 41 });
+  expect(resolveSessionWorkStartError("agent:main:snoozed", entry)).toBeUndefined();
+});
+
 it("preserves shipped pending key-as-session-id rows without a transcript id", () => {
   const entry = normalizePersistedSessionEntryShape(
     {

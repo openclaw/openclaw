@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
@@ -1041,4 +1041,70 @@ describe("session menu", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(menu.querySelector("wa-dropdown")).not.toBe(staleDropdown);
   });
+});
+
+describe("sidebar snooze menu", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each([false, true])(
+    "dispatches the selected wake time from the preset submenu (compact: %s)",
+    async (compact) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const now = new Date(2026, 8, 29, 9);
+      vi.setSystemTime(now);
+      const onAction = vi.fn<(action: SessionMenuAction) => void>();
+      const menu = await mountMenu({ snoozeAllowed: true, compact, onAction });
+      if (compact) {
+        selectMenuValue(menu, "compact:open-snooze");
+        await menu.updateComplete;
+      }
+      const labels = menuItemLabels(compact ? menu : menuItem(menu, "Snooze"));
+      expect(labels.filter((label) => label.includes(" · "))).toEqual([
+        "In 1 hour · 10:00 AM",
+        "In 3 hours · 12:00 PM",
+        "This evening · 6:00 PM",
+        "Tomorrow · tomorrow 9:00 AM",
+        "Next week · Mon 9:00 AM",
+      ]);
+      const value = menuItem(menu, "This evening · 6:00 PM").getAttribute("value")!;
+      selectMenuValue(menu, value);
+      expect(onAction).toHaveBeenCalledWith({
+        kind: "snooze",
+        snoozedUntil: new Date(2026, 8, 29, 18).getTime(),
+      });
+    },
+  );
+
+  it("offers Wake session with the scheduled time and treats expired snoozes as awake", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = new Date(2026, 8, 29, 9).getTime();
+    vi.setSystemTime(now);
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({
+      snoozeAllowed: true,
+      session: { snoozedUntil: now + 3_600_000 },
+      onAction,
+    });
+    expect(menuItemLabels(menu)).toContain("Wake session · 10:00 AM");
+    expect(menuItemLabels(menu)).not.toContain("Snooze");
+    selectMenuValue(menu, "wake");
+    expect(onAction).toHaveBeenCalledWith({ kind: "wake" });
+    menu.session = { ...menu.session, snoozedUntil: now };
+    await menu.updateComplete;
+    expect(menuItemLabels(menu)).toContain("Snooze");
+    expect(menuItemLabels(menu).some((label) => label.startsWith("Wake session"))).toBe(false);
+  });
+
+  it.each([{ archived: true }, { isChild: true }, { pinnable: false }])(
+    "omits snooze actions for ineligible rows %j",
+    async (session) => {
+      const onAction = vi.fn<(action: SessionMenuAction) => void>();
+      const menu = await mountMenu({ snoozeAllowed: true, session, onAction });
+      expect(menuItemLabels(menu)).not.toContain("Snooze");
+      expect(menuItemLabels(menu).some((label) => label.startsWith("Wake session"))).toBe(false);
+      selectMenuValue(menu, `snooze:${Date.now() + 3_600_000}`);
+      selectMenuValue(menu, "wake");
+      expect(onAction).not.toHaveBeenCalled();
+    },
+  );
 });

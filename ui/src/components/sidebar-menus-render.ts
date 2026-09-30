@@ -271,6 +271,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           unread: batchRows ? allUnread : session.unread,
           hiddenFromInvolvingMe: session.hiddenFromInvolvingMe,
           archived: allArchived,
+          snoozedUntil: session.snoozedUntil ?? null,
           archiving: rows.some((row) => context?.sessions.archiveVisibility(row.key) === "pending"),
           category: batchRows ? sharedCategory : (session.category ?? null),
           icon: batchRows ? null : (session.icon ?? null),
@@ -291,6 +292,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         .splitAllowed=${canSplitSessionView()}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .forkFromLastCompleted=${session.gatewayHasActiveRun ?? session.hasActiveRun}
+        .snoozeAllowed=${true}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
@@ -398,6 +400,16 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "new-group":
               void host.sessionOrganizer.createSessionGroup([session]);
+              break;
+            case "snooze":
+              void host.sessionOrganizer.snoozeSessionWithUndo(session, action.snoozedUntil);
+              break;
+            case "wake":
+              void host.sessionOrganizer.patchSession(
+                session,
+                { snoozedUntil: null },
+                { sessionScope: true },
+              );
               break;
             case "toggle-archived":
               if (session.archived) {

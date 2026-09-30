@@ -301,11 +301,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     lifecycleRevision?: string;
     /** Current provider precaution; only its acknowledged continuation may start work. */
     providerReview?: import("./provider-review.types.js").SessionProviderReview;
-    // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
-    // threads.archived_at: the boolean is always derived from the timestamp and
-    // stamped server-side). Codex serializes camelCase but in epoch SECONDS;
-    // these are epoch MS like every other session timestamp — convert at the
-    // codex plugin seam when exchanging thread metadata.
     /** Timestamp (ms) when the session was archived from active session lists. */
     archivedAt?: number;
     /** Actor that archived the session; cleared when the session is restored. */
@@ -314,6 +309,10 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
+    /** Epoch ms wake time; suppresses the active session in sidebar lists until then. */
+    snoozedUntil?: number;
+    /** Server-stamped epoch ms when the current snooze was set. */
+    snoozedAt?: number;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */
