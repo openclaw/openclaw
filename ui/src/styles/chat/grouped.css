@@ -528,7 +528,8 @@
 .chat-notice {
   display: grid;
   gap: 7px;
-  margin: 14px auto;
+  margin: 14px auto
+    calc(14px + var(--chat-footer-offset) + var(--chat-footer-row) + var(--chat-turn-gap));
   padding: 0 16px;
   color: var(--muted);
   font-size: 12px;
@@ -586,7 +587,6 @@
 
 .chat-notice--danger {
   width: min(560px, calc(100% - 32px));
-  margin: 14px auto;
   text-align: left;
 }
 
