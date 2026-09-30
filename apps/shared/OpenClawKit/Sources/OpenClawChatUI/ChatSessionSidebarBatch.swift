@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Observation
+import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 
 struct ChatSidebarSelection {
@@ -60,6 +61,27 @@ final class ChatSessionSidebarBatch {
 
     struct Groups: Decodable {
         let groups: [OpenClawChatSessionGroup]
+        let sectionOrder: [String]?
+    }
+
+    struct PinSnapshot: Decodable {
+        let valid: Bool
+        let hash: String
+        let config: Config
+        struct Config: Decodable {
+            let ui: UI?
+            struct UI: Decodable {
+                let prefs: Prefs?
+                struct Prefs: Decodable { let sidebarEntries: [String]? }
+            }
+        }
+
+        func entries() throws -> [String] {
+            guard self.valid else { throw CocoaError(.coderReadCorrupt) }
+            // ui/src/app-navigation.ts:59: absence uses page defaults; explicit [] hides them.
+            return self.config.ui?.prefs?.sidebarEntries ??
+                ["route:agents-home", "route:dashboards", "route:systems", "route:cron", "route:plugins"]
+        }
     }
 
     var selection = ChatSidebarSelection()
@@ -67,6 +89,15 @@ final class ChatSessionSidebarBatch {
     var notices: [String] = []
     var running = false
     var pendingDelete: [OpenClawChatSessionEntry] = []
+    var sectionOrder: [String] = []
+    private(set) var sidebarEntries: [String] = []
+    private var pinRevision = 0
+    private var writingPins = false
+    private var pinRefreshPending = false
+    var busy: Bool {
+        self.running || self.writingPins
+    }
+
     var connection: OpenClawSessionMenuConnection?
     var scope = UUID()
 
@@ -76,8 +107,110 @@ final class ChatSessionSidebarBatch {
         self.notices = []
         self.running = false
         self.pendingDelete = []
-        if clearConnection { self.connection = nil }
+        if clearConnection {
+            self.pinRevision += 1
+            self.writingPins = false
+            self.pinRefreshPending = false
+            self.connection = nil
+            self.sectionOrder = []
+            self.sidebarEntries = []
+        }
         self.scope = UUID()
+    }
+
+    func refreshPins(_ connection: OpenClawSessionMenuConnection) async throws {
+        try Task.checkCancellation()
+        guard connection.allows("config.get", scope: "operator.read") else { return }
+        if self.writingPins { self.pinRefreshPending = true
+            return
+        }
+        self.pinRevision += 1
+        let revision = self.pinRevision
+        let snapshot: PinSnapshot = try await connection.read("config.get")
+        if revision == self.pinRevision { self.sidebarEntries = try snapshot.entries() }
+    }
+
+    private func reconcilePins(_ connection: OpenClawSessionMenuConnection, revision: Int) async throws {
+        // A config.changed event can arrive during the post-ack read. Drain it before publishing the mirror.
+        repeat {
+            self.pinRefreshPending = false
+            do {
+                let committed: PinSnapshot = try await connection.read("config.get")
+                guard revision == self.pinRevision else { throw CancellationError() }
+                if !self.pinRefreshPending { self.sidebarEntries = try committed.entries() }
+            } catch {
+                guard revision == self.pinRevision, self.pinRefreshPending else { throw error }
+            }
+        } while self.pinRefreshPending
+    }
+
+    static func movingPin(_ entries: [String], keys: [String], key: String, target: String?, after: Bool) -> [String] {
+        guard key != target else { return entries }
+        // Keep foreign slots fixed. Unpinning changes session state, not this array's slot count.
+        var result = entries
+        for key in keys where !result.contains("session:\(key)") {
+            result.append("session:\(key)")
+        }
+        let slots = result.indices.filter {
+            result[$0].hasPrefix("session:") && !result[$0].dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+        }
+        var sessions = slots.map { result[$0] }
+        guard let source = sessions.firstIndex(of: "session:\(key)") else { return entries }
+        let entry = sessions.remove(at: source)
+        let destination = target.flatMap { sessions.firstIndex(of: "session:\($0)") }
+        sessions.insert(entry, at: destination.map { $0 + (after ? 1 : 0) } ?? sessions.count)
+        for (slot, value) in zip(slots, sessions) {
+            result[slot] = value
+        }
+        return result
+    }
+
+    func movePin(
+        keys: [String],
+        key: String,
+        target: String?,
+        after: Bool,
+        connection: OpenClawSessionMenuConnection) async throws
+    {
+        guard !self.writingPins,
+              connection.allows("config.patch", scope: "operator.admin") else { throw CancellationError() }
+        self.writingPins = true
+        self.pinRevision += 1
+        let revision = self.pinRevision
+        // The preference belongs to the connection, not the current roster filter or selection.
+        defer { if revision == self.pinRevision { self.writingPins = false } }
+        do {
+            for attempt in 0..<2 {
+                let snapshot: PinSnapshot = try await connection.read("config.get")
+                guard revision == self.pinRevision else { throw CancellationError() }
+                let previous = try snapshot.entries()
+                self.sidebarEntries = Self.movingPin(previous, keys: keys, key: key, target: target, after: after)
+                do {
+                    // ui/src/app/server-prefs.ts:549 uses this same leaf replacement. The config.patch baseHash
+                    // guard protects foreign slots; a conflict recomputes the move instead of replaying stale bytes.
+                    try await connection.request(OpenClawChatGatewayRequests.sidebarPinOrder(
+                        self.sidebarEntries,
+                        hash: snapshot.hash))
+                } catch {
+                    guard revision == self.pinRevision else { throw CancellationError() }
+                    self.sidebarEntries = previous
+                    // ui/src/lib/config/config-mutation-error.ts:40 identifies this existing conflict response.
+                    if attempt == 0, let error = error as? GatewayResponseError,
+                       error.code == "INVALID_REQUEST",
+                       error.details["publication"] == nil,
+                       error.message.contains("config changed since last load") { continue }
+                    throw error
+                }
+                try await self.reconcilePins(connection, revision: revision)
+                return
+            }
+        } catch {
+            guard revision == self.pinRevision else { throw CancellationError() }
+            self.notices = [error.localizedDescription]
+            if self.pinRefreshPending { try? await self.reconcilePins(connection, revision: revision) }
+            throw error
+        }
     }
 
     static func allows(
@@ -200,6 +333,74 @@ final class ChatSessionSidebarBatch {
         for row in rows {
             self.errors[OpenClawChatSessionSidebarData.identity(row)] = message
         }
+    }
+
+    enum Drop {
+        case selfDrop
+        case mutation([String: AnyCodable]?)
+    }
+
+    static func drop(
+        _ row: OpenClawChatSessionEntry, section: String,
+        target: OpenClawChatSessionEntry? = nil) -> Drop?
+    {
+        if section == "pinned" {
+            // ui/src/components/session-organizer-controller.ts:281 consumes self-drops before list unpinning.
+            if let target, OpenClawChatSessionSidebarData.identity(row) ==
+                OpenClawChatSessionSidebarData.identity(target) { return .selfDrop }
+            guard ChatSessionSidebarEligibility.canPin(row) else { return nil }
+            return .mutation(row.pinned == true ? nil : ["pinned": .init(true)])
+        }
+        // ui/src/components/session-organizer-controller.ts:656 unpins atomically with category assignment;
+        // dropping onto the broad list at :354 instead preserves category.
+        if section.hasPrefix("group:") || section == "recent" {
+            let category = section == "recent" ? nil : String(section.dropFirst(6))
+            guard row.category != category || row.pinned == true else { return nil }
+            var patch: [String: AnyCodable] =
+                ["category": section == "recent" ? .init(NSNull()) : .init(String(section.dropFirst(6)))]
+            if row.pinned == true { patch["pinned"] = .init(false) }
+            return .mutation(patch)
+        }
+        return section == "list" && row.pinned == true ? .mutation(["pinned": .init(false)]) : nil
+    }
+
+    nonisolated static func sectionToken(_ id: String) -> String {
+        if id.hasPrefix("group:") { return "category:" + id.dropFirst(6) }
+        return id == "recent" ? "ungrouped" : id
+    }
+
+    static func orderedSections(_ stored: [String], groups: [String]) -> [String] {
+        let builtins = ["ungrouped", "groups", "work"]
+        var order: [String] = []
+        // ui/src/lib/sessions/grouping.ts:72: preserve saved catalog slots even when not rendered.
+        for token in stored where !order.contains(token) {
+            if builtins.contains(token) || token.hasPrefix("catalog:") ||
+                (token.hasPrefix("category:") && groups.contains(String(token.dropFirst(9))))
+            { order.append(token) }
+        }
+        for group in groups where !order.contains("category:\(group)") {
+            order.insert("category:\(group)", at: order.firstIndex(where: { builtins.contains($0) }) ?? order.count)
+        }
+        for (index, token) in builtins.enumerated() where !order.contains(token) {
+            let slot = index == 0 ? order.count : (order.firstIndex(of: builtins[index - 1])! + 1)
+            order.insert(token, at: slot)
+        }
+        return order
+    }
+
+    func moveSection(_ source: String, to target: String, after: Bool) async throws -> Groups {
+        guard let connection else { throw CancellationError() }
+        let scope = self.scope
+        let current: Groups = try await connection.read("sessions.groups.list")
+        guard scope == self.scope else { throw CancellationError() }
+        var order = Self.orderedSections(current.sectionOrder ?? [], groups: current.groups.map(\.name))
+        let source = Self.sectionToken(source)
+        let target = Self.sectionToken(target)
+        guard source != target, order.contains(source), order.contains(target) else { return current }
+        order.removeAll { $0 == source }
+        order.insert(source, at: order.firstIndex(of: target)! + (after ? 1 : 0))
+        let names = order.filter { $0.hasPrefix("category:") }.map { String($0.dropFirst(9)) }
+        return try await connection.read("sessions.groups.put", ["names": .init(names), "sectionOrder": .init(order)])
     }
 }
 #endif

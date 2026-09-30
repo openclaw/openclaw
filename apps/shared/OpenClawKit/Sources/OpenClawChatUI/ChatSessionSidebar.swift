@@ -52,7 +52,7 @@ struct ChatSessionSidebar: View {
     }
 
     private func sidebar(now: Date) -> some View {
-        let sections = self.rosterSections(now: now, observedOrder: self.observedOrder)
+        let sections = self.interactionSections(now: now)
         let nextWake = OpenClawChatSessionSnooze.nextWake(
             in: self.rosterData?.queryRows ?? self.viewModel.sessions, now: now)
         let projectedRows = sections.flatMap(\.nodes).flatMap(\.previewSessions)
@@ -120,9 +120,14 @@ struct ChatSessionSidebar: View {
                 self.connectionFooter
             }
         }
+        .dropDestination(for: ChatSidebarDrag.self) { items, _ in
+            guard items.count == 1, let item = items.first else { return false }
+            return self.dropInteraction(item, section: "list", after: false)
+        }
         .onChange(of: self.viewModel.sidebarData?.scopeRevision) { _, _ in self.batch.reset() }
         .onChange(of: self.rosterData?.query) { _, _ in self.batch.reset(clearConnection: false) }
         .onChange(of: self.viewModel.sessionKey) { _, _ in self.batch.selection = .init() }
+        .task(id: self.viewModel.sidebarData?.scopeRevision) { await self.watchPinOrder() }
         .onChange(of: (self.rosterData?.rows ?? self.viewModel.sessions).map(\.key), initial: true) { _, keys in
             self.observedOrder.observe(keys)
         }

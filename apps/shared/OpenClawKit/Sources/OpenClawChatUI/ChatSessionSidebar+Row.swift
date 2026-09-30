@@ -67,7 +67,7 @@ extension ChatSessionSidebar {
             },
             archive: { self.viewModel.setSessionArchived(session, archived: !session.isArchived) },
             presentedAttention: self.$presentedAttention)
-        return self.interactionRow(content, session: session)
+        return self.interactionRow(content, session: session, isChild: isChild)
             .overlay(alignment: .leading) {
                 OpenClawSessionColorStripe(color: session.color)
                     .offset(x: -6)
@@ -77,7 +77,7 @@ extension ChatSessionSidebar {
                 if self.selectedBatchRows.count > 1,
                    self.batch.selection.keys.contains(self.interactionIdentity(session))
                 {
-                    self.batchMenu.disabled(self.batch.running)
+                    self.batchMenu.disabled(self.batch.busy)
                 } else {
                     self.contextMenu(for: session, isChild: isChild, now: now)
                 }
