@@ -484,16 +484,9 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.installDaemon !== undefined || opts.customImageInput !== undefined) {
     return true;
   }
-  for (const [key, value] of Object.entries(opts)) {
-    if (GUIDED_SAFE_ONBOARD_KEYS.has(key) || key === "installDaemon") {
-      continue;
-    }
-    if (value === undefined || value === false) {
-      continue;
-    }
-    return true;
-  }
-  return false;
+  return Object.entries(opts).some(
+    ([key, value]) => !GUIDED_SAFE_ONBOARD_KEYS.has(key) && value !== undefined && value !== false,
+  );
 }
 
 /** Runs the onboard command after normalizing legacy flags and setup mode. */

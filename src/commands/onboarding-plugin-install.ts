@@ -433,26 +433,9 @@ async function promptInstallChoice(params: {
 
   options.push({ value: "skip", label: t("common.skipForNow") });
 
-  const initialValue =
-    params.defaultChoice === "local" && !params.localPath
-      ? clawhubSpec
-        ? "clawhub"
-        : npmSpec
-          ? "npm"
-          : "skip"
-      : params.defaultChoice === "clawhub" && !clawhubSpec
-        ? npmSpec
-          ? "npm"
-          : params.localPath
-            ? "local"
-            : "skip"
-        : params.defaultChoice === "npm" && !npmSpec
-          ? clawhubSpec
-            ? "clawhub"
-            : params.localPath
-              ? "local"
-              : "skip"
-          : params.defaultChoice;
+  const initialValue = ([params.defaultChoice, "clawhub", "npm", "local", "skip"] as const).find(
+    (choice) => options.some((option) => option.value === choice),
+  );
 
   return await params.prompter.select<InstallChoice>({
     message: t("wizard.plugins.installPluginPrompt", { plugin: safeLabel }),
@@ -901,32 +884,29 @@ async function installPluginFromOverride(params: {
     params.override.kind === "npm-pack"
       ? (result as InstallPluginResult & { npmTarballName?: string }).npmTarballName
       : undefined;
-  const install =
-    params.override.kind === "npm-pack"
-      ? ({
-          pluginId: result.pluginId,
-          source: "npm",
-          spec: result.npmResolution?.resolvedSpec ?? result.manifestName ?? result.pluginId,
-          sourcePath: params.override.archivePath,
-          installPath: result.targetDir,
-          ...(result.version ? { version: result.version } : {}),
-          ...buildNpmResolutionInstallFields(result.npmResolution),
-          artifactKind: "npm-pack",
-          artifactFormat: "tgz",
+  const install = {
+    pluginId: result.pluginId,
+    source: "npm" as const,
+    spec:
+      params.override.kind === "npm-pack"
+        ? (result.npmResolution?.resolvedSpec ?? result.manifestName ?? result.pluginId)
+        : params.override.spec,
+    ...(params.override.kind === "npm-pack" ? { sourcePath: params.override.archivePath } : {}),
+    installPath: result.targetDir,
+    ...(result.version ? { version: result.version } : {}),
+    ...buildNpmResolutionInstallFields(result.npmResolution),
+    ...(params.override.kind === "npm-pack"
+      ? {
+          artifactKind: "npm-pack" as const,
+          artifactFormat: "tgz" as const,
           ...(result.npmResolution?.integrity
             ? { npmIntegrity: result.npmResolution.integrity }
             : {}),
           ...(result.npmResolution?.shasum ? { npmShasum: result.npmResolution.shasum } : {}),
           ...(npmTarballName ? { npmTarballName } : {}),
-        } as const)
-      : ({
-          pluginId: result.pluginId,
-          source: "npm",
-          spec: params.override.spec,
-          installPath: result.targetDir,
-          ...(result.version ? { version: result.version } : {}),
-          ...buildNpmResolutionInstallFields(result.npmResolution),
-        } as const);
+        }
+      : {}),
+  };
   return await finishOnboardingPluginInstall({
     cfg: params.cfg,
     pluginId: result.pluginId,
@@ -1111,8 +1091,8 @@ export async function ensureOnboardingPluginInstalled(params: {
   assertConfigWriteAllowedInCurrentMode();
 
   return await withPluginLifecycleLease({}, async () => {
-    if (choice === "local" && localPath) {
-      return await installLocalOnboardingPlugin({
+    const installLocal = (localPath: string) =>
+      installLocalOnboardingPlugin({
         cfg: next,
         entry,
         localPath,
@@ -1124,6 +1104,8 @@ export async function ensureOnboardingPluginInstalled(params: {
         onCapabilityConsent,
         beforePersistentEffect: params.beforePersistentEffect,
       });
+    if (choice === "local" && localPath) {
+      return await installLocal(localPath);
     }
 
     const sources = resolvePluginInstallSources(
@@ -1270,18 +1252,7 @@ export async function ensureOnboardingPluginInstalled(params: {
         initialValue: true,
       });
       if (fallback) {
-        return await installLocalOnboardingPlugin({
-          cfg: next,
-          entry,
-          localPath,
-          bundledLocalPath,
-          npmSpec,
-          workspaceDir,
-          prompter,
-          runtime,
-          onCapabilityConsent,
-          beforePersistentEffect: params.beforePersistentEffect,
-        });
+        return await installLocal(localPath);
       }
     }
     runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);

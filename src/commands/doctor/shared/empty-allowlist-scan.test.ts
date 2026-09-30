@@ -207,6 +207,38 @@ describe("doctor empty allowlist policy scan", () => {
     ]);
   });
 
+  it("keeps inherited top-level allowlists ahead of nested account values in warnings and hooks", async () => {
+    const accountContexts: unknown[] = [];
+    const warnings = await scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          signal: {
+            allowFrom: [],
+            accounts: {
+              work: { dm: { policy: "allowlist", allowFrom: ["nested-sender"] } },
+            },
+          },
+        },
+      },
+      {
+        doctorFixCommand: "openclaw doctor --fix",
+        extraWarningsForAccount: ({ dmPolicy, effectiveAllowFrom, prefix }) => {
+          accountContexts.push({ dmPolicy, effectiveAllowFrom, prefix });
+          return [];
+        },
+      },
+    );
+
+    expect(warnings).toEqual([
+      '- channels.signal.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
+    ]);
+    expect(accountContexts).toContainEqual({
+      dmPolicy: "allowlist",
+      effectiveAllowFrom: [],
+      prefix: "channels.signal.accounts.work",
+    });
+  });
+
   it("skips disabled channel and account entries", async () => {
     const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
 
