@@ -427,8 +427,17 @@ export async function loadFlakeClassifications({
         run.status === "completed" &&
         run.conclusion === "success" &&
         /^\d+$/u.test(run.display_title.slice(prefix.length)) &&
-        run.display_title.startsWith(prefix),
+        run.display_title.startsWith(prefix) &&
+        typeof run.head_sha === "string" &&
+        /^[a-f0-9]{40}$/u.test(run.head_sha),
       "receipt workflow run differs",
+    );
+    // head_branch cannot tell a main branch dispatch from a same-named tag; require main lineage.
+    const lineage = await api(`compare/${run.head_sha}...main?per_page=1`, { signal });
+    requireValue(
+      ["ahead", "identical"].includes(lineage?.status) &&
+        lineage.merge_base_commit?.sha === run.head_sha,
+      "receipt workflow revision is not a main ancestor",
     );
     const artifacts = await api(`actions/runs/${run.id}/artifacts?per_page=100`, { signal });
     requireValue(

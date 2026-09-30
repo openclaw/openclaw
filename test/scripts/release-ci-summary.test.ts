@@ -3746,7 +3746,14 @@ describe("release CI summary child correlation", () => {
     },
   );
 
-  it.each(["valid", "changed-receipt", "foreign-parent", "failed-producer", "changed-gate"])(
+  it.each([
+    "valid",
+    "changed-receipt",
+    "foreign-parent",
+    "failed-producer",
+    "tag-revision",
+    "changed-gate",
+  ])(
     "rederives recorded flakes from authenticated receipt artifacts and the live CI gate: %s",
     async (scenario) => {
       const fixture = trustedMainNpmFixture();
@@ -3833,6 +3840,7 @@ describe("release CI summary child correlation", () => {
         head_branch: "main",
         status: "completed",
         conclusion: scenario === "failed-producer" ? "failure" : "success",
+        head_sha: "d".repeat(40),
         display_title: `FRV flake classification ${receipt.jobUrl}`,
         triggering_actor: { login: receipt.classifiedBy },
       };
@@ -3848,6 +3856,11 @@ describe("release CI summary child correlation", () => {
         }
         if (path === "actions/runs/890") {
           return producer;
+        }
+        if (path === `compare/${"d".repeat(40)}...main?per_page=1`) {
+          return scenario === "tag-revision"
+            ? { status: "diverged", merge_base_commit: { sha: "e".repeat(40) } }
+            : { status: "ahead", merge_base_commit: { sha: "d".repeat(40) } };
         }
         if (path === "actions/runs/890/artifacts?per_page=100") {
           return {
@@ -3911,7 +3924,7 @@ describe("release CI summary child correlation", () => {
         expect(api.mock.calls.filter(([path]) => path === "actions/jobs/502/logs")).toHaveLength(1);
       } else {
         await expect(validation).rejects.toThrow(
-          scenario === "foreign-parent" || scenario === "failed-producer"
+          ["foreign-parent", "failed-producer", "tag-revision"].includes(scenario)
             ? /FRV flake classification/u
             : /classification evidence mismatch/u,
         );
