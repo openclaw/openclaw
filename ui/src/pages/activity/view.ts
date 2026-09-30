@@ -153,8 +153,11 @@ function renderToolFilter(props: ActivityProps, toolNames: string[]) {
               }
             }}
           >
-            <option value="">${t("activity.allTools")}</option>
-            ${toolNames.map((name) => html`<option value=${name}>${name}</option>`)}
+            <option value="" .selected=${props.toolFilter === ""}>${t("activity.allTools")}</option>
+            ${toolNames.map(
+              (name) =>
+                html`<option value=${name} .selected=${name === props.toolFilter}>${name}</option>`,
+            )}
           </select>
         </label>
       </div>
