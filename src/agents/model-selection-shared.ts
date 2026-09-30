@@ -965,8 +965,8 @@ function buildAllowedModelSetFromPrepared(
     allowedCaseInsensitiveIdentities.add(caseInsensitiveIdentity(ref.provider, ref.model));
     return modelCatalogEntryKey({ provider: ref.provider, id: ref.model });
   };
-  for (const entry of catalog.filter((entry) =>
-    isModelKeyAllowedBySet(wildcardModelKeys, modelKey(entry.provider, entry.id)),
+  for (const entry of catalog.filter((candidate) =>
+    isModelKeyAllowedBySet(wildcardModelKeys, modelKey(candidate.provider, candidate.id)),
   )) {
     allowedKeys.add(modelKey(entry.provider, entry.id));
     addAllowedCatalogRef({ provider: entry.provider, model: entry.id });
