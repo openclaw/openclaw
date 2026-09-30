@@ -30,6 +30,35 @@ describe("structured_output", () => {
     expect(peekSwarmStructuredOutput(runId)?.structured).toEqual({ answer: "yes" });
   });
 
+  it("accepts a double-encoded JSON string result from completions-style providers", async () => {
+    const tool = createStructuredOutputTool({
+      runId,
+      schema: {
+        type: "object",
+        properties: { status: { type: "string" }, echo: { type: "string" } },
+        required: ["status"],
+        additionalProperties: false,
+      },
+    });
+    const result = await tool.execute("call-1", {
+      result: JSON.stringify({ status: "ok", echo: "hi" }),
+    });
+    expect(isToolResultError(result)).toBe(false);
+    expect(peekSwarmStructuredOutput(runId)?.structured).toEqual({ status: "ok", echo: "hi" });
+  });
+
+  it("preserves unsafe integer literals when decoding a double-encoded result", async () => {
+    const tool = createStructuredOutputTool({
+      runId,
+      schema: { type: "object" },
+    });
+    const result = await tool.execute("call-1", {
+      result: '{"id":9007199254740993}',
+    });
+    expect(isToolResultError(result)).toBe(false);
+    expect(peekSwarmStructuredOutput(runId)?.structured).toEqual({ id: "9007199254740993" });
+  });
+
   it("publishes a provider-valid schema while accepting any JSON result", () => {
     const tool = createStructuredOutputTool({
       runId,
