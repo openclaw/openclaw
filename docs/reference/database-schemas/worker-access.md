@@ -201,6 +201,15 @@ Scope matching, FTS scan bounds, fire budgets, and hidden-context limits are unc
 Cold agent opening and lease/bootstrap control retain their existing owners; this
 cut does not claim that all agent-database work has left the host thread.
 
+Memory Core origin recording and reservation compensation use that same agent
+writer and a connection-bound worker. Recall staging, backfill, and consolidation
+await their origin writes before publication or releasing the workspace lock.
+Compensation removes only the inserted prefix from its original database;
+uncertain file publication retains the reserved lineage. Missing-store and
+no-match preflights remain noncreating. Read-only origin planning and forget's
+supplied-connection kernels retain their existing owners; this is a mutation cut,
+not a claim that all memory persistence is off the calling thread.
+
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.
