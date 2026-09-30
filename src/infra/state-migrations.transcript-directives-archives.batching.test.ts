@@ -124,7 +124,7 @@ function archiveBlob(database: DatabaseSync, sessionId: string): Buffer {
 }
 
 function changeContent(content: string) {
-  return { changed: true, content: content.replace("old", "new") };
+  return { changed: content.includes("old"), content: content.replace("old", "new") };
 }
 
 afterEach(() => {
@@ -135,7 +135,7 @@ afterEach(() => {
 });
 
 describe("canonical transcript archive batch transactions", () => {
-  it("preserves unchanged bytes across batch boundaries with two transactions per batch", async () => {
+  it("preserves unchanged bytes across batch boundaries with one transaction per batch", async () => {
     const f = fixture(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
     try {
       const before = f.database
@@ -150,8 +150,8 @@ describe("canonical transcript archive batch transactions", () => {
           .all(),
       ).toEqual(before);
       expect(f.progress()).toBe('{"phase":"complete"}');
-      expect(f.transactions).toBe(5); // Two per batch, plus completion.
-      expect(f.checks).toBe(10); // Entry and pre-commit for every transaction.
+      expect(f.transactions).toBe(3); // One per batch, plus completion.
+      expect(f.checks).toBe(6); // Entry and pre-commit for every transaction.
     } finally {
       f.close();
     }
@@ -183,7 +183,7 @@ describe("canonical transcript archive batch transactions", () => {
           blob,
         );
       }
-      expect(f.transactions).toBe(3);
+      expect(f.transactions).toBe(2);
     } finally {
       f.close();
     }
@@ -265,17 +265,6 @@ describe("canonical transcript archive batch transactions", () => {
     }
   });
 
-  it("rolls back cursor progress if authority is lost before cursor commit", async () => {
-    const f = fixture();
-    try {
-      f.failAt(4);
-      await expect(f.migrate()).rejects.toThrow("maintenance lease lost");
-      expect(f.progress()).toBe("start");
-    } finally {
-      f.close();
-    }
-  });
-
   it("rolls back a failed cursor batch and resumes from the original cursor", async () => {
     const f = fixture();
     try {
@@ -293,6 +282,108 @@ describe("canonical transcript archive batch transactions", () => {
       expect(f.progress()).toBe("start");
       expect((await f.migrate()).rewrittenArchives).toBe(0);
       expect(f.progress()).toBe('{"phase":"complete"}');
+    } finally {
+      f.close();
+    }
+  });
+
+  it("restores changed published archives after a cursor write fails", async () => {
+    const f = fixture();
+    try {
+      let writes = 0;
+      const prepareFile = (archivePath: string) => {
+        if (!fs.existsSync(archivePath)) {
+          fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+          fs.writeFileSync(archivePath, originalContent);
+        }
+      };
+      await expect(
+        f.migrate({
+          transformContent: changeContent,
+          onArchive: prepareFile,
+          writeCursor: (cursor) => {
+            f.database.prepare("UPDATE progress SET value = ?").run(JSON.stringify(cursor));
+            if (++writes === 2) {
+              throw new Error("cursor write failed");
+            }
+          },
+        }),
+      ).rejects.toThrow("cursor write failed");
+      expect(f.progress()).toBe("start");
+
+      expect(
+        (await f.migrate({ transformContent: changeContent, onArchive: prepareFile }))
+          .rewrittenArchives,
+      ).toBe(3);
+      for (let index = 0; index < 3; index++) {
+        const sessionId = `s${String(index).padStart(5, "0")}`;
+        const blob = archiveBlob(f.database, sessionId);
+        const row = f.database
+          .prepare("SELECT published_at FROM session_transcript_archives WHERE session_id = ?")
+          .get(sessionId);
+        expect(blob.toString()).toContain("new");
+        expect(row?.published_at).toBe(123);
+        expect(fs.readFileSync(path.join(f.archiveDirectory, `archive-${index}.jsonl`))).toEqual(
+          blob,
+        );
+      }
+    } finally {
+      f.close();
+    }
+  });
+
+  it("retries changed published archives after a later file repair fails", async () => {
+    const f = fixture();
+    try {
+      const prepareFile = (archivePath: string) => {
+        if (!fs.existsSync(archivePath)) {
+          fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+          fs.writeFileSync(archivePath, originalContent);
+        }
+      };
+      const renameSync = fs.renameSync;
+      const failedPath = path.join(f.archiveDirectory, "archive-1.jsonl");
+      const rename = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+        if (destination === failedPath) {
+          throw new Error("file repair failed");
+        }
+        return renameSync(source, destination);
+      });
+      await expect(
+        f.migrate({ transformContent: changeContent, onArchive: prepareFile }),
+      ).rejects.toThrow("file repair failed");
+      rename.mockRestore();
+      expect(f.progress()).toBe("start");
+      for (let index = 0; index < 3; index++) {
+        const sessionId = `s${String(index).padStart(5, "0")}`;
+        expect(archiveBlob(f.database, sessionId).toString()).toContain("old");
+        expect(
+          f.database
+            .prepare("SELECT published_at FROM session_transcript_archives WHERE session_id = ?")
+            .get(sessionId)?.published_at,
+        ).toBe(123);
+      }
+      expect(
+        fs.readFileSync(path.join(f.archiveDirectory, "archive-0.jsonl")).toString(),
+      ).toContain("new");
+
+      expect(
+        (await f.migrate({ transformContent: changeContent, onArchive: prepareFile }))
+          .rewrittenArchives,
+      ).toBe(3);
+      for (let index = 0; index < 3; index++) {
+        const sessionId = `s${String(index).padStart(5, "0")}`;
+        const blob = archiveBlob(f.database, sessionId);
+        expect(blob.toString()).toContain("new");
+        expect(
+          f.database
+            .prepare("SELECT published_at FROM session_transcript_archives WHERE session_id = ?")
+            .get(sessionId)?.published_at,
+        ).toBe(123);
+        expect(fs.readFileSync(path.join(f.archiveDirectory, `archive-${index}.jsonl`))).toEqual(
+          blob,
+        );
+      }
     } finally {
       f.close();
     }
