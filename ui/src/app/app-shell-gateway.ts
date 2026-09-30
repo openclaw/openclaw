@@ -194,8 +194,7 @@ export class ShellGatewayOwner {
       // A gateway session carried a model-visible redaction marker/notice. Surface it as a
       // notification panel so the operator notices a secret was masked before the model saw it.
       showToast({
-        message:
-          "OpenClaw redacted sensitive value(s) from a session before the model saw them.",
+        message: "OpenClaw redacted sensitive value(s) from a session before the model saw them.",
       });
       return;
     }
