@@ -8,9 +8,12 @@ const failures = {
 export class GatewayRestartPreparationError extends Error {
   readonly code = refusalCode;
 
-  constructor(readonly reason: keyof typeof failures) {
+  constructor(
+    readonly reason: keyof typeof failures,
+    readonly detail?: string,
+  ) {
     super(
-      `${refusalCode}: ${failures[reason]}. Gateway was not signaled. Verify the service definition and Gateway status, then retry.`,
+      `${refusalCode}: ${failures[reason]}. ${detail ? `${detail} ` : ""}Gateway was not signaled. Verify the service definition and Gateway status, then retry.`,
     );
     this.name = "GatewayRestartPreparationError";
   }

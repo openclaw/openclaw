@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { hostname } from "node:os";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 // Persists short-lived gateway restart intent for supervisor SIGTERM handoff.
@@ -306,8 +307,9 @@ export function writeGatewayServiceRestartIntentSync(opts: {
   const written = writeGatewayRestartIntentForTargetSync(
     opts,
     (db) => {
+      let owner: ReturnType<typeof readGatewayOwnerLeaseFromDatabase>;
       try {
-        const owner = readGatewayOwnerLeaseFromDatabase(db);
+        owner = readGatewayOwnerLeaseFromDatabase(db);
         if (owner === undefined) {
           const legacyPid = readLegacyGatewayRestartTargetSync(opts);
           if (legacyPid !== undefined) {
@@ -328,8 +330,18 @@ export function writeGatewayServiceRestartIntentSync(opts: {
         ) {
           return owner.pid;
         }
-      } catch {
+      } catch (err) {
+        if (err instanceof GatewayRestartPreparationError) {
+          throw err;
+        }
         throw new GatewayRestartPreparationError("serving-owner");
+      }
+      // Keep the owner refused. A rename still cannot prove the serving process.
+      if (owner && owner.host !== hostname()) {
+        throw new GatewayRestartPreparationError(
+          "serving-owner",
+          `Recorded serving host ${JSON.stringify(owner.host)} does not match this host ${JSON.stringify(hostname())}.`,
+        );
       }
       throw new GatewayRestartPreparationError("serving-owner");
     },
