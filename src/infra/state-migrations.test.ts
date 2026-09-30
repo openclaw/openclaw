@@ -26,12 +26,17 @@ import type {
 } from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
   OPENCLAW_AGENT_SCHEMA_VERSION,
+  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -1937,6 +1942,47 @@ describe("state migrations", () => {
     expect(repaired.changes).toContain("doctor-only repair migrated");
     expect(detectLegacyState).toHaveBeenCalledTimes(2);
     expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("carries retained database holds through the Doctor migration result", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const agentId = "retired";
+    const operationId = "retained-database-doctor-notice";
+    const databasePath = openOpenClawAgentDatabase({ agentId, env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    beginAgentDeletionJournal(
+      {
+        agentId,
+        operationId,
+        agentDir: path.dirname(databasePath),
+        workspaceDir: path.join(stateDir, "workspaces", agentId),
+        sessionsDir: path.join(stateDir, "agents", agentId, "sessions"),
+        databasePaths: [databasePath],
+        deleteFiles: false,
+      },
+      { env },
+    );
+    expect(completeAgentDeletionJournal(agentId, operationId, { env })).toBe(true);
+
+    const result = await autoMigrateLegacyState({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toContain(
+      `Held retained database ${databasePath} for deleted agent ${agentId}; restore that agent from backup or move this database out of the active state directory, then rerun openclaw doctor --fix.`,
+    );
+    expect(
+      listOpenClawRegisteredAgentDatabases({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+    ).toEqual([expect.objectContaining({ agentId, path: databasePath })]);
   });
 
   it("checks automatic migrations independently for each state directory", async () => {

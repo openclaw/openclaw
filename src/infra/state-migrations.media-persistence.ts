@@ -49,7 +49,9 @@ import {
 } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
+  assertRetainedAgentDatabaseWritable,
   listTranscriptArchives,
+  RetainedAgentDatabaseHoldError,
   resolveAgentDatabaseMigrationTargets,
 } from "./state-migrations.media-persistence-targets.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
@@ -343,27 +345,9 @@ function mediaSourceDriftMessage(
   return `${pathname} source changed before migration transaction`;
 }
 
-function createMigrationDatabaseHandle(
-  database: DatabaseSync,
-  agentId: string,
-  pathname: string,
-): OpenClawAgentDatabase {
-  return {
-    agentId,
-    db: database,
-    path: pathname,
-    walMaintenance: { checkpoint: () => false, close: () => false },
-  };
-}
-
-function refreshAgentDatabasePlannerStatistics(database: DatabaseSync): void {
-  // Doctor owns a stopped-writer maintenance window here. Explicitly analyze every
-  // table because the supported pre-3.46 SQLite floor lacks optimize's all-table bit.
-  database.exec("PRAGMA analysis_limit=1000; ANALYZE main;");
-}
-
 function migrateAgentDatabase(params: {
   agentId: string;
+  assertWritable?: () => void;
   beforeTransaction?: () => void;
   pathname: string;
 }) {
@@ -376,6 +360,7 @@ function migrateAgentDatabase(params: {
     });
     let userVersion = readSqliteUserVersion(database);
     const initialVersion = userVersion;
+    params.assertWritable?.();
     if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
       migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(database, {
         agentId: params.agentId,
@@ -429,14 +414,21 @@ function migrateAgentDatabase(params: {
         { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
       );
       if (detected.rewrittenSessions === 0 && detected.rewrittenTrajectoryRows === 0) {
-        refreshAgentDatabasePlannerStatistics(database);
+        params.assertWritable?.();
+        database.exec("PRAGMA analysis_limit=1000; ANALYZE main;");
         return { ...detected, initialVersion, finalVersion: userVersion };
       }
     }
 
     const sourceVersion = readMediaSourceVersion(database);
     params.beforeTransaction?.();
-    const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
+    params.assertWritable?.();
+    const owner: OpenClawAgentDatabase = {
+      agentId: params.agentId,
+      db: database,
+      path: params.pathname,
+      walMaintenance: { checkpoint: () => false, close: () => false },
+    };
     const rewritten = runSqliteImmediateTransactionSync(
       database,
       () => {
@@ -479,8 +471,11 @@ function migrateAgentDatabase(params: {
         operationLabel: "media-persistence-retirement",
       },
     );
+    params.assertWritable?.();
     ensureOpenClawAgentDatabaseSchema(database, { agentId: params.agentId, path: params.pathname });
-    refreshAgentDatabasePlannerStatistics(database);
+    // Doctor owns a stopped-writer maintenance window. Explicitly analyze every
+    // table because the supported pre-3.46 SQLite floor lacks optimize's all-table bit.
+    database.exec("PRAGMA analysis_limit=1000; ANALYZE main;");
     return {
       ...rewritten,
       initialVersion,
@@ -614,6 +609,7 @@ export async function migrateLegacyMediaPersistence(
     configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
     hooks?: {
       beforeArchiveReplace?: (archivePath: string) => void;
+      beforeDatabaseWrite?: (databasePath: string) => void;
       beforeDatabaseTransaction?: (databasePath: string) => void;
     };
     env?: NodeJS.ProcessEnv;
@@ -622,12 +618,14 @@ export async function migrateLegacyMediaPersistence(
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   try {
     await withAgentDatabaseMaintenanceLease({ env }, async () => {
       const targets = resolveAgentDatabaseMigrationTargets({
         changes,
         configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
         env,
+        notices,
         warnings,
       });
       const seenPaths = new Set<string>();
@@ -635,24 +633,33 @@ export async function migrateLegacyMediaPersistence(
       const archiveDirectories = new Set<string>();
       for (const entry of targets) {
         const pathname = entry.path;
-        archiveDirectories.add(
-          resolveSqliteTranscriptArchiveDirectory({
-            agentId: entry.agentId,
-            path: pathname,
-          }),
-        );
         if (seenPaths.has(entry.realPath)) {
           continue;
         }
-        seenPaths.add(entry.realPath);
         try {
           const result = migrateAgentDatabase({
             agentId: entry.agentId,
+            assertWritable: () => {
+              params.hooks?.beforeDatabaseWrite?.(pathname);
+              assertRetainedAgentDatabaseWritable({
+                candidate: entry,
+                configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
+                env,
+                warnings,
+              });
+            },
             beforeTransaction: params.hooks?.beforeDatabaseTransaction
               ? () => params.hooks?.beforeDatabaseTransaction?.(pathname)
               : undefined,
             pathname,
           });
+          seenPaths.add(entry.realPath);
+          archiveDirectories.add(
+            resolveSqliteTranscriptArchiveDirectory({
+              agentId: entry.agentId,
+              path: pathname,
+            }),
+          );
           const schemaAdvanced = result.finalVersion > result.initialVersion;
           if (entry.source !== "registry" || schemaAdvanced) {
             registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
@@ -668,6 +675,10 @@ export async function migrateLegacyMediaPersistence(
             );
           }
         } catch (error) {
+          if (error instanceof RetainedAgentDatabaseHoldError) {
+            error.record(notices, warnings);
+            continue;
+          }
           databaseMigrationFailed = true;
           warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
         }
@@ -717,5 +728,5 @@ export async function migrateLegacyMediaPersistence(
   } catch (error) {
     warnings.push(`Agent database maintenance deferred: ${String(error)}`);
   }
-  return { changes, warnings };
+  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
 }

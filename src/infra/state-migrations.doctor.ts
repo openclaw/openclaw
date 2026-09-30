@@ -1207,6 +1207,7 @@ export async function autoMigrateLegacyState(params: {
       ? await migrateHistoricalTranscriptDirectives(agentMigrationOptions)
       : { changes: [], warnings: [] };
   if (transcriptDirectives.warnings.length > 0 || mediaPersistence.warnings.length > 0) {
+    const notices = mergeNotices([stateDirResult, transcriptDirectives, mediaPersistence]);
     return {
       migrated:
         stateDirResult.migrated ||
@@ -1226,7 +1227,7 @@ export async function autoMigrateLegacyState(params: {
         ...transcriptDirectives.warnings,
         ...mediaPersistence.warnings,
       ],
-      ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
+      ...(notices.length > 0 ? { notices } : {}),
     };
   }
   const profileWorkspace =
@@ -1404,6 +1405,8 @@ export async function autoMigrateLegacyState(params: {
     const notices = mergeNotices([
       stateDirResult,
       profileWorkspace,
+      transcriptDirectives,
+      mediaPersistence,
       detected,
       ...alwaysRunSources,
       deviceAuth,
@@ -1442,6 +1445,8 @@ export async function autoMigrateLegacyState(params: {
   const notices = mergeNotices([
     stateDirResult,
     profileWorkspace,
+    transcriptDirectives,
+    mediaPersistence,
     detected,
     ...migrations.sharedNoticeSources,
     deviceAuth,
