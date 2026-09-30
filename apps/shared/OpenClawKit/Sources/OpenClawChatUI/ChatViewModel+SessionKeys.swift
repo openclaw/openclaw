@@ -132,7 +132,7 @@ extension OpenClawChatViewModel {
     func applyLiveRunUsage(runID: String, sequence: Int, outputTokens: Int) -> Bool {
         guard sequence > 0, outputTokens > 0, self.ownsLiveTelemetryRun(runID) else { return false }
         var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
-        guard sequence > state.sequence, !state.terminal else { return false }
+        guard sequence > state.sequence else { return false }
         state.sequence = sequence
         state.outputTokens = max(outputTokens, state.outputTokens ?? 0)
         self.liveRunStateByRunID[runID] = state
@@ -143,7 +143,7 @@ extension OpenClawChatViewModel {
     func acceptLiveRunSequence(runID: String, sequence: Int) -> Bool {
         guard sequence > 0, self.ownsLiveTelemetryRun(runID) else { return false }
         var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
-        guard sequence > state.sequence, !state.terminal else { return false }
+        guard sequence > state.sequence else { return false }
         state.sequence = sequence
         self.liveRunStateByRunID[runID] = state
         return true
@@ -221,16 +221,8 @@ extension OpenClawChatViewModel {
         sessionRoutingContract: String?) -> ModelPatchTarget
     {
         let presentationKey = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let listedKey = canonicalSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let candidate = if let listedKey, !listedKey.isEmpty {
-            listedKey
-        } else {
-            presentationKey
-        }
-        let normalizedAgentID = agentID?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let routeAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let candidate = ChatPayloadDecoding.trimmedNonEmptyString(canonicalSessionKey) ?? presentationKey
+        let routeAgentID = Self.normalizedAgentId(agentID)
         let normalizedCandidate = candidate.lowercased()
         let targetKey: String
         let targetAgentID: String?
@@ -460,8 +452,7 @@ extension OpenClawChatViewModel {
     }
 
     private static func normalizedAgentId(_ agentId: String?) -> String? {
-        let normalized = agentId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
+        ChatPayloadDecoding.trimmedNonEmptyString(agentId)?.lowercased()
     }
 
     private static func matchesAliasAgent(
