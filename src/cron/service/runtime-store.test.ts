@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
@@ -79,6 +80,16 @@ describe("cron runtime row publication", () => {
         "UPDATE cron_job_runtime_authorities SET authority_json = '{}' WHERE store_key = ? AND job_id IN (?, ?)",
       )
       .run(storeKey, "row-1", "row-8");
+    database
+      .prepare(
+        "UPDATE cron_jobs SET agent_id = 'research', job_json = json_set(job_json, '$.authoredNote', 'preserve me') WHERE store_key = ? AND job_id IN (?, ?)",
+      )
+      .run(storeKey, "row-2", "row-9");
+    database
+      .prepare(
+        "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.enabled') WHERE store_key = ? AND job_id = ?",
+      )
+      .run(storeKey, "row-9");
     const before = database
       .prepare("SELECT * FROM cron_jobs WHERE store_key = ? ORDER BY sort_order")
       .all(storeKey);
@@ -119,6 +130,9 @@ describe("cron runtime row publication", () => {
             expect(current.get("row-2")?.runtimeAuthority).toEqual(jobs[2]!.runtimeAuthority);
             for (const job of current.values()) {
               job.state.lastError = "selected-row-marker";
+              if (job.id === "row-9") {
+                job.enabled = false;
+              }
             }
             return { value: [...current.keys()], upsertJobIds: current.keys() };
           },
@@ -145,6 +159,26 @@ describe("cron runtime row publication", () => {
       updatedAt: row.grant_definition_updated_at,
     });
     expect(after.map(grantDefinitionProjection)).toEqual(before.map(grantDefinitionProjection));
+    for (const jobId of ["row-2", "row-9"]) {
+      const beforeRow = expectDefined(
+        before.find((row) => row.job_id === jobId),
+        "before row",
+      );
+      const afterRow = expectDefined(
+        after.find((row) => row.job_id === jobId),
+        "after row",
+      );
+      expect(afterRow.agent_id).toBe("research");
+      if (typeof beforeRow.job_json !== "string" || typeof afterRow.job_json !== "string") {
+        throw new Error("Expected persisted cron definitions.");
+      }
+      expect(afterRow.job_json).toBe(
+        jobId === "row-9"
+          ? JSON.stringify({ ...JSON.parse(beforeRow.job_json), enabled: false })
+          : beforeRow.job_json,
+      );
+      expect(afterRow.enabled).toBe(jobId === "row-9" ? 0 : 1);
+    }
     expect(after.filter((row) => !committed.includes(row.job_id as string))).toEqual(
       before.filter((row) => !committed.includes(row.job_id as string)),
     );

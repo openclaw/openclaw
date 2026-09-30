@@ -82,6 +82,7 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   payloadModel: "cron.form.model",
   payloadThinking: "cron.form.thinking",
   timeoutSeconds: "cron.form.timeoutSeconds",
+  deliveryMode: "cron.form.deliveryModeLabel",
   deliveryTo: "cron.form.to",
   failureAlertAfter: "cron.form.failureAlertAfter",
   failureAlertCooldownSeconds: "cron.form.failureAlertCooldown",
@@ -257,6 +258,7 @@ type CronSelectOptions = {
   disabled?: boolean;
   standalone?: boolean;
   channel?: boolean;
+  errorKey?: CronFieldKey;
 };
 
 function renderCronSelect(
@@ -265,6 +267,7 @@ function renderCronSelect(
   options: CronSelectOptions,
 ) {
   const selected = options.value ?? props.form[field];
+  const error = options.errorKey ? props.fieldErrors[options.errorKey] : undefined;
   const picker = options.channel ? renderChannelPicker : renderPicker;
   return picker({
     id: options.standalone ? undefined : inputIdForField(field),
@@ -272,6 +275,8 @@ function renderCronSelect(
     value: options.channel ? selected || "last" : selected,
     options: options.options,
     disabled: options.disabled,
+    invalid: options.errorKey ? Boolean(error) : undefined,
+    describedBy: error && options.errorKey ? errorIdForField(options.errorKey) : undefined,
     onChange: (value) => props.onFormChange({ [field]: value }),
   });
 }
@@ -285,6 +290,8 @@ function renderCronSelectField(
     label: options.label,
     controlId: inputIdForField(field),
     help: options.help,
+    error: options.errorKey ? props.fieldErrors[options.errorKey] : undefined,
+    errorId: options.errorKey ? errorIdForField(options.errorKey) : undefined,
     control: renderCronSelect(props, field, options),
   });
 }
@@ -1447,7 +1454,11 @@ function renderDeliverySection(
         label: t("cron.form.deliveryModeLabel"),
         help: t("cron.form.deliveryHelp"),
         value: ctx.selectedDeliveryMode,
+        errorKey: "deliveryMode",
         options: [
+          ...(ctx.selectedDeliveryMode === ""
+            ? [{ value: "", label: t("cron.form.selectDeliveryMode"), disabled: true }]
+            : []),
           ...(ctx.supportsAnnounce
             ? [{ value: "announce", label: t("cron.form.announceDefault") }]
             : []),

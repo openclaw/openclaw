@@ -6,6 +6,22 @@ import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { getCronStoreKysely } from "./schema.js";
 
+/** SQL ownership is independently authoritative when legacy JSON omits it. */
+export function inspectCronOwnerRowsForDoctor(db: DatabaseSync, storeKey: string) {
+  if (!tableExists(db, "cron_jobs")) {
+    return [];
+  }
+  return executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .selectFrom("cron_jobs")
+      .select(["job_id", "agent_id", "job_json", "sort_order"])
+      .where("store_key", "=", storeKey)
+      .orderBy("sort_order")
+      .orderBy("job_id"),
+  ).rows;
+}
+
 /** Raw inspection deliberately bypasses runtime loading and its repair/filter policies. */
 export function inspectCronRowsForDoctor(db: DatabaseSync): PluginDoctorCronJob[] {
   if (!tableExists(db, "cron_jobs")) {

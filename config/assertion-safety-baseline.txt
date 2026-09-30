@@ -2093,7 +2093,7 @@ src/cron/run-diagnostics.ts	3
 src/cron/runtime-authority.ts	2
 src/cron/schedule-identity.ts	2
 src/cron/service/active-run-cancellation.ts	1
-src/cron/service/jobs.ts	4
+src/cron/service/jobs.ts	3
 src/cron/service/list-page-validation.ts	2
 src/cron/service/store.ts	1
 src/cron/service/timer.ts	1

@@ -603,6 +603,44 @@ describe("cron controller", () => {
     });
   });
 
+  it.each([undefined, null, "deliver", "unknown", " ANNOUNCE "])(
+    "requires an explicit delivery choice before editing a persisted mode %s",
+    async (mode) => {
+      const job = createCronJob({
+        id: "legacy-delivery",
+        name: "Garden summary",
+        delivery: { mode: "announce", channel: "telegram", to: "garden-room" },
+      });
+      if (mode === undefined) {
+        Reflect.deleteProperty(job.delivery!, "mode");
+      } else {
+        Reflect.set(job.delivery!, "mode", mode);
+      }
+      const original = structuredClone(job);
+      const { request, state } = createCronEditHarness(job);
+      state.cronForm.name = "Renamed garden summary";
+      expect(await addCronJob(state)).toEqual({ saved: false });
+      expect(request.mock.calls.some(([method]) => method === "cron.update")).toBe(false);
+      expect(job).toEqual(original);
+      expect(state.cronFieldErrors.deliveryMode).toBe("cron.errors.deliveryModeRequired");
+
+      state.cronForm.deliveryMode = "announce";
+      expect(await addCronJob(state)).toMatchObject({ saved: true, jobId: job.id });
+      const patch = requestPatch(findRequestCall(request.mock.calls, "cron.update"));
+      expect(patch.name).toBe("Renamed garden summary");
+      expect(patch.delivery).toMatchObject({
+        mode: "announce",
+        channel: "telegram",
+        to: "garden-room",
+      });
+      expect(
+        validateCronUpdateParams(
+          requestPayload(findRequestCall(request.mock.calls, "cron.update")),
+        ),
+      ).toBe(true);
+    },
+  );
+
   it("loads declared Workshop jobs as locked rows", async () => {
     const job = createCronJob({
       id: "review",

@@ -14,7 +14,10 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
-import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
@@ -140,6 +143,112 @@ function mockExdevRename(filePath: string) {
 }
 
 describe("collectLegacyCronStoreHealthFindings", () => {
+  it.each([
+    { mode: "not-a-route", legacyHints: false },
+    { mode: 42, legacyHints: true },
+  ])(
+    "preserves unknown delivery mode $mode alongside legacy hints=$legacyHints",
+    async ({ mode, legacyHints }) => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          enabled: false,
+          agentId: "ops",
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+          payload: { kind: "agentTurn", message: "synthetic unknown delivery", toolsAllow: [] },
+          delivery: { mode: "none" },
+        }),
+        createCurrentCronJob({
+          id: "repairable-sibling",
+          enabled: false,
+          agentId: "ops",
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+          payload: { kind: "agentTurn", message: "repair supported sibling", toolsAllow: [] },
+          delivery: { mode: "announce", channel: "telegram", to: "synthetic-target" },
+        }),
+      ]);
+      const db = openOpenClawStateDatabase().db;
+      db.prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery.mode', json(?), '$.isolation', json(?)) WHERE store_key = ? AND job_id = 'sqlite-job'",
+      ).run(JSON.stringify(mode), JSON.stringify({ legacy: "retain me" }), cronStoreKey(storePath));
+      db.prepare(
+        "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.delivery.mode') WHERE store_key = ? AND job_id = 'repairable-sibling'",
+      ).run(cronStoreKey(storePath));
+      if (legacyHints) {
+        db.prepare(
+          "UPDATE cron_jobs SET job_json = json_set(job_json, '$.notify', json('true'), '$.payload.deliver', json('true'), '$.payload.channel', 'telegram') WHERE store_key = ? AND job_id = 'sqlite-job'",
+        ).run(cronStoreKey(storePath));
+      }
+      const readRows = () =>
+        db
+          .prepare("SELECT * FROM cron_jobs WHERE store_key = ? AND job_id = 'sqlite-job'")
+          .all(cronStoreKey(storePath));
+      const before = readRows();
+      const cfg = createCronConfig(storePath);
+      expect(await collectLegacyCronStoreHealthFindings({ cfg })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            requirement: "cron-delivery-mode-valid",
+            message: expect.stringContaining("unsupported delivery mode"),
+          }),
+        ]),
+      );
+      const prompter = makePrompter(true);
+      await maybeRepairLegacyCronStore({ cfg, options: {}, prompter });
+      expectNoteContaining("Unsupported cron delivery modes were left unchanged", "Cron");
+      expect(readRows()).toEqual(before);
+      expect(prompter.confirm).toHaveBeenCalledOnce();
+      const sibling = db
+        .prepare(
+          "SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = 'repairable-sibling'",
+        )
+        .get(cronStoreKey(storePath));
+      expect(JSON.parse(String(sibling?.job_json)).delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: "synthetic-target",
+      });
+      expectNoNoteContaining("Failed writing migrated cron store", "Doctor warnings");
+    },
+  );
+
+  it("retains an unsupported legacy import and rolls back its receipt and supported sibling", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      createCurrentCronJob({
+        id: "unsupported-import",
+        agentId: "ops",
+        enabled: false,
+        payload: { kind: "agentTurn", message: "preserve original source", toolsAllow: [] },
+        delivery: { mode: "not-a-route" },
+      }),
+      createCurrentCronJob({
+        id: "supported-import",
+        agentId: "ops",
+        enabled: false,
+        payload: { kind: "agentTurn", message: "no partial import", toolsAllow: [] },
+        delivery: { mode: "none" },
+      }),
+    ]);
+    const original = await fs.readFile(storePath, "utf8");
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+    expect(await fs.readFile(storePath, "utf8")).toBe(original);
+    await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await loadCronStore(storePath)).jobs).toEqual([]);
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT source_path FROM migration_sources WHERE source_path = ?")
+        .all(storePath),
+    ).toEqual([]);
+    expectNoteContaining("unsupported delivery mode", "Doctor warnings");
+    expectNoteContaining("Failed writing migrated cron store", "Doctor warnings");
+  });
+
   it("reports alias-only Gateway exec jobs with recreation guidance", async () => {
     await writeCurrentCronStore([
       createCurrentCronJob({

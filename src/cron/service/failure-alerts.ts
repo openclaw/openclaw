@@ -15,6 +15,7 @@ import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-targe
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
+import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type {
   CronCompletionStatus,
   CronFailureNotificationDelivery,
@@ -118,9 +119,11 @@ export function resolveFailureAlert(
     globalConfig,
     hasJobRoute ? jobConfig : undefined,
   );
-  const primaryRoute = resolveCronDeliveryPlan(job);
+  const primaryRoute = hasCanonicalCronDeliveryMode(job.delivery)
+    ? resolveCronDeliveryPlan(job)
+    : undefined;
   const primaryAnnounceRoute =
-    primaryRoute.mode === "announce" && primaryRoute.requested ? primaryRoute : undefined;
+    primaryRoute?.mode === "announce" && primaryRoute.requested ? primaryRoute : undefined;
   const explicitlyConfigured = jobConfig !== undefined || globalConfig !== undefined;
   if (!alternateRoute && !primaryAnnounceRoute && !explicitlyConfigured) {
     return null;

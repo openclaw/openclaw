@@ -200,7 +200,11 @@ describe("scheduled tool policy provenance", () => {
         },
       },
       {
-        toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
+        toolsAllowProvenance: {
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: { kind: "unknown" },
+        },
       },
     );
     expect(proven.toolsAllowProvenance).toEqual({
@@ -220,6 +224,11 @@ describe("scheduled tool policy provenance", () => {
       },
     });
     expect(legacy.toolsAllowProvenance).toBeUndefined();
+    const stored = await loadCronStore(storePath);
+    expect(stored.jobs.find((job) => job.id === proven.id)?.toolsAllowProvenance).toEqual(
+      proven.toolsAllowProvenance,
+    );
+    expect(stored.jobs.find((job) => job.id === legacy.id)?.toolsAllowProvenance).toBeUndefined();
 
     const routine = await update(state, proven.id, { description: "keep" });
     expect(routine.toolsAllowProvenance).toEqual(proven.toolsAllowProvenance);
@@ -475,6 +484,7 @@ describe("scheduled tool policy provenance", () => {
     const legacy = structuredClone(created);
     delete legacy.scheduledToolPolicy;
     await writeCronStoreSnapshot({ storePath, jobs: [legacy] });
+    expect((await loadCronStore(storePath)).jobs[0]?.scheduledToolPolicy).toBeUndefined();
 
     const routine = await update(state, created.id, { description: "routine" });
     expect(routine.scheduledToolPolicy).toBeUndefined();
@@ -742,6 +752,13 @@ describe("cron service ops seam coverage", () => {
       state: { nextRunAtMs: now + 3_600_000 },
     } as CronJob & { notify: true };
     insertCronJobRow(storePath, legacyJob);
+    const database = openOpenClawStateDatabase().db;
+    const readDefinition = () =>
+      database
+        .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+        .get(cronStoreKey(storePath), legacyJob.id)?.job_json;
+    const before = readDefinition();
+    expect(typeof before).toBe("string");
     const state = createCronServiceState({
       storePath,
       cronConfig: { webhook: "https://example.invalid/cron" } as never,
@@ -755,10 +772,8 @@ describe("cron service ops seam coverage", () => {
     const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
     const persisted = loaded.store.jobs[0] as CronJob & { notify?: unknown };
     expect(persisted.notify).toBeUndefined();
-    expect(persisted.delivery).toEqual({
-      mode: "announce",
-      to: "telegram:chat-1",
-    });
+    expect(persisted.delivery).toEqual({ to: "telegram:chat-1" });
+    expect(readDefinition()).toBe(before);
     expect(loaded.configJobs[0]?.notify).toBe(true);
     expect(logger.info).not.toHaveBeenCalledWith(
       { storePath },

@@ -24,7 +24,6 @@ import { createCronServiceState } from "./state.js";
 import {
   ensureLoaded,
   persist,
-  persistOrRestore,
   snapshotStoreForRollback,
   captureCronJobMutationSource,
   persistCronJobMutation,
@@ -128,41 +127,27 @@ describe("cron service store seam coverage", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it.each(["full", "changed"] as const)(
-    "reloads a later committed value after a %s save publishes its own revision",
-    async (kind) => {
-      const { storePath } = await makeStorePath();
-      await writeSingleJobStore(storePath, createReloadCronJob());
-      const state = createStoreTestState(storePath);
-      await ensureLoaded(state);
-      const snapshot = snapshotStoreForRollback(state);
-      findJobOrThrow(state, "reload-cron-expr-job").name = "first save";
-      const withLaterWrite = async <Value>(save: Promise<Value>): Promise<Value> => {
-        const committed = await save;
+  it("reloads a later committed value after a full save publishes its own revision", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob());
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state);
+    findJobOrThrow(state, "reload-cron-expr-job").name = "first save";
+    const save = cronStoreModule.saveCronJobsStoreWithRevision;
+    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockImplementationOnce(
+      async (...args) => {
+        const committed = await save(...args);
         const later = await loadCronStore(storePath);
         later.jobs[0]!.name = "later committed save";
         await saveCronStore(storePath, later);
         return committed;
-      };
-      if (kind === "full") {
-        const save = cronStoreModule.saveCronJobsStoreWithRevision;
-        vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockImplementationOnce(
-          (...args) => withLaterWrite(save(...args)),
-        );
-        await persist(state);
-      } else {
-        state.deps.cronEnabled = false;
-        const save = cronStoreModule.saveCronJobsStoreChangesWithRevision;
-        vi.spyOn(cronStoreModule, "saveCronJobsStoreChangesWithRevision").mockImplementationOnce(
-          (...args) => withLaterWrite(save(...args)),
-        );
-        await persistOrRestore(state, snapshot);
-      }
-      expect(state.store?.jobs[0]?.name).toBe("first save");
-      await ensureLoaded(state);
-      expect(state.store?.jobs[0]?.name).toBe("later committed save");
-    },
-  );
+      },
+    );
+    await persist(state);
+    expect(state.store?.jobs[0]?.name).toBe("first save");
+    await ensureLoaded(state);
+    expect(state.store?.jobs[0]?.name).toBe("later committed save");
+  });
 
   it("loads stored jobs without schedule repair or rewriting the store", async () => {
     const { storePath } = await makeStorePath();
@@ -535,7 +520,6 @@ describe("cron service store seam coverage", () => {
     await writeSingleJobStore(storePath, createReloadCronJob());
     const state = createStoreTestState(storePath);
     await ensureLoaded(state);
-    const snapshot = snapshotStoreForRollback(state);
     const job = findJobOrThrow(state, "reload-cron-expr-job");
     job.state.nextRunAtMs = nextRunAtMs;
     const siblingNotify = vi.fn();
@@ -545,7 +529,7 @@ describe("cron service store seam coverage", () => {
       })
       .mockImplementationOnce(siblingNotify);
 
-    await persistOrRestore(state, snapshot, {
+    await persist(state, {
       postPersistNotifications: [
         createPostPersistNotification(job),
         createPostPersistNotification(job),

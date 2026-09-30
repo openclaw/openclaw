@@ -770,6 +770,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     { scenario: "projects-doctor", baseline: "2026.9.4" },
     { scenario: "projects-startup-migration", baseline: "2026.9.4" },
     { scenario: "dreaming-cron-doctor", baseline: "2026.9.6" },
+    { scenario: "cron-owner-doctor", baseline: "2026.9.4" },
   ])(
     "plans $scenario only for its exact published writer without registry or credential fixtures",
     ({ scenario, baseline }) => {

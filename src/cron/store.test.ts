@@ -536,6 +536,46 @@ describe("cron store", () => {
     await expectPathMissing(`${store.storePath}.bak`);
   });
 
+  it.each([
+    { order: ["new", "legacy", "healthy"] },
+    { order: ["legacy", "new", "healthy"] },
+    { order: ["legacy", "healthy", "new"] },
+    { order: ["healthy", "new", "legacy"] },
+  ])("honors replacement order $order without repairing an unsupported row", async ({ order }) => {
+    const { storePath } = await makeStorePath();
+    const first = expectDefined(makeStore("legacy", true).jobs[0], "legacy fixture");
+    const second = expectDefined(makeStore("healthy", true).jobs[0], "healthy fixture");
+    await saveCronStore(storePath, { version: 1, jobs: [first, second] });
+    const db = openOpenClawStateDatabase().db;
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery', json(?)), sort_order = 10 WHERE store_key = ? AND job_id = 'legacy'",
+    ).run(JSON.stringify({ mode: "unsupported", to: "authored-target" }), cronStoreKey(storePath));
+    db.prepare(
+      "UPDATE cron_jobs SET sort_order = 20 WHERE store_key = ? AND job_id = 'healthy'",
+    ).run(cronStoreKey(storePath));
+    const retained = () => {
+      const { sort_order: _sortOrder, ...row } = expectDefined(
+        db
+          .prepare("SELECT * FROM cron_jobs WHERE store_key = ? AND job_id = 'legacy'")
+          .get(cronStoreKey(storePath)),
+        "stored legacy row",
+      );
+      return row;
+    };
+    const before = retained();
+    const loaded = await loadCronStore(storePath);
+    const jobsById = new Map(loaded.jobs.map((job) => [job.id, job]));
+    jobsById.set("new", expectDefined(makeStore("new", true).jobs[0], "new fixture"));
+    await expect(
+      saveCronStore(storePath, {
+        version: 1,
+        jobs: order.map((id) => expectDefined(jobsById.get(id), "replacement fixture")),
+      }),
+    ).resolves.toBeUndefined();
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(order);
+    expect(retained()).toEqual(before);
+  });
+
   it("persists runtime-only state churn in SQLite", async () => {
     const store = await makeStorePath();
     const first = makeStore("job-1", true);
