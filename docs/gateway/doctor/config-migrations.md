@@ -99,6 +99,11 @@ reviewing the intended route. Unrelated edits cannot silently discard it.
 Wholly omitted delivery still uses the job's normal defaults; optional failure
 notification fields still inherit their configured defaults.
 
+Gateway `cron.add` and `cron.update` requests still accept the deprecated
+`delivery.mode: "deliver"` spelling and persist `announce`. Clients should send
+`announce`. This request adapter does not repair stored `deliver` values; those
+still require Doctor.
+
 ## Channel ownership during an update
 
 When Doctor migrates a legacy `agents.list` roster without a `default: true` marker
