@@ -399,10 +399,7 @@ struct CommandCenterTab: View {
                                     mainSessionKey: self.appModel.defaultChatSessionKey),
                                 actions: .gateway(
                                     session: session,
-                                    performMutation: { key, operation in
-                                        self.dashboardModel.performSessionMutation(
-                                            appModel: self.appModel, resetActiveSessionKey: key, operation)
-                                    },
+                                    performMutation: self.performSessionMutation,
                                     fork: { self.forkSession(session) }))
                         }
 
@@ -545,6 +542,23 @@ struct CommandCenterTab: View {
                     fromLastCompleted: session.hasActiveRun == true)
                 await self.dashboardModel.refreshSessions(appModel: self.appModel)
                 self.openSessionKey(key)
+            } catch {
+                self.dashboardModel.reportSessionError(error)
+            }
+        }
+    }
+
+    private func performSessionMutation(
+        resetActiveSessionKey: String? = nil,
+        _ operation: @escaping (any OpenClawChatTransport) async throws -> Void)
+    {
+        Task {
+            do {
+                try await operation(self.appModel.makeChatTransport())
+                if resetActiveSessionKey == self.appModel.chatSessionKey {
+                    self.appModel.focusChatSession(nil)
+                }
+                await self.dashboardModel.refreshSessions(appModel: self.appModel)
             } catch {
                 self.dashboardModel.reportSessionError(error)
             }

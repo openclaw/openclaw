@@ -10,8 +10,13 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
     static let storageKey = "appearance.preference"
 
     static var launchArgumentPreference: AppAppearancePreference? {
-        AppLaunchArguments.value(for: "--openclaw-appearance")
-            .flatMap { AppAppearancePreference(rawValue: $0.lowercased()) }
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-appearance") else {
+            return nil
+        }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+        return AppAppearancePreference(rawValue: arguments[valueIndex].lowercased())
     }
 
     var id: String {

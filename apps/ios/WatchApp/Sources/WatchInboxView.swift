@@ -138,7 +138,10 @@ struct WatchInboxView: View {
             } else {
                 // The decorative mascot belongs only to the empty or waiting inbox surface.
                 WatchMascot(
-                    mood: self.store.hasAppSnapshot ? .sleepy : .thinking,
+                    mood: watchInboxMascotMood(
+                        hasSnapshot: self.store.hasAppSnapshot,
+                        hasApprovals: self.approvalCount > 0,
+                        hasChats: self.chatCount > 0),
                     size: 72)
                     .frame(maxWidth: .infinity)
 

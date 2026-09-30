@@ -689,10 +689,7 @@ struct RootSidebar: View {
                     mainSessionKey: self.resolvedMainSessionKey),
                 actions: .gateway(
                     session: session,
-                    performMutation: { key, operation in
-                        self.model.performSessionMutation(
-                            appModel: self.appModel, resetActiveSessionKey: key, operation)
-                    },
+                    performMutation: self.performSessionMutation,
                     fork: { self.forkSession(session) }))
             .accessibilityValue(Self.sessionAccessibilityValue(
                 isPinned: session.pinned == true,
@@ -808,6 +805,23 @@ struct RootSidebar: View {
             if !trimmed.isEmpty { return trimmed }
         }
         return String(localized: "Connection")
+    }
+
+    private func performSessionMutation(
+        resetActiveSessionKey: String?,
+        _ operation: @escaping CommandSessionActions.Mutation)
+    {
+        Task {
+            do {
+                try await operation(self.appModel.makeChatTransport())
+                if resetActiveSessionKey == self.appModel.chatSessionKey {
+                    self.appModel.focusChatSession(nil)
+                }
+                await self.model.refreshSessions(appModel: self.appModel)
+            } catch {
+                self.model.reportSessionError(error)
+            }
+        }
     }
 
     private func forkSession(_ session: OpenClawChatSessionEntry) {

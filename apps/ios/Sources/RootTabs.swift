@@ -85,8 +85,10 @@ struct RootTabs: View {
         if let requested = self.requestedInitialSidebarDestination(arguments: arguments) {
             return requested
         }
-        guard let value = AppLaunchArguments.value(for: "--openclaw-initial-tab", in: arguments) else { return .chat }
-        return switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-tab") else { return .chat }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return .chat }
+        return switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "control", "overview": .overview
         case "chat", "talk", "voice": .chat
         case "agent", "agents": .agents
@@ -96,10 +98,12 @@ struct RootTabs: View {
     }
 
     static func requestedInitialSidebarDestination(arguments: [String]) -> SidebarDestination? {
-        guard let value = AppLaunchArguments.value(for: "--openclaw-initial-destination", in: arguments) else {
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-destination") else {
             return nil
         }
-        let requested = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+        let requested = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return SidebarDestination.allCases.first { $0.rawValue.lowercased() == requested }
     }
 
@@ -108,8 +112,13 @@ struct RootTabs: View {
     }
 
     private static var initialChatSessionKey: String? {
-        guard let value = AppLaunchArguments.value(for: "--openclaw-chat-session") else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-chat-session") else {
+            return nil
+        }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+        let trimmed = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 

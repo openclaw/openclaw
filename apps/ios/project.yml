@@ -484,6 +484,16 @@ targets:
         group: WatchApp/Sources
       - path: WatchApp/Sources/WatchInboxMessages.swift
         group: WatchApp/Sources
+      - path: WatchApp/Sources/WatchMascot.swift
+        group: WatchApp/Sources
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotAnimator.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotCanvas+Accessories.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatTypography.swift
+        group: Shared
       - path: Sources/Services/ExactOpaqueIdentifier.swift
         group: Sources/Services
     dependencies:

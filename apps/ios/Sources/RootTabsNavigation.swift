@@ -207,10 +207,13 @@ extension RootTabs {
     }
 
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
-        guard let value = AppLaunchArguments.value(for: "--openclaw-sidebar-visibility", in: arguments) else {
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-sidebar-visibility") else {
             return nil
         }
-        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+
+        switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "visible", "show", "shown", "open", "true", "1":
             return true
         case "hidden", "hide", "closed", "false", "0":

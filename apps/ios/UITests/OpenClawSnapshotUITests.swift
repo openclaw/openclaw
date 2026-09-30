@@ -1367,7 +1367,7 @@ extension OpenClawSnapshotUITests {
         let thinkingNotches = app.descendants(matching: .any)["chat-thinking-notches"]
         XCTAssertTrue(thinkingNotches.waitForExistence(timeout: 5))
         XCTAssertEqual(thinkingNotches.value as? String, "4 stops")
-        let thinkingValues = ["Auto", "Low", "Medium", "High"]
+        let thinkingValues = ["Default (Auto)", "Low", "Medium", "High"]
         self.waitForValue(thinkingValues[0], of: thinkingSlider)
         for (index, expectedValue) in thinkingValues.enumerated().dropFirst() {
             thinkingSlider.adjust(
