@@ -11,18 +11,13 @@ import {
 } from "../infra/shell-env.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
-import {
-  resolveConfigIoEffect,
-  runConfigIoAsync,
-  runConfigIoSync,
-  type ConfigIoOperation,
-} from "./io.effects.js";
 import { isInvalidConfigError } from "./io.invalid-config.js";
 import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
 import {
@@ -36,7 +31,6 @@ import {
   resolveConfigIncludesForRead,
   resolveConfigPathForDeps,
 } from "./io.read-helpers.js";
-import type { ConfigSnapshotMetadataLoader } from "./io.snapshot-preparation.types.js";
 import type {
   ConfigIoFactoryOptions,
   ConfigRecoveryCandidate,
@@ -56,6 +50,13 @@ import {
 } from "./validation.js";
 import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
+type ValidateConfigWithPluginsResult = ReturnType<typeof validateConfigObjectWithPlugins>;
+
+type RecoveryCandidateValidation = {
+  authoredCandidate: unknown;
+  validated: ValidateConfigWithPluginsResult;
+};
+
 export type ConfigRecoveryCandidateTransform = (params: {
   candidate: ConfigRecoveryCandidate;
   configPath: string;
@@ -64,7 +65,10 @@ export type ConfigRecoveryCandidateTransform = (params: {
   deferredPluginMigrations: readonly DeferredPluginMigration[];
 }) => unknown;
 
-type ValidationPluginMetadataSnapshotLoader = ConfigSnapshotMetadataLoader & {
+type ValidationPluginMetadataSnapshotLoader = {
+  load: (config: OpenClawConfig) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  loadAsync: (config: OpenClawConfig) => Promise<PreparedConfigValidationPluginMetadata>;
+  getManifestRegistry: () => PluginManifestRegistry | undefined;
   getSnapshot: () => PluginMetadataSnapshot | undefined;
 };
 
@@ -205,6 +209,7 @@ export function createConfigIoContext(
             installedPluginRecordIds: new Set(Object.keys(records)),
           };
         })()),
+      getManifestRegistry: () => snapshot?.manifestRegistry,
       getSnapshot: () => snapshot,
     };
   }
@@ -233,9 +238,14 @@ export function createConfigIoContext(
     );
   }
 
-  function* prepareRecoveryBackupCandidateSteps(
-    candidate: ConfigRecoveryCandidate,
-  ): ConfigIoOperation<ConfigRecoveryCandidatePreparation> {
+  function* prepareRecoveryBackupCandidateSteps(candidate: ConfigRecoveryCandidate): Generator<
+    {
+      sync: () => RecoveryCandidateValidation;
+      async: () => Promise<RecoveryCandidateValidation>;
+    },
+    ConfigRecoveryCandidatePreparation,
+    RecoveryCandidateValidation
+  > {
     try {
       const originalEnv = cloneEnvWithPlatformSemantics(deps.env);
       const includeProvenance: NonNullable<ConfigFileSnapshot["includeProvenance"]>[number][] = [];
@@ -289,7 +299,7 @@ export function createConfigIoContext(
           },
         };
       };
-      const { authoredCandidate: preparedRawConfig, validated } = yield* resolveConfigIoEffect({
+      const { authoredCandidate: preparedRawConfig, validated } = yield {
         sync: () =>
           withSynchronousArtifactPreservingStateSnapshot(() => {
             const prepared = prepareValidation(resolveDeferredPluginMigrations());
@@ -311,7 +321,7 @@ export function createConfigIoContext(
             }),
           };
         },
-      });
+      };
       if (!validated.ok) {
         const issueSummary = formatConfigIssueSummary(validated.issues.slice(0, 3)) ?? "";
         const detail = issueSummary.length > 800 ? `${issueSummary.slice(0, 799)}…` : issueSummary;
@@ -346,13 +356,31 @@ export function createConfigIoContext(
   function prepareRecoveryBackupCandidate(
     candidate: ConfigRecoveryCandidate,
   ): ConfigRecoveryCandidatePreparation {
-    return runConfigIoSync(prepareRecoveryBackupCandidateSteps(candidate));
+    const steps = prepareRecoveryBackupCandidateSteps(candidate);
+    let next = steps.next();
+    while (!next.done) {
+      try {
+        next = steps.next(next.value.sync());
+      } catch (error) {
+        next = steps.throw(error);
+      }
+    }
+    return next.value;
   }
 
   async function prepareRecoveryBackupCandidateAsync(
     candidate: ConfigRecoveryCandidate,
   ): Promise<ConfigRecoveryCandidatePreparation> {
-    return await runConfigIoAsync(prepareRecoveryBackupCandidateSteps(candidate));
+    const steps = prepareRecoveryBackupCandidateSteps(candidate);
+    let next = steps.next();
+    while (!next.done) {
+      try {
+        next = steps.next(await next.value.async());
+      } catch (error) {
+        next = steps.throw(error);
+      }
+    }
+    return next.value;
   }
 
   return {
