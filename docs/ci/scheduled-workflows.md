@@ -95,6 +95,88 @@ jobs. Vitest Cache Warm runs at minute 17 of every hour, retaining its manual
 and repository-dispatch recovery paths. The warmer is independent. Its
 completion before CI is not guaranteed.
 
+### PR-only CI repair agent
+
+`CI Repair Agent` reacts to failed scheduled `CI` completions on canonical `main`.
+A read-only admission job re-fetches the run and verifies its workflow path,
+repository, head repository, branch, SHA, and attempt. A later successful hourly
+run, an existing open canonical `ci-repair/` PR, or infrastructure-only failed jobs skips
+repair with a recorded reason. Unknown failures are retained for diagnosis.
+In-flight detection lists only canonical `ci-repair/*` branch refs, then checks
+for an open PR at each exact head. Recovery needs only the first five matching
+successful scheduled runs, without scanning the open-PR backlog.
+
+The repair job collects failed-job logs, bounded excerpts, extracted Vitest test
+paths, and recurrence across the previous six scheduled runs. Unavailable history
+is recorded as unknown. It runs each extracted test file once before asking Codex
+for a small, high-confidence repair or a precise diagnosis. Original shard order
+is included when it can be recovered from logged commands. Native-platform and
+missing-runtime prerequisites can prevent reproduction on the Linux runner;
+those cases do not establish a product regression.
+
+Codex uses a read-only sandbox with `drop-sudo` and reads the controller's
+reproduction logs. Its prompt prohibits editing files, running tests, and any
+command that executes repository code. It returns a structured `patch` string
+containing a git-format unified diff with `a/<path>` and `b/<path>` paths, or an
+empty patch for `diagnose`. The controller guards that text before running
+`git apply --check` and `git apply` with hooks disabled, then guards the resulting
+working tree. Invalid results, rejected patches, and application failures record
+a refusal and cannot produce a PR.
+
+Deterministic guards permit at most four existing regular files and 80 added plus
+removed lines. They reject new, deleted, renamed, or mode-changed files; workflow,
+package, lockfile, snapshot, baseline, ratchet, inventory, generated, changelog,
+TypeScript/Vitest configuration, workspace/package-manager settings, Git attributes,
+submodules, ignore files, and controller changes; skip/only/todo/expected-failure
+markers, retries, timeout changes, type suppressions, and lint disables; and any
+per-file loss of assertion calls. Test files and helpers additionally reject
+conditional test controls, test-control option keys, and trailing numeric timeout
+arguments. Product files retain the global rules, which allow ordinary `timeout:`
+options. Conservative matches request diagnosis instead of a repair PR. These
+syntactic checks do not prove unchanged coverage. Human review remains required, particularly for flakes.
+
+A permitted repair is committed locally with hooks disabled, rebased onto freshly
+fetched public `main`, and tested again. Conflicts stop publication. Previously
+non-reproduced failures require five consecutive passes without retrying a failed
+proof. A single-file attempt is bounded to eight minutes to accommodate cold
+worker compilation; reproduction and proof steps have 20- and 30-minute limits.
+Empty or more-than-eight-file failure selections produce a diagnosis without editing. The complete repair job
+has a 75-minute limit (typical runs take about ten minutes); the Codex step retains its fifteen-minute limit. Dependency
+installation and test children receive no Actions control-file variables, runtime
+or GitHub credentials, OIDC request variables, or Actions cache/results URLs.
+
+Only artifacts cross into the publisher, on a fresh runner and trusted workflow
+checkout. It independently validates the patch digest and patch-level guards,
+rechecks admission using a dedicated read-only GitHub token, and applies the patch
+to current `main` as data, with hooks disabled. It never installs dependencies or executes the generated source, tests,
+or tooling. The publisher then mints the existing GitHub App token to create only
+a fresh `ci-repair/<run_id>` branch and a review PR. It never pushes to `main`,
+updates an existing repair branch, or enables auto-merge. The `ci-repair` label is
+added only when it already exists. App-authored events allow the PR's CI to run;
+that CI verifies any main movement after the repair proof. The PR body identifies
+the prove verdict as repair-job evidence; the PR's own CI and review are authoritative.
+
+Manual dispatch is restricted to the default branch and accepts a failed
+scheduled or push `main` CI run. Dry-run is the default: repair and evidence still
+run, but the publisher does not execute. For example:
+
+```bash
+gh workflow run ci-repair-agent.yml --ref main -f run_id=<failed-run-id> -F dry_run=true
+```
+
+The agent uses `OPENCLAW_CI_REPAIR_OPENAI_API_KEY` when configured, falling back to
+`OPENAI_API_KEY`, and the existing CI model variable. No new secret is required.
+Job summaries record skips, diagnoses, rejected guards, proof failures, or the PR
+link. Collection and reproduction evidence is uploaded before Codex starts so a
+stalled action or lost runner does not erase the completed baseline. Context,
+structured result, patch, and guard/proof logs are retained as
+Actions artifacts for fourteen days. A final always-run repair step prints the
+largest resident processes and available memory to help diagnose runner hangs.
+A timeout, missing evidence, unavailable API,
+or malformed patch never authorizes publication. A partial publication failure
+is left for maintainer reconciliation; the agent does not overwrite a branch or
+retry an uncertain GitHub write.
+
 ### Restore per-push CI
 
 Set the **repository Actions variable** `OPENCLAW_CI_ON_PUSH` to `true` under

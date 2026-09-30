@@ -1,0 +1,271 @@
+name: CI Repair Agent
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] read-only admission re-fetches the exact failed canonical scheduled main CI attempt; publication uses a fresh trusted runner and independently guards patch data
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Failed canonical main CI run (schedule or push).
+        required: true
+        type: string
+      dry_run:
+        description: Collect, repair and prove without publishing a branch or PR.
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: ci-repair-agent
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'failure' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.event == 'schedule' &&
+        github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+        github.event.workflow_run.head_repository.full_name == 'openclaw/openclaw'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      allowed: ${{ steps.verify.outputs.allowed }}
+      run_id: ${{ steps.verify.outputs.run_id }}
+      attempt: ${{ steps.verify.outputs.attempt }}
+      head_sha: ${{ steps.verify.outputs.head_sha }}
+      dry_run: ${{ steps.verify.outputs.dry_run }}
+    steps:
+      - name: Checkout trusted workflow code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475 # trusted lifecycle owner
+      - name: Verify failed canonical main CI
+        id: verify
+        env:
+          CI_REPAIR_READ_TOKEN: ${{ github.token }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: node scripts/ci-repair-agent.mjs verify
+      - name: Summarize admission
+        if: always()
+        run: node scripts/ci-repair-agent.mjs summary
+      - name: Upload admission diagnosis
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-repair-admission
+          path: .artifacts/ci-repair/
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: ignore
+
+  repair:
+    needs: verify
+    if: needs.verify.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    # Typical runs take about 10 minutes; bound intermittent post-step finalization stalls.
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CI_REPAIR_RUN_ID: ${{ needs.verify.outputs.run_id }}
+      CI_REPAIR_ATTEMPT: ${{ needs.verify.outputs.attempt }}
+      CI_REPAIR_HEAD_SHA: ${{ needs.verify.outputs.head_sha }}
+      CI_REPAIR_ARTIFACTS: ${{ github.workspace }}/candidate/.artifacts/ci-repair
+    outputs:
+      publish_request: ${{ steps.prove.outputs.publish_request }}
+    defaults:
+      run:
+        working-directory: candidate
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Checkout failed revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475 # trusted lifecycle owner
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
+          install-deps: "false"
+      - name: Install candidate dependencies
+        run: node ../scripts/ci-repair-agent.mjs install
+      - name: Collect failures and scheduled history
+        env:
+          CI_REPAIR_READ_TOKEN: ${{ github.token }}
+        run: node ../scripts/ci-repair-agent.mjs collect
+      - name: Reproduce before editing
+        id: reproduce
+        timeout-minutes: 20
+        run: node ../scripts/ci-repair-agent.mjs reproduce
+      # Preserve trusted reproduction evidence even if Codex stalls or the runner is lost.
+      - name: Checkpoint reproduction evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-repair-reproduction
+          path: |
+            candidate/.artifacts/ci-repair/context.json
+            candidate/.artifacts/ci-repair/failures.md
+            candidate/.artifacts/ci-repair/reproduce-*.log
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: ignore
+      # No GitHub token is passed to Codex or the test processes. Only patch and
+      # evidence artifacts cross to publish; that job mints its app token on a
+      # fresh runner and checkout, never beside Codex or its child processes.
+      - name: Run Codex CI repair agent
+        if: steps.reproduce.outputs.has_tests == 'true'
+        timeout-minutes: 15
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_CI_REPAIR_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          working-directory: candidate
+          prompt-file: .github/codex/prompts/ci-repair-agent.md
+          output-file: ${{ github.workspace }}/candidate/.artifacts/ci-repair/result.json
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: high
+          sandbox: read-only
+          safety-strategy: drop-sudo
+          output-schema: >-
+            {"type":"object","additionalProperties":false,"required":["action","patch","failingTests","cause","classification","evidence","confidence"],"properties":{"action":{"type":"string","enum":["fix","diagnose"]},"patch":{"type":"string"},"failingTests":{"type":"array","items":{"type":"string"}},"cause":{"type":"string"},"classification":{"type":"string","enum":["deterministic-break","flake","infra","unknown"]},"evidence":{"type":"string"},"confidence":{"type":"string","enum":["high","medium","low"]}}}
+      - name: Guard patch text, apply, and guard working tree
+        id: guard
+        if: steps.reproduce.outputs.has_tests == 'true'
+        run: node ../scripts/ci-repair-agent.mjs guard
+      - name: Commit locally and rebase onto current main
+        id: prepare
+        if: steps.guard.outputs.passed == 'true'
+        run: node ../scripts/ci-repair-agent.mjs prepare-repair
+      - name: Prove the rebased repair
+        id: prove
+        if: steps.prepare.outputs.prepared == 'true'
+        timeout-minutes: 30
+        run: node ../scripts/ci-repair-agent.mjs prove
+      - name: Summarize repair
+        if: always()
+        run: node ../scripts/ci-repair-agent.mjs summary
+      - name: Upload repair evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-repair-evidence
+          path: |
+            candidate/.artifacts/ci-repair/*.json
+            candidate/.artifacts/ci-repair/*.md
+            candidate/.artifacts/ci-repair/*.patch
+            candidate/.artifacts/ci-repair/*.log
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Report final process and memory state
+        if: always()
+        run: |
+          ps -eo pid,ppid,pgid,stat,etime,rss,args --sort=-rss | head -40
+          free -m
+
+  publish:
+    needs: [verify, repair]
+    if: needs.repair.outputs.publish_request == 'true' && needs.verify.outputs.dry_run == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      CI_REPAIR_RUN_ID: ${{ needs.verify.outputs.run_id }}
+      CI_REPAIR_ATTEMPT: ${{ needs.verify.outputs.attempt }}
+      CI_REPAIR_HEAD_SHA: ${{ needs.verify.outputs.head_sha }}
+      CI_REPAIR_ARTIFACTS: ${{ github.workspace }}/.artifacts/ci-repair-publish-evidence
+      CI_REPAIR_PUBLISH_DIR: ${{ github.workspace }}/.artifacts/ci-repair-publish-tree
+      # Admission uses a dedicated read token, including after the app writer is minted.
+      CI_REPAIR_READ_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout trusted workflow code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475 # trusted lifecycle owner
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+      - name: Download patch and evidence as data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ci-repair-evidence
+          path: .artifacts/ci-repair-publish-evidence
+      - name: Independently guard and prepare publication
+        id: prepare
+        run: node scripts/ci-repair-agent.mjs prepare-publish
+      # No permission-* subset: reuse the installations' granted permissions,
+      # exactly as dated-todo-sweep's isolated upsert job does.
+      - name: Create Barnacle app token
+        if: steps.prepare.outputs.ready == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - name: Create fallback Barnacle app token
+        if: steps.prepare.outputs.ready == 'true' && steps.app-token.outcome == 'failure'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        id: app-token-fallback
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+      - name: Push fresh repair branch and open review PR
+        if: steps.prepare.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+        run: node scripts/ci-repair-agent.mjs publish
+      - name: Summarize publication
+        if: always()
+        run: node scripts/ci-repair-agent.mjs summary
+      - name: Upload publication evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-repair-publication
+          path: .artifacts/ci-repair-publish-evidence/
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: ignore
