@@ -593,6 +593,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/memory-core/src/memory-forget-consolidation.test.ts",
   "extensions/memory-core/src/memory-forget-curated-writes.test.ts",
   "extensions/memory-core/src/memory-forget.phase-signals.test.ts",
+  "extensions/memory-core/src/memory-forget-recovery.test.ts",
   "extensions/memory-core/src/memory-forget.test.ts",
   "extensions/memory-core/src/memory/index.test.ts",
   "extensions/memory-core/src/memory/manager-candidate-repair.test.ts",

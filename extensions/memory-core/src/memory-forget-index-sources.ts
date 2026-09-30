@@ -1,11 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { parseUsageCountedSessionIdFromFileName } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
-  sqliteStringSet,
   tableExists,
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -40,6 +38,7 @@ type ForgetIndexPlan = {
   vectorRows: number;
   embeddingCacheRows: number;
   hasVectorTable: boolean;
+  extensionPath?: string;
 };
 
 export function referencesSession(
@@ -173,9 +172,10 @@ export async function planMemoryIndex(params: {
     };
   }
   let vectorRows = 0;
+  let extensionPath: string | undefined;
   if (result.value.hasVectorTable && result.value.chunks.length > 0) {
     const probe = openNodeSqliteDatabase(":memory:", { allowExtension: true });
-    let extensionPath: string;
+    let preparedExtensionPath: string;
     try {
       const loaded = await loadSqliteVecExtension({ db: probe });
       if (!loaded.ok || !loaded.extensionPath) {
@@ -183,16 +183,17 @@ export async function planMemoryIndex(params: {
           `memory forget cannot inspect vector index: ${loaded.error ?? "load failed"}`,
         );
       }
-      extensionPath = loaded.extensionPath;
+      preparedExtensionPath = loaded.extensionPath;
     } finally {
       probe.close();
     }
+    extensionPath = preparedExtensionPath;
     // Preview must not create or migrate state; its owner-validated handle
     // stays read-only while exposing vec0.
     const vectorResult = withOpenClawAgentDatabaseReadOnly(
       ({ db }) => {
         db.enableLoadExtension(true);
-        db.loadExtension(extensionPath);
+        db.loadExtension(preparedExtensionPath);
         const vectorKysely = getNodeSqliteKysely<ForgetDatabase>(db);
         return executeSqliteQuerySync(
           db,
@@ -211,30 +212,5 @@ export async function planMemoryIndex(params: {
     );
     vectorRows = vectorResult.found ? vectorResult.value : 0;
   }
-  return { ...result.value, vectorRows };
-}
-
-type MemoryIndexSource = { path: string; source: string };
-
-// The forget owner supplies its selected rows and retains the purge transaction.
-export function deleteMemoryIndexSources(
-  database: DatabaseSync,
-  sources: readonly MemoryIndexSource[],
-): void {
-  const db = getNodeSqliteKysely<{ memory_index_sources: MemoryIndexSource }>(database);
-  for (let start = 0; start < sources.length;) {
-    const source = sources[start]!;
-    let end = start + 1;
-    while (end < sources.length && sources[end]!.source === source.source) {
-      end += 1;
-    }
-    executeSqliteQuerySync(
-      database,
-      db
-        .deleteFrom("memory_index_sources")
-        .where("path", "in", sqliteStringSet(sources.slice(start, end).map((row) => row.path)))
-        .where("source", "=", source.source),
-    );
-    start = end;
-  }
+  return { ...result.value, vectorRows, extensionPath };
 }

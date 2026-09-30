@@ -23,8 +23,8 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readMemoryPreimages, storeMemoryPreimage } from "./dreaming-consolidation-artifacts.js";
+import { deleteMemoryEntryOriginsInDatabase } from "./memory-entry-origins-delete.js";
 import {
-  deleteMemoryEntryOriginsInDatabase,
   listMemoryEntryOrigins,
   listMemorySessionTombstones,
   pruneMemoryEntryOrigins,
