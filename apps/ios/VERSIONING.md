@@ -119,6 +119,12 @@ review or available to testers and the group, notes, and automatic notification
 settings are verified. Each skip or deferral records its reason in
 `testflight-result.json`.
 
+If the same source already has a build selected by the App Store draft, is ready
+for beta submission, and has no beta notes, TestFlight reuses it. The attempt saves
+a TestFlight plan and new beta notes, then stages that exact build without another
+archive or upload. Builds with existing beta notes require their saved recovery
+artifacts so a partial distribution cannot silently regenerate its notes.
+
 After processing, the pipeline saves the immutable source ref, writes the saved
 What to Test notes, assigns the external group, and submits for TestFlight review
 when the build is eligible. Automatic tester notification distributes the build

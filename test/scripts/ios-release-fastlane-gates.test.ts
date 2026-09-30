@@ -369,6 +369,9 @@ Review = Struct.new(:contact_first_name, :contact_last_name, :contact_email, :co
 Group = Struct.new(:id, :name, :is_internal_group, :builds) do
   def fetch_builds; builds; end
 end
+StoreVersion = Struct.new(:version_string, :selected) do
+  def get_build; selected; end
+end
 App = Struct.new(:id, :groups, :localizations) do
   def get_beta_groups; groups; end
   def get_beta_app_localizations; localizations; end
@@ -400,7 +403,7 @@ states = {
   "reviewing" => "IN_BETA_REVIEW", "approved" => "BETA_APPROVED", "available" => "IN_BETA_TESTING",
   "rejected" => "BETA_REJECTED", "compliance" => "MISSING_EXPORT_COMPLIANCE"
 }
-scenarios = states.keys + %w[source-mismatch group-change internal-group ambiguous-group missing-description missing-contact missing-demo pending-other processing expired submission-failure notes-readback notify-readback group-readback]
+scenarios = states.keys + %w[source-mismatch group-change internal-group ambiguous-group missing-description missing-contact missing-demo pending-other processing expired submission-failure notes-readback notify-readback group-readback adopt adopt-retry adopt-wrong-id adopt-changed-notes adopt-other-locale]
 rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
   Tempfile.create(["openclaw-beta-result", ".json"]) do |result|
     ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] = "1"
@@ -409,9 +412,19 @@ rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
     scenarios.map do |scenario|
       $scenario, $options = scenario, nil
       ENV["OPENCLAW_TESTFLIGHT_GROUP_ID"] = scenario == "group-change" ? "changed" : "external-group"
-      File.write(plan.path, JSON.generate({ destination: "testflight", appStoreVersion: "2026.7.21", buildNumber: 3, testflight: { groupId: "external-group" } }))
+      beta_plan = { groupId: "external-group" }
+      beta_plan[:existingBuildId] = scenario == "adopt-wrong-id" ? "different-build" : "uploaded" if scenario.start_with?("adopt")
+      File.write(plan.path, JSON.generate({ destination: "testflight", appStoreVersion: "2026.7.21", buildNumber: 3, testflight: beta_plan }))
       File.write(result.path, "")
       build = Build.new("uploaded", "3", "2026.7.21", scenario == "processing" ? "PROCESSING" : "VALID", scenario == "expired", Detail.new(states.fetch(scenario, "READY_FOR_BETA_SUBMISSION"), false), [])
+      case scenario
+      when "adopt-retry"
+        build.localizations = [Localization.new("en-US", nil, nil, "Saved beta notes.")]
+      when "adopt-changed-notes"
+        build.localizations = [Localization.new("en-US", nil, nil, "Existing beta attempt notes.")]
+      when "adopt-other-locale"
+        build.localizations = [Localization.new("sv-SE", nil, nil, "Existing localized beta notes.")]
+      end
       $builds = [build]
       $builds << Build.new("other", "2", "2026.7.21", "VALID", false, Detail.new("IN_BETA_REVIEW", true), []) if scenario == "pending-other"
       $group = Group.new("external-group", "External Testing", scenario == "internal-group", [])
@@ -419,13 +432,14 @@ rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
       groups << Group.new("other", "external-group", false, []) if scenario == "ambiguous-group"
       $app = App.new("app", groups, [Localization.new("en-US", scenario == "missing-description" ? "" : "Beta description", "feedback@example.invalid")])
       $review = Review.new("Review", "Contact", scenario == "missing-contact" ? "" : "review@example.invalid", "+15555550123", "Reviewer access instructions", scenario == "missing-demo" ? true : nil)
+      facts = testflight_plan_facts(app: $app, group: $group, short_version: "2026.7.21", versions: [StoreVersion.new("2026.7.21", scenario.start_with?("adopt") ? build : nil)])
       error = nil
       begin
         release_stage(destination: "testflight", release_version: "2026.7.2", app_store_revision: "1", build_number: "3")
       rescue => failure
         error = failure.message
       end
-      { scenario: scenario, error: error, options: $options, result: File.read(result.path).empty? ? nil : JSON.parse(File.read(result.path)) }
+      { scenario: scenario, facts: facts.fetch("builds").first, error: error, options: $options, result: File.read(result.path).empty? ? nil : JSON.parse(File.read(result.path)) }
     end
   end
 end
@@ -438,6 +452,7 @@ puts JSON.generate(rows)
       error: string | null;
       options: Record<string, unknown> | null;
       result: { outcome: string; externalState: string } | null;
+      facts: { selectedForAppStore: boolean; hasBetaNotes: boolean } | null;
     }[];
     const outcomes: Record<string, string> = {
       submit: "awaiting-review",
@@ -445,6 +460,8 @@ puts JSON.generate(rows)
       reviewing: "awaiting-review",
       approved: "approved",
       available: "available",
+      adopt: "awaiting-review",
+      "adopt-retry": "awaiting-review",
     };
     const errors: Record<string, string> = {
       rejected: "cannot be distributed in state BETA_REJECTED",
@@ -463,8 +480,19 @@ puts JSON.generate(rows)
       "notes-readback": "readback did not match",
       "notify-readback": "readback did not match",
       "group-readback": "readback did not match",
+      "adopt-wrong-id": "does not match the saved existing build",
+      "adopt-changed-notes": "already has different TestFlight notes",
+      "adopt-other-locale": "already has different TestFlight notes",
     };
     for (const row of rows) {
+      if (row.scenario.startsWith("adopt") || row.scenario === "submit") {
+        expect(row.facts).toMatchObject({
+          selectedForAppStore: row.scenario.startsWith("adopt"),
+          hasBetaNotes: ["adopt-retry", "adopt-changed-notes", "adopt-other-locale"].includes(
+            row.scenario,
+          ),
+        });
+      }
       if (outcomes[row.scenario]) {
         expect(row.error, row.scenario).toBeNull();
         expect(row.result?.outcome).toBe(outcomes[row.scenario]);
@@ -477,7 +505,7 @@ puts JSON.generate(rows)
           distribute_external: true,
           groups: ["external-group"],
           notify_external_testers: true,
-          submit_beta_review: row.scenario === "submit",
+          submit_beta_review: ["submit", "adopt", "adopt-retry"].includes(row.scenario),
           skip_submission: false,
           reject_build_waiting_for_review: false,
           expire_previous_builds: false,

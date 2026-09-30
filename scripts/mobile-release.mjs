@@ -186,11 +186,11 @@ function testflightNonUploadOutcome(root, plan, sourceSha) {
         return [ref, sha];
       }),
   );
-  for (const build of facts.builds) {
+  const sameSourceBuilds = facts.builds.filter((build) => {
     const ref = `refs/openclaw/mobile-releases/ios/${build.shortVersion}-${build.buildNumber}`;
-    if (refs.get(ref) !== sourceSha) {
-      continue;
-    }
+    return refs.get(ref) === sourceSha;
+  });
+  for (const build of sameSourceBuilds) {
     if (
       build.configured &&
       [
@@ -203,9 +203,6 @@ function testflightNonUploadOutcome(root, plan, sourceSha) {
     ) {
       return { outcome: "unchanged", groupId: facts.groupId, build, sourceSha };
     }
-    throw new Error(
-      `This source already uploaded TestFlight build ${build.shortVersion} (${build.buildNumber}) in state ${build.externalState}. Recover its saved destination with mobile-release.mjs stage; do not upload it again.`,
-    );
   }
   if (facts.pendingBuild) {
     return {
@@ -225,6 +222,21 @@ function testflightNonUploadOutcome(root, plan, sourceSha) {
       upload: pendingUpload,
       sourceSha,
     };
+  }
+  const storeBuild = sameSourceBuilds.find(
+    (build) =>
+      build.selectedForAppStore === true &&
+      build.hasBetaNotes === false &&
+      build.externalState === "READY_FOR_BETA_SUBMISSION",
+  );
+  if (storeBuild) {
+    return { outcome: "stage-existing", build: storeBuild };
+  }
+  if (sameSourceBuilds.length) {
+    const build = sameSourceBuilds[0];
+    throw new Error(
+      `This source already uploaded iOS build ${build.shortVersion} (${build.buildNumber}) in state ${build.externalState}. Recover its saved destination with mobile-release.mjs stage; do not upload it again.`,
+    );
   }
   for (const build of facts.builds) {
     if (!refs.has(`refs/openclaw/mobile-releases/ios/${build.shortVersion}-${build.buildNumber}`)) {
@@ -321,9 +333,36 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
     }
     plan.sourceSha = sourceSha;
     fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+    let stageExisting = false;
     if (destination === "testflight") {
       const outcome = testflightNonUploadOutcome(root, plan, sourceSha);
-      if (outcome) {
+      if (outcome?.outcome === "stage-existing") {
+        const build = outcome.build;
+        const buildNumber = Number(build.buildNumber);
+        if (
+          build.shortVersion !== plan.appStoreVersion ||
+          !/^[1-9]\d*$/.test(build.buildNumber) ||
+          !Number.isSafeInteger(buildNumber) ||
+          !build.id
+        ) {
+          throw new Error(
+            "The existing App Store build does not match the planned TestFlight train.",
+          );
+        }
+        if (releaseArgs.includes("--build-number")) {
+          throw new Error(
+            "This source already has an App Store build. Omit --build-number to distribute that build through TestFlight without another upload.",
+          );
+        }
+        plan = {
+          ...plan,
+          buildNumber,
+          decision: "stage-existing",
+          testflight: { ...plan.testflight, existingBuildId: build.id },
+        };
+        fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+        stageExisting = true;
+      } else if (outcome) {
         fs.writeFileSync(
           path.join(recovery, "testflight-result.json"),
           `${JSON.stringify(outcome, null, 2)}\n`,
@@ -372,9 +411,16 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
     console.log(
       `Prepared ${platform} release from main source ${sourceSha}. Saved plan and notes: ${recovery}`,
     );
+    if (stageExisting) {
+      uploadedRef(root, platform, plan, planPath);
+    }
     run(
       "/bin/bash",
-      [`scripts/${platform}-release-upload.sh`, ...(platform === "ios" ? uploadArgs(plan) : [])],
+      [
+        `scripts/${platform}-release-upload.sh`,
+        ...(stageExisting ? ["--stage-only"] : []),
+        ...(platform === "ios" ? uploadArgs(plan) : []),
+      ],
       source,
       {
         stdio: "inherit",

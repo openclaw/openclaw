@@ -32,6 +32,8 @@ function fixture(
       buildNumber: string;
       externalState: string;
       configured: boolean;
+      hasBetaNotes?: boolean;
+      selectedForAppStore?: boolean;
     }>;
     pendingBuild: {
       id: string;
@@ -93,8 +95,10 @@ import { renderMobileReleaseNotes } from "./lib/mobile-release-notes.ts";
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
 const sha = git("rev-parse", "HEAD");
 const stageOnly = process.argv.includes("--stage-only");
-const notes = renderMobileReleaseNotes({ rootDir: process.cwd(), platform: "ios", version: "2026.9.20", build: "8", audience: "ios" });
-fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, destination: process.argv.includes("--destination") ? process.argv[process.argv.indexOf("--destination") + 1] : "app-store", stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
+const plan = JSON.parse(fs.readFileSync(process.env.OPENCLAW_IOS_RELEASE_PLAN, "utf8"));
+const buildNumber = process.argv[process.argv.indexOf("--build-number") + 1];
+const notes = renderMobileReleaseNotes({ rootDir: process.cwd(), platform: "ios", version: plan.appStoreVersion, build: buildNumber, audience: "ios" });
+fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, buildNumber, destination: process.argv.includes("--destination") ? process.argv[process.argv.indexOf("--destination") + 1] : "app-store", stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
 if (process.env.FIXTURE_UPLOAD_FAIL === "1") {
   fs.mkdirSync("apps/ios/fastlane/screenshots/en-US", { recursive: true });
   fs.writeFileSync("apps/ios/fastlane/screenshots/en-US/iPhone-01-control-connected.png", "Synthetic fixture screenshot");
@@ -417,6 +421,51 @@ describe("mobile release CLI", () => {
     ]);
   });
 
+  it("stages an existing App Store build for TestFlight and recovers its frozen notes without uploading", () => {
+    const build = {
+      id: "store-build",
+      shortVersion: "2026.9.20",
+      buildNumber: "7",
+      externalState: "READY_FOR_BETA_SUBMISSION",
+      configured: false,
+      hasBetaNotes: false,
+      selectedForAppStore: true,
+    };
+    const f = fixture("ios", {
+      groupId: "external-fixture",
+      builds: [build],
+      pendingBuild: null,
+    });
+    const existingRef = "refs/openclaw/mobile-releases/ios/2026.9.20-7";
+    git(f.root, "push", "origin", `${f.base}:${existingRef}`);
+    const result = f.invoke("run", ["--destination", "testflight"], { FIXTURE_STAGE_FAIL: "1" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Synthetic metadata stage refused after upload");
+    expect(f.audit()).toEqual([
+      expect.objectContaining({ destination: "testflight", buildNumber: "7", stageOnly: true }),
+    ]);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(f.recovery, "ios-plan.json"), "utf8")),
+    ).toMatchObject({
+      destination: "testflight",
+      decision: "stage-existing",
+      buildNumber: 7,
+      sourceSha: f.base,
+      testflight: { existingBuildId: build.id },
+    });
+    const notes = fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8");
+    const recovered = f.invoke("stage", [], { OPENAI_API_KEY: "" });
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(f.audit().map((entry) => [entry.stageOnly, entry.buildNumber])).toEqual([
+      [true, "7"],
+      [true, "7"],
+    ]);
+    expect(fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8")).toBe(notes);
+    expect(git(f.root, "ls-remote", "--refs", "origin", uploadRef)).toBe("");
+    expect(git(f.remote, "rev-parse", existingRef)).toBe(f.base);
+    expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+  });
+
   it.each(["unchanged", "deferred-review", "recovery-required"])(
     "does not upload or regenerate notes for TestFlight %s",
     (outcome) => {
@@ -425,8 +474,14 @@ describe("mobile release CLI", () => {
         shortVersion: "2026.9.20",
         buildNumber: "7",
         externalState:
-          outcome === "deferred-review" ? "WAITING_FOR_BETA_REVIEW" : "IN_BETA_TESTING",
+          outcome === "deferred-review"
+            ? "WAITING_FOR_BETA_REVIEW"
+            : outcome === "recovery-required"
+              ? "READY_FOR_BETA_SUBMISSION"
+              : "IN_BETA_TESTING",
         configured: outcome !== "recovery-required",
+        selectedForAppStore: outcome === "recovery-required",
+        hasBetaNotes: true,
       };
       const f = fixture("ios", {
         groupId: "external-fixture",

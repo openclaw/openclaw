@@ -1386,7 +1386,7 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
   end
   plan = JSON.parse(stdout)
   if testflight_group
-    plan["testflight"] = testflight_plan_facts(app: app, group: testflight_group, short_version: plan.fetch("appStoreVersion"))
+    plan["testflight"] = testflight_plan_facts(app: app, group: testflight_group, short_version: plan.fetch("appStoreVersion"), versions: versions)
   end
   plan
 rescue JSON::ParserError => e

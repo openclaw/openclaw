@@ -62,7 +62,12 @@ export type IosReleasePlan = {
   buildNumber: number;
   buildUploads: IosRemoteBuildUpload[];
   releaseNotesBaselines: IosReleasePlanInput["releaseNotesBaselines"];
-  decision: "new-revision" | "resume-editable" | "resume-testflight" | "retry-upload";
+  decision:
+    | "new-revision"
+    | "resume-editable"
+    | "resume-testflight"
+    | "retry-upload"
+    | "stage-existing";
   destination: IosReleaseDestination;
   gatewayVersion: string;
   sourceClean: boolean | null;

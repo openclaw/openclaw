@@ -47,21 +47,25 @@ def testflight_train_builds(app:, short_version:)
   ).select { |build| build.processing_state == "VALID" && build.expired == false }
 end
 
-def testflight_build_facts(build, group_build_ids)
-  localizations = build.get_beta_build_localizations.select { |localization| localization.locale == "en-US" }
+def testflight_build_facts(build, group_build_ids, store_build_ids)
+  localizations = build.get_beta_build_localizations
+  english = localizations.select { |localization| localization.locale == "en-US" }
   {
     "id" => build.id,
     "shortVersion" => build.app_version,
     "buildNumber" => build.version.to_s,
     "externalState" => build.build_beta_detail&.external_build_state,
+    "hasBetaNotes" => localizations.any? { |localization| env_present?(localization.whats_new.to_s) },
+    "selectedForAppStore" => store_build_ids.include?(build.id),
     "configured" => group_build_ids.include?(build.id) && build.build_beta_detail&.auto_notify_enabled == true &&
-      localizations.length == 1 && env_present?(localizations.first.whats_new.to_s)
+      english.length == 1 && env_present?(english.first.whats_new.to_s)
   }
 end
 
-def testflight_plan_facts(app:, group:, short_version:)
+def testflight_plan_facts(app:, group:, short_version:, versions:)
   group_build_ids = group.fetch_builds.map(&:id)
-  builds = testflight_train_builds(app: app, short_version: short_version).map { |build| testflight_build_facts(build, group_build_ids) }
+  store_build_ids = versions.select { |version| version.version_string == short_version }.filter_map { |version| version.get_build&.id }
+  builds = testflight_train_builds(app: app, short_version: short_version).map { |build| testflight_build_facts(build, group_build_ids, store_build_ids) }
   pending = builds.select { |build| TESTFLIGHT_REVIEW_STATES.include?(build.fetch("externalState")) }
   UI.user_error!("Multiple TestFlight builds are in review for #{short_version}; reconcile App Store Connect before continuing.") if pending.length > 1
   { "groupId" => group.id, "builds" => builds, "pendingBuild" => pending.first }
@@ -100,6 +104,17 @@ def stage_ios_testflight_release!(api_key:, short_version:, build_number:, notes
   require "pilot"
   expected_notes = Pilot::BuildManager.sanitize_changelog(notes)
   UI.user_error!("Saved TestFlight What to Test notes are empty after Apple's formatting restrictions.") unless env_present?(expected_notes)
+  existing_build_id = frozen.fetch("testflight")["existingBuildId"]
+  if existing_build_id
+    UI.user_error!("TestFlight staging target does not match the saved existing build.") unless build.id == existing_build_id
+    # Adopting a store upload starts its first beta distribution. Only a retry
+    # of these exact saved notes may reuse an already-noted build.
+    different_notes = build.get_beta_build_localizations.any? do |localization|
+      env_present?(localization.whats_new.to_s) &&
+        (localization.locale != "en-US" || localization.whats_new != expected_notes)
+    end
+    UI.user_error!("The existing build already has different TestFlight notes; recover its original beta attempt before continuing.") if different_notes
+  end
   # This is distribution-only. Upload and immutable source recording complete
   # first, so a rejected submission or partial metadata write can be recovered.
   upload_to_testflight(
