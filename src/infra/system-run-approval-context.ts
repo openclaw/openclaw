@@ -189,9 +189,11 @@ export function resolveSystemRunApprovalRuntimeContext(params: {
       ok: true,
       plan: normalizedPlan,
       argv: [...normalizedPlan.argv],
-      cwd: normalizedPlan.cwd,
-      agentId: normalizedPlan.agentId,
-      sessionKey: normalizedPlan.sessionKey,
+      // Resolve identity fields exactly like resolveSystemRunApprovalRequestContext
+      // so the runtime binding reproduces the stored approval binding field for field.
+      cwd: normalizedPlan.cwd ?? normalizeNonEmptyString(params.cwd),
+      agentId: normalizedPlan.agentId ?? normalizeNonEmptyString(params.agentId),
+      sessionKey: normalizedPlan.sessionKey ?? normalizeNonEmptyString(params.sessionKey),
       commandText: normalizedPlan.commandText,
     };
   }
