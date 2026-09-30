@@ -46,6 +46,7 @@ function sessionRow(index: number): SidebarRecentSession {
     key: `agent:main:batch-${index}`,
     label: `Batch ${index}`,
     sessionId: `session-${index}`,
+    sharingRole: "owner",
     pinned: index === 0 || index === 100,
   } as SidebarRecentSession;
 }
@@ -423,27 +424,26 @@ describe("patchSessionRows", () => {
     );
   });
 
-  it("keeps scoped organization owner-only with independent interaction grants", async () => {
+  it.each([
+    { scope: "operator.sessions.write", archived: true },
+    { scope: "operator.sessions.write", archived: false },
+    { scope: "operator.write", archived: true },
+    { scope: "operator.write", archived: false },
+  ])("keeps archive=$archived owner-only with $scope", async ({ scope, archived }) => {
     const harness = createHarness({
-      scopes: [
-        "operator.read",
-        "operator.sessions.write",
-        "operator.questions",
-        "operator.approvals",
-        "operator.talk",
-      ],
+      scopes: ["operator.read", scope, "operator.questions", "operator.approvals", "operator.talk"],
     });
-    const own = { ...sessionRow(0), sharingRole: "owner" as const };
-    const member = { ...sessionRow(1), sharingRole: "member" as const };
+    const own = { ...sessionRow(0), archived: !archived, sharingRole: "owner" as const };
+    const member = { ...sessionRow(1), archived: !archived, sharingRole: "member" as const };
     expect(
       sessionMenuReasons({
         snapshot: harness.scope.gateway.snapshot,
         session: own,
         batchRows: [own, member],
       })["toggle-archived"],
-    ).toBe("Only the session owner can make this change.");
+    ).toBe("Only the session creator or an admin can make this change.");
     await expect(
-      patchSessionRows(harness.host, [own, member], { archived: true }, harness.scope, {
+      patchSessionRows(harness.host, [own, member], { archived }, harness.scope, {
         sessionScope: true,
       }),
     ).resolves.toBeNull();
@@ -451,18 +451,18 @@ describe("patchSessionRows", () => {
     expect(harness.reconcileMutation).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
       harness.scope,
-      "Only the session owner can make this change.",
+      "Only the session creator or an admin can make this change.",
     );
 
     await expect(
-      patchSessionRows(harness.host, [own], { archived: true }, harness.scope, {
+      patchSessionRows(harness.host, [own], { archived }, harness.scope, {
         sessionScope: true,
       }),
     ).resolves.toEqual([own]);
     expect(harness.request).toHaveBeenCalledOnce();
     expect(harness.request.mock.calls[0]?.[1]).toMatchObject({
       targets: [{ key: own.key }],
-      patch: { archived: true },
+      patch: { archived },
     });
   });
 });

@@ -29,6 +29,28 @@ sidebarTitle: "Models"
 
 GPT-5.4 and GPT-5.4 Mini are retired from the ChatGPT-account Codex route. Run `openclaw doctor --fix` to replace persisted subscription references with their documented successors: `openai/gpt-5.6-terra` and `openai/gpt-5.6-luna`, respectively. This includes defaults, per-agent model selections, automation overrides, and unlocked session overrides whose selected route is known. The Platform API-key route is unaffected. Doctor retains pinned overrides when their successor is outside the agent's model policy, or when clearing an override would keep the same retired model and account. Doctor also retains the original reference and warns when its declared successor is retired or definitively unsupported on the selected account route; unknown availability and temporary cooldowns do not block migration. It reports the model or policy change needed, along with unresolved or conflicting account routes. Review the repair output, restart the Gateway, and re-enable any automation that was disabled after repeated failures.
 
+## Daybreak Blue and Red
+
+Accounts provisioned for Daybreak can select `openai/gpt-daybreak-blue-latest` or
+`openai/gpt-daybreak-red-latest` with an OpenAI API-key profile. Both aliases use
+the Responses API and expose `low`, `medium`, `high`, `xhigh`, and `max` on the
+OpenClaw runtime. `/think ultra` remains a separate orchestration mode; it uses
+the highest supported native effort rather than sending `ultra` to the API.
+
+Daybreak aliases can resolve to different snapshots as access programs evolve.
+OpenClaw preserves the requested alias instead of replacing it with a snapshot.
+Blue keeps reasoning enabled; Red also supports `/think off`. Explicit configured
+effort capabilities remain authoritative, including narrower or empty lists.
+Alias cost estimates are unknown, not a claim that Daybreak requests are free;
+check the resolved model and current OpenAI pricing. Successful account discovery
+remains authoritative and this support does not grant Daybreak access. Native
+Codex continues to use its account catalog and native effort controls.
+
+See the [Daybreak guide](https://developers.openai.com/api/docs/guides/daybreak)
+and the [Blue](https://developers.openai.com/api/docs/models/gpt-daybreak-blue-latest)
+and [Red](https://developers.openai.com/api/docs/models/gpt-daybreak-red-latest)
+model references.
+
 ## GPT-6 Astra
 
 Select `openai/gpt-6-astra` with an OpenAI API-key profile or a ChatGPT/Codex

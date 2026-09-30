@@ -507,6 +507,12 @@ repair applies when the updated driver runs the next upgrade; it cannot change
 an already-running 2026.9.5 updater. If that older driver stops with recovery
 pending, use the installed version's `openclaw update repair`.
 
+If you interrupt while Windows task autostart is initially being suspended, the
+updater restores its prior autostart setting before exiting. Restoration still
+requires the original live update owner and task identity. This interruption
+handling belongs to the updater already running; an in-progress older updater
+keeps its existing behavior.
+
 When Doctor cannot acquire maintenance before repair writes begin, finalization
 restores any service it stopped and exits successfully with a recorded warning.
 This includes lock contention from unknown or non-serving processes. Doctor and

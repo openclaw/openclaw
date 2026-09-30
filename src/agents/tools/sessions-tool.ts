@@ -239,7 +239,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     description: assignmentOnly
       ? "Assign responsibility for a visible session to a human or agent with assign_owner, ownerType, and ownerId. Default target: current session. Does not change creator attribution or access."
       : controlOnly
-        ? `${stopAllowed ? "Archive, restore, or stop" : "Archive or restore"} sessions owned by or assigned to the requesting operator. Requires operator.write. Use patch with archived=true/false; self-archive waits until this run finishes. ${stopAllowed ? "Stop targets another session; runId optionally selects one active run. " : ""}assign_owner assigns responsibility for a visible session to a human or agent. No deletion, settings, batch, or global group changes.`
+        ? `Archive or restore sessions created by the requesting operator. Requires operator.write. Use patch with archived=true/false; self-archive waits until this run finishes. ${stopAllowed ? "Stop targets another session created by or assigned to the operator; runId optionally selects one active run. " : ""}assign_owner assigns responsibility for a visible session to a human or agent. No deletion, settings, batch, or global group changes.`
         : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.`,
     parameters: assignmentOnly
       ? SessionOwnerToolSchema
@@ -299,6 +299,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         return await stopSessionTool(
           {
             ...target,
+            operation: "stop",
             restricted: controlOnly,
             expectedSessionId: readToolStringParam(params, "expectedSessionId"),
           },
@@ -473,6 +474,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         key,
         expectedSessionId,
         expectedLifecycleRevision: selectedLifecycleRevision,
+        operation: archived === true ? ("archive" as const) : ("restore" as const),
         restricted: true,
       });
       const callSessionPatch = (

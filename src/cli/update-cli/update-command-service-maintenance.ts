@@ -659,7 +659,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     }
   } catch (err) {
     try {
-      assertCurrent(windowsTaskAutoStartRecovery ? "restore" : undefined);
+      assertCurrent("restore");
     } catch (cause) {
       const failures = [err, cause];
       try {

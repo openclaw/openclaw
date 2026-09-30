@@ -302,7 +302,16 @@ export * from "../infra/fs-safe.ts";
 export * from "../infra/heartbeat-events.ts";
 export * from "../infra/heartbeat-summary.ts";
 export * from "../infra/heartbeat-visibility.ts";
-export * from "../infra/home-dir.js";
+export {
+  expandHomePrefix,
+  resolveEffectiveHomeDir,
+  resolveHomeRelativePath,
+  resolveOsHomeDir,
+  resolveOsHomeRelativePath,
+  resolveRequiredHomeDir,
+  resolveRequiredOsHomeDir,
+  resolveUserPath,
+} from "../infra/home-dir.js";
 // Keep this deprecated barrel pinned to its shipped request-body surface; new
 // response readers belong only to the focused response-limit/media entrypoints.
 export {

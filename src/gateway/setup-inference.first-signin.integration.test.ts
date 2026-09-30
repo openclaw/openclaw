@@ -1,22 +1,62 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { WizardNextResult } from "../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import * as catalogRefresh from "../agents/prepared-model-runtime.refresh-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+} from "../infra/device-identity.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { getCurrentDiagnosticPhase } from "../logging/diagnostic-phase.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import * as setupAdmission from "./server-methods/setup-admission.js";
+import type { GatewayRequestOptions } from "./server-methods/types.js";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+  startGatewayWithClient,
+} from "./test-helpers.e2e.js";
+
+const observation = vi.hoisted(() => ({ settled: (_options: GatewayRequestOptions) => {} }));
+
+// A revoked socket can lose its reply. Join the real handler before checking effects.
+vi.mock(
+  "./server/ws-connection/authenticated-request-dispatch.server-methods.runtime.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("./server/ws-connection/authenticated-request-dispatch.server-methods.runtime.js")
+      >();
+    return {
+      ...actual,
+      handleGatewayRequest: async (...args: Parameters<typeof actual.handleGatewayRequest>) => {
+        const settled = observation.settled;
+        try {
+          return await actual.handleGatewayRequest(...args);
+        } finally {
+          settled(args[0]);
+        }
+      },
+    };
+  },
+);
 
 afterEach(() => {
+  observation.settled = () => {};
   vi.restoreAllMocks();
   resetGatewayTestState();
 });
 
 it(
-  "activates the first device sign-in through openclaw.setup.auth.start and the embedded probe",
+  "replaces same-owner device sign-in, preserves other owners, and fences revoked retries through WebSocket",
   { timeout: 90_000 },
   async ({ signal, onTestFinished }) => {
     const requests: string[] = [];
@@ -235,7 +275,7 @@ it(
           throw new Error("Setup must complete without a recovery restart");
         });
         markPhase("gateway-start-and-connect");
-        const { client, server } = await startGatewayWithClient({
+        const { client, server, port } = await startGatewayWithClient({
           configPath: state.configPath,
           token: "synthetic-gateway-token",
           scopes: ["operator.admin"],
@@ -255,19 +295,67 @@ it(
             update: { checkOnStart: false },
           },
         });
+        let owner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
         try {
           markPhase("gateway-startup-settlement");
           await server.startupSettled;
-          const sessionId = "first-device-signin";
-          markPhase("setup-auth-start");
-          await client.request("openclaw.setup.auth.start", {
-            sessionId,
+          const identity = loadOrCreateDeviceIdentity({ path: state.path("setup-owner.sqlite") });
+          const pending = await requestDevicePairing({
+            deviceId: identity.deviceId,
+            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+            clientId: "test",
+            clientMode: "backend",
+            role: "operator",
+            scopes: ["operator.admin"],
+          });
+          await approveDevicePairing(pending.request.requestId, {
+            callerScopes: ["operator.admin"],
+          });
+          const rotated = await rotateDeviceToken({
+            deviceId: identity.deviceId,
+            role: "operator",
+            scopes: ["operator.admin"],
+          });
+          if (!rotated.ok) {
+            throw new Error("Expected setup owner device token");
+          }
+          // Backend clients keep device ownership; the admin client uses the Gateway owner profile.
+          owner = await connectGatewayClient({
+            mode: "backend",
+            url: `ws://127.0.0.1:${port}`,
+            deviceIdentity: identity,
+            deviceToken: rotated.entry.token,
+            scopes: ["operator.admin"],
+          });
+          const auth = {
             agentId: "main",
             authChoice: "github-copilot",
             nativeSessionCatalogsEnabled: false,
+          };
+          const readProfiles = () =>
+            loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
+          markPhase("different-owner-rejected");
+          await owner.request("openclaw.setup.auth.start", {
+            ...auth,
+            sessionId: "abandoned-signin",
           });
+          const abandoned = await owner.request<WizardNextResult>("wizard.next", {
+            sessionId: "abandoned-signin",
+          });
+          expect(abandoned).toMatchObject({ done: false, step: { type: "note" } });
+          await expect(
+            client.request("openclaw.setup.auth.start", { ...auth, sessionId: "different-owner" }),
+          ).rejects.toThrow("OpenClaw setup is already in progress");
+          expect(await owner.request("wizard.next", { sessionId: "abandoned-signin" })).toEqual(
+            abandoned,
+          );
+          expect(readProfiles()).toEqual({});
+
+          const sessionId = "replacement-signin";
+          markPhase("same-owner-retry");
+          await owner.request("openclaw.setup.auth.start", { ...auth, sessionId });
           markPhase("wizard-next");
-          let result = await client.request<WizardNextResult>("wizard.next", { sessionId });
+          let result = await owner.request<WizardNextResult>("wizard.next", { sessionId });
           while (!result.done) {
             const step = result.step;
             if (!step) {
@@ -288,7 +376,7 @@ it(
                     : "other";
               wizardProgressElapsedMs = Math.round(performance.now() - startedAt);
             }
-            result = await client.request<WizardNextResult>("wizard.next", {
+            result = await owner.request<WizardNextResult>("wizard.next", {
               sessionId,
               answer: { stepId: step.id, value: step.type === "confirm" ? true : null },
             });
@@ -306,9 +394,8 @@ it(
               (url) => url === "https://api.individual.githubcopilot.com/v1/messages",
             ),
           ).toHaveLength(1);
-          const profiles = Object.entries(
-            loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles,
-          );
+          const savedProfiles = readProfiles();
+          const profiles = Object.entries(savedProfiles);
           expect(profiles).toHaveLength(1);
           const [profileId, credential] = profiles[0]!;
           expect(credential).toMatchObject({
@@ -321,8 +408,88 @@ it(
           expect(resolveAgentEffectiveModelPrimary(getRuntimeConfig(), "main")).toBe(
             `github-copilot/claude-sonnet-5@${profileId}`,
           );
+
+          markPhase("queued-retry-revocation");
+          await owner.request("openclaw.setup.auth.start", {
+            ...auth,
+            sessionId: "before-revocation",
+          });
+          let waiting = await owner.request<WizardNextResult>("wizard.next", {
+            sessionId: "before-revocation",
+          });
+          expect(waiting.step?.type).toBe("confirm");
+          waiting = await owner.request<WizardNextResult>("wizard.next", {
+            sessionId: "before-revocation",
+            answer: { stepId: waiting.step!.id, value: true },
+          });
+          expect(waiting).toMatchObject({ done: false, step: { type: "note" } });
+          const beforeRevocation = [...requests];
+          const reached = createDeferredCore();
+          const release = createDeferredCore();
+          const finished = createDeferredCore<string[]>();
+          const whenSettled = setupAdmission.whenAdmittedWizardSessionSettled;
+          // Hold only the retry's existing settlement await; cancellation and lock release stay real.
+          vi.spyOn(setupAdmission, "whenAdmittedWizardSessionSettled").mockImplementationOnce(
+            async (session) => {
+              await whenSettled(session);
+              reached.resolve();
+              await release.promise;
+            },
+          );
+          observation.settled = (options) => {
+            if (options.req.method === "openclaw.setup.auth.start") {
+              finished.resolve([...options.context.wizardSessions.keys()]);
+            }
+          };
+          const reply = owner
+            .request("openclaw.setup.auth.start", { ...auth, sessionId: "revoked-retry" })
+            .then(
+              (value) => ({ result: value }),
+              (error: unknown) => ({ error }),
+            );
+          try {
+            await withinTest(
+              awaitGateBeforeSettlement(
+                reached.promise,
+                finished.promise,
+                "Retry finished before settlement barrier",
+              ),
+              signal,
+            );
+            await client.request("device.token.revoke", {
+              deviceId: identity.deviceId,
+              role: "operator",
+            });
+            release.resolve();
+            const sessions = await withinTest(finished.promise, signal);
+            expect(await reply).toHaveProperty("error");
+            expect(sessions).not.toContain("revoked-retry");
+            expect(requests).toEqual(beforeRevocation);
+            expect(readProfiles()).toEqual(savedProfiles);
+            expect(resolveAgentEffectiveModelPrimary(getRuntimeConfig(), "main")).toBe(
+              `github-copilot/claude-sonnet-5@${profileId}`,
+            );
+            expect(recoveryRestart).not.toHaveBeenCalled();
+            markPhase("revoked-retry-no-effects");
+          } finally {
+            release.resolve();
+            await withinTest(Promise.all([finished.promise, reply]), signal);
+          }
+          console.info("[setup-retry-proof]", {
+            differentOwner: "rejected; original prompt preserved",
+            sameOwner: "replacement activated",
+            tokenExchanges: requests.filter(
+              (url) => url === "https://github.com/login/oauth/access_token",
+            ).length,
+            storedProfiles: profiles.length,
+            revokedRetry: "handler settled; no session, provider request, or credential change",
+            phaseTransitions,
+          });
         } finally {
           markPhase("client-disconnect");
+          if (owner) {
+            await disconnectGatewayClient(owner);
+          }
           await disconnectGatewayClient(client);
           markPhase("server-close");
           await server.close({ reason: "first sign-in test complete" });

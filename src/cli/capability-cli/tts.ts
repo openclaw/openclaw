@@ -42,7 +42,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       .option("--output <path>", "Output path"),
     "local",
     async (opts, transport) => {
-      const { resolveModelRefOverride } = await import("./shared.js");
+      const { resolveModelRefOverride } = await import("../../shared/model-ref-override.js");
       const { runTtsConvert } = await import("./tts-runtime.js");
       const modelRef = resolveModelRefOverride(opts.model as string | undefined);
       if (opts.model && !modelRef.provider) {
