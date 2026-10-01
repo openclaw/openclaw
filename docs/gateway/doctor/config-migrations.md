@@ -9,6 +9,20 @@ read_when:
 Checks 0-2 cover config normalization and the legacy config key migrations,
 plus how doctor publishes shared-state schema during an update.
 
+## Runtime config migration
+
+Runtime config reads require per-model context budgets and current GitHub Copilot
+settings. Doctor migrates retired provider-level `contextTokens` and
+`contextWindow` values into explicit model entries, preserves existing per-model
+values, and reports agent-level caps that cannot be represented per model. Doctor
+also removes `plugins.entries.github-copilot.config.discovery.enabled`; configured
+Copilot access refreshes its catalog automatically.
+
+Run `openclaw doctor --fix` before starting with these retired keys. Updates apply
+the same transforms before candidate config validation, through the existing
+backup and include-aware write flow. Ordinary reads leave the authored values
+untouched so Doctor can report and persist the repair.
+
 ## Channel ownership during an update
 
 When Doctor migrates a legacy `agents.list` roster without a `default: true` marker

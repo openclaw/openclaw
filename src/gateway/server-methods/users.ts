@@ -48,9 +48,9 @@ import { usersChannelIdentityHandlers } from "./users-channel-identities.js";
 import { usersGitHubHandlers } from "./users-github.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
 import {
+  prepareAuthenticatedProfile,
+  prepareProfileMutationAccess,
   prepareUserProfileAdministration,
-  requireProfileMutationAccess,
-  resolveAuthenticatedProfileId,
 } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
@@ -108,7 +108,8 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     respond(true, { profiles: await listProfiles() });
   },
-  "users.self": async ({ client, params, respond }) => {
+  "users.self": async (options) => {
+    const { client, params, respond } = options;
     if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
@@ -128,7 +129,9 @@ export const usersHandlers: GatewayRequestHandlers = {
           // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
         }
       }
-      const profileId = resolveAuthenticatedProfileId(client);
+      const profile = await prepareAuthenticatedProfile(options);
+      profile.assertCurrent();
+      const profileId = profile.profileId;
       if (!profileId) {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
@@ -282,16 +285,19 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setDisplayName": ({ client, context, params, respond }) => {
+  "users.setDisplayName": async (options) => {
+    const { context, params, respond } = options;
     if (
       !assertValidParams(params, validateUsersSetDisplayNameParams, "users.setDisplayName", respond)
     ) {
       return;
     }
     try {
-      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
+      const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
+      if (!assertCurrent) {
         return;
       }
+      assertCurrent();
       const profile = setDisplayName(params.profileId, params.displayName);
       refreshConnectedProfile(context, profile);
       respond(true, { profile });
@@ -334,7 +340,8 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setAvatar": ({ client, context, params, respond }) => {
+  "users.setAvatar": async (options) => {
+    const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSetAvatarParams, "users.setAvatar", respond)) {
       return;
     }
@@ -349,9 +356,11 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const bytes = Buffer.from(avatarBase64, "base64");
     try {
-      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
+      const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
+      if (!assertCurrent) {
         return;
       }
+      assertCurrent();
       const result = setAvatar(params.profileId, bytes, params.mime);
       if (!result.ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));

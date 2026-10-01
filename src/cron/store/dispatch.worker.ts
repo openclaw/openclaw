@@ -7,6 +7,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { loadMutableCronStoreInWorker } from "./load.worker.js";
+import { registerCronQuarantineInDatabase } from "./quarantine.kernel.js";
 import { recordCronRunInDatabase } from "./run-history.kernel.js";
 import {
   bindCronRunReceiptExecutionInDatabase,
@@ -113,6 +114,7 @@ export function isCronStateWorkerCommand(command: {
     case "cron.recordFailureAlertOutcome":
     case "cron.save":
     case "cron.saveChanges":
+    case "cron.registerQuarantine":
     case "cron.bindReceiptExecution":
       return true;
     default:
@@ -125,6 +127,16 @@ export function executeCronStateCommand(
   database: OpenClawStateDatabase,
 ): CronStateWorkerOperations[keyof CronStateWorkerOperations]["output"] {
   switch (command.type) {
+    case "cron.registerQuarantine":
+      return runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          registerCronQuarantineInDatabase(db, command.input);
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        },
+        { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+        { operationLabel: command.type },
+      );
     case "cron.recordSkippedRuns":
     case "cron.planStartup":
       if (!scheduler) {

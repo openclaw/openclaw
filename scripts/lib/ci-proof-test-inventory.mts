@@ -1,6 +1,14 @@
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { stateStartupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
+import { uiE2eRealGatewayTestFiles } from "../../test/vitest/vitest.ui-paths.mjs";
+import { UI_E2E_OWNER_WATCHES, UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
+
+const ownerSelectedUiE2eTests = new Set(
+  UI_E2E_OWNER_WATCHES.map(({ testFile }) => testFile).filter(
+    (file) => !uiE2eRealGatewayTestFiles.includes(file) && !UI_E2E_SMOKE_TEST_FILES.includes(file),
+  ),
+);
 
 // Complete process/lifecycle proofs stay outside PR CI. Main retains runtime
 // owners; manual/release validation also retains the tooling owner.
@@ -1324,7 +1332,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/sessions/session-manager-static-notes.test.ts",
   "src/agents/sessions/session-manager.fork-rebase.test.ts",
   "src/agents/sessions/session-manager.persistence-compat.test.ts",
-  "src/agents/sessions/session-manager.user-idempotency.test.ts",
   "src/agents/sessions/settings-storage.test.ts",
   "src/agents/sessions/tools/bash-termination.test.ts",
   "src/agents/sessions/tools/bash.test.ts",
@@ -4604,7 +4611,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/styles/cursor-policy.node.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
   "ui/src/test-helpers/control-ui-e2e-suite.test.ts",
-];
+].filter((file) => !ownerSelectedUiE2eTests.has(file));
 
 // Measured integration proofs and slower owner matrices run hourly on main and
 // in full release validation. PRs opt in for edited tests or resolved source owners.
@@ -5514,10 +5521,13 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/styles/cursor-policy.browser.test.ts",
 ] as const;
 
-const prExemptRuntimeTestFiles = new Set<string>(PR_EXEMPT_RUNTIME_TEST_FILES);
+const prExemptRuntimeTestFiles = new Set<string>([
+  ...PR_EXEMPT_RUNTIME_TEST_FILES,
+  ...ownerSelectedUiE2eTests,
+]);
 
 export function listPrExemptRuntimeTestFiles(cwd = process.cwd()): string[] {
-  return PR_EXEMPT_RUNTIME_TEST_FILES.filter((file) =>
+  return [...prExemptRuntimeTestFiles].filter((file) =>
     statSync(resolve(cwd, file), { throwIfNoEntry: false })?.isFile(),
   );
 }

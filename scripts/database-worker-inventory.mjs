@@ -111,6 +111,13 @@ const reviewed = new Map([
       evidence: "Reaction bindings use worker; other synchronous registry callers remain",
     },
   ],
+  [
+    "src/cron/store/quarantine.kernel.ts",
+    {
+      priority: 99,
+      evidence: "Shared by worker operations and native Doctor store-repair transactions",
+    },
+  ],
 ]);
 const workerModules = new Set([
   "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.

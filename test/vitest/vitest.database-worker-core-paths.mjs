@@ -394,7 +394,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/session-manager.persistence-compat.test.ts",
   "src/agents/sessions/session-manager-static-notes.test.ts",
   "src/agents/sessions/session-manager.test.ts",
-  "src/agents/sessions/session-manager.user-idempotency.test.ts",
   "src/agents/sessions/agent-session-models.admission.test.ts",
   "src/agents/session-tool-result-guard.transcript-events.test.ts",
   "src/agents/embedded-agent-runner/compact.delegate.test.ts",

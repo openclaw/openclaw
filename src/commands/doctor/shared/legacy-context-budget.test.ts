@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
-import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
+import { resolveContextTokensForModelFromCache } from "../../../agents/context-resolution.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { migrateLegacyContextBudgetConfig } from "./legacy-context-budget.js";
 
 const noCachedValue = () => undefined;
 

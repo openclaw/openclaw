@@ -2,16 +2,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getRetainedLegacyDefaultAgentId,
   setRetainedLegacyDefaultAgentId,
-} from "./legacy.default-agent-owner-state.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
+} from "../../../config/legacy.default-agent-owner-state.js";
 
 /** Drop the retired discovery switch before validation, including malformed values. */
-export function removeLegacyCopilotDiscovery(config: OpenClawConfig): OpenClawConfig;
-export function removeLegacyCopilotDiscovery(config: unknown): unknown;
-export function removeLegacyCopilotDiscovery(config: unknown): unknown {
-  if (!isRecord(config)) {
-    return config;
-  }
+export function removeLegacyCopilotDiscovery(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
   const plugins = isRecord(config.plugins) ? config.plugins : undefined;
   const entries = isRecord(plugins?.entries) ? plugins.entries : undefined;
   const entry = isRecord(entries?.["github-copilot"]) ? entries["github-copilot"] : undefined;

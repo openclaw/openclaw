@@ -16,6 +16,7 @@ import {
 } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
+  normalizeDatabasePath,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
 import {
@@ -378,7 +379,7 @@ function openAgentDatabaseBackend(
         !database ||
         !identity ||
         !database.db.isOpen ||
-        database.db.location() !== identity.nativeLocation ||
+        normalizeDatabasePath(database.db.location() ?? "") !== identity.nativeLocation ||
         getOpenClawAgentDatabaseIfOpen(options) !== database
       ) {
         throw new Error("Agent cleanup lost its retained native database");

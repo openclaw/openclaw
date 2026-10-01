@@ -1,9 +1,12 @@
 import { readFileSync } from "node:fs";
 import { matchesGlob } from "node:path";
 import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
+import { isTestFileTarget } from "./changed-path-facts.mjs";
+import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
 type PolicyTestWatch = {
   ownerGlobs?: readonly string[];
+  sourceOnly?: boolean;
   testFile: string;
   watchGlobs: readonly string[];
 };
@@ -12,7 +15,13 @@ type PolicyTestWatch = {
 // they enforce. Boundary and contract suites have dedicated always-on lanes;
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
-const policyTestWatches = [
+const policyTestWatches: readonly PolicyTestWatch[] = [
+  // Browser-served route owners are not imports of the Playwright entry point.
+  ...UI_E2E_OWNER_WATCHES.map(({ testFile, watchGlobs }): PolicyTestWatch => ({
+    testFile,
+    watchGlobs,
+    sourceOnly: true,
+  })),
   {
     testFile: "test/vitest-pr-exempt-retention.test.ts",
     watchGlobs: [
@@ -2053,7 +2062,7 @@ const policyTestWatches = [
       "src/agents/sandbox/ssh-backend.ts",
     ],
   },
-] satisfies readonly PolicyTestWatch[];
+];
 
 const literalPolicyPatterns = new Set(
   policyTestWatches
@@ -2077,9 +2086,10 @@ export function resolvePolicyTestTargets(
     literal: isPlainRepoRelativePath(changedPath),
   }));
   return policyTestWatches
-    .filter(({ watchGlobs, ownerGlobs }) =>
+    .filter(({ watchGlobs, ownerGlobs, sourceOnly }) =>
       paths.some(
         ({ changedPath, literal }) =>
+          (!sourceOnly || !isTestFileTarget(changedPath)) &&
           watchGlobs.some((watchGlob) => matchesPolicyPattern(changedPath, watchGlob, literal)) &&
           (!options.completeOwnersOnly ||
             ownerGlobs?.some((ownerGlob) => matchesPolicyPattern(changedPath, ownerGlob, literal))),

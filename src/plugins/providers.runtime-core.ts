@@ -318,6 +318,8 @@ export function createProviderRegistryResolver(dependencies: {
         installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(snapshot.index),
       },
       {
+        registrationConfigOrigin:
+          !setup && params.registryScope !== "exact" ? params.config : undefined,
         onlyPluginIds: selection.pluginIds,
         pluginSdkResolution: params.pluginSdkResolution,
         cache: params.cache ?? !setup,
