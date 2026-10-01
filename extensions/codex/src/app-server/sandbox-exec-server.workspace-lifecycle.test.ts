@@ -243,7 +243,7 @@ describe("Codex managed workspace process authority", () => {
             })
           : httpRequest(
               server,
-              { send: vi.fn(), isOpen: () => true, signal: new AbortController().signal },
+              { send: vi.fn(), signal: new AbortController().signal },
               {
                 requestId: "readiness",
                 method: "POST",

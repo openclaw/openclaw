@@ -1,7 +1,10 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { AgentsListResult } from "../api/types.ts";
 import { clearCachedBootState } from "../lib/sessions/session-roster-cache.runtime.ts";
 import * as snapshots from "../pages/chat/session-snapshot-invalidation.runtime.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { clearBootRecords, type BootRecord } from "./boot-record.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
@@ -27,6 +30,80 @@ describe("warm boot profile validation", () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("keeps a version2 roster private until live discovery, including same-profile reconnect failure", async () => {
+    const scope = gatewayCredentialScope(loadSettings().gatewayUrl);
+    const record: BootRecord = {
+      version: 2,
+      authMethod: "token",
+      credential: "9d17676d",
+      scope,
+      savedAt: Date.now(),
+      profileId: "profile-a",
+      agents: {
+        defaultId: "private",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "private", name: "Private agent" }, { id: "shared" }],
+      },
+      groups: [{ name: "Personal", position: 0 }],
+      sectionOrder: ["Personal"],
+    };
+    localStorage.setItem(BOOT_RECORD_PREFIX + scope, JSON.stringify(record));
+    const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+    const createGateway = gatewayStore.createApplicationGateway;
+    vi.spyOn(gatewayStore, "createApplicationGateway").mockImplementation((...args) => {
+      const gateway = createGateway(...args);
+      vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      });
+      return gateway;
+    });
+    const discovery = createDeferred<AgentsListResult>();
+    let discoveryFailed = false;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "agents.list") {
+        return {};
+      }
+      if (discoveryFailed) {
+        throw new Error("roster unavailable");
+      }
+      return discovery.promise;
+    });
+    const client = createTestGatewayClient(request);
+    const runtime = bootstrapApplication();
+    const publish = (phase: ApplicationGatewaySnapshot["phase"]) => {
+      const snapshot = runtime.context.gateway.snapshot;
+      Object.assign(snapshot, { phase, client, selfUser: { id: "profile-a" } });
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    };
+    try {
+      const agents = runtime.context.agents;
+      expect(agents.state.agentsList).toBeNull();
+      expect(runtime.context.sessions.state.groupSettings).toEqual(record.groups);
+      expect(runtime.context.sessions.state.sectionOrder).toEqual(record.sectionOrder);
+      publish("connected");
+      const pending = agents.ensureList();
+      expect(agents.state.agentsList).toBeNull();
+      discovery.resolve({ ...record.agents, agents: [{ id: "shared" }] });
+      await pending;
+      expect(agents.state.agentsList?.agents).toEqual([{ id: "shared" }]);
+
+      publish("reconnecting");
+      expect(agents.state.agentsList).toBeNull();
+      discoveryFailed = true;
+      publish("connected");
+      await agents.ensureList();
+      expect(agents.state.agentsList).toBeNull();
+      expect(agents.state.agentsError).toContain("roster unavailable");
+      expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(2);
+    } finally {
+      runtime.stop();
+    }
   });
 
   it.each([

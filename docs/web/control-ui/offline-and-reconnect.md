@@ -30,8 +30,12 @@ the paired device token retained from that connection, and present that same
 credential again. After that connection, OpenClaw keeps a small agent roster, the
 session list without live run state, and custom groups in browser storage. Recent
 transcripts use the existing chat cache. On reload, the shell, sidebar, and cached
-conversation can appear while the Gateway is still connecting. Live state replaces
-the cached roster on connect, and chat requests changes from its saved transcript cursor.
+conversation can appear while the Gateway is still connecting. Agent pickers and
+the agent directory wait for a live roster from the Gateway; stored agent lists
+cannot establish the current role's discovery permissions. Short conversation links
+use cached routing defaults and session rows without waiting for agent discovery.
+The Gateway verifies the established session after connecting. Live state replaces
+the cached session roster on connect, and chat requests changes from its saved transcript cursor.
 The first chat request waits up to 300 ms after connecting for the stored transcript,
 then falls back to live history if it is not ready. A stored transcript belongs to its selected
 agent; switching agents while it loads cannot display or save it under the new agent.
@@ -103,6 +107,11 @@ The account and connection indicators describe identity and connectivity, not me
 The composer count covers only its conversation and does not promise automatic sending.
 Draft text and saved messages awaiting destination recovery are separate.
 
+While a connected chat finishes account recovery, Send stays unavailable and
+explains that recovery is pending. Your draft stays in the composer. Once recovery
+finishes, ordinary messages can enter the queue even if chat history is still loading.
+Stop and approval controls keep their existing availability.
+
 These Inbox entries are a read-only view of the existing browser-tab/Gateway outbox, not a new
 per-person or cross-device inbox. They show available conversation labels, not message text,
 attachment names, or private error details. Review does not retry or discard anything, and
@@ -140,6 +149,8 @@ save clears the previous error.
 Page and sidebar refreshes that fail because the Gateway is suspending, restarting, starting,
 or unreachable show no inline error: the footer connection indicator owns that state. Each panel
 keeps its last data and refreshes automatically once the Gateway accepts work again.
+Agent pickers and the agent directory clear their roster while reconnecting and
+wait for a fresh authorized list, including when the same user's role has changed.
 Established conversation names remain visible in the browser tab and chat headings,
 including split views, while reconnecting to the same Gateway and account. Other refresh
 failures remain visible inline with their message and are retried automatically when the Gateway

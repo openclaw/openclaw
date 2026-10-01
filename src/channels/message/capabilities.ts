@@ -1,10 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-/**
- * Channel message capability derivation.
- *
- * Computes durable-final delivery requirements from a concrete outbound payload.
- */
 import type {
   DeriveDurableFinalDeliveryRequirementsParams,
   DurableFinalDeliveryCapability,

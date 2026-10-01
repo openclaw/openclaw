@@ -43,13 +43,11 @@ const OpenRouterRoutingSchema = Type.Object({
   preferred_max_latency: Type.Optional(Type.Union([Type.Number(), PercentileCutoffsSchema])),
 });
 
-// Schema for Vercel AI Gateway routing preferences
 const VercelGatewayRoutingSchema = Type.Object({
   only: Type.Optional(Type.Array(Type.String())),
   order: Type.Optional(Type.Array(Type.String())),
 });
 
-// Schema for thinking level support and provider-specific values
 const ThinkingLevelMapValueSchema = Type.Union([Type.String(), Type.Null()]);
 const ThinkingLevelMapSchema = Type.Object({
   off: Type.Optional(ThinkingLevelMapValueSchema),

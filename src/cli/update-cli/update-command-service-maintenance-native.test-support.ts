@@ -82,6 +82,8 @@ vi.mock("../../infra/update-global.js", async (original) => ({
 }));
 vi.mock("./update-execution.runtime.js", async () => ({
   executeMutableUpdate: (await import("./update-command-execution.js")).executeMutableUpdate,
+  createUpdateCommandExecutionGuards: (await import("./update-command-execution-guards.js"))
+    .createUpdateCommandExecutionGuards,
   restoreFailedUpdateDatabases: (await import("./update-command-database-backup.js"))
     .restoreFailedUpdateDatabases,
   createUpdateCommandFinalizationFence: (await import("./update-command-recovery.js"))
@@ -163,7 +165,8 @@ export async function runNativeMaintenanceUpdate(
     packageUpdateNodeRunner: undefined,
     devTarget: undefined,
   });
-  command.finish.mockReset().mockImplementation(async ({ result }) => {
+  command.finish.mockReset().mockImplementation(async ({ result }, options) => {
+    await options?.beforeFinalization?.();
     if (result.status === "error") {
       throw new Error(`${result.reason}: ${result.steps.at(-1)?.stderrTail}`);
     }

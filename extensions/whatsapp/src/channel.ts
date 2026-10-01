@@ -165,30 +165,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         supportsAction: ({ action }) => action === "react" || action === "upload-file",
         resolveExecutionMode: ({ action }) =>
           action === "react" || action === "upload-file" ? "gateway" : "local",
-        handleAction: async ({
-          action,
-          params,
-          cfg,
-          accountId,
-          requesterSenderId,
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
-          toolContext,
-        }) =>
-          await (
-            await loadWhatsAppChannelReactAction()
-          ).handleWhatsAppMessageAction({
-            action,
-            params,
-            cfg,
-            accountId,
-            requesterSenderId,
-            mediaAccess,
-            mediaLocalRoots,
-            mediaReadFile,
-            toolContext,
-          }),
+        handleAction: async (params) =>
+          await (await loadWhatsAppChannelReactAction()).handleWhatsAppMessageAction(params),
       },
       approvalCapability: whatsappApprovalCapability,
       auth: {

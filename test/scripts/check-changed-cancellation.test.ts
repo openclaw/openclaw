@@ -1,20 +1,36 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as waitForReaper } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { hasErrnoCode } from "../../src/infra/errno.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive, waitForDead, waitForFixtureFile } from "../helpers/process-wait.js";
-import { withTestTimeout } from "../helpers/promise.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
+// The detached implementation/leaf PIDs have no ChildProcess handles in this harness.
+async function waitForRecordedPidsDead(pids: number[], signal: AbortSignal) {
+  for (const pid of pids) {
+    try {
+      while (isProcessAlive(pid)) {
+        await waitForReaper(10, undefined, { signal });
+      }
+    } catch (error) {
+      throw new Error(`process still alive: ${pid}`, { cause: error });
+    }
+  }
+}
+
 describe.skipIf(process.platform === "win32")("check-changed public wrapper cancellation", () => {
-  it.each(["resistant", "cooperative", "failure"] as const)(
+  it.for(["resistant", "cooperative", "failure"] as const)(
     "joins a %s check and stops admitting commands",
-    async (mode) => {
+    { timeout: 20_000 },
+    async (mode, { signal }) => {
       await fixture.run(async () => {
         const cwd = fixture.createTempDir("check-changed-cancellation-");
         const wrapperPath = path.resolve("scripts/check-changed.mjs");
@@ -23,7 +39,7 @@ describe.skipIf(process.platform === "win32")("check-changed public wrapper canc
         const pidPaths = ["implementation", "command", "descendant"].map((name) =>
           path.join(cwd, `${name}.pid`),
         );
-        const readyPath = path.join(cwd, "ready.pid");
+        const ready = createDeferred();
         const clockPath = path.join(cwd, "supervisor-clock.mjs");
         const binDir = path.join(cwd, "bin");
         fs.mkdirSync(binDir);
@@ -87,7 +103,7 @@ child.once("close", () => {
 });
 setTimeout(() => process.exit(98), 15000);
 child.once("message", () => {
-  fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));
+  fs.writeSync(1, "changed-check command ready\\n");
 });
 `,
           { mode: 0o755 },
@@ -108,8 +124,13 @@ child.once("message", () => {
           runNodeScript([wrapperPath, "--staged", "--", "README.md"], env, 10_000, {
             cwd,
             maxBuffer: 64 * 1024,
-            onReady(child) {
+            onReady(child, readOutput) {
               wrapper = child;
+              child.stdout!.on("data", () => {
+                if (readOutput().stdout.includes("changed-check command ready\n")) {
+                  ready.resolve();
+                }
+              });
             },
           }),
         );
@@ -126,16 +147,19 @@ child.once("message", () => {
           });
         try {
           if (mode !== "failure") {
-            // The receipt is written only after both leaf signal handlers are installed.
-            await withTestTimeout(
-              waitForFixtureFile(readyPath, completion),
-              5_000,
-              "changed-check command did not become ready",
+            // The relay writes readiness only after both leaf signal handlers are installed.
+            await withinTest(
+              awaitGateBeforeSettlement(
+                ready.promise,
+                completion,
+                "changed-check command did not become ready",
+              ),
+              signal,
             );
             expect(readOwnedPids()).toHaveLength(3);
             expect(wrapper?.kill("SIGTERM")).toBe(true);
           }
-          const result = await completion;
+          const result = await withinTest(completion, signal);
           expect(result.error, result.stderr).toBeUndefined();
           expect(result.status, result.stderr).toBe(mode === "failure" ? 7 : 143);
           expect(result.stderr.trim().split("\n").at(-1)).toBe(
@@ -163,20 +187,17 @@ child.once("message", () => {
                 try {
                   process.kill(pid, "SIGKILL");
                 } catch (error) {
-                  if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+                  if (!hasErrnoCode(error, "ESRCH")) {
                     throw error;
                   }
                 }
               }
             }
-            await Promise.all([
-              ...pids.map((pid) => waitForDead(pid, 2_000)),
-              withTestTimeout(completion, 2_000, "wrapper output did not close during cleanup"),
-            ]);
+            await completion;
+            await waitForRecordedPidsDead(pids, signal);
           });
         }
       });
     },
-    20_000,
   );
 });

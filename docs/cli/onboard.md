@@ -284,6 +284,11 @@ Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses 
 
 Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use underscore or POSIX suffix forms such as `zh_CN.UTF-8`. Product names, command names, config keys, URLs, provider IDs, model IDs, and plugin/channel labels remain literal.
 
+The Control UI's fixed onboarding welcome and setup choices use the UI language
+reported when it connects to the Gateway. Chinese UI locales use the same
+source-maintained setup translations; command replies such as `yes` and
+`talk to agent` remain unchanged.
+
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
 OPENCLAW_LOCALE=en openclaw onboard # Explicit English override

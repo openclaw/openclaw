@@ -358,7 +358,6 @@ export function createWorkerEnvironmentSessionAttachments(
             attachment.closedAtMs === null &&
             !["destroyed", "failed", "orphaned"].includes(environment.state),
           );
-          let allocationKey: string;
           if (reused && attachment && environment) {
             if (
               environment.profileId !== request.profileId ||
@@ -386,7 +385,7 @@ export function createWorkerEnvironmentSessionAttachments(
               }
             });
           } else {
-            allocationKey = JSON.stringify([
+            const allocationKey = JSON.stringify([
               "conversation",
               request.agentId,
               request.sessionId,

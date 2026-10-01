@@ -3,17 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 import {
   beginVoiceCapture,
   clearVoiceCaptureFinalizeTimer,
-  createVoiceCaptureState,
   finishVoiceCapture,
   scheduleVoiceCaptureFinalize,
   stopVoiceCaptureState,
+  type VoiceCaptureState,
 } from "./capture-state.js";
 
 describe("voice capture state", () => {
   it("keeps a replacement's finalize timer when an old decode finishes", async () => {
     vi.useFakeTimers();
     try {
-      const state = createVoiceCaptureState();
+      const state: VoiceCaptureState = new Map();
       const first = beginVoiceCapture(state, "u1", { destroy: vi.fn() } as never);
       finishVoiceCapture(state, "u1", first);
       const destroy = vi.fn();
@@ -32,7 +32,7 @@ describe("voice capture state", () => {
   it("clears active speaker state before destroying a finalized capture", async () => {
     vi.useFakeTimers();
     try {
-      const state = createVoiceCaptureState();
+      const state: VoiceCaptureState = new Map();
       const destroy = vi.fn(() => {
         expect(state.has("u1")).toBe(false);
       });
@@ -48,7 +48,7 @@ describe("voice capture state", () => {
   });
 
   it("lets a pending finalize be canceled for the same capture", () => {
-    const state = createVoiceCaptureState();
+    const state: VoiceCaptureState = new Map();
     const capture = beginVoiceCapture(state, "u1", { destroy: vi.fn() } as never);
 
     expect(scheduleVoiceCaptureFinalize({ state, userId: "u1", delayMs: 1_200 })).toBe(true);
@@ -59,18 +59,17 @@ describe("voice capture state", () => {
   it("retires every capture and cancels timers before terminal stream teardown", async () => {
     vi.useFakeTimers();
     try {
-      const state = createVoiceCaptureState();
+      const state: VoiceCaptureState = new Map();
       const destroy = vi.fn(() => expect(state.size).toBe(0));
-      const onFinalize = vi.fn();
       for (const userId of ["u1", "u2"]) {
         beginVoiceCapture(state, userId, { destroy } as never);
-        scheduleVoiceCaptureFinalize({ state, userId, delayMs: 1_200, onFinalize });
+        scheduleVoiceCaptureFinalize({ state, userId, delayMs: 1_200 });
       }
 
       stopVoiceCaptureState(state);
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(1_200);
       expect(destroy).toHaveBeenCalledTimes(2);
-      expect(onFinalize).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

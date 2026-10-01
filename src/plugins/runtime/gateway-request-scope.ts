@@ -45,9 +45,11 @@ function runWithPluginGatewayScope<T>(
     runtime?.gatewayScope === gatewayScope && runtime.invocation === invocation
       ? runtime
       : new PluginRuntimeExecutionFrame(
-          { ...current, invocation },
+          // Reuse prepared frame facts; the mutable Gateway view remains call-local.
+          current ?? {},
           gatewayScope,
           runtime?.generationRegistry,
+          invocation,
         ),
     run,
   );

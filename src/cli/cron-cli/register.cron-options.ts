@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
+import { collectOption } from "../program/helpers.js";
 import { getCronChannelOptions } from "./shared.js";
 
 export function registerCronMutationOptions(command: Command, mode: "add" | "edit"): Command {
@@ -51,7 +52,7 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option(
       "--command-env <KEY=VALUE>",
       "Environment override for command payloads (repeatable)",
-      (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
+      collectOption,
     )
     .option("--command-input <text>", "stdin for command payloads")
     .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)

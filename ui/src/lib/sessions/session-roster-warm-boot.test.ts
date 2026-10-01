@@ -204,6 +204,7 @@ describe("session capability warm roster", () => {
   it("publishes groups synchronously, then the cached roster without a connection or canonical revision", async () => {
     const cached = createDeferred<SessionRosterRecord | null>();
     const h = harness({ cached: cached.promise });
+    expect(h.sessions.cachedRoutingDefaults).toEqual({ mainKey: "main", scope: "per-sender" });
     expect(h.sessions.state.groups).toEqual(["Work"]);
     expect(h.sessions.state.result).toBeNull();
     let settled = false;
@@ -230,6 +231,7 @@ describe("session capability warm roster", () => {
 
   it("does not read or publish a cached roster without an accepted boot record", async () => {
     const h = harness({ withBootRecord: false });
+    expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
     await h.sessions.whenCachedRosterSettled();
     expect(h.read).not.toHaveBeenCalled();
     expect(h.sessions.state).toMatchObject({
@@ -457,6 +459,7 @@ describe("session capability warm roster", () => {
       const cached = createDeferred<SessionRosterRecord | null>();
       const h = harness({ cached: cached.promise });
       h.changeCredentials();
+      expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
       if (transition === "credentials") {
         h.publish({ phase: "connecting" });
         expect(h.sessions.state.groups).toEqual([]);
@@ -479,6 +482,7 @@ describe("session capability warm roster", () => {
       } else {
         h.sessions.dispose();
       }
+      expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
       await expect(
         Promise.race([
           settled.then(() => "released"),
@@ -509,6 +513,7 @@ describe("session capability warm roster", () => {
       } else {
         h.changeCredentials();
       }
+      expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
       h.publish({ phase: "connecting" });
       expect(h.sessions.state).toMatchObject({
         result: null,

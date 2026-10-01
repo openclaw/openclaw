@@ -222,77 +222,47 @@ test.each(["source", "source-and-acp", "acp", "committed-callback"])(
   },
 );
 
-test("sessions.reset force-discards ACP runtime ownership after cancel timeout", async () => {
-  const { prepareFreshSession, storePath } = await seedAcpSession();
-  let releaseCancel: (() => void) | undefined;
-  acpManagerMocks.cancelSession.mockImplementation(
-    async () =>
-      await new Promise<void>((resolve) => {
-        releaseCancel = resolve;
-      }),
-  );
-  const timeoutSpy = accelerateAcpCleanupTimeout();
-
-  try {
-    const reset = await directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
-    expect(reset.ok).toBe(true);
-    expect(acpManagerMocks.forceDiscardSessionRuntime).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      sessionKey: "agent:main:main",
-      reason: "session-reset",
-      agentId: "main",
-      isCurrent: expect.any(Function),
-      assertCurrent: undefined,
-    });
-    expect(acpManagerMocks.closeSession).not.toHaveBeenCalled();
-    expect(prepareFreshSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "agent:main:main", agentId: "main" }),
+test.each(["cancelSession", "closeSession"] as const)(
+  "sessions.reset force-discards ACP ownership after %s timeout",
+  async (step) => {
+    const { prepareFreshSession, storePath } = await seedAcpSession();
+    let release: (() => void) | undefined;
+    const cleanup = acpManagerMocks[step];
+    cleanup.mockImplementation(
+      async () =>
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        }),
     );
-    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })).not.toHaveProperty(
-      "acp",
-    );
-    expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
-  } finally {
-    releaseCancel?.();
-    timeoutSpy.mockRestore();
-    acpManagerMocks.cancelSession.mockImplementation(async () => {});
-  }
-});
+    const timeoutSpy = accelerateAcpCleanupTimeout();
 
-test("sessions.reset force-discards ACP actor ownership after close timeout", async () => {
-  const { prepareFreshSession } = await seedAcpSession();
-  let releaseClose: (() => void) | undefined;
-  acpManagerMocks.closeSession.mockImplementation(
-    async () =>
-      await new Promise<void>((resolve) => {
-        releaseClose = resolve;
-      }),
-  );
-  const timeoutSpy = accelerateAcpCleanupTimeout();
-
-  try {
-    const reset = await directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
-    expect(reset.ok).toBe(true);
-    expect(acpManagerMocks.cancelSession).toHaveBeenCalledTimes(1);
-    expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
-    expect(acpManagerMocks.forceDiscardSessionRuntime).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      sessionKey: "agent:main:main",
-      reason: "session-reset",
-      agentId: "main",
-      isCurrent: expect.any(Function),
-      assertCurrent: undefined,
-    });
-    expect(prepareFreshSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "agent:main:main", agentId: "main" }),
-    );
-    expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
-  } finally {
-    releaseClose?.();
-    timeoutSpy.mockRestore();
-    acpManagerMocks.closeSession.mockImplementation(async () => {});
-  }
-});
+    try {
+      const reset = await directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
+      expect(reset.ok).toBe(true);
+      expect(acpManagerMocks.cancelSession).toHaveBeenCalledTimes(1);
+      expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(step === "cancelSession" ? 0 : 1);
+      expect(acpManagerMocks.forceDiscardSessionRuntime).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        sessionKey: "agent:main:main",
+        reason: "session-reset",
+        agentId: "main",
+        isCurrent: expect.any(Function),
+        assertCurrent: undefined,
+      });
+      expect(prepareFreshSession).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey: "agent:main:main", agentId: "main" }),
+      );
+      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })).not.toHaveProperty(
+        "acp",
+      );
+      expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
+    } finally {
+      release?.();
+      timeoutSpy.mockRestore();
+      cleanup.mockImplementation(async () => {});
+    }
+  },
+);
 
 test.each([true, false])(
   "reset binds legacy ACP metadata to the committed canonical row (existing=%s)",

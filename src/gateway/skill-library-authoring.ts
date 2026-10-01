@@ -152,15 +152,12 @@ export function prepareGatewaySkillAuthoring(
       if (input.action === "list") {
         return listSkillLibrary(currentAuthority);
       }
-      if (input.action === "read") {
+      if (input.action === "read" || input.action === "activate") {
         if (!input.skillId) {
           throw new SkillLibraryError("INVALID_BUNDLE", "Choose skill_id from list.");
         }
-        return readSkillLibrary(currentAuthority, input.skillId, input.revision);
-      }
-      if (input.action === "activate") {
-        if (!input.skillId) {
-          throw new SkillLibraryError("INVALID_BUNDLE", "Choose skill_id from list.");
+        if (input.action === "read") {
+          return readSkillLibrary(currentAuthority, input.skillId, input.revision);
         }
         return activateLibrarySelection(
           { ...options, sessionMutationCommitGuard: assertCurrent },

@@ -1,10 +1,8 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
-import {
-  applySessionEntryReplacements,
-  iterateDoctorSessionKeyBatches,
-} from "../config/sessions/session-accessor.js";
+import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
+import { iterateDoctorSessionKeyBatches } from "./doctor/shared/session-entry-rewrite.js";
 
 export type MainSessionRecoveryIntegrityCandidate = {
   clearStaleAbort: boolean;

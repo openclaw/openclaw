@@ -1,4 +1,3 @@
-/** Applies directive-only command state changes without running the agent. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
@@ -22,6 +21,7 @@ import {
 } from "../../sessions/model-overrides.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
+import { formatFastModeConfirmation } from "../../shared/fast-mode.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -43,11 +43,7 @@ import {
   canPersistSessionDirectiveDefaults,
   DIRECTIVE_ACK_MESSAGES,
   type IgnoredSessionDirectiveFlag,
-  formatElevatedRuntimeHint,
   formatElevatedUnavailableText,
-  formatInternalExecPersistenceDeniedText,
-  formatInternalVerboseCurrentReplyOnlyText,
-  formatInternalVerbosePersistenceDeniedText,
   formatModelSelectionScopeAck,
   enqueueModeSwitchEvents,
   persistSessionDirectiveSnapshot,
@@ -64,7 +60,8 @@ import {
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { resumeSuspendedFollowupDrain } from "./queue/drain.js";
 
-/** Handles inline directives that can be acknowledged without a model turn. */
+const ELEVATED_RUNTIME_HINT = prefixSystemMessage("Runtime is direct; sandboxing does not apply.");
+
 export async function handleDirectiveOnly(
   params: HandleDirectiveOnlyParams,
 ): Promise<ReplyPayload | undefined> {
@@ -302,7 +299,7 @@ export async function handleDirectiveOnly(
     }
     return acknowledgeIgnoredDirective(
       {
-        text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off, auto, default, status.`,
+        text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off, ultrafast, auto, default, status.`,
       },
       "hasFastDirective",
     );
@@ -347,7 +344,7 @@ export async function handleDirectiveOnly(
         {
           text: [
             withOptions(`Current elevated level: ${level}.`, "on, off, ask, full"),
-            shouldHintDirectRuntime ? formatElevatedRuntimeHint() : null,
+            shouldHintDirectRuntime ? ELEVATED_RUNTIME_HINT : null,
           ]
             .filter(Boolean)
             .join("\n"),
@@ -621,25 +618,23 @@ export async function handleDirectiveOnly(
   if (directives.clearFastMode) {
     parts.push(prefixSystemMessage("Fast mode reset to default."));
   } else if (directives.hasFastDirective && directives.fastMode !== undefined) {
-    parts.push(
-      directives.fastMode === "auto"
-        ? prefixSystemMessage("Fast mode set to auto.")
-        : directives.fastMode
-          ? prefixSystemMessage("Fast mode enabled.")
-          : prefixSystemMessage("Fast mode disabled."),
-    );
+    parts.push(prefixSystemMessage(formatFastModeConfirmation(directives.fastMode)));
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     const message = allowPrivilegedPersistence
       ? DIRECTIVE_ACK_MESSAGES.verbose[directives.verboseLevel]
-      : formatInternalVerboseCurrentReplyOnlyText();
+      : "Verbose logging set for the current reply only.";
     parts.push(prefixSystemMessage(message));
   }
   if (directives.hasTraceDirective && directives.traceLevel) {
     parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.trace[directives.traceLevel]));
   }
   if (directives.hasVerboseDirective && directives.verboseLevel && !allowPrivilegedPersistence) {
-    parts.push(prefixSystemMessage(formatInternalVerbosePersistenceDeniedText()));
+    parts.push(
+      prefixSystemMessage(
+        "Verbose defaults require operator.admin for gateway callers; skipped persistence.",
+      ),
+    );
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
     parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.reasoning[directives.reasoningLevel]));
@@ -647,7 +642,7 @@ export async function handleDirectiveOnly(
   if (directives.hasElevatedDirective && directives.elevatedLevel) {
     parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.elevated[directives.elevatedLevel]));
     if (shouldHintDirectRuntime) {
-      parts.push(formatElevatedRuntimeHint());
+      parts.push(ELEVATED_RUNTIME_HINT);
     }
   }
   if (directives.hasExecDirective && directives.hasExecOptions) {
@@ -667,7 +662,7 @@ export async function handleDirectiveOnly(
       if (execParts.length > 0) {
         const message = label
           ? `${label} (${execParts.join(", ")}).`
-          : formatInternalExecPersistenceDeniedText();
+          : "Exec defaults require operator.admin for gateway callers; skipped persistence.";
         parts.push(prefixSystemMessage(message));
       }
     }
@@ -704,11 +699,7 @@ export async function handleDirectiveOnly(
   parts.push(...queueDirective.formatQueueDirectiveAcknowledgements(directives, resumedQueuedWork));
   if (fastModeChanged && !params.persistenceState) {
     const nextFastMode = directives.clearFastMode ? fastModeState.mode : sessionEntry.fastMode;
-    const nextFastModeText =
-      nextFastMode === "auto"
-        ? "Fast mode set to auto."
-        : `Fast mode ${nextFastMode ? "enabled" : "disabled"}.`;
-    enqueueSystemEvent(nextFastModeText, {
+    enqueueSystemEvent(formatFastModeConfirmation(nextFastMode), {
       sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
       contextKey: `fast:${formatFastModeValue(nextFastMode)}`,
     });

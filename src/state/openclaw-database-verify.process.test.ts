@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import * as sqliteLocation from "../infra/sqlite-readonly-location.js";
+import * as sqliteSource from "../infra/sqlite-source-handle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   runDatabaseVerifyWorker,
@@ -68,13 +68,16 @@ describe("database verifier child process entrypoint", () => {
     fs.writeFileSync(databasePath, source);
 
     await expect(
-      runDatabaseVerifyWorker([{ path: databasePath, kind: "state", label: "synthetic database" }]),
+      runDatabaseVerifyWorker([
+        { path: databasePath, kind: "state", label: "synthetic database", check: "quick" },
+      ]),
     ).resolves.toEqual([
       {
         path: databasePath,
         ok: false,
-        error: "Error: file is not a database (code=ERR_SQLITE_ERROR, errcode=26)",
-        terminal: false,
+        error:
+          "SqliteIntegrityError: SQLite quick_check failed for synthetic database: file is not a database (code=ERR_SQLITE_ERROR, errcode=26)",
+        terminal: true,
       },
     ]);
     expect(fs.readFileSync(databasePath)).toEqual(source);
@@ -314,7 +317,12 @@ describe("database verifier worker lifetime", () => {
 });
 
 describe("database verifier bounded diagnostics", () => {
-  const target = { path: "synthetic.sqlite", kind: "state", label: "synthetic database" } as const;
+  const target = {
+    path: "synthetic.sqlite",
+    kind: "state",
+    label: "synthetic database",
+    check: "quick",
+  } as const;
 
   afterEach(() => vi.restoreAllMocks());
 
@@ -329,7 +337,7 @@ describe("database verifier bounded diagnostics", () => {
     },
     {
       name: "wrapped I/O error without cause prose or metadata",
-      failure: new Error("snapshot failed", {
+      failure: new Error("source read failed", {
         cause: Object.assign(new Error("private cause prose"), {
           code: "ERR_SQLITE_ERROR",
           errcode: 10,
@@ -339,18 +347,18 @@ describe("database verifier bounded diagnostics", () => {
           stack: "private stack",
         }),
       }),
-      expected: "Error: snapshot failed (code=ERR_SQLITE_ERROR, errcode=10)",
+      expected: "Error: source read failed (code=ERR_SQLITE_ERROR, errcode=10)",
     },
     {
       name: "distinct extended codes in traversal order with exact duplicates removed",
       failure: Object.assign(
-        new Error("snapshot failed", {
+        new Error("source read failed", {
           cause: { code: "EIO", errcode: 778, cause: { code: "ERR_SQLITE_ERROR", errcode: 1034 } },
         }),
         { code: "ERR_SQLITE_ERROR", errcode: 778 },
       ),
       expected:
-        "Error: snapshot failed (code=ERR_SQLITE_ERROR, errcode=778, code=EIO, errcode=1034)",
+        "Error: source read failed (code=ERR_SQLITE_ERROR, errcode=778, code=EIO, errcode=1034)",
     },
     { name: "non-Error value", failure: "unavailable", expected: "unavailable" },
     {
@@ -372,9 +380,10 @@ describe("database verifier bounded diagnostics", () => {
       expected: "AggregateError: aggregate failure",
     },
   ])("preserves $name", async ({ failure, expected }) => {
-    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess").mockRejectedValueOnce(
-      failure,
-    );
+    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
+      // oxlint-disable-next-line typescript/only-throw-error -- Verify diagnostics for non-Error native failures.
+      throw failure;
+    });
 
     await expect(verifyOpenClawDatabases([target])).resolves.toEqual([
       { path: target.path, ok: false, error: expected, terminal: false },
@@ -388,9 +397,13 @@ describe("database verifier bounded diagnostics", () => {
     for (let index = 7; index >= 0; index -= 1) {
       deep = Object.assign(new Error("deep failure", { cause: deep }), { errcode: index });
     }
-    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess")
-      .mockRejectedValueOnce(cycle)
-      .mockRejectedValueOnce(deep);
+    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase")
+      .mockImplementationOnce(() => {
+        throw cycle;
+      })
+      .mockImplementationOnce(() => {
+        throw deep;
+      });
 
     await expect(verifyOpenClawDatabases([target, target])).resolves.toEqual([
       {
@@ -418,39 +431,39 @@ describe("database verifier bounded diagnostics", () => {
     { code: { secret: "private metadata" }, errcode: "10" },
   ])("omits invalid code metadata %#", async (metadata) => {
     const failure = Object.assign(
-      new Error("snapshot failed", {
+      new Error("source read failed", {
         cause: { code: "EIO", errcode: 10, message: "private cause prose" },
       }),
       metadata,
     );
-    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess").mockRejectedValueOnce(
-      failure,
-    );
+    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
+      throw failure;
+    });
 
     await expect(verifyOpenClawDatabases([target])).resolves.toEqual([
       {
         path: target.path,
         ok: false,
-        error: "Error: snapshot failed (code=EIO, errcode=10)",
+        error: "Error: source read failed (code=EIO, errcode=10)",
         terminal: false,
       },
     ]);
   });
 
   it("admits the code length and integer boundaries", async () => {
-    const failure = Object.assign(new Error("snapshot failed", { cause: { errcode: 0 } }), {
+    const failure = Object.assign(new Error("source read failed", { cause: { errcode: 0 } }), {
       code: "X".repeat(64),
       errcode: 0x7fff_ffff,
     });
-    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess").mockRejectedValueOnce(
-      failure,
-    );
+    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
+      throw failure;
+    });
 
     await expect(verifyOpenClawDatabases([target])).resolves.toEqual([
       {
         path: target.path,
         ok: false,
-        error: `Error: snapshot failed (code=${"X".repeat(64)}, errcode=2147483647, errcode=0)`,
+        error: `Error: source read failed (code=${"X".repeat(64)}, errcode=2147483647, errcode=0)`,
         terminal: false,
       },
     ]);
@@ -462,12 +475,6 @@ describe("database verifier bounded diagnostics", () => {
     { name: "original corruption before close failure", errcode: 779, terminal: true },
   ])("preserves $name and classification", async ({ errcode, terminal }) => {
     const database = nodeSqlite.openNodeSqliteDatabase(":memory:");
-    const cleanup = vi.fn(() => true);
-    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess").mockResolvedValueOnce({
-      location: ":memory:",
-      cleanup,
-      cleanupAsync: async () => cleanup(),
-    });
     vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockReturnValueOnce(database);
     if (errcode !== undefined) {
       vi.spyOn(database, "prepare").mockImplementationOnce(() => {
@@ -488,11 +495,10 @@ describe("database verifier bounded diagnostics", () => {
           error:
             errcode === undefined
               ? "Error: close failed (code=EIO, errcode=10)"
-              : `SqliteIntegrityError: SQLite integrity_check failed for synthetic database: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`,
+              : `SqliteIntegrityError: SQLite quick_check failed for synthetic database: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`,
         },
       ]);
       expect(database.isOpen).toBe(false);
-      expect(cleanup).toHaveBeenCalledOnce();
     } finally {
       if (database.isOpen) {
         close();

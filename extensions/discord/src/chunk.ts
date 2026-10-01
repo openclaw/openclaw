@@ -383,14 +383,12 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
   if (!fence) {
     collect(source.length);
   }
-  const firstSpanEndingAfter = (position: number) => {
+  const firstMatchingIndex = (length: number, before: (index: number) => boolean) => {
     let low = 0;
-    let high = spans.length;
-    // The parser emits disjoint inline spans in source order.
+    let high = length;
     while (low < high) {
       const middle = low + Math.floor((high - low) / 2);
-      const span = expectDefined(spans[middle], "Discord inline span");
-      if (span.end <= position) {
+      if (before(middle)) {
         low = middle + 1;
       } else {
         high = middle;
@@ -398,21 +396,20 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
     }
     return low;
   };
-  const firstPrefixEndingAfter = (position: number) => {
-    let low = 0;
-    let high = spans.length;
-    // Spans in the same container can share a prefix; prefix ends remain ordered.
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      const span = expectDefined(spans[middle], "Discord inline span");
-      if (span.base + span.code.prefix.end <= position) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    return spans[low];
-  };
+  // The parser emits disjoint inline spans in source order.
+  const firstSpanEndingAfter = (position: number) =>
+    firstMatchingIndex(
+      spans.length,
+      (index) => expectDefined(spans[index], "Discord inline span").end <= position,
+    );
+  // Spans in the same container can share a prefix; prefix ends remain ordered.
+  const firstPrefixEndingAfter = (position: number) =>
+    spans[
+      firstMatchingIndex(spans.length, (index) => {
+        const span = expectDefined(spans[index], "Discord inline span");
+        return span.base + span.code.prefix.end <= position;
+      })
+    ];
   const overlaps = (start: number, end: number) => {
     const span = spans[firstSpanEndingAfter(start)];
     return Boolean(span && span.start < end);
@@ -484,21 +481,14 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
     }
     return text + source.slice(cursor, end);
   };
-  const fenceEndingAtOrAfter = (position: number) => {
-    let low = 0;
-    let high = fences.length;
-    // The scanner emits disjoint fences in source order, including an open final fence.
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      const range = expectDefined(fences[middle], "Discord fence range");
-      if (range.end < position) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    return fences[low];
-  };
+  // The scanner emits disjoint fences in source order, including an open final fence.
+  const fenceEndingAtOrAfter = (position: number) =>
+    fences[
+      firstMatchingIndex(
+        fences.length,
+        (index) => expectDefined(fences[index], "Discord fence range").end < position,
+      )
+    ];
   // A partial closing line is still inside the fence until its original text is consumed.
   const fenceAt = (position: number) => {
     const range = fenceEndingAtOrAfter(position);

@@ -15,26 +15,18 @@ import {
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import type { CliTimeoutContext, FallbackAttemptRecord } from "../failover-error.js";
-import { ERROR_PREFIX_RE, renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
+import { ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
+  splitFailoverAggregateLegs,
 } from "./message-patterns.js";
 import {
   classifyProviderRequestFacets,
   type ProviderRequestFacet,
 } from "./request-error-facets.js";
 import type { FailoverClassification, FailoverReason } from "./signal.js";
-
-type FailoverUserCopyContext = {
-  raw?: string;
-  provider?: string;
-  model?: string;
-  authMode?: string;
-};
-
-type FailoverBaseCopyRenderer = (context: FailoverUserCopyContext) => string;
 
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 export const AUTH_INVALID_TOKEN_USER_TEXT =
@@ -107,46 +99,29 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   return `⚠️ ${trimmed}`;
 }
 
-function renderRateLimitBaseCopy(context: FailoverUserCopyContext): string {
-  const raw = context.raw ?? "";
-  if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
-    return MODEL_CAPACITY_ERROR_USER_MESSAGE;
-  }
-  return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
-}
-
-const FAILOVER_REASON_BASE_COPY = {
-  auth: () => AUTH_INVALID_TOKEN_USER_TEXT,
-  auth_permanent: () => AUTH_INVALID_TOKEN_USER_TEXT,
-  format: (context) => renderFormatErrorCopy(context.raw ?? ""),
-  rate_limit: renderRateLimitBaseCopy,
-  overloaded: (context) =>
-    MODEL_CAPACITY_ERROR_RE.test(context.raw ?? "")
-      ? MODEL_CAPACITY_ERROR_USER_MESSAGE
-      : OVERLOADED_ERROR_USER_MESSAGE,
-  billing: (context) =>
-    formatBillingErrorMessage(context.provider, context.model, context.authMode),
-  server_error: () => "LLM request failed: provider returned an internal error.",
-  timeout: () => "LLM request timed out.",
-  tls_certificate: () =>
-    "LLM request failed: TLS certificate validation rejected the provider endpoint. Check the endpoint hostname, proxy, and local certificate trust.",
-  context_overflow: () =>
-    "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
-  model_not_found: () =>
-    "The selected model was not found by the provider. Check the model id or choose a different model.",
-  session_expired: () => "The provider session expired. Start a new session and try again.",
-  empty_response: () => "The model returned an empty response. Please try again.",
-  no_error_details: () => "LLM request failed with an unknown error.",
-  unclassified: () => "LLM request failed.",
-  unknown: () => "LLM request failed with an unknown error.",
-} satisfies Record<FailoverReason, FailoverBaseCopyRenderer>;
-
 /** Render rate-limit versus overload copy from the canonical classified reason. */
 export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
   raw?: string;
 }): string {
-  return FAILOVER_REASON_BASE_COPY[params.reason]({ raw: params.raw });
+  const raw = params.raw ?? "";
+  if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
+    return MODEL_CAPACITY_ERROR_USER_MESSAGE;
+  }
+  if (params.reason === "overloaded") {
+    return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  const direct = extractProviderRateLimitMessage(raw);
+  if (direct) {
+    return direct;
+  }
+  for (const leg of splitFailoverAggregateLegs(raw)) {
+    const fromLeg = extractProviderRateLimitMessage(leg);
+    if (fromLeg) {
+      return fromLeg;
+    }
+  }
+  return RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
@@ -252,10 +227,12 @@ export function renderSanitizedUserFacingText(
       ERROR_PREFIX_RE.test(trimmed) ||
       CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
   ) {
-    return FAILOVER_REASON_BASE_COPY.context_overflow();
+    return "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
-    return FAILOVER_REASON_BASE_COPY[reason]({ raw: trimmed });
+    return reason === "billing"
+      ? BILLING_ERROR_USER_MESSAGE
+      : renderRateLimitOrOverloadedCopy({ reason, raw: trimmed });
   }
   // Labeled HTTP statuses require the full grammar; keep provider retry detail above.
   const providerRequestCode = resolveProviderRequestFailureCode({
@@ -287,7 +264,7 @@ export function renderSanitizedUserFacingText(
       return formatRawAssistantErrorForUi(trimmed);
     }
     if (reason === "timeout") {
-      return FAILOVER_REASON_BASE_COPY.timeout();
+      return "LLM request timed out.";
     }
     return formatRawAssistantErrorForUi(trimmed);
   }
@@ -439,6 +416,15 @@ export function renderRateLimitReplyCopy(params: {
       return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
     }
     return RATE_LIMIT_RETRY_MESSAGE;
+  }
+  for (const attempt of attempts) {
+    if (attempt.reason !== "rate_limit" || !attempt.error) {
+      continue;
+    }
+    const hint = extractProviderRateLimitMessage(attempt.error);
+    if (hint) {
+      return params.sanitizeText?.(attempt.error) ?? hint;
+    }
   }
   const expiry = params.cooldownExpiry;
   const nowMs = params.nowMs ?? Date.now();

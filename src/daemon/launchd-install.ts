@@ -113,13 +113,12 @@ async function assertExternalLaunchAgentMutation(
   );
 }
 
-export async function stageLaunchAgent({
-  stdout,
-  ...args
-}: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
-  const { plistPath, stdoutPath } = await writeLaunchAgentPlist({ ...args, stdout });
+export async function stageLaunchAgent(
+  args: GatewayServiceInstallArgs,
+): Promise<{ plistPath: string }> {
+  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
   writeFormattedLines(
-    stdout,
+    args.stdout,
     [
       { label: "Staged LaunchAgent", value: plistPath },
       { label: "Logs", value: stdoutPath },

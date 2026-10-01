@@ -1,4 +1,8 @@
-import { resolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
+import { tryGetLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import {
+  resolveCronJobEffectiveAgentId,
+  tryResolveCronJobEffectiveAgentId,
+} from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import {
@@ -34,7 +38,9 @@ import type {
 
 export function resolveCronCreatorAuthorityCapture(
   callerScope: CronCallerScope | undefined,
-): (() => CronRuntimeAuthority | undefined) | undefined {
+):
+  | { captureRuntimeAuthority: () => CronRuntimeAuthority | undefined; assertCurrent: () => void }
+  | undefined {
   const grant = callerScope?.cronCreatorAuthorityGrant;
   if (!grant) {
     return undefined;
@@ -48,7 +54,16 @@ export function resolveCronCreatorAuthorityCapture(
   if (callerScope.toolsAllowProvenance?.source !== "final-executable-surface") {
     throw new TypeError("cron creator authority grant is missing tool-surface provenance");
   }
-  return () => consumeCronCreatorAuthorityGrant(grant);
+  let consumed: ReturnType<typeof consumeCronCreatorAuthorityGrant> | undefined;
+  return {
+    captureRuntimeAuthority() {
+      consumed = consumeCronCreatorAuthorityGrant(grant);
+      return consumed.authority;
+    },
+    assertCurrent() {
+      consumed?.assertCurrent();
+    },
+  };
 }
 
 export function resolveCronMutationCommitGuard(
@@ -87,6 +102,7 @@ export function resolveCronMutationCommitGuard(
   ) {
     return undefined;
   }
+  let consumedRequester: ReturnType<typeof consumeCronCreatorAuthorityGrant> | undefined;
   return bindGatewayDeviceRevocation(() => {
     callerAuthority?.sessionMutationCommitGuard?.();
     if (callerAuthority?.hasCurrentClientAuthority?.() === false) {
@@ -110,6 +126,7 @@ export function resolveCronMutationCommitGuard(
           job,
           callerScope,
           defaultAgentId: context.cron.getDefaultAgentId(),
+          legacyDefaultAgentId: tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
           allowCurrentJob: jobScope.allowCurrentJob,
         })
       ) {
@@ -117,7 +134,11 @@ export function resolveCronMutationCommitGuard(
       }
     }
     if (requesterGrant) {
-      consumeCronCreatorAuthorityGrant(requesterGrant);
+      if (consumedRequester) {
+        consumedRequester.assertCurrent();
+      } else {
+        consumedRequester = consumeCronCreatorAuthorityGrant(requesterGrant);
+      }
     }
   }, callerAuthority?.hasCurrentClientAuthority);
 }
@@ -271,7 +292,7 @@ function parseAgentIdFromSessionRef(
   return trimmed ? (parseAgentSessionKey(trimmed)?.agentId ?? fallbackAgentId) : undefined;
 }
 
-function resolveCronJobOwnerAgentId(job: Pick<CronJob, "owner">): string | undefined {
+export function resolveCronJobOwnerAgentId(job: Pick<CronJob, "owner">): string | undefined {
   const ownerAgentId =
     job.owner?.agentId?.trim() || parseAgentIdFromSessionRef(job.owner?.sessionKey);
   return ownerAgentId ? normalizeAgentId(ownerAgentId) : undefined;
@@ -289,6 +310,7 @@ export function cronJobMatchesCallerScope(params: {
   job: CronJob;
   callerScope: CronCallerScope | undefined;
   defaultAgentId?: string;
+  legacyDefaultAgentId?: string;
   allowCurrentJob?: boolean;
 }): boolean {
   if (!params.callerScope) {
@@ -304,7 +326,11 @@ export function cronJobMatchesCallerScope(params: {
   if (isOperatorCommandCronJob(params.job)) {
     return false;
   }
-  const effectiveAgentId = resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
+  const effectiveAgentId = tryResolveCronJobEffectiveAgentId(
+    params.job,
+    params.defaultAgentId,
+    params.legacyDefaultAgentId,
+  );
   const policy = params.job.scheduledToolPolicy;
   // A signed scheduled-run claim restores only the cron tool's historical
   // current-job surface. Callers must opt in per read/self-remove operation.
@@ -350,6 +376,7 @@ export function cronJobMatchesDeclarationScope(params: {
   input: CronJobCreate;
   callerScope: CronCallerScope | undefined;
   defaultAgentId?: string;
+  legacyDefaultAgentId?: string;
 }): boolean {
   if (params.callerScope) {
     return cronJobMatchesCallerScope(params);
@@ -372,7 +399,11 @@ export function cronJobMatchesDeclarationScope(params: {
     inputOwnerAgentId ?? resolveCronJobEffectiveAgentId(params.input, params.defaultAgentId);
   const jobAgentId =
     resolveCronJobOwnerAgentId(params.job) ??
-    resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
+    tryResolveCronJobEffectiveAgentId(
+      params.job,
+      params.defaultAgentId,
+      params.legacyDefaultAgentId,
+    );
   return jobAgentId === inputAgentId;
 }
 

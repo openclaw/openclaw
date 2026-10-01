@@ -1,6 +1,13 @@
 // Covers approval initiating-surface detection.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalKind } from "./approval-types.js";
+import {
+  describeNativeExecApprovalClientSetup,
+  describeNativePluginApprovalClientSetup,
+  resolveApprovalInitiatingSurfaceState,
+  resolveExecApprovalInitiatingSurfaceState,
+  supportsNativeExecApprovalClient,
+} from "./exec-approval-surface.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
@@ -33,25 +40,7 @@ vi.mock("../utils/message-channel.js", () => ({
   normalizeMessageChannel: (...args: unknown[]) => normalizeMessageChannelMock(...args),
 }));
 
-type ExecApprovalSurfaceModule = typeof import("./exec-approval-surface.js");
-
-let resolveExecApprovalInitiatingSurfaceState: ExecApprovalSurfaceModule["resolveExecApprovalInitiatingSurfaceState"];
-let resolveApprovalInitiatingSurfaceState: ExecApprovalSurfaceModule["resolveApprovalInitiatingSurfaceState"];
-let supportsNativeExecApprovalClient: ExecApprovalSurfaceModule["supportsNativeExecApprovalClient"];
-let describeNativeExecApprovalClientSetup: ExecApprovalSurfaceModule["describeNativeExecApprovalClientSetup"];
-let describeNativePluginApprovalClientSetup: ExecApprovalSurfaceModule["describeNativePluginApprovalClientSetup"];
-
 describe("resolveExecApprovalInitiatingSurfaceState", () => {
-  beforeAll(async () => {
-    ({
-      describeNativeExecApprovalClientSetup,
-      describeNativePluginApprovalClientSetup,
-      resolveApprovalInitiatingSurfaceState,
-      resolveExecApprovalInitiatingSurfaceState,
-      supportsNativeExecApprovalClient,
-    } = await import("./exec-approval-surface.js"));
-  });
-
   beforeEach(() => {
     loadConfigMock.mockReset();
     getChannelPluginMock.mockReset();
@@ -232,6 +221,16 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
   });
 
   it("uses generic approval availability for plugin initiating surfaces", () => {
+    const request = {
+      id: "plugin:calendar",
+      request: {
+        title: "Review",
+        description: "Calendar tool",
+        policySubject: { pluginKey: "calendar" },
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1,
+    };
     const getExecInitiatingSurfaceState = vi.fn(() => ({ kind: "enabled" as const }));
     const getActionAvailabilityState = vi.fn(
       ({ approvalKind }: { approvalKind?: ChannelApprovalKind }) =>
@@ -252,6 +251,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         accountId: "default",
         cfg: {} as never,
         approvalKind: "plugin",
+        request,
       }),
     ).toEqual({
       kind: "disabled",
@@ -265,7 +265,24 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       accountId: "default",
       action: "approve",
       approvalKind: "plugin",
+      request,
     });
+  });
+
+  it("reports no plugin approval route when the channel cannot enforce scoped reviewers", () => {
+    const getActionAvailabilityState = vi.fn(() => ({ kind: "enabled" as const }));
+    getChannelPluginMock.mockReturnValue({
+      meta: { label: "Slack" },
+      approvalCapability: { getActionAvailabilityState },
+    });
+    const cfg = {
+      approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
+    } as never;
+
+    expect(
+      resolveApprovalInitiatingSurfaceState({ channel: "slack", cfg, approvalKind: "plugin" }),
+    ).toMatchObject({ kind: "disabled", channel: "slack" });
+    expect(getActionAvailabilityState).not.toHaveBeenCalled();
   });
 
   it("loads config lazily when cfg is omitted and marks unsupported channels", () => {

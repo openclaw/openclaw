@@ -252,9 +252,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       (gateway) => this.installedAgents.subscribe(gateway),
     )
     .watch(() => this.context?.gateway.snapshot.client, modelCatalog.subscribeModelCatalogCache)
-    .watch(
+    .watchStore(
       () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
       (runtimeConfig) => {
         if (!runtimeConfig.state.configSnapshot && !runtimeConfig.state.configLoading) {
           void runtimeConfig.ensureLoaded().catch(() => undefined);
@@ -262,14 +261,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.profileActions.flushPendingOrders();
       },
     )
-    .watch(
+    .watchStore(
       () => this.context?.overlays,
-      (overlays, notify) => overlays.subscribe(notify),
       () => this.profileActions.flushPendingOrders(),
     )
-    .watch(
+    .watchStore(
       () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
       () => this.syncSelectedAgent(),
     )
     .effect(

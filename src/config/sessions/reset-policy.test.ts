@@ -133,7 +133,11 @@ describe("session reset policy", () => {
          now: Date.parse(now),
          policy: { mode: "daily", atHour },
        })})));`,
-        { env: { ...process.env, TZ: timezone }, timeout: 10_000 },
+        {
+          env: { ...process.env, TZ: timezone },
+          imports: [new URL("../../../scripts/tsx.mjs", import.meta.url).href],
+          timeout: 10_000,
+        },
       );
       expect(JSON.parse(output)).toMatchObject({ fresh, dailyResetAt: Date.parse(boundary) });
     },

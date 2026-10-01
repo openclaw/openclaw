@@ -183,13 +183,30 @@ describe("composer camera capture", () => {
     await settle();
     expect(component.renderRoot.querySelector("[role=alert]")?.textContent).toContain(copy);
     expect(component.onUpload).not.toHaveBeenCalled();
-    expect(component.renderRoot.textContent).not.toContain("Use device camera");
+    expect(component.renderRoot.textContent).toContain("Use device camera");
+    expect(component.onNativeCapture).not.toHaveBeenCalled();
     const onUpload = component.onUpload;
     button("Upload photo").click();
     await settle();
     expect(onUpload).toHaveBeenCalledOnce();
     expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
   });
+
+  it.each(["NotAllowedError", "SecurityError", "NotReadableError"])(
+    "preserves explicit native capture and retry after %s",
+    async (name) => {
+      getUserMedia.mockRejectedValue(new DOMException("preview failed", name));
+      component.show();
+      await settle();
+      expect(component.onNativeCapture).not.toHaveBeenCalled();
+      expect(button("Try again").disabled).toBe(false);
+      const nativeCapture = component.onNativeCapture;
+      button("Use device camera").click();
+      await settle();
+      expect(nativeCapture).toHaveBeenCalledExactlyOnceWith(component);
+      expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    },
+  );
 
   it.each(["insecure", "unsupported"])(
     "offers native capture explicitly for %s contexts",

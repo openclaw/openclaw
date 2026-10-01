@@ -1,4 +1,3 @@
-// Gateway handlers for plugin inventory, runtime state and catalog search.
 import {
   ErrorCodes,
   errorShape,
@@ -40,7 +39,7 @@ import { listPluginServiceHealthFailures } from "../../plugins/service-health.js
 import { validatePluginSkillPath } from "../../skills/loading/plugin-skill-bundle.js";
 import { pluginCredentialHandlers } from "./plugins.credentials.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function pluginReadError(error: unknown) {
   return errorShape(
@@ -221,123 +220,112 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
-  "plugins.catalog.browse": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validatePluginsCatalogBrowseParams,
-        "plugins.catalog.browse",
-        respond,
-      )
-    ) {
-      return;
-    }
-    if (params.query?.trim() && params.cursor) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Plugin search does not accept a browse cursor."),
-      );
-      return;
-    }
-    try {
-      const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
-      const query = params.query?.trim();
-      const intent = params.intent ?? "all";
-      const includeBundledOnly = intent === "bundled" || intent === "official" || intent === "all";
-      const catalogOptions = {
-        local,
-        includeBundledOnly,
-        intent,
-        category: params.category,
-        query: params.query,
-        cursor: params.cursor,
-      };
-      try {
-        const overviewRequest = intent === "all" && !query && !params.category && !params.cursor;
-        const remote: {
-          items: ClawHubPluginCatalogEntry[];
-          categories?: ClawHubPluginCategory[];
-          nextCursor?: string;
-        } = overviewRequest
-          ? await fetchClawHubPluginOverview()
-          : intent === "bundled"
-            ? { items: [] }
-            : await fetchClawHubPluginCatalog({
-                query,
-                ...(params.searchSource ? { searchSource: params.searchSource } : {}),
-                intent,
-                category: params.category,
-                cursor: params.cursor,
-                limit: params.pageSize ?? 20,
-              });
-        const items = joinClawHubPluginCatalog({
-          ...catalogOptions,
-          remote: remote.items,
-          categories: remote.categories,
-        });
-        registerClawHubCatalogIconUrls(items.map((item) => item.catalog.imageUrl));
+  "plugins.catalog.browse": defineValidatedGatewayHandler(
+    "plugins.catalog.browse",
+    validatePluginsCatalogBrowseParams,
+    async ({ params, respond, context }) => {
+      if (params.query?.trim() && params.cursor) {
         respond(
-          true,
-          {
-            items,
-            ...(overviewRequest ? { categories: remote.categories } : {}),
-            ...(remote.nextCursor ? { nextCursor: remote.nextCursor } : {}),
-          },
+          false,
           undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Plugin search does not accept a browse cursor."),
         );
+        return;
+      }
+      try {
+        const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
+        const query = params.query?.trim();
+        const intent = params.intent ?? "all";
+        const includeBundledOnly =
+          intent === "bundled" || intent === "official" || intent === "all";
+        const catalogOptions = {
+          local,
+          includeBundledOnly,
+          intent,
+          category: params.category,
+          query: params.query,
+          cursor: params.cursor,
+        };
+        try {
+          const overviewRequest = intent === "all" && !query && !params.category && !params.cursor;
+          const remote: {
+            items: ClawHubPluginCatalogEntry[];
+            categories?: ClawHubPluginCategory[];
+            nextCursor?: string;
+          } = overviewRequest
+            ? await fetchClawHubPluginOverview()
+            : intent === "bundled"
+              ? { items: [] }
+              : await fetchClawHubPluginCatalog({
+                  query,
+                  ...(params.searchSource ? { searchSource: params.searchSource } : {}),
+                  intent,
+                  category: params.category,
+                  cursor: params.cursor,
+                  limit: params.pageSize ?? 20,
+                });
+          const items = joinClawHubPluginCatalog({
+            ...catalogOptions,
+            remote: remote.items,
+            categories: remote.categories,
+          });
+          registerClawHubCatalogIconUrls(items.map((item) => item.catalog.imageUrl));
+          respond(
+            true,
+            {
+              items,
+              ...(overviewRequest ? { categories: remote.categories } : {}),
+              ...(remote.nextCursor ? { nextCursor: remote.nextCursor } : {}),
+            },
+            undefined,
+          );
+        } catch (error) {
+          respond(
+            true,
+            {
+              items: joinClawHubPluginCatalog({ ...catalogOptions, remote: [] }),
+              ...(params.cursor ? { nextCursor: params.cursor } : {}),
+              remoteError: `ClawHub is unavailable: ${formatErrorMessage(error)}.${
+                intent === "all"
+                  ? " Installed plugins remain available."
+                  : includeBundledOnly
+                    ? " Bundled plugins remain available."
+                    : ""
+              }`,
+            },
+            undefined,
+          );
+        }
       } catch (error) {
         respond(
-          true,
-          {
-            items: joinClawHubPluginCatalog({ ...catalogOptions, remote: [] }),
-            ...(params.cursor ? { nextCursor: params.cursor } : {}),
-            remoteError: `ClawHub is unavailable: ${formatErrorMessage(error)}.${
-              intent === "all"
-                ? " Installed plugins remain available."
-                : includeBundledOnly
-                  ? " Bundled plugins remain available."
-                  : ""
-            }`,
-          },
+          false,
           undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Plugin discovery is unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
+          ),
         );
       }
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Plugin discovery is unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-        ),
-      );
-    }
-  },
-  "plugins.catalog.categories": async ({ params, respond }) => {
-    if (
-      !assertValidParams(
-        params,
-        validatePluginsCatalogCategoriesParams,
-        "plugins.catalog.categories",
-        respond,
-      )
-    ) {
-      return;
-    }
-    try {
-      respond(true, { categories: await fetchClawHubPluginCategories() }, undefined);
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Plugin categories are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-        ),
-      );
-    }
-  },
+    },
+  ),
+  "plugins.catalog.categories": defineValidatedGatewayHandler(
+    "plugins.catalog.categories",
+    validatePluginsCatalogCategoriesParams,
+    async ({ respond }) => {
+      try {
+        respond(true, { categories: await fetchClawHubPluginCategories() }, undefined);
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Plugin categories are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
+          ),
+        );
+      }
+    },
+  ),
   "plugins.catalog.get": async ({ params, respond, context }) => {
     if (
       !assertValidParams(params, validatePluginsCatalogGetParams, "plugins.catalog.get", respond)
@@ -356,48 +344,40 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     try {
       const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const localPlugin = findLocalPluginByIdentity(local, identity.identity, identity.origin);
-      if (identity.origin === "local") {
-        if (!localPlugin) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "Unknown local plugin discovery identity."),
-          );
+      if (identity.origin !== "local") {
+        try {
+          const remote = await fetchClawHubPluginDetail({
+            packageName: identity.identity,
+            ...(params.version ? { version: params.version } : {}),
+          });
+          registerClawHubCatalogIconUrls([remote.iconUrl, remote.owner?.imageUrl]);
+          respond(true, joinClawHubPluginDetail({ remote, local }), undefined);
           return;
+        } catch (error) {
+          if (!localPlugin) {
+            throw error;
+          }
         }
-        const inspectionPluginId = localPlugin.installed
-          ? localPlugin.id
-          : localPlugin.install?.source === "official"
-            ? localPlugin.install.pluginId
-            : undefined;
-        const inspection = inspectionPluginId
-          ? await inspectManagedPlugin({
-              config: context.getRuntimeConfig(),
-              pluginId: inspectionPluginId,
-            })
-          : undefined;
-        respond(true, joinLocalPluginDetail({ plugin: localPlugin, local, inspection }), undefined);
+      } else if (!localPlugin) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Unknown local plugin discovery identity."),
+        );
         return;
       }
-      try {
-        const remote = await fetchClawHubPluginDetail({
-          packageName: identity.identity,
-          ...(params.version ? { version: params.version } : {}),
-        });
-        registerClawHubCatalogIconUrls([remote.iconUrl, remote.owner?.imageUrl]);
-        respond(true, joinClawHubPluginDetail({ remote, local }), undefined);
-      } catch (error) {
-        if (!localPlugin) {
-          throw error;
-        }
-        const inspection = localPlugin.installed
-          ? await inspectManagedPlugin({
-              config: context.getRuntimeConfig(),
-              pluginId: localPlugin.id,
-            })
+      const inspectionPluginId = localPlugin.installed
+        ? localPlugin.id
+        : identity.origin === "local" && localPlugin.install?.source === "official"
+          ? localPlugin.install.pluginId
           : undefined;
-        respond(true, joinLocalPluginDetail({ plugin: localPlugin, local, inspection }), undefined);
-      }
+      const inspection = inspectionPluginId
+        ? await inspectManagedPlugin({
+            config: context.getRuntimeConfig(),
+            pluginId: inspectionPluginId,
+          })
+        : undefined;
+      respond(true, joinLocalPluginDetail({ plugin: localPlugin, local, inspection }), undefined);
     } catch (error) {
       respond(
         false,

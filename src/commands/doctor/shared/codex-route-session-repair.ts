@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../../agents/agent-scope.js";
 import {
   areOAuthCredentialsEquivalent,
@@ -14,7 +15,6 @@ import {
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import {
   applySessionEntryReplacements,
-  iterateDoctorSessionKeyBatches,
   scanDoctorSessionEntriesStrict,
   scanDoctorSessionEntriesTolerant,
 } from "../../../config/sessions/session-accessor.js";
@@ -40,7 +40,6 @@ import {
   isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
   isProviderlessModelRef,
-  normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
   toOpenAIModelId,
   resolveRuntimeModelRef,
@@ -58,6 +57,7 @@ import {
 import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
 import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
 import { repairRetiredSessionModelRef } from "./retired-session-model-repair.js";
+import { iterateDoctorSessionKeyBatches } from "./session-entry-rewrite.js";
 
 function rewriteSessionModelPair(params: {
   entry: SessionEntry;
@@ -139,7 +139,7 @@ function isCodexSessionRoute(entry: SessionEntry): boolean {
       isOpenAICodexModelRef(entry.model)) ||
     (sessionProviderAllowsScopedModelRef(normalizeString(entry.providerOverride)) &&
       isOpenAICodexModelRef(entry.modelOverride)) ||
-    normalizeRuntimeString(entry.agentRuntimeOverride) === "codex"
+    normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) === "codex"
   );
 }
 
@@ -153,13 +153,13 @@ function normalizeCodexSessionHarness(
   }
   let changed = false;
   if (
-    normalizeRuntimeString(entry.agentHarnessId) === "codex-cli" ||
+    normalizeOptionalAgentRuntimeId(entry.agentHarnessId) === "codex-cli" ||
     (legacyCodexHarness && entry.agentHarnessId === undefined)
   ) {
     entry.agentHarnessId = "codex";
     changed = true;
   }
-  if (normalizeRuntimeString(entry.agentRuntimeOverride) === "codex-cli") {
+  if (normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) === "codex-cli") {
     entry.agentRuntimeOverride = "codex";
     changed = true;
   }
@@ -192,7 +192,7 @@ function clearStaleCodexFallbackNotice(
 
 function clearRepairedCodexSessionHarness(entry: SessionEntry): boolean {
   const harnessId = entry.agentHarnessId;
-  if (harnessId === undefined || normalizeRuntimeString(harnessId) === "openclaw") {
+  if (harnessId === undefined || normalizeOptionalAgentRuntimeId(harnessId) === "openclaw") {
     return false;
   }
   delete entry.agentHarnessId;
@@ -302,12 +302,13 @@ function repairCodexSessionStoreRoutes(params: {
       }
       continue;
     }
-    const legacyCodexHarness = normalizeRuntimeString(entry.agentHarnessId) === "codex-cli";
+    const legacyCodexHarness =
+      normalizeOptionalAgentRuntimeId(entry.agentHarnessId) === "codex-cli";
     const wasCodexRoute = isCodexSessionRoute(entry);
     const hasSelectedOverride = Boolean(entry.modelOverride?.trim());
     const runtimeWasExplicit =
       entry.agentRuntimeOverride !== undefined &&
-      normalizeRuntimeString(entry.agentRuntimeOverride) !== "auto";
+      normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) !== "auto";
     const runtimeModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "modelProvider",

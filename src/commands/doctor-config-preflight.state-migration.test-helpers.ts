@@ -74,38 +74,3 @@ export function makeStartupConvergenceResult(
     ...overrides,
   };
 }
-
-export function makeQuarantinedPluginRepairConvergence(
-  pluginId: string,
-  repairPluginId: string | undefined,
-): StartupConvergenceResult {
-  return makeStartupConvergenceResult({
-    errored: true,
-    warnings: [
-      {
-        kind: "repair",
-        pluginId: repairPluginId,
-        reason: "npm package not found",
-        message: `Failed to update ${repairPluginId ?? pluginId}: npm package not found.`,
-        guidance: ["Run `openclaw update repair` to retry plugin repair."],
-      },
-      {
-        pluginId,
-        reason: "missing-package-json: package.json is missing",
-        message: `Plugin "${pluginId}" failed post-core payload smoke check (missing): package.json is missing`,
-        guidance: [
-          "Run `openclaw update repair` to retry plugin repair.",
-          `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`,
-        ],
-      },
-    ],
-    smokeFailures: [
-      {
-        pluginId,
-        installPath: `/plugins/${pluginId}`,
-        reason: "missing-package-json",
-        detail: "package.json is missing",
-      },
-    ],
-  });
-}

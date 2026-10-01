@@ -1,4 +1,3 @@
-// Checks gateway port usage and reports listener diagnostics.
 import { danger, info, shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import type { RuntimeEnv } from "../runtime.js";

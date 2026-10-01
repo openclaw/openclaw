@@ -14,6 +14,7 @@ import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
 import {
+  asToolParamsRecord,
   ToolInputError,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
@@ -44,6 +45,7 @@ import {
 import { acquireMediaGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
+  MEDIA_GENERATE_DESCRIPTIONS,
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
@@ -64,11 +66,7 @@ const SUPPORTED_FAL_CREATIVITY = ["raw", "low", "medium", "high"] as const;
 const log = createSubsystemLogger("agents/tools/image-generate");
 
 const ImageGenerateToolSchema = Type.Object({
-  action: Type.Optional(
-    Type.String({
-      description: '"generate" default, "status" active task, "list" providers/models.',
-    }),
-  ),
+  action: Type.Optional(Type.String({ description: MEDIA_GENERATE_DESCRIPTIONS.action })),
   prompt: Type.Optional(Type.String({ description: "Image prompt." })),
   image: Type.Optional(
     Type.String({
@@ -86,11 +84,7 @@ const ImageGenerateToolSchema = Type.Object({
         "Provider/model override, e.g. openai/gpt-image-2; transparent OpenAI: openai/gpt-image-1.5.",
     }),
   ),
-  filename: Type.Optional(
-    Type.String({
-      description: "Output filename hint; basename preserved in managed media dir.",
-    }),
-  ),
+  filename: Type.Optional(Type.String({ description: MEDIA_GENERATE_DESCRIPTIONS.filename })),
   size: Type.Optional(
     Type.String({
       description: "Size hint: 1024x1024, 1536x1024, 1024x1536, 2048x2048, 3840x2160.",
@@ -175,15 +169,8 @@ function resolveRequestedCount(args: Record<string, unknown>): number {
 
 const parseImageOption = createEnumOptionParser(ToolInputError);
 
-function readRecordParam(params: Record<string, unknown>, key: string): Record<string, unknown> {
-  const raw = params[key];
-  return raw && typeof raw === "object" && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : {};
-}
-
 function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationOpenAIOptions {
-  const raw = readRecordParam(args, "openai");
+  const raw = asToolParamsRecord(args.openai);
   const background = parseImageOption(
     readToolStringParam(raw, "background"),
     SUPPORTED_BACKGROUNDS,
@@ -213,7 +200,7 @@ function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationO
 function normalizeProviderOptions(
   args: Record<string, unknown>,
 ): ImageGenerationProviderOptions | undefined {
-  const falRaw = readRecordParam(args, "fal");
+  const falRaw = asToolParamsRecord(args.fal);
   const falCreativity = parseImageOption(
     readToolStringParam(falRaw, "creativity"),
     SUPPORTED_FAL_CREATIVITY,
@@ -249,16 +236,6 @@ function resolveSelectedImageGenerationModelId(params: {
     return primaryModelRef.model;
   }
   return params.imageGenerationModelConfig.primary ?? params.selectedProvider?.defaultModel;
-}
-
-function modelDisablesImageResolution(
-  provider: ImageGenerationProvider | undefined,
-  modelId?: string,
-) {
-  if (!provider || !modelId) {
-    return false;
-  }
-  return provider.capabilities.geometry?.resolutionsByModel?.[modelId]?.length === 0;
 }
 
 function validateImageGenerationCount(params: {
@@ -298,7 +275,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Create/edit images. Batch via count; aspectRatio and resolution up to 4K. Session chat runs background: call once/request, await completion, then visible reply with structured media attachment. Transparent: outputFormat png|webp + background="transparent"; OpenAI also openai.background, default gpt-image-1.5. action=list providers/models/readiness/auth; status active task.',
+      'Create/edit images. Batch via count; aspectRatio and resolution up to 4K. Session chat runs in background: call once/request; the result returns as a later turn that sends the media. This turn: short ack at most, then end; no poll/yield. Transparent: outputFormat png|webp + background="transparent"; OpenAI also openai.background, default gpt-image-1.5. action=list providers/models/readiness/auth; status active task.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
@@ -464,7 +441,9 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
           const resolution =
             explicitResolution ??
             (modeCaps?.supportsResolution === false ||
-            modelDisablesImageResolution(selectedProvider, selectedModelId)
+            (selectedModelId &&
+              selectedProvider?.capabilities.geometry?.resolutionsByModel?.[selectedModelId]
+                ?.length === 0)
               ? undefined
               : inferredResolution);
           return {
@@ -482,12 +461,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
               onFailure: (message: string, meta?: Record<string, unknown>) =>
                 log.warn(message, meta),
               detailExtras: {
-                ...buildMediaReferenceDetails({
-                  entries: loadedReferenceImages,
-                  singleKey: "image",
-                  pluralKey: "images",
-                  getResolvedInput: (entry) => entry.resolvedInput,
-                }),
+                ...buildMediaReferenceDetails(loadedReferenceImages, "image"),
                 ...(model ? { model } : {}),
                 ...(resolution ? { resolution } : {}),
                 ...(size ? { size } : {}),

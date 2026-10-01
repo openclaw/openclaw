@@ -16,10 +16,15 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
-import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
+import {
+  adoptSubagentRunForRequesterTurn,
+  registerSubagentRun,
+  replaceSubagentRunAfterSteerCore,
+} from "./subagent-registry.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   releaseSubagentRun,
@@ -63,6 +68,102 @@ afterEach(() => {
 });
 
 describe("registered completion source custody", () => {
+  it.each([false, true])(
+    "publishes ordinary registration only after a current worker commit (caller revoked: %s)",
+    async (revoke) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const cfg = { session: { store: state.path("sessions.json") } };
+        vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
+        const runId = "worker-registration";
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const execute = stateWorker.runOpenClawStateWorkerOperation;
+        const held = vi
+          .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+          .mockImplementationOnce(async (owner, run, options) => {
+            entered.resolve();
+            await release.promise;
+            return execute(owner, run, options);
+          });
+        let current = true;
+        let pending: Promise<void> | undefined;
+        try {
+          pending = Promise.resolve(
+            registerSubagentRun(registration(runId), {
+              persistence: "worker",
+              assertCurrent: () => {
+                if (!current) {
+                  throw new Error("requester retired before registry commit");
+                }
+              },
+            }),
+          );
+          await Promise.race([
+            entered.promise,
+            pending.then(() => {
+              throw new Error("Registration completed without entering worker persistence");
+            }),
+          ]);
+          expect(subagentRuns.has(runId)).toBe(false);
+          expect(callGateway).not.toHaveBeenCalled();
+          current = !revoke;
+          release.resolve();
+          if (revoke) {
+            await expect(pending).rejects.toThrow("requester retired before registry commit");
+            expect(subagentRuns.has(runId)).toBe(false);
+            expect(callGateway).not.toHaveBeenCalled();
+          } else {
+            await pending;
+            expect(subagentRuns.get(runId)).toMatchObject({
+              execution: { status: "running" },
+              expectsCompletionMessage: true,
+            });
+            expect(callGateway).toHaveBeenCalledWith(
+              expect.objectContaining({
+                method: "agent.wait",
+                params: expect.objectContaining({ runId }),
+              }),
+            );
+            const accepted = subagentRuns.get(runId);
+            expect(accepted?.childAgentId).toBeUndefined();
+            await registerSubagentRun(registration(runId, { childAgentId: "MAIN" }), {
+              persistence: "worker",
+            });
+            expect(subagentRuns.get(runId)).toBe(accepted);
+            expect(() =>
+              registerSubagentRun(registration(runId, { childAgentId: "research" }), {
+                persistence: "worker",
+              }),
+            ).toThrow("Subagent registration child agent disagrees with its session key.");
+            expect(callGateway).toHaveBeenCalledTimes(1);
+          }
+        } finally {
+          release.resolve();
+          await pending?.catch(() => {});
+          held.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("retains raw child ownership, including unknown legacy ownership, on registration replay", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const originalConfig = { session: { store: state.path("original.sqlite") } };
+      for (const childAgentId of [undefined, "research"]) {
+        vi.mocked(config.getRuntimeConfig).mockReturnValue(originalConfig);
+        const runId = childAgentId ?? "legacy";
+        const params = registration(runId, { childSessionKey: "global", childAgentId });
+        await registerSubagentRun(params);
+        expect(subagentRuns.get(runId)?.childAgentId).toBe(childAgentId);
+        vi.mocked(config.getRuntimeConfig).mockReturnValue({
+          session: { store: state.path("replacement.sqlite") },
+        });
+        await registerSubagentRun({ ...params, childAgentId: "main" });
+        expect(subagentRuns.get(runId)?.childAgentId).toBe(childAgentId);
+      }
+    });
+  });
+
   it.each([
     "admission",
     "lifecycle",
@@ -188,6 +289,7 @@ describe("registered completion source custody", () => {
             await pending;
             expect(subagentRuns.get(runId)?.requesterStorePath).toBe(originalPath);
             expect(subagentRuns.get(runId)?.controllerStorePath).toBe(originalPath);
+            expect(subagentRuns.get(runId)?.childAgentId).toBeUndefined();
             releaseSubagentRun(runId);
           } else {
             await expect(pending).rejects.toThrow(
@@ -248,7 +350,13 @@ describe("registered completion source custody", () => {
             },
             () =>
               registerSubagentRun(
-                registration(runId, { requesterAgentId: "main", requesterTurnRunId: "parent" }),
+                registration(runId, {
+                  requesterAgentId: "main",
+                  requesterTurnRunId: "parent",
+                  ...(ending === "replace"
+                    ? { childSessionKey: "global", childAgentId: "research" }
+                    : {}),
+                }),
               ),
           );
         if (ending === "registration-rejected") {
@@ -355,6 +463,7 @@ describe("registered completion source custody", () => {
               preserveRequesterSettleWake: true,
             }),
           ).toBe(true);
+          expect(subagentRuns.get("successor")?.childAgentId).toBe("research");
           expect(source.authority.assertCurrent).not.toThrow();
           expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
             /authority/,
@@ -368,7 +477,17 @@ describe("registered completion source custody", () => {
           expect(source.authority.assertCurrent).not.toThrow();
           releaseSubagentRun(entry.runId);
         } else {
+          entry.requesterTurnRunId = undefined;
           revoked.abort(new Error("operator revoked"));
+          await expect(
+            adoptSubagentRunForRequesterTurn({
+              expected: entry,
+              requesterSessionKey: entry.requesterSessionKey,
+              requesterAgentId: "main",
+              requesterTurnRunId: "next-parent",
+              assertCurrent: () => {},
+            }),
+          ).rejects.toThrow(/authority/);
         }
         expect(source.authority.assertCurrent).toThrow();
         expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(

@@ -1,4 +1,3 @@
-// Extracts web content public artifacts from plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   loadBundledPublicArtifactEntries,

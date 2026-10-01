@@ -23,7 +23,7 @@ import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import * as nativeControl from "../registry/subagent-control.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { registerSubagentRun } from "../registry/subagent-registry.test-helpers.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
@@ -267,7 +267,7 @@ export function registerNativeCancellationCases<
         expect(blockedAdmission?.isActive()).toBe(true);
         expect(resolveSubagentSessionStatus(subagentRuns.get(targetRunId))).toBe("running");
         const settled = createDeferred();
-        stopObserving = onSubagentRegistryPersisted(() => {
+        stopObserving = subscribeSubagentRunChanges("persistence", () => {
           if (resolveSubagentSessionStatus(subagentRuns.get(targetRunId)) === "killed") {
             settled.resolve();
           }

@@ -22,6 +22,7 @@ import {
   createProjectOptions,
   createWarmProvider,
   tempDirs,
+  unsupportedCaptureReceipt,
 } from "./crabbox-worker-warm-image.test-support.js";
 
 function fixture(
@@ -101,6 +102,27 @@ function fixture(
 }
 
 describe("Crabbox durable allocation admission", () => {
+  it("returns false and permits enrollment only after an unsupported capture receipt settles its claim", async () => {
+    const { manager, context } = fixture(false, (argv) =>
+      argv[2] === "create"
+        ? commandResult({
+            code: 2,
+            stdout: JSON.stringify({
+              ...unsupportedCaptureReceipt("cbx_project"),
+              message: "x".repeat(1024),
+            }),
+          })
+        : undefined,
+    );
+    const owner = manager();
+    const project = context("cbx_project", "project-a");
+    await owner.allocate(project);
+    await owner.markPrepared(project.id, "a".repeat(40));
+    await expect(owner.capture(project)).resolves.toBe(false);
+    await owner.markEnrolled(project.id);
+    expect((await owner.lookupLease(project.id))?.phase).toBe("enrolled");
+    expect(openWarmImageStore().entries()[0]?.value.operation).toBeUndefined();
+  });
   it("forks an aged pinned checkpoint without refreshing until the operator unpins it", async () => {
     const { manager, context, calls } = fixture();
     const owner = manager();

@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 
 type NativeCommandSpecMock = {
@@ -190,13 +190,6 @@ const {
 
 export function getProviderMonitorTestMocks(): typeof providerMonitorTestMocks {
   return providerMonitorTestMocks;
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe handler params shape.
-export function getFirstDiscordMessageHandlerParams<T extends object>() {
-  expect(createDiscordMessageHandlerMock).toHaveBeenCalledTimes(1);
-  const firstCall = createDiscordMessageHandlerMock.mock.calls.at(0) as [T] | undefined;
-  return firstCall?.[0];
 }
 
 export function resetDiscordProviderMonitorMocks(params?: {

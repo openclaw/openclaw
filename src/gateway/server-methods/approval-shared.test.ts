@@ -198,7 +198,6 @@ describe("handlePendingApprovalRequest", () => {
       route: "plugin",
       id: "plugin-turn-source-kind",
       request: {
-        command: "plugin approval",
         title: "Plugin approval",
         description: "Review the plugin action",
         turnSourceChannel: "whatsapp",
@@ -262,6 +261,7 @@ describe("handlePendingApprovalRequest", () => {
           turnSourceChannel: "whatsapp",
           turnSourceAccountId: "default",
           approvalKind: "plugin",
+          request: requestedEvent(record),
         });
       } else {
         expect((await manager.getSnapshot(record.id))?.resolvedAtMs).toBeUndefined();

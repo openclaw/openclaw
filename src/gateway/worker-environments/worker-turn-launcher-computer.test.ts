@@ -328,7 +328,7 @@ describe("worker launch capabilities", () => {
             throw new Error("expected a local workspace source");
           }
           order.push("reconcile");
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,

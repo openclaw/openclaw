@@ -8,7 +8,10 @@ import {
   normalizeOpenAICompatibleReasoningReplay,
   setQwenChatTemplateThinking,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { asOptionalRecord as asPayloadRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as asPayloadRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isQwen38ModelId,
   isQwenTokenPlanDeepSeekV4ModelId,
@@ -128,11 +131,11 @@ function patchTokenPlanDeepSeekV4Payload(
   delete payload.thinking;
   if (!enableThinking) {
     delete payload.reasoning_effort;
-    normalizeOpenAICompatibleReasoningReplay(payload, { thinkingEnabled: false });
-    return;
+  } else {
+    payload.reasoning_effort =
+      thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
   }
-  payload.reasoning_effort = thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
-  normalizeOpenAICompatibleReasoningReplay(payload, { thinkingEnabled: true });
+  normalizeOpenAICompatibleReasoningReplay(payload, { thinkingEnabled: enableThinking });
 }
 
 function patchTokenPlanKimiPayload(
@@ -311,10 +314,7 @@ function readQwenThinkingFormatFromModel(
   if ((sourceApi ?? model.api) !== "openai-completions") {
     return undefined;
   }
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as { thinkingFormat?: unknown })
-      : undefined;
+  const compat = asOptionalObjectRecord(model.compat);
   return typeof compat?.thinkingFormat === "string" ? compat.thinkingFormat : undefined;
 }
 

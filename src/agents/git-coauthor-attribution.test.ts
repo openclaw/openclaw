@@ -9,7 +9,8 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setUserPreferences } from "../state/user-preferences.js";
-import { ensureProfileForEmail, linkEmail, syncGitHubIdentity } from "../state/user-profiles.js";
+import { linkEmail, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

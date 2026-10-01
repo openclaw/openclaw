@@ -1,4 +1,3 @@
-// Tracks queue state for active, pending, and recently deduped reply runs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ModelCatalogEntry } from "../../../agents/model-catalog.types.js";
@@ -39,7 +38,6 @@ type FollowupQueueState = {
   activeSummarySources: WeakSet<FollowupRun>;
   summaryElisions: Array<{
     contextKey: string;
-    count: number;
     /** Compact sources stay strong so cancellation follows summarized content until delivery. */
     sources: FollowupRun[];
     /** Summary lines stay index-aligned with sources across context isolation and eviction. */
@@ -120,7 +118,6 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
       }
       const [source] = entry.sources.splice(sourceIndex, 1);
       entry.summaryLines.splice(sourceIndex, 1);
-      entry.count = entry.sources.length;
       queue.evictedSummaryCount += 1;
       sourceCount -= 1;
       if (source) {

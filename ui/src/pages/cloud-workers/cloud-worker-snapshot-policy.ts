@@ -32,17 +32,15 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
       this.configSave.update({ busy: false, error: null, notice: null });
     },
   });
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.runtimeConfig,
-    (runtimeConfig) => {
-      void runtimeConfig.ensureLoaded();
-      return runtimeConfig.subscribe(() => this.requestUpdate());
-    },
-  );
-
-  override disconnectedCallback() {
-    this.subscriptions.clear();
-    super.disconnectedCallback();
+  constructor() {
+    super();
+    void new SubscriptionsController(this).effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => {
+        void runtimeConfig.ensureLoaded();
+        return runtimeConfig.subscribe(() => this.requestUpdate());
+      },
+    );
   }
 
   private policy(): PolicyDraft {

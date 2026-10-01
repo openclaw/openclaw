@@ -209,16 +209,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           preserveToolCallState:
             this.config.sessionResumption === true && this.conversationId !== null,
         });
-        // Finalization retains capture failures; observe Promises returned by the SDK view.
-        void captureHost
-          .captureWsEventAsync?.({
-            url,
-            direction: "local",
-            kind: "ws-open",
-            flowId: this.flowId,
-            meta: { provider: "xai", capability: "realtime-voice" },
-          })
-          .catch(() => {});
+        this.captureEvent(url, { direction: "local", kind: "ws-open" });
         this.sendEvent(this.buildSessionUpdate());
       });
 
@@ -229,16 +220,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         if (attempt.settled && !attempt.ready) {
           return;
         }
-        void captureHost
-          .captureWsEventAsync?.({
-            url,
-            direction: "inbound",
-            kind: "ws-frame",
-            flowId: this.flowId,
-            payload: data,
-            meta: { provider: "xai", capability: "realtime-voice" },
-          })
-          .catch(() => {});
+        this.captureEvent(url, { direction: "inbound", kind: "ws-frame", payload: data });
         try {
           const event = JSON.parse(data.toString()) as XaiRealtimeEvent;
           if (event.type === "error" && !attempt.ready) {
@@ -270,16 +252,11 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         if (!this.lifecycle.acceptsEvents(connection) || this.ws !== ws) {
           return;
         }
-        void captureHost
-          .captureWsEventAsync?.({
-            url,
-            direction: "local",
-            kind: "error",
-            flowId: this.flowId,
-            errorText: error instanceof Error ? error.message : String(error),
-            meta: { provider: "xai", capability: "realtime-voice" },
-          })
-          .catch(() => {});
+        this.captureEvent(url, {
+          direction: "local",
+          kind: "error",
+          errorText: error instanceof Error ? error.message : String(error),
+        });
         if (!attempt.ready) {
           rejectStartup(toStringifiedError(error));
           return;
@@ -288,23 +265,17 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       });
 
       ws.on("close", (code, reasonBuffer) => {
-        void captureHost
-          .captureWsEventAsync?.({
-            url,
-            direction: "local",
-            kind: "ws-close",
-            flowId: this.flowId,
-            closeCode: typeof code === "number" ? code : undefined,
-            meta: {
-              provider: "xai",
-              capability: "realtime-voice",
-              reason:
-                Buffer.isBuffer(reasonBuffer) && reasonBuffer.length > 0
-                  ? reasonBuffer.toString("utf8")
-                  : undefined,
-            },
-          })
-          .catch(() => {});
+        this.captureEvent(url, {
+          direction: "local",
+          kind: "ws-close",
+          closeCode: typeof code === "number" ? code : undefined,
+          meta: {
+            reason:
+              Buffer.isBuffer(reasonBuffer) && reasonBuffer.length > 0
+                ? reasonBuffer.toString("utf8")
+                : undefined,
+          },
+        });
         if (!this.lifecycle.isCurrent(connection)) {
           return;
         }
@@ -482,19 +453,25 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         ? (event as { type: string }).type
         : "unknown";
     const payload = JSON.stringify(event);
-    void captureHost
-      .captureWsEventAsync?.({
-        url: this.connectionUrl,
-        direction: "outbound",
-        kind: "ws-frame",
-        flowId: this.flowId,
-        payload,
-        meta: { provider: "xai", capability: "realtime-voice" },
-      })
-      .catch(() => {});
+    this.captureEvent(this.connectionUrl, { direction: "outbound", kind: "ws-frame", payload });
     ws.send(payload);
     // Observers report a sent frame, so nested control cannot overtake it.
     this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
+  }
+
+  private captureEvent(
+    url: string,
+    event: Omit<Parameters<typeof proxyCaptureSdk.captureWsEventAsync>[0], "url" | "flowId">,
+  ): void {
+    // Finalization retains capture failures; observe Promises returned by the SDK view.
+    void captureHost
+      .captureWsEventAsync?.({
+        url,
+        flowId: this.flowId,
+        ...event,
+        meta: { provider: "xai", capability: "realtime-voice", ...event.meta },
+      })
+      .catch(() => {});
   }
 
   private failConnection(

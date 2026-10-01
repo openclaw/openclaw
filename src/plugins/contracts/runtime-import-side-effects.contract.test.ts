@@ -1,6 +1,7 @@
 // Runtime import side-effect contract tests cover cold import behavior for plugin runtime code.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { assertNoImportTimeSideEffects } from "../../plugin-sdk/test-helpers/import-side-effects.js";
 
 const listChannelPlugins = vi.hoisted(() =>

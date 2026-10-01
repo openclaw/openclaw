@@ -4,11 +4,11 @@ import {
   markdownItAssistantTranscriptRoles,
   type AssistantTranscriptRoleImageMeta,
 } from "../../../packages/markdown-core/src/assistant-transcript.js";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 function renderAssistantTranscriptRoleMarker(text: string): string {
-  return `<code class="assistant-transcript-role">${escapeMarkdownHtml(text)}</code>`;
+  return `<code class="assistant-transcript-role">${escapeHtml(text)}</code>`;
 }
 
 const linkedImageIndicesByTokens = new WeakMap<readonly { type: string }[], ReadonlySet<number>>();
@@ -43,13 +43,13 @@ function renderAssistantTranscriptRoleImageLabel(
   for (const span of spans) {
     const start = Math.max(cursor, Math.min(span.start, text.length));
     const end = Math.max(start, Math.min(span.end, text.length));
-    rendered += escapeMarkdownHtml(text.slice(cursor, start));
+    rendered += escapeHtml(text.slice(cursor, start));
     if (end > start) {
       rendered += renderAssistantTranscriptRoleMarker(text.slice(start, end));
     }
     cursor = end;
   }
-  return rendered + escapeMarkdownHtml(text.slice(cursor));
+  return rendered + escapeHtml(text.slice(cursor));
 }
 
 export function installAssistantTranscriptRoleMarkdown(md: MarkdownIt): void {
@@ -76,22 +76,22 @@ export function installAssistantTranscriptRoleMarkdown(md: MarkdownIt): void {
     if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(src) && env?.remoteImages !== true) {
       const renderedLabel = roleMeta
         ? renderAssistantTranscriptRoleImageLabel(roleMeta.text, roleMeta.spans)
-        : escapeMarkdownHtml(alt);
+        : escapeHtml(alt);
       const url = URL.parse(src);
       if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
         return renderedLabel;
       }
-      const label = `<span>${escapeMarkdownHtml(t("chat.externalImage.notLoaded"))}: ${renderedLabel}</span>`;
+      const label = `<span>${escapeHtml(t("chat.externalImage.notLoaded"))}: ${renderedLabel}</span>`;
       const action = linkedImage
         ? ""
-        : ` <a href="${escapeMarkdownHtml(src)}">${escapeMarkdownHtml(t("chat.externalImage.open"))}</a>`;
+        : ` <a href="${escapeHtml(src)}">${escapeHtml(t("chat.externalImage.open"))}</a>`;
       return `<span class="markdown-external-image">${label}${action}</span>`;
     }
-    const image = `<img class="markdown-inline-image" src="${escapeMarkdownHtml(src)}" alt="${escapeMarkdownHtml(alt)}">`;
+    const image = `<img class="markdown-inline-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">`;
     const interactiveImage =
       linkedImage || env?.interactiveImages !== true
         ? image
-        : `<button class="markdown-inline-image-button" type="button" aria-label="${escapeMarkdownHtml(t("chat.imageLightbox.open", { title: token.content.trim() ? alt : t("chat.imageLightbox.untitled") }))}">${image}</button>`;
+        : `<button class="markdown-inline-image-button" type="button" aria-label="${escapeHtml(t("chat.imageLightbox.open", { title: token.content.trim() ? alt : t("chat.imageLightbox.untitled") }))}">${image}</button>`;
     return roleMeta
       ? `${renderAssistantTranscriptRoleMarker(`${t("sessionsView.assistant")}:`)} ${interactiveImage}`
       : interactiveImage;

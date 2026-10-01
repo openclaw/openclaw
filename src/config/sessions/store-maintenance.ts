@@ -256,14 +256,7 @@ export function pruneStaleEntries(
   const cutoffMs = now - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
-    if (
-      shouldPreserveMaintenanceEntry({
-        key,
-        entry,
-        preserveKeys: opts.preserveKeys,
-        preserveRecentMs: opts.preserveRecentMs,
-      })
-    ) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, ...opts })) {
       continue;
     }
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
@@ -306,14 +299,7 @@ export function pruneStaleModelRunEntries(
   const cutoffMs = Date.now() - overrideMaxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
-    if (
-      shouldPreserveMaintenanceEntry({
-        key,
-        entry,
-        preserveKeys: opts.preserveKeys,
-        preserveRecentMs: opts.preserveRecentMs,
-      })
-    ) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, ...opts })) {
       continue;
     }
     if (!isGatewayModelRunSessionKey(key)) {
@@ -627,16 +613,10 @@ export function getActiveSessionMaintenanceWarning(params: {
     params.preserveKeys,
     params.preserveRecentMs,
   ).includes(activeSessionKey);
-  const capOutcome = wouldCap
-    ? isSyntheticSessionMaintenanceKey(activeSessionKey)
-      ? "remove"
-      : "archive"
-    : null;
-
   if (!wouldPrune && !wouldCap) {
     return null;
   }
-
+  const outcome = isSyntheticSessionMaintenanceKey(activeSessionKey) ? "remove" : "archive";
   return {
     activeSessionKey,
     activeUpdatedAt: activeEntry.updatedAt,
@@ -645,12 +625,8 @@ export function getActiveSessionMaintenanceWarning(params: {
     maxEntries: params.maxEntries,
     wouldPrune,
     wouldCap,
-    capOutcome,
-    pruneOutcome: wouldPrune
-      ? isSyntheticSessionMaintenanceKey(activeSessionKey)
-        ? "remove"
-        : "archive"
-      : null,
+    capOutcome: wouldCap ? outcome : null,
+    pruneOutcome: wouldPrune ? outcome : null,
   };
 }
 

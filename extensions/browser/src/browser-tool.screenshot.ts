@@ -2,6 +2,7 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   browserScreenshotAction,
@@ -39,10 +40,6 @@ export type BrowserScreenshotOptions = {
     chatType?: string;
   };
 };
-
-function formatScreenshotShareHint(filePath: string): string {
-  return `[Screenshot saved to ${JSON.stringify(filePath)}. A sanitized outbound copy is ready at this path for explicit sharing.]`;
-}
 
 const SCREENSHOT_SHARE_UNAVAILABLE =
   "[Screenshot sharing is unavailable because an outbound copy could not be prepared.]";
@@ -113,7 +110,7 @@ export async function executeScreenshotAction({
       screenshotPath,
       imageSanitization?.maxDimensionPx,
     );
-    shareHint = formatScreenshotShareHint(sharePath);
+    shareHint = `[Screenshot saved to ${JSON.stringify(sharePath)}. A sanitized outbound copy is ready at this path for explicit sharing.]`;
   } catch {
     // Screenshot viewing remains useful when optional outbound staging fails.
   }
@@ -158,22 +155,19 @@ export async function executeScreenshotAction({
         },
       );
       const text = `[analyzed by ${analyzedBy}]\n${wrappedDescription}\n${shareHint}`;
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          ...result,
-          // Do NOT include details.media here — the vision path returns
-          // a text description as the deliverable output. Exposing the raw
-          // screenshot as media would cause channel delivery to auto-send
-          // potentially sensitive page content. The text block carries the
-          // staged outbound-copy path for an explicit outbound-delivery send.
-          vision: {
-            provider: described.provider,
-            model: described.model,
-            decision: described.decision,
-          },
+      return textResult(text, {
+        ...result,
+        // Do NOT include details.media here — the vision path returns
+        // a text description as the deliverable output. Exposing the raw
+        // screenshot as media would cause channel delivery to auto-send
+        // potentially sensitive page content. The text block carries the
+        // staged outbound-copy path for an explicit outbound-delivery send.
+        vision: {
+          provider: described.provider,
+          model: described.model,
+          decision: described.decision,
         },
-      };
+      });
     }
   } catch (err) {
     // Fall back to returning the raw image block so the agent loop can

@@ -51,7 +51,6 @@ import {
   matchesActiveDiscordMentionPatterns,
   resolveDiscordMentionState,
   resolveInjectedBoundThreadLookupRecord,
-  resolvePreflightMentionRequirement,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
 import { buildDiscordPreflightHistoryEntry } from "./message-handler.preflight-history.js";
@@ -460,7 +459,6 @@ export async function preflightDiscordMessage(
     return null;
   }
   const isBoundThreadSession = Boolean(threadBinding && threadChannel);
-  const bypassMentionRequirement = isBoundThreadSession;
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,
@@ -592,10 +590,7 @@ export async function preflightDiscordMessage(
     guildInfo,
   });
   const shouldRequireMentionByConfig = mentionPolicy.requireMention;
-  const shouldRequireMention = resolvePreflightMentionRequirement({
-    shouldRequireMention: shouldRequireMentionByConfig,
-    bypassMentionRequirement,
-  });
+  const shouldRequireMention = shouldRequireMentionByConfig && !isBoundThreadSession;
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
     guildInfo,

@@ -14,6 +14,7 @@ import {
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -21,11 +22,21 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { handleGatewayRequest } from "../server-methods.js";
 import { dispatchInboundMessageMock, testState, writeSessionStore } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
+import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
+import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 export function useBrowserFollowupFixture() {
-  const temporaryDirs = useAutoCleanupTempDirTracker(afterEach);
+  const temporaryDirs = useAutoCleanupTempDirTracker((cleanup) => {
+    afterEach(async () => {
+      // Agent leases retain the per-case Gateway home; release them before its cleanup.
+      for (const dir of temporaryDirs.dirs) {
+        await releaseGatewaySessionStoreFixture(dir);
+      }
+      cleanup();
+    });
+  });
   return async function createBrowserFollowupFixture(
     options: {
       active?: boolean;
@@ -118,7 +129,12 @@ export function useBrowserFollowupFixture() {
       }
       return {};
     });
-    const context = createDirectChatContext({ getRuntimeConfig, chatQueuedTurns: new Map() });
+    // The process-local placement fallback would retain the previous case's deleted home.
+    const context = createDirectChatContext({
+      getRuntimeConfig,
+      chatQueuedTurns: new Map(),
+      workerSessionPlacementService: createWorkerSessionPlacementStore(),
+    });
     const client: GatewayClient = {
       connId: "browser-custody-client",
       connect: {
@@ -160,7 +176,10 @@ export function useBrowserFollowupFixture() {
           extraHandlers: { "chat.send": handleChatSend },
         });
       } else {
-        await handleChatSend(request);
+        await withPluginRuntimeGatewayRequestScope(
+          { context, isWebchatConnect: request.isWebchatConnect },
+          () => handleChatSend(request),
+        );
       }
       return respond;
     };

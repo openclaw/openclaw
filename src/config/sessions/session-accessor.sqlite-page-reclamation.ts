@@ -59,16 +59,19 @@ export async function readSqliteSessionArchivePruning(
   const { withSessionHistoryWorkerDatabase } =
     await import("./session-transcript-worker-runtime.js");
   assertExistingDatabaseIdentity(options.path, physical.key);
-  return withSessionHistoryWorkerDatabase(databaseOptions, async (reader) => {
-    assertExistingDatabaseIdentity(options.path, physical.key);
-    const result = await reader.readArchivePruning({
-      env: databaseOptions.env,
-      expectedIdentity,
-    });
-    reader.assertCurrent();
-    assertExistingDatabaseIdentity(options.path, physical.key);
-    return result;
-  });
+  return withSessionHistoryWorkerDatabase(
+    { ...databaseOptions, requestedPath: options.path },
+    async (reader) => {
+      assertExistingDatabaseIdentity(options.path, physical.key);
+      const result = await reader.readArchivePruning({
+        env: databaseOptions.env,
+        expectedIdentity,
+      });
+      reader.assertCurrent();
+      assertExistingDatabaseIdentity(options.path, physical.key);
+      return result;
+    },
+  );
 }
 
 /** Retain source custody across the sweep; archive removals and page units admit separately. */
@@ -193,7 +196,12 @@ export async function withSqliteSessionPageReclamation<T>(
       physicalIdentity: physical.key.slice("file:".length),
       nativeLocation: physical.canonicalPath,
     };
-    const execution = captureOpenClawAgentDatabaseExecution(databaseOptions, { expectedIdentity });
+    // The owner also routes later captures through this alias; admission may have waited.
+    assertExistingDatabaseIdentity(options.path, physical.key);
+    const execution = captureOpenClawAgentDatabaseExecution(databaseOptions, {
+      expectedIdentity,
+      requestedPath: options.path,
+    });
     const assertPruningCurrent = () => {
       assertCurrent();
       execution.assertCurrent();
@@ -250,7 +258,7 @@ export async function withSqliteSessionPageReclamation<T>(
       ]);
       assertPruningCurrent();
       return await withSessionHistoryWorkerDatabase(
-        databaseOptions,
+        { ...databaseOptions, requestedPath: options.path },
         async (reader) => {
           assertPruningCurrent();
           return run(

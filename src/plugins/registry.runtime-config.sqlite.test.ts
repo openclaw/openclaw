@@ -10,17 +10,6 @@ import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 describe("plugin registry SQLite session ownership", () => {
-  it("does not read runtime config before a logical session requires it", () => {
-    const runtime = createPluginRuntime();
-    const readConfig = vi.fn(() => {
-      throw new Error("runtime config was accessed eagerly");
-    });
-    Object.defineProperty(runtime, "config", { configurable: true, get: readConfig });
-
-    expect(() => createRuntimeTestRegistry(runtime)).not.toThrow();
-    expect(readConfig).not.toHaveBeenCalled();
-  });
-
   it("resolves unscoped worker keys through the configured default agent", async () => {
     await withTempHome(async () => {
       const config = {

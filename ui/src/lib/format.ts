@@ -24,7 +24,6 @@ type FormatTimeAgoOptions = {
 
 type FormatRelativeTimestampOptions = {
   dateFallback?: boolean;
-  timezone?: string;
   fallback?: string;
   suffix?: boolean;
 };
@@ -105,10 +104,9 @@ export function formatRelativeTimestamp(
       return new Intl.DateTimeFormat(i18n.getLocale(), {
         month: "short",
         day: "numeric",
-        ...(options.timezone ? { timeZone: options.timezone } : {}),
       }).format(new Date(timestampMs));
     } catch {
-      // Invalid time zones should still leave a useful localized relative value.
+      // Finite timestamps can still be outside JavaScript's date range.
     }
   }
 
@@ -259,14 +257,14 @@ export function formatCost(cost: number | null | undefined, fallback = "$0.00"):
 // Keep token presentation consistent across UI session and usage surfaces.
 export function formatCompactTokenCount(
   tokens: number | null | undefined,
-  options: { thousandsSuffix?: string; millionsSuffix?: string; trimTrailingZero?: boolean } = {},
+  options: { thousandsSuffix?: string; trimTrailingZero?: boolean } = {},
 ): string {
   if (tokens == null || !Number.isFinite(tokens)) {
     return "0";
   }
   return formatTokenUnits(tokens, {
     thousandsSuffix: options.thousandsSuffix,
-    millionsSuffix: options.millionsSuffix ?? "M",
+    millionsSuffix: "M",
     trimTrailingZero: options.trimTrailingZero ?? true,
     maxUnit: "billion",
   });

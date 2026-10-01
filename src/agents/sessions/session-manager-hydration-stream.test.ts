@@ -4,7 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -204,7 +204,9 @@ it("hydrates one complete UTF-8 snapshot while a writer replaces rows between ch
             ? Object.assign(entry, { id: target.sessionId })
             : entry,
         );
-      await replaceTranscriptEvents(target, replacementEntries);
+      // The hot fixture writer must not queue cold preflight on the history worker
+      // whose snapshot this test deliberately holds until the write completes.
+      expect(replaceTranscriptEventsSync(target, replacementEntries)).toBe(true);
       gate.release();
       const hydrated = await pending;
       expect(hydrated.getPersistedEntries()).toEqual(entries);

@@ -195,7 +195,7 @@ describe("session progress card store", () => {
     expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
   });
 
-  it("dismisses only a completed card at the expected revision", () => {
+  it("dismisses the card only at its expected revision", () => {
     vi.spyOn(Date, "now").mockReturnValue(1000);
     writeSessionProgressCard(db, SESSION_KEY, {
       steps: [{ step: "Done", status: "completed" }],
@@ -232,16 +232,27 @@ describe("session progress card store", () => {
     });
   });
 
-  it("does not dismiss an active or note-only card", () => {
+  it("dismisses active and note-only cards at the expected revision", () => {
     writeSessionProgressCard(db, SESSION_KEY, { steps: STEPS });
     expect(writeSessionProgressCard(db, SESSION_KEY, { expectedRevision: 1 })).toEqual({
-      card: expect.objectContaining({ revision: 1 }),
+      cleared: true,
     });
+    expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
+    expect(writeSessionProgressCard(db, SESSION_KEY, { expectedRevision: 2 })).toEqual({
+      card: null,
+    });
+    expect(db.prepare("SELECT revision FROM session_progress_cards").get()?.revision).toBe(2);
 
     writeSessionProgressCard(db, SESSION_KEY, { markdown: "Still relevant" });
-    expect(writeSessionProgressCard(db, SESSION_KEY, { expectedRevision: 2 })).toEqual({
-      card: expect.objectContaining({ revision: 2 }),
+    const current = readSessionProgressCard(db, SESSION_KEY);
+    expect(writeSessionProgressCard(db, SESSION_KEY, { expectedRevision: 1 })).toEqual({
+      card: current,
     });
+    expect(readSessionProgressCard(db, SESSION_KEY)).toEqual(current);
+    expect(writeSessionProgressCard(db, SESSION_KEY, { expectedRevision: 3 })).toEqual({
+      cleared: true,
+    });
+    expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
   });
 
   it.each(["revision", "created_at", "updated_at"] as const)(

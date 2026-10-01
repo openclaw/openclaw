@@ -50,13 +50,6 @@ const HEIF_BRANDS = new Set(["mif1", "msf1"]);
 const IMAGE_SIGNATURE_PREFIX_BASE64_CHARS = 128;
 const INLINE_IMAGE_DATA_URL_MIMES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
-function startsWithDataUrl(value: string): boolean {
-  return (
-    value.slice(0, INLINE_IMAGE_DATA_URL_PREFIX.length).toLowerCase() ===
-    INLINE_IMAGE_DATA_URL_PREFIX
-  );
-}
-
 function sniffIsoBmffImageMime(buffer: Buffer): string | undefined {
   if (buffer.length < 12 || buffer.subarray(4, 8).toString("ascii") !== "ftyp") {
     return undefined;
@@ -115,56 +108,30 @@ export function sanitizeInlineImageBase64(params: {
   };
 }
 
-function parseInlineImageDataUrl(value: string):
-  | {
-      metadata: string[];
-      payload: string;
-    }
-  | undefined {
-  if (!startsWithDataUrl(value)) {
-    return { metadata: [], payload: value };
-  }
-  const commaIndex = value.indexOf(",");
-  if (commaIndex < 0) {
-    return undefined;
-  }
-  return {
-    metadata: value
-      .slice(INLINE_IMAGE_DATA_URL_PREFIX.length, commaIndex)
-      .split(";")
-      .map((part) => part.trim()),
-    payload: value.slice(commaIndex + 1),
-  };
-}
-
-function metadataAllowsImageBase64(metadata: string[]): boolean {
-  const [mimeType, ...options] = metadata;
-  return (
-    mimeType !== undefined &&
-    isImageMimeType(mimeType) &&
-    options.some((part) => part.toLowerCase() === "base64")
-  );
-}
-
 function sanitizeInlineImageDataUrlWithAllowedMimes(
   imageUrl: string,
   allowedMimes?: Set<string>,
 ): string | undefined {
-  const parsed = parseInlineImageDataUrl(imageUrl);
-  if (!parsed) {
-    return undefined;
-  }
-  if (parsed.metadata.length === 0) {
+  if (
+    imageUrl.slice(0, INLINE_IMAGE_DATA_URL_PREFIX.length).toLowerCase() !==
+    INLINE_IMAGE_DATA_URL_PREFIX
+  ) {
     return imageUrl;
   }
-  if (!metadataAllowsImageBase64(parsed.metadata)) {
+  const commaIndex = imageUrl.indexOf(",");
+  if (commaIndex < 0) {
     return undefined;
   }
-
-  const [mimeType] = parsed.metadata;
+  const [mimeType, ...options] = imageUrl
+    .slice(INLINE_IMAGE_DATA_URL_PREFIX.length, commaIndex)
+    .split(";")
+    .map((part) => part.trim());
+  if (!mimeType || !options.some((part) => part.toLowerCase() === "base64")) {
+    return undefined;
+  }
   const sanitized = sanitizeInlineImageBase64({
-    mimeType: mimeType ?? "",
-    base64: parsed.payload,
+    mimeType,
+    base64: imageUrl.slice(commaIndex + 1),
   });
   if (!sanitized) {
     return undefined;

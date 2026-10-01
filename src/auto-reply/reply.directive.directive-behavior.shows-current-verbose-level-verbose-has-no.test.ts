@@ -93,7 +93,7 @@ describe("directive behavior", () => {
       } as OpenClawConfig,
     });
     expect(fastText).toContain("Current fast mode: auto (30 sec) (default: model)");
-    expect(fastText).toContain("Options: on, off, auto (30 sec), default, status.");
+    expect(fastText).toContain("Options: on, off, ultrafast, auto (30 sec), default, status.");
 
     const { text: verboseText } = await runDirectiveStatus("/verbose", {
       currentVerboseLevel: "on",

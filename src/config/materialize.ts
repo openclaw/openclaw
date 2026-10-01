@@ -1,4 +1,3 @@
-// Materializes normalized config into runtime-ready settings.
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   applyCompactionDefaults,

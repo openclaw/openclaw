@@ -34,7 +34,6 @@ export {
 export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
-  applySessionStoreProjection,
   purgeDeletedAgentSessionEntries,
 } from "./session-accessor.sqlite-projection.js";
 

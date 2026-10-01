@@ -123,19 +123,11 @@ function pathEndsWithSegment(params: {
 
 export function isBridgeBundledPathRecord(params: {
   bridge: ExternalizedBundledPluginBridge;
-  bundledLocalPath?: string;
   record: PluginInstallRecord;
   env: NodeJS.ProcessEnv;
 }): boolean {
   if (params.record.source !== "path") {
     return false;
-  }
-  if (
-    params.bundledLocalPath &&
-    (userPathsEqual(params.record.sourcePath, params.bundledLocalPath, params.env) ||
-      userPathsEqual(params.record.installPath, params.bundledLocalPath, params.env))
-  ) {
-    return true;
   }
   const bundledPathSuffix = getExternalizedBundledPluginLegacyPathSuffix(params.bridge);
   return (

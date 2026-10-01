@@ -15,14 +15,6 @@ import { resizeChatAttachmentImage } from "./chat-attachment-image.ts";
 
 const CHAT_ATTACHMENT_READ_TIMEOUT_MS = 15_000;
 
-// Structural subset of the composer controls props: the controls contract imports
-// this module, so importing it back would form a type cycle.
-type ChatAttachmentReadOptions = {
-  readSignal?: AbortSignal;
-  attachmentLimits?: ChatAttachmentLimits;
-  uploadConfig?: ApplicationConfigCapability;
-};
-
 type ChatAttachmentReadDestination = {
   getAttachments: () => ChatAttachment[];
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
@@ -162,7 +154,12 @@ export function readChatAttachmentFile(
   file: File,
   entry: PendingChatAttachmentRead,
   reads: ChatAttachmentReadLifecycle,
-  props: ChatAttachmentReadOptions,
+  // Declared here so the controls prop types can depend on this module without a cycle.
+  props: {
+    readSignal?: AbortSignal;
+    attachmentLimits?: ChatAttachmentLimits;
+    uploadConfig?: ApplicationConfigCapability;
+  },
 ): void {
   const signal = props.readSignal ?? reads.readSignal;
   if (signal.aborted) {
