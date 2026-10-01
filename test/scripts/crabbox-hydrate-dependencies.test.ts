@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { parse, parseDocument } from "yaml";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -287,7 +287,19 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
 
       let frozenLockfile: string | undefined;
       if (entrypoint === "shared setup action") {
-        // Selected-source reconciliation must preserve the original package-manager document.
+        const { environment: managerEnvironment, dependencies } = pnpmLockfileDocuments(
+          readFileSync(lockfilePath, "utf8"),
+        );
+        if (managerEnvironment !== null) {
+          const document = parseDocument(managerEnvironment);
+          const managers = ["importers", ".", "packageManagerDependencies"];
+          // This unused engine already has real package and snapshot records.
+          document.setIn(
+            [...managers, "@pnpm/exe.linux-x64"],
+            document.getIn([...managers, "pnpm"]),
+          );
+          writeFileSync(lockfilePath, `---\n${document.toString()}\n---\n${dependencies}`);
+        }
         frozenLockfile = readFileSync(lockfilePath, "utf8");
       }
 
