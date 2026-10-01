@@ -23,17 +23,26 @@ import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let cleanupFixture: (() => Promise<void>) | undefined;
+const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
+  afterEach(async () => {
+    try {
+      // afterEach precedes onTestFinished, including while a timed-out body unwinds.
+      await cleanupFixture?.();
+    } finally {
+      cleanupFixture = undefined;
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      cleanupDirs();
+    }
+  }),
+);
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
 afterAll(async () => {
   await receipts.close();
-});
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
 });
 
 // Receipts and command settlement travel independently. The fixture publishes the
@@ -56,7 +65,7 @@ async function fixtureEventBeforeSettlement(
 
 it.for([undefined, 600_000])(
   "honors the %s ms allowance during metadata inventory",
-  async (timeoutMs, { signal }) => {
+  async (timeoutMs, { signal, onTestFinished }) => {
     const root = tempDirs.make("openclaw-metadata-budget-");
     const file = path.join(root, "database.sqlite");
     const ready = path.join(root, "ready");
@@ -116,6 +125,19 @@ it.for([undefined, 600_000])(
       (sizes) => ({ sizes }),
       (error: unknown) => ({ error }),
     );
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        try {
+          await fs.writeFile(release, "continue");
+        } finally {
+          // A failed release must still cancel and join the blocked stat worker.
+          controller.abort();
+          await operation;
+        }
+      })());
+    cleanupFixture = cleanup;
+    onTestFinished(cleanup);
     try {
       await withinTest(
         fixtureEventBeforeSettlement(ready, readyReceipt.promise, operation),
@@ -170,9 +192,7 @@ it.for([undefined, 600_000])(
       expect(() => process.kill(pid, 0)).toThrow();
       expect(await fs.readFile(file, "utf8")).toBe("database");
     } finally {
-      await fs.writeFile(release, "continue");
-      controller.abort();
-      await operation;
+      await cleanup();
     }
   },
 );
@@ -207,7 +227,7 @@ it.for([
   "budgets schema inspection for $name",
   async (
     { bytes, discoveredBytes, waits, completes, configuredCache, timeoutMs, diagnosticBytes },
-    { signal },
+    { signal, onTestFinished },
   ) => {
     const root = tempDirs.make("openclaw-state-budget-");
     const stateDir = path.join(root, "source");
@@ -291,6 +311,23 @@ it.for([
         return { error };
       },
     );
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        try {
+          await fs.writeFile(release, "done");
+        } catch (error) {
+          controller.abort(error);
+          throw error;
+        } finally {
+          if (signal.aborted) {
+            controller.abort(signal.reason);
+          }
+          await result;
+        }
+      })());
+    cleanupFixture = cleanup;
+    onTestFinished(cleanup);
     try {
       if (waits.some((milliseconds) => milliseconds > 0)) {
         await withinTest(
@@ -326,12 +363,7 @@ it.for([
         expect(relative.split(path.sep)[0]).not.toBe("..");
       }
     } finally {
-      await fs.writeFile(release, "done");
-      // Join the real process and its pipes before the fixture owner removes files.
-      if (signal.aborted) {
-        controller.abort(signal.reason);
-      }
-      await result;
+      await cleanup();
     }
     if (completes) {
       expect(await result).toEqual({ versions: [{ path: database, userVersion: 3 }] });
