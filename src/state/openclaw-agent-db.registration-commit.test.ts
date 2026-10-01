@@ -99,20 +99,17 @@ describe("agent registration commit publication", () => {
 
   it("clears its pending registration when a scoped admission throws an ordinary error", async () => {
     const fixture = createFixture();
+    const assertCurrent = vi.fn(() => fixture.admission.assertCurrent());
     const registration = registryListing.captureOpenClawAgentDatabaseRegistration({
       agentId: fixture.target.agentId,
       agentPath: fixture.target.path,
-      admission: fixture.admission,
+      admission: { ...fixture.admission, assertCurrent },
     });
     registration.begin();
-    const admission = vi.spyOn(fixture.admission, "assertCurrent").mockImplementation(() => {
+    assertCurrent.mockImplementation(() => {
       throw new Error("existing schema scope ended");
     });
-    try {
-      expect(() => registration.finish()).toThrow("existing schema scope ended");
-    } finally {
-      admission.mockRestore();
-    }
+    expect(() => registration.finish()).toThrow("existing schema scope ended");
     const prepared = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead(
       { env: fixture.env },
       () => false,

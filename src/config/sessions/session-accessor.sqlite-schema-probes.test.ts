@@ -48,7 +48,7 @@ it.each([false, true])(
     if (warm) {
       entryCache.readSessionEntryCache(writer, { cache: true });
     }
-    const sql = observeHostDataSql(options.env);
+    const sql = observeHostDataSql();
     const publicationQueries: string[] = [];
     const observePublication = <T>(publish: () => T): T => {
       const start = sql.queries.length;
@@ -157,7 +157,15 @@ it("bounds schema and freshness probes across admitted session reader entry poin
           updatedAt: 1,
           label: "current",
         });
-        expect(publications).toEqual([{ prepared: undefined, sharing: "unchanged" }]);
+        expect(publications).toEqual([
+          {
+            prepared: expect.objectContaining({
+              entry: expect.objectContaining({ sessionId: "probe", label: "current" }),
+              source: expect.objectContaining({ filename: writer.path }),
+            }),
+            sharing: "unchanged",
+          },
+        ]);
         expect(read()?.label).toBe("current");
         allowed = false;
         expect(read).toThrow(/not authorized/i);

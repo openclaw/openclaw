@@ -111,6 +111,10 @@ export function createSessionRowPublication(owner: {
       return;
     }
     const facts = change.facts;
+    const sharingUnchanged =
+      !change.factsInvalidated &&
+      (facts?.kind === "unchanged" ||
+        (!change.storePath && !facts && change.scope !== "session-entry"));
     if (facts?.kind === "removed") {
       owner.remove(records.identity(row));
       return;
@@ -138,7 +142,7 @@ export function createSessionRowPublication(owner: {
       }
       return;
     }
-    if (!prepared) {
+    if (!prepared && !sharingUnchanged) {
       row.publishedSource = undefined;
     }
     if (
@@ -181,14 +185,15 @@ export function createSessionRowPublication(owner: {
       return;
     }
     if (
-      !facts ||
-      facts.kind === "entry" ||
-      change.factsInvalidated ||
-      (facts.kind === "owner" &&
-        (row.sharingEntry?.sessionId !== facts.sessionId ||
-          (row.sharingEntry.lifecycleRevision ?? null) !== facts.lifecycleRevision)) ||
-      ((facts.kind === "member" || facts.kind === "category") &&
-        row.sharingEntry?.sessionId !== facts.sessionId)
+      !sharingUnchanged &&
+      (!facts ||
+        facts.kind === "entry" ||
+        change.factsInvalidated ||
+        (facts.kind === "owner" &&
+          (row.sharingEntry?.sessionId !== facts.sessionId ||
+            (row.sharingEntry.lifecycleRevision ?? null) !== facts.lifecycleRevision)) ||
+        ((facts.kind === "member" || facts.kind === "category") &&
+          row.sharingEntry?.sessionId !== facts.sessionId))
     ) {
       row.sharingEntry = undefined;
     }

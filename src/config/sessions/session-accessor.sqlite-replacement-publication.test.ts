@@ -302,6 +302,11 @@ it.each(["session ID", "lifecycle revision"] as const)(
         visibility: "draft" as const,
         label: "newer native metadata",
       };
+      const expectedEntry: Partial<InternalSessionEntry> = { ...newer };
+      if (replacement === "session ID") {
+        // Visibility belongs to the replaced session and does not copy into its successor.
+        delete expectedEntry.visibility;
+      }
       const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
       const query = { agentId: scope.agentId, storePath: scope.storePath, key: laterKey };
       const observed: Array<{
@@ -373,22 +378,29 @@ it.each(["session ID", "lifecycle revision"] as const)(
         expect(observed).toHaveLength(1);
         for (const entry of [observed[0]!.entry, observed[0]!.storedEntry]) {
           if (entry !== undefined) {
-            expect(entry).toMatchObject(newer);
+            expect(entry).toMatchObject(expectedEntry);
+            expect(entry.visibility).toBe(expectedEntry.visibility);
           }
         }
         const expectedSharing = {
           sessionId: newer.sessionId,
           lifecycleRevision: newer.lifecycleRevision,
-          visibility: newer.visibility,
         };
         if (observed[0]!.sharingEntry !== undefined) {
           expect(observed[0]!.sharingEntry).toMatchObject(expectedSharing);
+          expect(observed[0]!.sharingEntry.visibility).toBe(expectedEntry.visibility);
         }
-        expect(readExactSessionEntryRow(database, laterKey)?.entry).toMatchObject(newer);
+        const committed = readExactSessionEntryRow(database, laterKey)?.entry;
+        expect(committed).toMatchObject(expectedEntry);
+        expect(committed?.visibility).toBe(expectedEntry.visibility);
         await projection.ensureMaterialized();
-        expect(projection.capture(query)?.entry).toMatchObject(newer);
-        expect(projection.capture(query)?.storedEntry).toMatchObject(newer);
+        const current = projection.capture(query);
+        for (const entry of [current?.entry, current?.storedEntry]) {
+          expect(entry).toMatchObject(expectedEntry);
+          expect(entry?.visibility).toBe(expectedEntry.visibility);
+        }
         expect(projection.sharingTarget(query)?.entry).toMatchObject(expectedSharing);
+        expect(projection.sharingTarget(query)?.entry.visibility).toBe(expectedEntry.visibility);
       } finally {
         stop();
         projection.dispose();
@@ -1220,14 +1232,20 @@ it.each([false, true])(
           }),
         });
         if (recreated) {
-          expect(seen).toHaveLength(1);
-          expect(seen[0]).toMatchObject({ native: true, sharingId: undefined });
+          expect(seen).toEqual([
+            {
+              native: true,
+              sessionId: "newer-alias-generation",
+              sharingId: "newer-alias-generation",
+            },
+          ]);
         } else {
           expect(seen).toEqual([{ native: false, sessionId: undefined, sharingId: undefined }]);
         }
         await projection.ensureMaterialized();
         const expected = recreated ? "newer-alias-generation" : undefined;
         expect(projection.capture(query)?.storedEntry?.sessionId).toBe(expected);
+        expect(projection.sharingTarget(query)?.entry.sessionId).toBe(expected);
         expect(readExactSessionEntryRow(database, alias)?.entry.sessionId).toBe(expected);
       } finally {
         stop();

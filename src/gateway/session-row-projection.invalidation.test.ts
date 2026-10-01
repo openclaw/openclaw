@@ -1,6 +1,7 @@
 import { renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
@@ -323,6 +324,29 @@ it.each(["native", "worker"] as const)(
           },
         ]);
         expect(reads).not.toHaveBeenCalled();
+        const publishedSource = projection.capture(query)?.publishedSource;
+        expect(publishedSource).toBeDefined();
+        const sql = observeHostDataSql();
+        try {
+          sessionChanges.emit({ agentId: scope.agentId, sessionKey: scope.sessionKey });
+          expect(projection.dirtyRowCount).toBeGreaterThan(0);
+          expect(projection.sharingTarget(query)?.entry).toMatchObject(expected);
+          expect(projection.capture(query)?.publishedSource).toBe(publishedSource);
+          sessionChanges.emit({
+            ...scope,
+            storePath: warm!.storeTarget.storePath,
+            facts: { kind: "unchanged" },
+          });
+          expect(projection.sharingTarget(query)?.entry).toMatchObject(expected);
+          expect(projection.capture(query)?.publishedSource).toBe(publishedSource);
+          // Unknown storage changes still revoke compact facts until an exact refresh.
+          sessionChanges.emit({ ...scope, storePath: warm!.storeTarget.storePath });
+          expect(projection.sharingTarget(query)).toBeNull();
+          expect(projection.capture(query)?.publishedSource).toBeUndefined();
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
       } finally {
         stop();
         await projection.ensureMaterialized();
@@ -610,11 +634,7 @@ it.each([false, true])(
         const current = projection.capture({ agentId: scope.agentId, key: scope.sessionKey });
         expect(current).toBeDefined();
         expect(current?.generation).not.toBe(originalGeneration);
-        if (cache) {
-          expect(current?.entry).toMatchObject({ sessionId: newer.sessionId, label: newer.label });
-        } else {
-          expect(current?.entry).toBeUndefined();
-        }
+        expect(current?.entry).toMatchObject({ sessionId: newer.sessionId, label: newer.label });
         expect((await list()).sessions).toEqual([
           expect.objectContaining({
             key: scope.sessionKey,
