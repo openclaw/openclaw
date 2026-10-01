@@ -19,10 +19,12 @@ import {
   createTriageInferenceSelection,
   createTriageRuntime,
   resetTriageRepairRuntimeMocks,
+  useTriageHeadlessFixture,
   withTriageTerminal,
 } from "./triage.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const createHeadlessFixture = useTriageHeadlessFixture();
 const failedUpdate: UpdateRunResult = {
   status: "error",
   mode: "npm",
@@ -534,17 +536,13 @@ describe("triageCommand", () => {
     },
   );
 
-  it("cancels a headless child before returning to the failure owner", async () => {
+  it("cancels a headless child before returning to the failure owner", async ({ signal }) => {
     if (process.platform === "win32") {
       return;
     }
-    const executablePath = path.join(stateDir, "claude");
+    const executablePath = path.join(stateDir, "claude.mjs");
     const pidPath = path.join(stateDir, "child.pid");
-    await fs.writeFile(
-      executablePath,
-      `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setInterval(() => {}, 1000);\n`,
-      { mode: 0o700 },
-    );
+    const waitForReady = await createHeadlessFixture(executablePath, pidPath);
     const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     mocks.spawn.mockImplementation(actual.spawn);
     mocks.resolveExecutablePath.mockImplementation((binary) =>
@@ -567,10 +565,8 @@ describe("triageCommand", () => {
     );
     let pid = 0;
     try {
-      await vi.waitFor(async () => {
-        pid = Number(await fs.readFile(pidPath, "utf8"));
-        expect(pid).toBeGreaterThan(0);
-      });
+      pid = await waitForReady(result, signal);
+      expect(pid).toBeGreaterThan(0);
     } finally {
       controller.abort();
       await expect(result).rejects.toMatchObject({ code: 1 });

@@ -2,7 +2,11 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { getFreePort } from "../../test-utils/ports.js";
@@ -225,7 +229,9 @@ export function registerUpdateRespawnTests(fixtures: UpdateRespawnFixtures): voi
     },
   );
 
-  it("preserves a real foreground successor after shared readiness reports still-starting", async () => {
+  it("preserves a real foreground successor after shared readiness reports still-starting", async ({
+    signal,
+  }) => {
     const actualKillTree = await vi.importActual<typeof import("../../process/kill-tree.js")>(
       "../../process/kill-tree.js",
     );
@@ -247,10 +253,15 @@ process.send("parked");`,
       { detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"] },
     );
     const parked = once(child, "message");
+    const closed = once(child, "close");
+    void closed.catch(() => {});
     const childKill = vi.spyOn(child, "kill");
     killProcessTree.mockImplementation(actualKillTree.killProcessTree);
     try {
-      const [parkedMessage] = await withTimeout(parked, 5_000);
+      const [parkedMessage] = await withinTest(
+        awaitGateBeforeSettlement(parked, closed, "foreground successor did not park"),
+        signal,
+      );
       expect(parkedMessage).toBe("parked");
       expect(child.pid).toBeTypeOf("number");
       consumeGatewayRestartIntent.mockReturnValueOnce({
@@ -302,7 +313,10 @@ process.send("parked");`,
 
         const listening = once(child, "message");
         child.send("listen");
-        const [listeningMessage] = await withTimeout(listening, 5_000);
+        const [listeningMessage] = await withinTest(
+          awaitGateBeforeSettlement(listening, closed, "foreground successor did not listen"),
+          signal,
+        );
         expect(listeningMessage).toBe("listening");
         expect(child.exitCode).toBeNull();
         expect(child.signalCode).toBeNull();
