@@ -67,6 +67,7 @@ import {
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  buildAssistantMessage,
   describeToolResultMediaPlaceholder,
   createEmptyTransportUsage,
   failTransportStream,
@@ -142,16 +143,12 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
-    const output: AssistantMessage = {
-      role: "assistant",
+    const output = buildAssistantMessage({
+      model: { api: "bedrock-converse-stream", provider: model.provider, id: model.id },
       content: [],
-      api: "bedrock-converse-stream",
-      provider: model.provider,
-      model: model.id,
       usage: createEmptyTransportUsage(),
       stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    });
 
     const blocks = output.content as Block[];
     const pendingToolCallEnds: PendingBedrockToolCall[] = [];

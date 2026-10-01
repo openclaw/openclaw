@@ -438,10 +438,7 @@ export function applyPreparedRuntimeAuthToModel<
     ...(preparedAuth.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
     headers: requestConfig.headers,
   };
-  const routeFacts = getModelProviderRequestRouteFacts(model);
-  return routeFacts
-    ? attachModelProviderRequestRouteFacts(next, routeFacts.providerMetadataOwners)
-    : next;
+  return inheritModelProviderRequestRouteFacts(model, next);
 }
 
 function resolveProxyOverride(request: ProviderRequestTransportOverrides | undefined) {

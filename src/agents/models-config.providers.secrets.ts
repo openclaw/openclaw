@@ -167,33 +167,20 @@ export function createProviderApiKeyResolver(
   return (provider: string) => {
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
-    const envVar = resolveEnvApiKeyVarName(authProvider, env, {
-      aliasMap: lookupCaches.aliasMap,
-      candidateMap: lookupCaches.envCandidateMap,
-      authEvidenceMap: lookupCaches.authEvidenceMap,
-    });
-    if (envVar) {
-      // Public return value carries the env var name, while discovery receives
-      // only the redacted/hashable value form.
-      return {
-        apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        mode: resolveCatalogDirectAuthMode(config, authProvider),
-      };
-    }
-    const fromConfig = resolveConfigBackedProviderAuth({
+    const direct = resolveDirectCatalogAuth({
       provider: authProvider,
       config,
       env,
+      lookupCaches,
       sourceConfigForSecrets,
       workspaceDir,
       syntheticAuthEnv,
     });
-    if (fromConfig?.apiKey) {
+    if (direct?.apiKey) {
       return {
-        apiKey: fromConfig.apiKey,
-        discoveryApiKey: fromConfig.discoveryApiKey,
-        mode: fromConfig.mode,
+        apiKey: direct.apiKey,
+        discoveryApiKey: direct.discoveryApiKey,
+        mode: direct.mode,
       };
     }
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
@@ -274,43 +261,47 @@ export function createProviderAuthResolver(
       };
     }
 
-    const envVar = resolveEnvApiKeyVarName(authProvider, env, {
-      aliasMap: lookupCaches.aliasMap,
-      candidateMap: lookupCaches.envCandidateMap,
-      authEvidenceMap: lookupCaches.authEvidenceMap,
-    });
-    if (envVar) {
-      return {
-        apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        mode: resolveCatalogDirectAuthMode(config, authProvider),
-        source: "env" as const,
-      };
-    }
-
-    const fromConfig = resolveConfigBackedProviderAuth({
-      provider: authProvider,
-      config,
-      env,
-      sourceConfigForSecrets,
-      workspaceDir,
-      syntheticAuthEnv,
-    });
-    if (fromConfig) {
-      return {
-        apiKey: fromConfig.apiKey,
-        discoveryApiKey: fromConfig.discoveryApiKey,
-        mode: fromConfig.mode,
-        source: "none",
-      };
-    }
-    return {
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-      mode: "none" as const,
-      source: "none" as const,
-    };
+    return (
+      resolveDirectCatalogAuth({
+        provider: authProvider,
+        config,
+        env,
+        lookupCaches,
+        sourceConfigForSecrets,
+        workspaceDir,
+        syntheticAuthEnv,
+      }) ?? { apiKey: undefined, discoveryApiKey: undefined, mode: "none", source: "none" }
+    );
   };
+}
+
+function resolveDirectCatalogAuth(
+  params: Parameters<typeof resolveConfigBackedProviderAuth>[0] & {
+    env: NodeJS.ProcessEnv;
+    lookupCaches: ProviderAuthLookupCaches;
+  },
+) {
+  const envVar = resolveEnvApiKeyVarName(params.provider, params.env, {
+    aliasMap: params.lookupCaches.aliasMap,
+    candidateMap: params.lookupCaches.envCandidateMap,
+    authEvidenceMap: params.lookupCaches.authEvidenceMap,
+  });
+  // Public auth retains the env name; only discovery consumes its resolved value.
+  const auth = envVar
+    ? {
+        apiKey: envVar,
+        discoveryApiKey: toDiscoveryApiKey(params.env[envVar]),
+        mode: resolveCatalogDirectAuthMode(params.config, params.provider),
+      }
+    : resolveConfigBackedProviderAuth(params);
+  return auth
+    ? {
+        apiKey: auth.apiKey,
+        discoveryApiKey: auth.discoveryApiKey,
+        mode: auth.mode,
+        source: envVar ? ("env" as const) : ("none" as const),
+      }
+    : undefined;
 }
 
 function resolveConfigBackedProviderAuth(params: {
