@@ -21,7 +21,6 @@ import {
   buildProviderReplayFamilyHooks,
   normalizeModelCompat,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -47,6 +46,7 @@ import {
   createMinimaxProvider,
   minimaxAuthMethodMetadata,
 } from "./provider-contract-api.js";
+import { wrapMinimaxProviderStream } from "./stream.js";
 import { resolveMinimaxThinkingProfile } from "./thinking.js";
 
 const API_PROVIDER_ID = "minimax";
@@ -64,7 +64,8 @@ const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
 });
 const MINIMAX_PROVIDER_HOOKS = {
   ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
-  ...buildProviderStreamFamilyHooks("minimax-fast-mode"),
+  wrapStreamFn: wrapMinimaxProviderStream,
+  wrapSimpleCompletionStreamFn: wrapMinimaxProviderStream,
   resolveReasoningOutputMode: () => "native" as const,
   resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
     resolveMinimaxThinkingProfile(modelId),
