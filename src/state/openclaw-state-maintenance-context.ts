@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { OpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
 export type MaintenanceResource = {
   phase:
@@ -13,6 +12,32 @@ export type MaintenanceResource = {
     | "shared-handles";
   close: () => void | Promise<void>;
 };
+
+export type AgentSchemaMigration = {
+  agentId: string;
+  path: string;
+  foundVersion: number;
+  supportedVersion: number;
+};
+
+export type OpenClawDatabaseMaintenanceScope = {
+  readonly ownsSchemaMaintenance: boolean;
+  assertOwnerCurrent(this: void, access?: "read"): void;
+  assertDatabaseAccess(this: void, databasePath: string): void;
+  assertAdmission(this: void): void;
+  assertReadAdmission(this: void): void;
+  addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
+  assertAgentSchemaMigration(migration: AgentSchemaMigration): void;
+  run<T>(operation: () => T): T;
+  track<T>(operation: Promise<T>): Promise<T>;
+  own(
+    resource: object,
+    phase: MaintenanceResource["phase"],
+    close: MaintenanceResource["close"],
+  ): void;
+  close(): Promise<void>;
+};
+
 const liveAuthorityReads = resolveGlobalSingleton(
   Symbol.for("openclaw.maintenanceLiveAuthorityReads"),
   () => new WeakMap<OpenClawDatabaseMaintenanceScope, Set<string>>(),

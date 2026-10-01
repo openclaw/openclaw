@@ -558,6 +558,10 @@ If the Gateway was confirmed stopped during capture and the update fails before
 the candidate is allowed to start, restoration also requires matching database
 write evidence. Doctor checks the captured file generations before migrations
 and records their final generations before releasing maintenance ownership.
+Any fingerprint change during maintenance, including a newly created database,
+refuses automatic restoration. Gateway maintenance ownership does not exclude
+independent SQLite writers, and these observations cannot distinguish Doctor's
+own writes from foreign commits. Changed databases require manual recovery.
 Rollback checks those facts again while holding database file exclusions. The
 fingerprints cover database, WAL, and rollback-journal identity, timestamps,
 sizes, and content digests; they reuse the snapshot inventory.

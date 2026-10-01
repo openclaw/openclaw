@@ -50,8 +50,12 @@ export function prepareSkillProposalDraft(input: {
   evidence?: string;
 }): PreparedSkillProposalDraft {
   try {
-    assertProposalDescriptionWithinLimit(input.description);
-    assertProposalContentWithinLimit(input.content, input.maxSkillBytes);
+    assertProposalFieldWithinLimit(
+      "description",
+      input.description,
+      MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES,
+    );
+    assertProposalFieldWithinLimit("content", input.content, input.maxSkillBytes);
     const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
     const content = renderProposalMarkdown({
       name: input.name,
@@ -182,21 +186,14 @@ function decodeProposalTextFile(buffer: Buffer, label: string): string {
   return buffer.toString("utf8");
 }
 
-function assertProposalDescriptionWithinLimit(description: string): void {
-  const sizeBytes = Buffer.byteLength(description, "utf8");
-  if (sizeBytes > MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES) {
-    throw new Error(
-      `Skill proposal description is too large (${sizeBytes} bytes, max ${MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES}).`,
-    );
-  }
-}
-
-function assertProposalContentWithinLimit(content: string, maxSkillBytes: number): void {
+function assertProposalFieldWithinLimit(
+  field: "description" | "content",
+  content: string,
+  maxBytes: number,
+): void {
   const sizeBytes = Buffer.byteLength(content, "utf8");
-  if (sizeBytes > maxSkillBytes) {
-    throw new Error(
-      `Skill proposal content is too large (${sizeBytes} bytes, max ${maxSkillBytes}).`,
-    );
+  if (sizeBytes > maxBytes) {
+    throw new Error(`Skill proposal ${field} is too large (${sizeBytes} bytes, max ${maxBytes}).`);
   }
 }
 

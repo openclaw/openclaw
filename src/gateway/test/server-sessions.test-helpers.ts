@@ -116,16 +116,6 @@ const sessionCleanupMocks = vi.hoisted(() => ({
     vi.fn<
       (typeof import("../../auto-reply/reply/queue/cleanup.js"))["clearSessionLifecycleQueues"]
     >(),
-  clearSessionQueues: vi.fn((keys: Array<string | undefined>) => {
-    const clearedKeys = Array.from(
-      new Set(
-        keys
-          .map((key) => (typeof key === "string" ? key.trim() : ""))
-          .filter((key) => key.length > 0),
-      ),
-    );
-    return { followupCleared: 0, laneCleared: 0, keys: clearedKeys };
-  }),
   stopSessionResetSubagents: vi.fn(async () => {}),
 }));
 
@@ -190,16 +180,6 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   retireSessionMcpRuntime: vi.fn(async (_params: RetireSessionMcpRuntimeParams) => true),
 }));
 
-vi.mock("../../auto-reply/reply/queue.js", async () => {
-  const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue.js")>(
-    "../../auto-reply/reply/queue.js",
-  );
-  return {
-    ...actual,
-    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
-  };
-});
-
 vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
   const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue/cleanup.js")>(
     "../../auto-reply/reply/queue/cleanup.js",
@@ -209,7 +189,6 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
     clearSessionLifecycleQueues: sessionCleanupMocks.clearSessionLifecycleQueues.mockImplementation(
       actual.clearSessionLifecycleQueues,
     ),
-    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
   };
 });
 
@@ -338,7 +317,6 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     sessionCleanupMocks.clearSessionLifecycleQueues.mockClear();
-    sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSessionResetSubagents.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReset();
@@ -574,7 +552,6 @@ export function expectActiveRunCleanup(
 
 export function expectNoSessionQueueCleanup() {
   expect(sessionCleanupMocks.clearSessionLifecycleQueues).not.toHaveBeenCalled();
-  expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
 }
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;

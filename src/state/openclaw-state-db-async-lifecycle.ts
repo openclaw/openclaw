@@ -12,9 +12,12 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceResources,
   runMaintenance,
+  type AgentSchemaMigration,
   type MaintenanceResource,
+  type OpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-maintenance-context.js";
 
+export type { OpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 export {
   captureOpenClawDatabaseMaintenanceResource,
   getOpenClawDatabaseMaintenanceResourceScope,
@@ -60,31 +63,6 @@ type CloseAttempt = {
   retained: Set<OpenClawStateDatabaseAsyncResource>;
   pending?: Promise<boolean>;
   queue?: Set<OpenClawStateDatabaseAsyncResource>;
-};
-
-type AgentSchemaMigration = {
-  agentId: string;
-  path: string;
-  foundVersion: number;
-  supportedVersion: number;
-};
-
-export type OpenClawDatabaseMaintenanceScope = {
-  readonly ownsSchemaMaintenance: boolean;
-  assertOwnerCurrent(this: void, access?: "read"): void;
-  assertDatabaseAccess(this: void, databasePath: string): void;
-  assertAdmission(this: void): void;
-  assertReadAdmission(this: void): void;
-  addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
-  assertAgentSchemaMigration(migration: AgentSchemaMigration): void;
-  run<T>(operation: () => T): T;
-  track<T>(operation: Promise<T>): Promise<T>;
-  own(
-    resource: object,
-    phase: MaintenanceResource["phase"],
-    close: MaintenanceResource["close"],
-  ): void;
-  close(): Promise<void>;
 };
 
 /** Associate lexical database work with exact resources, never all files beneath a root. */

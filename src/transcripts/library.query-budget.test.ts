@@ -15,7 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { createTranscriptCaptureAppends } from "./capture-appends.js";
-import { activeSessions } from "./capture.js";
+import { activeSessions } from "./capture-startup.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import {
   createTranscriptLibraryStoreFixture,

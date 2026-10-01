@@ -586,7 +586,11 @@ extension OnboardingView {
     }
 
     func cliPage() -> some View {
-        let detail = "OpenClaw is setting up its Gateway background service on this Mac. " +
+        let bundled = BundledRuntime.isBundledApp
+        let detail = bundled
+            ? "Everything needed to run the Gateway is included in OpenClaw. " +
+            "The app prepares a private copy in your user folder and starts it on this Mac."
+            : "OpenClaw is setting up its Gateway background service on this Mac. " +
             "Published Stable and Beta installs are usually quick. " +
             "Dev (Git main) downloads and builds OpenClaw from source, so allow several minutes " +
             "and several gigabytes of free space. No administrator password is required."
@@ -602,27 +606,29 @@ extension OnboardingView {
 
             self.onboardingCard(spacing: 14, padding: 16) {
                 self.installStepRow(
-                    title: "Install OpenClaw",
+                    title: bundled ? "Prepare OpenClaw" : "Install OpenClaw",
                     detail: self.cliExecutableReady
                         ? (self.cliInstallLocation ?? "Installed")
                         : "A private copy inside your user folder.",
                     state: self.installStepStates.install,
                     monospacedDetail: self.cliExecutableReady && self.cliInstallLocation != nil)
                 self.installStepRow(
-                    title: "Start the background service",
-                    detail: "Runs quietly and starts again after a restart.",
+                    title: bundled ? "Start the Gateway" : "Start the background service",
+                    detail: bundled
+                        ? "Runs while OpenClaw is open."
+                        : "Runs quietly and starts again after a restart.",
                     state: self.installStepStates.service)
                 self.installStepRow(
-                    title: "Ready for the next step",
-                    detail: "Once the service answers, you’ll connect your AI.",
+                    title: bundled ? "Ready" : "Ready for the next step",
+                    detail: "Once the Gateway answers, you’ll connect your AI.",
                     state: self.cliInstalled ? .done : .pending)
 
                 if self.installFailed {
                     OnboardingErrorCard(
                         title: self.cliExecutableReady
                             ? "The Gateway didn’t start"
-                            : "OpenClaw installation failed",
-                        message: self.cliStatus ?? "The installer did not finish.",
+                            : (bundled ? "OpenClaw preparation failed" : "OpenClaw installation failed"),
+                        message: self.cliStatus ?? "OpenClaw setup did not finish.",
                         docsSlug: "platforms/mac/bundled-gateway",
                         retryTitle: "Try again")
                     {

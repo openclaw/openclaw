@@ -1607,26 +1607,31 @@ describe("resolveModel", () => {
     });
   });
 
-  it("lets configured vLLM Qwen compat override stale discovered reasoning", async () => {
-    mockMinimalModelDiscovery("vllm", "Qwen/Qwen3-8B", {
-      api: "openai-completions",
-      baseUrl: "http://localhost:9000",
-      reasoning: false,
-      compat: { supportsStrictMode: false },
-    });
-    const cfg = makeVllmQwenConfig();
+  it.each(["stale", "empty"])(
+    "infers reasoning from configured vLLM Qwen compat (%s registry)",
+    async (registry) => {
+      if (registry === "stale") {
+        mockMinimalModelDiscovery("vllm", "Qwen/Qwen3-8B", {
+          api: "openai-completions",
+          baseUrl: "http://localhost:9000",
+          reasoning: false,
+          compat: { supportsStrictMode: false },
+        });
+      }
+      const cfg = makeVllmQwenConfig();
 
-    const result = await resolveModelForTest("vllm", "Qwen/Qwen3-8B", cfg);
+      const result = await resolveModelForTest("vllm", "Qwen/Qwen3-8B", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model?.reasoning).toBe(true);
-    expect(result.model?.compat).toEqual(
-      expect.objectContaining({
-        supportsStrictMode: false,
-        thinkingFormat: "qwen-chat-template",
-      }),
-    );
-  });
+      expect(result.error).toBeUndefined();
+      expect(result.model?.reasoning).toBe(true);
+      expect(result.model?.compat).toEqual(
+        expect.objectContaining({
+          supportsStrictMode: false,
+          thinkingFormat: "qwen-chat-template",
+        }),
+      );
+    },
+  );
 
   it("does not derive reasoning from ignored compat on a catalog-owned vLLM route", async () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
@@ -1645,15 +1650,6 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(false);
     expect(result.model?.compat).toEqual(expect.objectContaining({ supportsStrictMode: false }));
     expect(result.model?.compat).not.toHaveProperty("thinkingFormat");
-  });
-
-  it("infers reasoning for matching vLLM Qwen compat fallback models", async () => {
-    const cfg = makeVllmQwenConfig();
-
-    const result = await resolveModelForTest("vllm", "Qwen/Qwen3-8B", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model?.reasoning).toBe(true);
   });
 
   it("resolves direct moonshotai refs through manifest-owned provider aliases", async () => {

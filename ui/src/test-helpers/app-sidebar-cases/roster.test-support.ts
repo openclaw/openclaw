@@ -122,15 +122,15 @@ export async function mountRoster(
   patchSettings({ gatewayUrl });
   const sessions = createSessionsHarness("main", ["agent:main:main"]);
   sessions.list.mockImplementation((options) => {
-    const children =
-      childRows ??
-      (options?.spawnedBy
-        ? result.sessions.filter((row) => row.spawnedBy === options.spawnedBy)
-        : undefined);
+    const children = options?.spawnedBy
+      ? (childRows ?? result.sessions.filter((row) => row.spawnedBy === options.spawnedBy))
+      : undefined;
     return Promise.resolve(
       children
         ? { ...result, sessions: children, count: children.length }
-        : sessions.sessions.state.result,
+        : options?.archivedFilter === "all" && !options.agentId
+          ? result
+          : sessions.sessions.state.result,
     );
   });
   const mainRows = fixtureRows.filter((row) => row.agentId === "main");

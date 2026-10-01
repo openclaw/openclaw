@@ -64,7 +64,7 @@ enum LaunchAgentPlist {
             password: password)
     }
 
-    private static func readGeneratedEnvironment(
+    static func readGeneratedEnvironment(
         programArguments: [String],
         fileURL: URL?,
         wrapperURL: URL?) -> [String: String]

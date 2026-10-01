@@ -117,8 +117,11 @@ Confirm no update is in progress and inspect the corresponding update report and
 recovery state before manual cleanup.
 If the Gateway was confirmed stopped during capture, a failed candidate
 that was never allowed to start can restore those databases before package
-rollback when Doctor's recorded write fingerprints still match. A change between
-capture and Doctor admission, or after Doctor finishes, preserves the current
+rollback only when database write fingerprints remain unchanged through Doctor
+and restoration. Maintenance ownership cannot identify independent SQLite writers,
+so any change during Doctor, including Doctor's own writes or a newly created
+database, makes these snapshots available for manual recovery only. A change between
+capture and Doctor admission, during Doctor, or after Doctor finishes preserves the current
 databases and reports `state-migrated-no-rollback` with the snapshot location and
 Doctor recovery guidance. Without Doctor write evidence, rollback requires the
 last verified database generations to remain unchanged.

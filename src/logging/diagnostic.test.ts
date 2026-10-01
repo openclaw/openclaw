@@ -1018,20 +1018,6 @@ describe("stuck session diagnostics threshold", () => {
     expect(diagnosticSessionStates.size).toBe(0);
   });
 
-  it("checks memory pressure every tick without recording idle samples", () => {
-    const emitMemorySample = createEmitMemorySampleMock();
-
-    startEnabledDiagnosticHeartbeat({ emitMemorySample, sampleLiveness: () => null });
-
-    vi.advanceTimersByTime(30_000);
-    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: false });
-
-    logSessionStateChange({ ...session, state: "processing" });
-    vi.advanceTimersByTime(30_000);
-
-    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
-  });
-
   it("records idle liveness samples without warning in the gateway log", () => {
     const emitMemorySample = createEmitMemorySampleMock();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);

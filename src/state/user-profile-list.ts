@@ -413,20 +413,6 @@ export function retainUserProfileMutationPublication(
   };
 }
 
-export function retainUserProfilePublication(
-  identity: DatabasePathIdentity,
-  profileId: string,
-  before: ProfileDisplayRow | undefined,
-) {
-  const publication = retainUserProfileMutationPublication(identity, [[profileId, before]]);
-  return {
-    reconcile(this: void, observed: ProfileDisplayRow | undefined) {
-      publication.reconcile([[profileId, observed]]);
-    },
-    release: publication.release,
-  };
-}
-
 function observeProfileCatalogs(refresh = false): void {
   observeEmailBindings();
   if (stopCatalogEvents && !refresh) {
