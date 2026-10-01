@@ -682,6 +682,7 @@ describe("restart health", () => {
   });
   it.each([
     { healthState: "starting", lifecycle: "starting", running: true },
+    { healthState: "starting", running: true },
     { healthState: "reconnecting", lifecycle: "recovering", running: false },
     { healthState: "not-running", running: false, restartPending: true },
   ])(
