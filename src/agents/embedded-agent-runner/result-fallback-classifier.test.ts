@@ -397,6 +397,25 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
+  it("classifies xAI's statusless token-generation error for fallback", () => {
+    const rawError = "Internal error during token generation";
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "xai",
+      model: "grok-4.6",
+      result: {
+        payloads: [{ isError: true, text: rawError }],
+        meta: { durationMs: 42 },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `xai/grok-4.6 ended with a provider error: ${rawError}`,
+      reason: "server_error",
+      code: "embedded_error_payload",
+      rawError,
+    });
+  });
+
   it("does not retry unclassified non-GPT error payloads", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
