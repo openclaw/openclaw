@@ -43,6 +43,7 @@ describe("loadPluginManifestRegistry provider metadata", () => {
         externalAuthProviders: ["acme-ai"],
         usageProviders: ["acme-ai"],
         workerProviders: [" static-ssh ", ""],
+        storageProviders: [" archive-objects ", ""],
       },
       configSchema: { type: "object" },
     });
@@ -58,6 +59,7 @@ describe("loadPluginManifestRegistry provider metadata", () => {
       externalAuthProviders: ["acme-ai"],
       usageProviders: ["acme-ai"],
       workerProviders: ["static-ssh"],
+      storageProviders: ["archive-objects"],
     });
   });
 

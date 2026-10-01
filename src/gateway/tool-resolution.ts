@@ -1,8 +1,8 @@
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
 import {
   getAdmittedRunDelegatedAuthority,
+  readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
-  type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
@@ -93,8 +93,6 @@ export function resolveGatewayScopedTools(
     agentThreadId?: string;
     senderIsOwner?: boolean;
     admittedRunContext?: AdmittedRunContext;
-    /** Host-issued source for limited session controls; execution rechecks its own caller. */
-    sessionControlAuthority?: AdmittedRunOperatorAuthority;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     allowGatewaySubagentBinding?: boolean;
     allowMediaInvokeCommands?: boolean;
@@ -270,6 +268,7 @@ export function resolveGatewayScopedTools(
     surface === "loopback" &&
     params.admittedRunContext &&
     getAdmittedRunDelegatedAuthority(params.admittedRunContext);
+  const sessionControlAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
   const ownerOnlyGatewayDeny = [
     ...(params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
       ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
@@ -279,7 +278,7 @@ export function resolveGatewayScopedTools(
     // Attach grants also use loopback; session binding is not run authority.
     ...(params.senderIsOwner !== true &&
     !assignmentAdmitted &&
-    !(surface === "loopback" && hasSessionControlAuthority(params.sessionControlAuthority))
+    !(surface === "loopback" && hasSessionControlAuthority(sessionControlAuthority))
       ? ["sessions"]
       : []),
   ];
@@ -409,7 +408,7 @@ export function resolveGatewayScopedTools(
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
     requesterSenderId: senderId,
-    sessionControlAuthority: params.sessionControlAuthority,
+    sessionControlAuthority,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,

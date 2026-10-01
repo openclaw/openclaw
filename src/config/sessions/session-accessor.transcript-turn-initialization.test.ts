@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -121,6 +122,7 @@ describe("first transcript turn initialization", () => {
       lookupSessionGoalOperation({ ...scope(), expectedSessionId: sessionId, operation }),
     ).toEqual(turn.sessionTurnMutationResult?.result);
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const replay = await admit({ onMessageCommitted });
     expect(onMessageCommitted).toHaveBeenCalledTimes(1);

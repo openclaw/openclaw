@@ -137,6 +137,7 @@ public struct OpenClawChatView: View {
     @Environment(\.openClawChatWindowCommands) private var windowCommands
     #endif
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
+    @State private var reactionPickerMessage: OpenClawChatMessage?
     #if os(iOS)
     @State private var selectTextMessage: OpenClawChatMessage?
     #endif
@@ -274,6 +275,9 @@ public struct OpenClawChatView: View {
         }
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
+        }
+        .sheet(item: self.$reactionPickerMessage) {
+            ChatMessageReactionPicker(viewModel: self.viewModel, message: $0)
         }
         .sheet(item: self.$fullMessageRequest) { request in
             ChatFullMessageReader(
@@ -766,6 +770,7 @@ extension OpenClawChatView {
                 alignment: isUser ? .trailing : .leading)
         let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
             bubble
+            ChatMessageReactions(viewModel: self.viewModel, message: msg)
             if let outboxState = self.viewModel.outboxState(for: msg.id) {
                 ChatOutboxStatusLabel(state: outboxState)
                     .padding(.trailing, 8)
@@ -824,15 +829,7 @@ extension OpenClawChatView {
                 self.hoveredMessageID = nil
             }
         }
-        #if os(iOS)
-        if isUser || !showsActions {
-            row.contextMenu { self.messageMenuActions(for: msg) }
-        } else {
-            row
-        }
-        #else
         row.contextMenu { self.messageMenuActions(for: msg) }
-        #endif
     }
 
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
@@ -847,6 +844,9 @@ extension OpenClawChatView {
 
     @ViewBuilder
     private func messageMenuActions(for message: OpenClawChatMessage) -> some View {
+        ChatMessageReactionAction(viewModel: self.viewModel, message: message) {
+            self.reactionPickerMessage = message
+        }
         self.copyMessageButton(for: message)
         #if os(iOS)
         self.selectTextButton(for: message)

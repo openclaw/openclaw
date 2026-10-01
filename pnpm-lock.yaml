@@ -904,6 +904,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/cloudflare:
+    dependencies:
+      '@aws-sdk/client-s3':
+        specifier: 3.1136.0
+        version: 3.1136.0
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/cloudflare-ai-gateway:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1490,8 +1500,8 @@ importers:
   extensions/lobster:
     dependencies:
       '@clawdbot/lobster':
-        specifier: 2026.9.13
-        version: 2026.9.13
+        specifier: 2026.9.14
+        version: 2026.9.14
       typebox:
         specifier: 1.3.34
         version: 1.3.34
@@ -2384,9 +2394,6 @@ importers:
       typebox:
         specifier: 1.3.34
         version: 1.3.34
-      ws:
-        specifier: 8.21.3
-        version: 8.21.3
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -2622,6 +2629,9 @@ importers:
 
   packages/llm-core:
     dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       typebox:
         specifier: 1.3.34
         version: 1.3.34
@@ -2834,8 +2844,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/gateway-protocol
       '@openclaw/libterminal':
-        specifier: 0.3.6
-        version: 0.3.6
+        specifier: 0.3.7
+        version: 0.3.7
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
@@ -3432,8 +3442,8 @@ packages:
     resolution: {integrity: sha512-dlT1m5e/0yUL0kRNcQn7yGLVThkgbB0Ga/1AmfDDC/8ik6AIiSf2QLQO2zPYvefsHP0aFgxO93cVLCCfDp7kzQ==}
     engines: {node: '>= 20.12.0'}
 
-  '@clawdbot/lobster@2026.9.13':
-    resolution: {integrity: sha512-sWbtxWkiN1UWVwhoUiMhrIus7ZjbavSQJc8zO3FUTh9p9AUECJrtR7eMyNZmkLP5zxSG8KhbQRjdlCIK2qkWKA==}
+  '@clawdbot/lobster@2026.9.14':
+    resolution: {integrity: sha512-z8XMcIE+o/O8mUtCuC9cZ8Z9rpfnfVZG1MxQ72gG+eHasmltoofULDekIZjNC2Laa2qwvryXxUvFnnD5jX6cXg==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -4697,8 +4707,8 @@ packages:
     resolution: {integrity: sha512-sBm68f4QiZrrqlZxbOlqVIutrmOK/KLZBrwyPIhV7xXJmlPFc6ZET8AggcU3hMDM3dDSUYgA8LUupxwTB2DZsg==}
     engines: {node: '>=22'}
 
-  '@openclaw/libterminal@0.3.6':
-    resolution: {integrity: sha512-lTrj+6t6sVte2S7RAgJS+rjtbRzy9+c6ZE13vfT6VYZhAJ1p6OEHBbXNqKdgKPUCSFmpuMtlzrD4x8HtlfJ2IA==}
+  '@openclaw/libterminal@0.3.7':
+    resolution: {integrity: sha512-zK/XiLc3nDFzRNCIAWKuEp1DoeAZr/U3qxV3ID03Wwlv/sq+yHhq4PRMYaaxcW+ZCr4J4jEwbsDuByFOObwBBQ==}
     engines: {node: ^22.18.0 || >=24.11.0}
     peerDependencies:
       node-pty: '>=1.0.0'
@@ -11015,7 +11025,7 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
-  '@clawdbot/lobster@2026.9.13':
+  '@clawdbot/lobster@2026.9.14':
     dependencies:
       ajv: 8.20.0
       yaml: 2.9.1
@@ -12334,7 +12344,7 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.21.3
       jszip: 3.10.2
 
-  '@openclaw/libterminal@0.3.6':
+  '@openclaw/libterminal@0.3.7':
     dependencies:
       ghostty-web: 0.4.0(patch_hash=eb0a0b91bbf843ba8dceeade968072a6c7a6be402fdd1e80d466e54241b62fa6)
 

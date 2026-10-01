@@ -94,14 +94,14 @@ const reviewed = new Map([
     "src/config/sessions/session-reaction-store.kernel.ts",
     {
       priority: 99,
-      evidence: "Durable reads use worker; writes and incognito reads remain native",
+      evidence: "Durable reads and writes use workers; incognito keeps its native owner",
     },
   ],
   [
     "src/config/sessions/session-reaction-store.ts",
     {
       priority: 99,
-      evidence: "Native reaction writer; worker broker excludes process-held incognito",
+      evidence: "Worker-admitted reaction writes; process-held incognito retains native owner",
     },
   ],
   [
@@ -125,6 +125,9 @@ const workerModules = new Set([
   "extensions/memory-core/src/memory-forget-index-read.ts", // Memory search worker forget-index-plan command only.
   "extensions/memory-core/src/memory-forget-kernel.ts", // Memory origin worker forget mark and purge commands only.
   "extensions/memory-core/src/standing-intents-kernel.ts", // Standing-intent worker command dispatcher only.
+
+  "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
+  "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
 
   "extensions/workboard/src/sqlite-store-kernel.ts", // Workboard SQLite worker backend factory only.
   "extensions/workboard/src/sqlite-store-sessions-board.ts", // Workboard worker kernel sessions-board store only.
@@ -177,6 +180,7 @@ const workerModules = new Set([
   "src/gateway/worker-environments/store.kernel.ts", // Environment worker dispatcher creates this kernel only.
   "src/gateway/worker-environments/terminal-environment-retention.ts", // Read-worker prune pages and environment worker pruning only.
 
+  "src/infra/device-auth-store.kernel.ts", // Shared-state worker SQL; pairing token retirement is supplied only by its worker rotation kernel.
   "src/infra/device-pairing-cloud-worker.ts", // Bootstrap worker dispatcher owns binding checks and completion writes.
   "src/infra/promotions-feed.kernel.ts", // Promotion claims execute through promotions-feed.worker.
   "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
@@ -442,7 +446,7 @@ function render(rows) {
     "",
     "The history cutover leaves selected/current session entries, pending-input/receipt reads, the retained transcript-session key, and lazy subagent source/run-input visibility reads as native work. Ordinary full pages were already worker-backed; raw cursor delta reads now share that worker. Process-held incognito database lifetime and the existing CLI-import history path remain explicit migration gaps. Incognito data cannot be reopened by a durable path in another isolate; this is remaining owner/lifetime work, not a new synchronous exception. A failed durable worker read never selects that local path.",
     "",
-    "Durable session reaction summaries and target-message reads use the admitted history worker. The reaction row kernel remains T1: writes and process-held incognito reads retain their existing native owner. The write cutover is blocked by the current broker contract: `supportsOpenClawAgentDatabaseExecution` excludes incognito scopes, and `openOpenClawAgentSqliteWorkerStore` requires a file identity. Supporting process-held databases requires their owner/lifetime cutover; this partial migration adds no broker or synchronous exception. Reaction mirroring reads durable source conversation bindings through the history worker, including a final read after account/config preparation and immediately before dispatch; synchronous handoff guards retain live reactor, session, and config checks. The conversation registry remains T1 because other synchronous callers are outside this cutover. Schemas, stored bytes, retention, and update behavior are unchanged.",
+    "Durable session reaction summaries and target-message reads use the admitted history worker; reaction writes use the canonical SQLite worker broker with live transaction and commit admission. Process-held incognito reads and writes retain their sole native owner because their database cannot be reopened by path. The synchronous reaction kernel is shared by those admitted worker and incognito paths; no new broker capability or native fallback is added. Reaction mirroring reads durable source conversation bindings through the history worker, including a final read after account/config preparation and immediately before dispatch; synchronous handoff guards retain live reactor, session, and config checks. The conversation registry remains T1 because other synchronous callers are outside this cutover. Schemas, stored bytes, retention, and update behavior are unchanged.",
     "",
     "## Next five independent lanes",
     "",

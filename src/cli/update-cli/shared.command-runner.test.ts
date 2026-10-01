@@ -85,6 +85,19 @@ describe("update CLI shared helpers", () => {
     );
   });
 
+  it("can close a package install's stdin without supplying interactive approval", async () => {
+    await runUpdateStep({
+      name: "package-install",
+      argv: ["pnpm", "add", "-g", "openclaw@2.0.0"],
+      input: "",
+    });
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["pnpm", "add", "-g", "openclaw@2.0.0"],
+      expect.objectContaining({ input: "" }),
+    );
+  });
+
   it("parses complete positive integer timeout values as milliseconds", () => {
     expect(parseUpdateTimeoutMs(" 10 ")).toBe(10_000);
     expect(parseUpdateTimeoutMs("+10")).toBe(10_000);
@@ -255,7 +268,7 @@ describe("update CLI shared helpers", () => {
           "complete\n",
         );
         await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
-        await expect(fs.readdir(checkoutDir)).resolves.toEqual([".git", "checkout.marker"]);
+        expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
         expect(runCommandWithTimeout).toHaveBeenCalledWith(
           [
             "git",

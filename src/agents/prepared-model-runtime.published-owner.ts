@@ -72,6 +72,24 @@ type PublishedModelRuntimeContext = {
   owners: Map<string, PreparedModelRuntimeOwner>;
 };
 
+/** Bind passive reads and retained acquisitions to the same publication owner. */
+export function createPublishedModelRuntimeAccess(
+  context: PublishedModelRuntimeContext,
+  getPublishedReplacement: PublishedModelRuntimeContext["getPendingReplacement"],
+) {
+  const readContext = { ...context, getPendingReplacement: getPublishedReplacement };
+  return {
+    acquire: (input: PreparedModelRuntimeInput) =>
+      projectPublishedModelRuntimeOwner(input, context, retainPublishedModelRuntimeOwner),
+    prepare: (input: PreparedModelRuntimeInput, options: { readPublished?: boolean } = {}) =>
+      projectPublishedModelRuntimeOwner(
+        input,
+        options.readPublished ? readContext : context,
+        (_owner, snapshot) => snapshot,
+      ),
+  };
+}
+
 /** Project or retain the exact published owner before its snapshot crosses an await. */
 export async function projectPublishedModelRuntimeOwner<T>(
   rawInput: PreparedModelRuntimeInput,

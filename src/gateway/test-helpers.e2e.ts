@@ -316,8 +316,8 @@ export async function startGatewayWithClient(
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port =
-      params.port ?? params.portClaim?.port ?? (listener = await reserveGatewayTestListener()).port;
+    listener = await reserveGatewayTestListener(params.portClaim ?? params.port);
+    const port = listener.port;
     const start = () =>
       startGatewayServer(port, {
         bind: "loopback",
@@ -325,7 +325,7 @@ export async function startGatewayWithClient(
         controlUiEnabled: false,
         hotReloadRecovery: params.hotReloadRecovery,
       });
-    const startedServer = await (listener ? listener.start(start) : start());
+    const startedServer = await listener.start(start);
     server = startedServer;
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,

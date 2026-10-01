@@ -1,5 +1,6 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import android.os.SystemClock
@@ -231,6 +232,7 @@ data class GatewayHelloSummary(
   val updateAvailable: GatewayUpdateAvailableSummary?,
   val authRole: String? = null,
   val authScopes: List<String> = emptyList(),
+  val authSessionCap: String? = null,
   val methods: Set<String>? = null,
   val capabilities: Set<String>? = null,
 )
@@ -1803,6 +1805,7 @@ class GatewaySession(
         }
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: target.options.role
+      val authSessionCap = authObj?.get("sessionCap").asStringOrNull()
       controlUiReadCredentials =
         listOfNotNull(deviceToken, selectedAuth.authDeviceToken, selectedAuth.authToken, selectedAuth.authPassword)
           .map(String::trim)
@@ -1897,6 +1900,7 @@ class GatewaySession(
             updateAvailable = parseGatewayUpdateAvailableSummary(snapshot?.get("updateAvailable").asObjectOrNull()),
             authRole = authRole,
             authScopes = authScopes,
+            authSessionCap = authSessionCap,
             methods = methods,
             capabilities = capabilities,
           ),
@@ -2714,8 +2718,6 @@ private fun formatGatewayAuthorityHost(host: String): String {
   val normalizedHost = host.trim().trim('[', ']')
   return if (normalizedHost.contains(":")) "[$normalizedHost]" else normalizedHost
 }
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? =
   when (this) {

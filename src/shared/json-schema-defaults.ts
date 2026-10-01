@@ -1,4 +1,6 @@
 import {
+  decodeJsonPointerSegment,
+  decodeLocalSchemaRefFragment,
   normalizeJsonSchemaForTypeBox,
   type JsonSchemaValue,
 } from "@openclaw/normalization-core/json-schema";
@@ -120,10 +122,6 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
   return `${path}.type: expected string or non-empty string array`;
 }
 
-function decodePointerSegment(segment: string): string {
-  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
-}
-
 function parseJsonPointerArrayIndex(segment: string): number | undefined {
   if (!JSON_POINTER_ARRAY_INDEX_SEGMENT.test(segment)) {
     return undefined;
@@ -162,15 +160,8 @@ function resolveLocalRef(
       return resolveLocalRef(resourceRoot, ref.slice(resourceRoot.$id.length), resourceBaseId);
     }
   }
-  if (!ref.startsWith("#")) {
-    return { found: false };
-  }
-  // Decode the URI fragment before recognizing or splitting its JSON Pointer;
-  // encoded slashes are separators, while ~1 belongs to a single token.
-  let fragment: string;
-  try {
-    fragment = decodeURIComponent(ref.slice(1));
-  } catch {
+  const fragment = decodeLocalSchemaRefFragment(ref);
+  if (fragment === undefined) {
     return { found: false };
   }
   if (fragment === "") {
@@ -180,7 +171,7 @@ function resolveLocalRef(
     let current: unknown = resourceRoot;
     let currentResourceRoot = resourceRoot;
     let currentResourceBaseId = resourceBaseId;
-    for (const segment of fragment.slice(1).split("/").map(decodePointerSegment)) {
+    for (const segment of fragment.slice(1).split("/").map(decodeJsonPointerSegment)) {
       if (Array.isArray(current)) {
         const index = parseJsonPointerArrayIndex(segment);
         if (index === undefined) {

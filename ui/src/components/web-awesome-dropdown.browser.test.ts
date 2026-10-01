@@ -278,6 +278,7 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     await tooltip.updateComplete;
     f.outside.focus();
     f.item.focus();
+    await tooltip.updateComplete;
     const hint = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     await expect.poll(() => hint.open).toBe(true);
     await userEvent.keyboard("{Escape}");

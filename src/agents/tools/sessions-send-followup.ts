@@ -38,7 +38,7 @@ export async function startSessionsSendFollowup(
     if (completion?.accepted && request) {
       // The live owner proves acceptance even when its transport ACK was lost.
       // Preserve that one result obligation; never dispatch another target run.
-      startSessionsSendReplyFlow({
+      await startSessionsSendReplyFlow({
         ...replyContext,
         runId: request.runId,
         completion,

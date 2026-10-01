@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
+import { boardWidget, gatewayContext } from "./board-view.test-support.ts";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
 
 type LifecycleInternals = {
@@ -114,87 +117,83 @@ describe("board widget frame terminal failure message", () => {
 
 describe("board widget frame scroll handoff", () => {
   it.each([true, false])(
-    "reissues scroll authority after document readiness while active=%s",
-    (activeAtReady) => {
+    "reissues scroll authority after document rendering while active=%s",
+    async (activeAtReady) => {
       let active = true;
       const scrollBy = vi.fn();
-      const widget = {
+      const widget = boardWidget({
         name: "long-dashboard",
-        revision: 1,
+        sandboxUrl: "/mcp-app-sandbox",
+        sandboxOrigin: "https://sandbox.example",
+        sandboxPort: 18790,
         viewTicket: "ticket",
-      } as BoardWidget;
+      });
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>Saved dashboard</p>"));
+      const context = gatewayContext(null);
+      const container = document.createElement("div");
+      document.body.append(container);
       const lifecycle = new BoardWidgetFrameLifecycle({
         active: () => active,
         connected: () => true,
-        context: () => undefined,
+        context: () => context,
         refreshFrame: () => undefined,
         reportContentHeight: () => {},
         scrollBy,
         requestUpdate: () => {},
-        resolveFrameUrl: () => () => "/__openclaw__/board/long-dashboard",
-        root: () => document,
+        resolveFrameUrl: () => () => "/__openclaw__/board/long-dashboard?bt=ticket",
+        root: () => container,
         widget: () => widget,
       });
-      const frame = document.createElement("iframe");
-      frame.className = "board-widget__frame";
-      document.body.append(frame);
-      const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
-      const internals = lifecycle as unknown as LifecycleInternals & {
-        notifyBoardHost: (event: Event) => void;
-      };
-      internals.sandboxOrigin = "https://sandbox.example";
-      internals.sandboxHost = {
-        frame,
-        dispose: () => {},
-        handleMessage: () => {},
-        setActive: () => {},
-        update: () => {},
-      };
       lifecycle.connect();
-
-      internals.notifyBoardHost({ currentTarget: frame } as unknown as Event);
-      const initialMessages = postMessage.mock.calls.filter(
-        ([message]) => (message as { type?: string }).type === "openclaw:widget-board-host",
-      );
-      expect(initialMessages).toHaveLength(1);
-      const initialNonce = (initialMessages[0]![0] as { nonce?: string }).nonce;
-
-      if (!activeAtReady) {
-        active = false;
-        lifecycle.activityChanged();
+      render(lifecycle.render(widget), container);
+      const frame = container.querySelector<HTMLIFrameElement>(".board-widget__frame")!;
+      const resourceReady = createDeferred<{ renderId: string }>();
+      const hostNonces: string[] = [];
+      vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((message) => {
+        if (message.type === "openclaw:widget-board-host") {
+          hostNonces.push(message.nonce);
+        } else if (message.method === "ui/notifications/sandbox-resource-ready") {
+          resourceReady.resolve(message.params);
+        }
+      });
+      const receive = (data: object) =>
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            source: frame.contentWindow,
+            origin: "https://sandbox.example",
+            data,
+          }),
+        );
+      try {
+        frame.dispatchEvent(new Event("load"));
+        const initialNonce = hostNonces.at(-1);
+        expect(initialNonce).toEqual(expect.any(String));
+        lifecycle.update();
+        receive({
+          method: "ui/notifications/sandbox-proxy-ready",
+          params: { sandboxUrl: frame.src },
+        });
+        const { renderId } = await resourceReady.promise;
+        if (!activeAtReady) {
+          active = false;
+          lifecycle.activityChanged();
+        }
+        receive({
+          method: "ui/notifications/sandbox-resource-loaded",
+          params: { renderId },
+        });
+        expect(hostNonces.at(-1)).not.toBe(initialNonce);
+        if (!activeAtReady) {
+          active = true;
+          lifecycle.activityChanged();
+        }
+        receive({ type: "openclaw:widget-scroll", deltaY: 96, nonce: initialNonce });
+        expect(scrollBy).not.toHaveBeenCalled();
+        receive({ type: "openclaw:widget-scroll", deltaY: 48, nonce: hostNonces.at(-1) });
+        expect(scrollBy).toHaveBeenCalledExactlyOnceWith(48);
+      } finally {
+        lifecycle.disconnect();
       }
-
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          origin: "https://sandbox.example",
-          data: { type: "openclaw:widget-bridge-ready" },
-        }),
-      );
-
-      if (!activeAtReady) {
-        active = true;
-        lifecycle.activityChanged();
-      }
-
-      const readyMessages = postMessage.mock.calls.filter(
-        ([message]) => (message as { type?: string }).type === "openclaw:widget-board-host",
-      );
-      expect(readyMessages).toHaveLength(2);
-      expect((readyMessages[1]![0] as { nonce?: string }).nonce).not.toBe(initialNonce);
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          origin: "https://sandbox.example",
-          data: {
-            type: "openclaw:widget-scroll",
-            deltaY: 48,
-            nonce: (readyMessages[1]![0] as { nonce?: string }).nonce,
-          },
-        }),
-      );
-      expect(scrollBy).toHaveBeenCalledWith(48);
-      lifecycle.disconnect();
     },
   );
 

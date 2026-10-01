@@ -11,6 +11,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case sessionObserver(SessionObserverDigest)
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
+    case sessionReaction(OpenClawChatReactionEvent)
     case agent(OpenClawAgentEventPayload)
     case progressCardChanged(ProgressCardChangedEvent)
     case questionRequested(QuestionRecord)
@@ -447,12 +448,12 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         agentID: String? = nil,
         expectedSessionID: String? = nil,
         expectedMarkedUnreadAt: Double?? = nil,
-        label: String??,
-        category: String??,
+        label: String?? = nil,
+        category: String?? = nil,
         color: String?? = nil,
-        pinned: Bool?,
-        archived: Bool?,
-        unread: Bool?) async throws -> OpenClawChatSessionPatchReceipt?
+        pinned: Bool? = nil,
+        archived: Bool? = nil,
+        unread: Bool? = nil) async throws -> OpenClawChatSessionPatchReceipt?
     {
         try await self.patchSessionImpl(
             OpenClawChatSessionTarget(sessionKey: key, agentID: agentID),
@@ -729,6 +730,14 @@ public enum OpenClawChatMediaKind: String, Sendable {
     case video
     case file
 
+    public var maximumDownloadBytes: Int {
+        switch self {
+        case .image: 12 * 1024 * 1024
+        case .audio, .video: 16 * 1024 * 1024
+        case .file: 100 * 1024 * 1024 // Gateway document limit (media-core/constants).
+        }
+    }
+
     public var acceptHeader: String {
         self == .file ? "*/*" : "\(rawValue)/*"
     }
@@ -826,6 +835,7 @@ public protocol OpenClawChatTransport: Sendable {
     func gatewayAdvertisesMethod(_ method: String) async -> Bool?
     func attachmentLimits() async -> GatewayAttachmentLimits?
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard?
+    func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
     func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext?
@@ -992,6 +1002,10 @@ extension OpenClawChatTransport {
     }
 
     public func fetchProgressCard(sessionKey _: String, agentID _: String?) async throws -> ProgressCard? {
+        nil
+    }
+
+    public func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
         nil
     }
 

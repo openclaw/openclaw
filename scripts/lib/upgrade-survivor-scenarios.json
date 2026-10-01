@@ -1,6 +1,7 @@
 {
   "scenarios": [
     "base",
+    "backup-schedule",
     "abandoned-update",
     "legacy-operator-state",
     "workshop-doctor-recovery",

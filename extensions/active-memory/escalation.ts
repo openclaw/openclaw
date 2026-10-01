@@ -51,6 +51,18 @@ const LOCALIZED_RECALL_INTENT_PATTERNS = [
     retrospective:
       /(?<!\p{L})(?:вчера|позавчера|раньше|прежде|обсуждал[аи]?|решил[аи]?|договорились|договорил(?:ся|ась)|говорил[аи]?|упоминали|упомянул[аи]?|выбрал[аи]?)(?!\p{L})|в\s+прошлый\s+раз|на\s+прошлой\s+неделе|в\s+прошлом\s+месяце/iu,
   },
+  {
+    // -amos verbs are syncretic (present = past), so intent requires an
+    // adjacent past marker or recall-question construction; "lembra" needs a
+    // retrospective interrogative (o que/do que/quando/...) rather than a
+    // bare question mark, so "lembra de configurar isso?" stays a reminder.
+    intent:
+      /(?<![\p{L}\p{N}_])(?:(?:lembra|recorda)(?:-se)?\s+(?:o\s+que|do\s+que|quando|onde|por\s+que|como|quem)\b|(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|dia\s+desses|[úu]ltima\s+vez).{0,30}(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos)|(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos).{0,30}(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|dia\s+desses|[úu]ltima\s+vez|hoje)|a\s+gente\s+(?:discutiu|decidiu|conversou|falou|combinou)|o\s+que\s+(?:decidimos|discutimos|conversamos|falamos|combinamos))(?![\p{L}\p{N}_])/iu,
+    future:
+      /(?<![\p{L}\p{N}_])(?:amanh[ãa]|depois\s+de\s+amanh[ãa]|pr[óo]xima\s+semana|pr[óo]ximo\s+(?:m[êe]s|ano)|(?:semana|m[êe]s|ano)\s+que\s+vem|daqui\s+a|no\s+futuro|em\s+breve|mais\s+tarde|hoje\s+[àa]\s+(?:noite|tarde))(?![\p{L}\p{N}_])/iu,
+    retrospective:
+      /(?<![\p{L}\p{N}_])(?:(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|dia\s+desses|[úu]ltima\s+vez).{0,30}(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos|discutiu|decidiu|conversou|falou|combinou)|(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos).{0,30}(?:ontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|[úu]ltima\s+vez)|(?:lembra|recorda)(?:-se)?\s+(?:o\s+que|do\s+que|quando|onde|por\s+que|como|quem)\b.{0,30}(?:decidimos|discutimos|conversamos|falamos|combinamos|investigamos))(?![\p{L}\p{N}_])/iu,
+  },
 ];
 
 export function hasRecallIntent(message: string): boolean {
