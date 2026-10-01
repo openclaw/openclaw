@@ -68,8 +68,8 @@ it.each([
     ]);
     const queued = listStoredChatOutboxes(host);
     expect(queued).toHaveLength(1);
-    expect(host.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.request.mock.calls.some(([method]) => method === "chat.history")).toBe(false);
+    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
     renderedErrors.length = 0;
 
     if (scenario === "connection epoch" || scenario === "load failure after reconnect") {
@@ -87,14 +87,16 @@ it.each([
     await draining;
 
     if (scenario === "current") {
-      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything());
+      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything(), {
+        timeoutMs: 30_000,
+      });
       const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
       expect(sends).toHaveLength(1);
       expect(sends[0]?.[1]).toMatchObject({ sessionKey, message: "Retained outbox message" });
       expect(listStoredChatOutboxes(host)).toEqual([]);
     } else {
-      expect(host.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.request.mock.calls.some(([method]) => method === "chat.history")).toBe(false);
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
       expect(listStoredChatOutboxes(host)).toEqual(queued);
       if (scenario === "load failure") {
         expect(host.chatError).toEqual(expect.any(String));

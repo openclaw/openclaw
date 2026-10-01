@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { findFenceSpanAt, parseFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
@@ -143,7 +144,7 @@ export async function readPostCompactionContext(
  * Extract named sections from markdown content.
  * Matches H2 (##) or H3 (###) headings case-insensitively.
  * Skips content inside fenced code blocks.
- * Captures until the next heading of same or higher level, or end of string.
+ * Captures until the next heading of same or higher level (including H1), or end of string.
  */
 export function extractSections(
   content: string,
@@ -152,27 +153,32 @@ export function extractSections(
 ): string[] {
   const results: string[] = [];
   const lines = content.split("\n");
+  const fenceSpans = parseFenceSpans(content);
+  let lineStart = 0;
+  // Span lookup excludes the opener line itself; opener lines never match a heading anyway.
+  const lineInFence = lines.map((line) => {
+    const inFence = findFenceSpanAt(fenceSpans, lineStart) !== undefined;
+    lineStart += line.length + 1;
+    return inFence;
+  });
 
   for (const name of sectionNames) {
     const sectionLines: string[] = [];
     let inSection = false;
     let sectionLevel = 0;
-    let inCodeBlock = false;
 
-    for (const line of lines) {
-      const isFence = line.trimStart().startsWith("```");
-      if (isFence) {
-        inCodeBlock = !inCodeBlock;
-      }
-      const headingMatch = !isFence && !inCodeBlock ? line.match(/^(#{2,3})\s+(.+?)\s*$/) : null;
+    for (const [index, line] of lines.entries()) {
+      const headingMatch = lineInFence[index] ? null : line.match(/^(#{1,3})\s+(.+?)\s*$/);
       if (headingMatch) {
         const level = expectDefined(headingMatch[1], "heading match capture group 1").length;
         const headingText = headingMatch[2];
         if (inSection && level <= sectionLevel) {
           break;
         }
+        // H1 headings only end a section; selection stays limited to H2/H3.
         if (
           !inSection &&
+          level >= 2 &&
           normalizeLowercaseStringOrEmpty(headingText) === normalizeLowercaseStringOrEmpty(name)
         ) {
           inSection = true;

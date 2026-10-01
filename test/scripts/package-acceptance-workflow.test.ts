@@ -41,6 +41,7 @@ import {
 } from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import { copyNativeCompilerPackage } from "./native-boundary-fixture.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
@@ -398,14 +399,8 @@ function frozenWorkflowFixture(
     const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
     const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
     const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
-    cpSync(dirname(installedParser), join(tooling, "node_modules/typescript"), {
-      recursive: true,
-      dereference: true,
-    });
-    cpSync(dirname(installedNative), join(tooling, "node_modules", nativeName), {
-      recursive: true,
-      dereference: true,
-    });
+    copyNativeCompilerPackage(dirname(installedParser), join(tooling, "node_modules/typescript"));
+    copyNativeCompilerPackage(dirname(installedNative), join(tooling, "node_modules", nativeName));
   }
   return {
     root,
@@ -11226,9 +11221,19 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(setupNodeWith).not.toHaveProperty("dependency-cache");
     expect(setupNodeWith).not.toHaveProperty("sticky-disk");
     expect(setupNodeWith["cache-mode"]).toBe("restore");
-    expect(checkTestboxJob["timeout-minutes"]).toBe(
-      "${{ fromJSON(inputs.timeout_minutes || '240') }}",
-    );
+    for (const [minutes, expected] of [
+      ["45", 45],
+      ["", 60],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(checkTestboxJob["timeout-minutes"], {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          additionalNeeds: { admission: { outputs: { minutes }, result: "success" } },
+        }),
+      ).toBe(expected);
+    }
     for (const step of [runTestboxStep, runArmTestboxStep, runBuildArtifactsTestboxStep]) {
       expect(step.uses).toBe(RUN_TESTBOX_WITH_FAILURE_REPORTING);
     }
@@ -11236,8 +11241,27 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d",
     );
     expect(windowsTestboxActionMarker.if).toBe("${{ false }}");
-    expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
-    expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
+    for (const step of [
+      runTestboxStep,
+      runArmTestboxStep,
+      runBuildArtifactsTestboxStep,
+      closeTestboxSshStep,
+    ]) {
+      for (const [eventName, expected] of [
+        ["workflow_dispatch", true],
+        ["pull_request", false],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            failed: true,
+            cancelled: true,
+          }),
+        ).toBe(expected);
+      }
+    }
     expect(closeTestboxSshStep.run).toContain(
       `sudo sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }'`,
     );
@@ -11246,10 +11270,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     expect(checkTestboxSteps.indexOf(closeTestboxSshStep)).toBe(
       checkTestboxSteps.indexOf(runTestboxStep) + 1,
-    );
-    expect(runArmTestboxStep.if).toBe("always()");
-    expect(runBuildArtifactsTestboxStep.if).toBe(
-      "github.event_name == 'workflow_dispatch' && always()",
     );
     expect(runWindowsTestboxStep.if).toBe("always()");
     expect(runWindowsTestboxStep.env?.JOB_STATUS).toBe("${{ job.status }}");

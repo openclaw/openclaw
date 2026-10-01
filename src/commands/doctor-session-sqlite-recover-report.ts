@@ -62,6 +62,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   targets: readonly SessionStoreTarget[];
   historicalArchiveStores?: ReadonlySet<string>;
   recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
+  prepareTarget?: (target: SessionSqliteMigrationTargetInput) => Promise<{ repaired: number }>;
   validateTarget: SessionSqliteRecoverTargetValidator;
 }): Promise<DoctorSessionSqliteReport> {
   const trustedTargets = params.targets.map((target) => ({
@@ -76,10 +77,17 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     );
     const retainedReports: DoctorSessionSqliteTargetReport[] = [...recoveredCorruptTargets];
     for (const target of trustedTargets) {
-      if (recoveredCorruptTargets.some((report) => report.sqlitePath === target.sqlitePath)) {
+      const recovered = recoveredCorruptTargets.find(
+        (report) => report.sqlitePath === target.sqlitePath,
+      );
+      if (recovered && recovered.issues.length > 0) {
         continue;
       }
       try {
+        const preparation = await params.prepareTarget?.(target);
+        if (recovered) {
+          continue;
+        }
         if (
           hasDeferredPluginSessionImport({
             target,
@@ -90,6 +98,8 @@ export async function recoverDoctorSessionSqliteTargets(params: {
           params.historicalArchiveStores?.has(target.storePath)
         ) {
           retainedReports.push(await params.validateTarget(target));
+        } else if (preparation?.repaired) {
+          retainedReports.push(createEmptyRecoverTargetReport(target, target.sqlitePath));
         }
       } catch (error) {
         retainedReports.push(
@@ -127,13 +137,24 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       ) || params.historicalArchiveStores?.has(target.storePath),
   );
   for (const manifestTarget of recoveryTargets) {
-    targetReports.push(
-      await params.validateTarget({
-        agentId: manifestTarget.agentId,
-        sqlitePath: manifestTarget.sqlitePath,
-        storePath: manifestTarget.storePath,
-      }),
-    );
+    try {
+      await params.prepareTarget?.(manifestTarget);
+      targetReports.push(
+        await params.validateTarget({
+          agentId: manifestTarget.agentId,
+          sqlitePath: manifestTarget.sqlitePath,
+          storePath: manifestTarget.storePath,
+        }),
+      );
+    } catch (error) {
+      targetReports.push(
+        createRecoverInspectionFailureTargetReport(
+          manifestTarget,
+          manifestTarget.sqlitePath,
+          error,
+        ),
+      );
+    }
   }
   const reportTarget =
     targetReports[0] ?? createSyntheticRecoverTargetReport(params.env, failedRun.manifestPath);

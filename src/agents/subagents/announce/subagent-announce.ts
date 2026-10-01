@@ -86,7 +86,6 @@ export type SubagentAnnounceFlowOutcome =
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
-  expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   modelRouteChange?: string;
   preserveModelRouteNotice: boolean;
@@ -100,12 +99,9 @@ function buildAnnounceReplyInstruction(params: {
     return SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION;
   }
   if (params.requesterIsSubagent) {
-    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+    return `${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} Convert the reviewed outcome into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
   }
-  if (params.expectsCompletionMessage) {
-    return `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} only when this exact result is already visible to the user in this same turn.`;
-  }
-  return `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  return `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update unless this exact result is already visible to the user in this same turn. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim.`;
 }
 
 export function hasUsableSessionEntry(entry: unknown): entry is Record<string, unknown> {
@@ -158,6 +154,7 @@ type SubagentAnnounceFlowParams = {
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   completionRequesterSessionId?: string;
+  completionRequesterLifecycleRevision?: string;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
   /** Deliver only frozen terminal facts; never inspect or mutate the child session. */
@@ -555,7 +552,6 @@ async function runSubagentAnnounceFlowBound(
         : undefined;
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
-      expectsCompletionMessage,
       completionTarget: params.completionTarget,
       modelRouteChange,
       // Nested and local operator parents may report the route fact. External
@@ -612,6 +608,7 @@ async function runSubagentAnnounceFlowBound(
       expectsCompletionMessage,
       completionTarget: params.completionTarget,
       completionRequesterSessionId: params.completionRequesterSessionId,
+      completionRequesterLifecycleRevision: params.completionRequesterLifecycleRevision,
       directIdempotencyKey,
       onDeliveryResult: reportDeliveryResult,
       signal: params.signal,

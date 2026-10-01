@@ -465,6 +465,7 @@ src/config/merge-patch.ts
 src/config/model-config-vocabulary.ts
 src/config/model-cost.ts
 src/config/model-input.ts
+src/config/model-input-normalization.ts
 src/config/model-policy-allowlist-migration.ts
 src/config/model-policy-ref.ts
 src/config/model-provider-config.ts

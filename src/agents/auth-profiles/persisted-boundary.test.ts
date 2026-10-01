@@ -9,11 +9,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { createApiKeyCredential, oidcIdentity } from "./credential-fixtures.test-support.js";
+import { applyLegacyAuthStore, coerceLegacyAuthStore } from "./legacy-flat-credential.js";
 import { resolveAuthProfileOrder } from "./order.js";
 import {
-  applyLegacyAuthStore,
   buildPersistedAuthProfileSecretsStore,
-  coerceLegacyAuthStore,
   coercePersistedAuthProfileStore,
   mergeAuthProfileStores,
 } from "./persisted.js";
@@ -23,6 +22,28 @@ import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 describe("persisted auth profile boundary", () => {
+  it.each([
+    { mode: "api_key", provider: "example", apiKey: "synthetic-key" },
+    { type: "apiKey", provider: "example", apiKey: "synthetic-key" },
+    { type: "api_key", provider: "example", api_key: "synthetic-key" },
+    { type: "api_key", provider: "example", key: { source: "env", id: "SYNTHETIC_KEY" } },
+    { type: "token", provider: "example", token: { source: "env", id: "SYNTHETIC_TOKEN" } },
+  ])(
+    "refuses unmigrated credential fields before publishing a partial store ($type/$mode)",
+    (credential) => {
+      const raw = {
+        version: 1,
+        profiles: {
+          "example:old": credential,
+          "example:current": { type: "api_key", provider: "example", key: "synthetic-current-key" },
+        },
+      };
+      const original = structuredClone(raw);
+      expect(() => coercePersistedAuthProfileStore(raw)).toThrow("openclaw doctor --fix");
+      expect(raw).toEqual(original);
+    },
+  );
+
   it.each([
     {
       name: "token-expired classification with auth reason",
@@ -69,14 +90,14 @@ describe("persisted auth profile boundary", () => {
     }
   });
 
-  it("normalizes malformed persisted credentials and state before runtime use", () => {
+  it("normalizes malformed canonical credentials and state before runtime use", () => {
     const store = coercePersistedAuthProfileStore({
       version: "not-a-version",
       profiles: {
         "openai:default": {
-          type: "apiKey",
+          type: "api_key",
           provider: " OpenAI ",
-          apiKey: "demo-openai-key",
+          key: "demo-openai-key",
           keyRef: { source: "env", id: "OPENAI_API_KEY" },
           metadata: { account: "acct_123", bad: 123 },
           copyToAgents: "yes",
@@ -84,14 +105,14 @@ describe("persisted auth profile boundary", () => {
           displayName: "Work",
         },
         "openai:legacy-api-key": {
-          type: "apiKey",
+          type: "api_key",
           provider: "openai",
-          apiKey: "legacy-openai-key",
+          key: "legacy-openai-key",
         },
         "openai:legacy-malformed-ref": {
-          type: "apiKey",
+          type: "api_key",
           provider: "openai",
-          apiKey: "legacy-fallback-key",
+          key: "legacy-fallback-key",
           keyRef: { source: "env", id: "" },
         },
         "minimax:default": {

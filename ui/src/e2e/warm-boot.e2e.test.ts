@@ -29,7 +29,7 @@ async function expectOwnMessageAlignment(page: Page): Promise<void> {
     .toEqual({ peer: false, alignment: "end" });
 }
 
-async function waitForPersistedWarmState(page: Page, eligible = true): Promise<void> {
+async function waitForPersistedWarmState(page: Page): Promise<void> {
   await expect
     .poll(() =>
       page.evaluate(async () => {
@@ -98,7 +98,7 @@ async function waitForPersistedWarmState(page: Page, eligible = true): Promise<v
         };
       }),
     )
-    .toEqual({ bootRecord: eligible, roster: eligible, transcript: true });
+    .toEqual({ bootRecord: true, roster: true, transcript: true });
 }
 
 suite.define(() => {
@@ -173,7 +173,7 @@ suite.define(() => {
         });
         await page.goto(
           controlUiSessionUrl(suite.server.baseUrl, sessionKey) +
-            (profile === "device-token" ? "" : "#token=test-token"),
+            (profile === "device-token" || profile === "trusted-proxy" ? "" : "#token=test-token"),
         );
         await gateway.waitForRequest("connect");
         await page.locator(".connect-splash").waitFor();
@@ -186,7 +186,7 @@ suite.define(() => {
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
         }
-        await waitForPersistedWarmState(page, profile !== "trusted-proxy");
+        await waitForPersistedWarmState(page);
         const hello = await page.evaluate(() => {
           const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
             "openclaw-app",
@@ -200,20 +200,6 @@ suite.define(() => {
 
         await page.reload();
         const connect = await gateway.waitForRequest("connect");
-        if (profile === "trusted-proxy") {
-          await page.locator(".connect-splash").waitFor();
-          expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-          expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
-          expect(await transcript.getByText(transcriptText, { exact: true }).count()).toBe(0);
-          expect(await gateway.getRequests("sessions.list")).toEqual([]);
-          expect(await gateway.getRequests("chat.startup")).toEqual([]);
-          await waitForPersistedWarmState(page, false);
-          await page.screenshot({ path: path.join(suite.artifactDir, "proxy-before-hello.png") });
-          await gateway.resolveDeferred("connect");
-          await transcript.getByText(transcriptText, { exact: true }).waitFor();
-          await waitForPersistedWarmState(page, false);
-          return;
-        }
         await sidebar.locator(".nav-item--home").waitFor();
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
@@ -257,6 +243,8 @@ suite.define(() => {
           await gateway.deferNext("chat.startup");
           await gateway.resolveDeferred("connect", {
             ...hello,
+            // Presence attribution alone does not change the authenticated storage owner.
+            auth: { ...hello.auth, recoveryScope: "e2e-profile-b-recovery-scope" },
             snapshot: {
               ...(typeof hello.snapshot === "object" && hello.snapshot !== null
                 ? hello.snapshot

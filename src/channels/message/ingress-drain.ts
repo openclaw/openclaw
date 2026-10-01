@@ -26,6 +26,7 @@ import {
   activeClaimKey,
   createIngressSettleOwner,
   IngressAdoptionLostError,
+  isPreAdoptionState,
   resolveLaneKey,
   sortedKeys,
   type ActiveHandlerState,
@@ -311,10 +312,7 @@ export function createChannelIngressDrain<
     state: ActiveHandlerState<TPayload, TMetadata>,
     releaseOptions: { lastError?: string; recordAttempt?: boolean },
   ) => {
-    if (state.phase !== "deferred" && state.phase !== "dispatching") {
-      return;
-    }
-    if (state.guillotined || state.superseded) {
+    if (!isPreAdoptionState(state)) {
       return;
     }
     clearStallTimer(state);
@@ -368,10 +366,7 @@ export function createChannelIngressDrain<
       },
       deferredHeartbeatIntervalMs: Math.max(1, Math.floor(adoptionStallTimeoutMs / 3)),
       onAdoptionFinalizing: () => {
-        if (state.phase !== "dispatching" && state.phase !== "deferred") {
-          return;
-        }
-        if (state.guillotined || state.superseded) {
+        if (!isPreAdoptionState(state)) {
           return;
         }
         // Adoption finalization (settlement hold) owns the claim; do not let a
@@ -379,10 +374,7 @@ export function createChannelIngressDrain<
         clearStallTimer(state);
       },
       onFailed: async (error) => {
-        if (state.phase !== "dispatching" && state.phase !== "deferred") {
-          return;
-        }
-        if (state.guillotined || state.superseded) {
+        if (!isPreAdoptionState(state)) {
           return;
         }
         // Keep recovery armed until disposition commits; removeActive clears it after success.

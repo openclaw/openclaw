@@ -142,53 +142,33 @@ it.each(["capture", "operator tool"])(
             await captureGatewayOperatorRunAuthority({ client, context }),
             "operator authority",
           );
+          const { authority } = retained;
           try {
-            retained.authority.assertCurrent();
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "a" }),
-            ).toBe(true);
+            authority.assertCurrent();
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(true);
             cfg = {
               ...cfg,
               agents: { defaults: { model: { primary: "fixture/b", fallbacks: ["fixture/a"] } } },
             };
             publishOperatorRoleConfigChange(context);
-            expect(retained.authority.modelPolicy?.models).toEqual([
+            expect(authority.modelPolicy?.models).toEqual([
               { provider: "fixture", model: "b" },
               { provider: "fixture", model: "a" },
             ]);
-            const roles = expectDefined(cfg.gateway?.roles, "configured roles");
-            cfg = {
-              ...cfg,
-              gateway: {
-                ...cfg.gateway,
-                roles: {
-                  ...roles,
-                  definitions: {
-                    ...roles.definitions,
-                    reader: {
-                      ...expectDefined(roles.definitions.reader, "reader role"),
-                      modelPolicy: { allow: ["fixture/b", "fixture/c"] },
-                    },
-                  },
-                },
-              },
+            cfg = structuredClone(cfg);
+            expectDefined(cfg.gateway?.roles?.definitions.reader, "reader role").modelPolicy = {
+              allow: ["fixture/b", "fixture/c"],
             };
             publishOperatorRoleConfigChange(context);
-            expect(retained.authority.signal?.aborted).toBe(false);
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "a" }),
-            ).toBe(false);
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "b" }),
-            ).toBe(true);
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "c" }),
-            ).toBe(false);
-            const release = expectDefined(retained.authority.retain, "operator retention")();
+            expect(authority.signal?.aborted).toBe(false);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(false);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(true);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(false);
+            const release = expectDefined(authority.retain, "operator retention")();
             retained.release();
-            retained.authority.assertCurrent();
+            authority.assertCurrent();
             release();
-            expect(retained.authority.assertCurrent).toThrow("no longer active");
+            expect(authority.assertCurrent).toThrow("no longer active");
           } finally {
             retained.release();
           }

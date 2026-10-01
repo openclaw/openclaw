@@ -8,6 +8,7 @@ import type { SessionsRewindResult } from "../../api/types.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
   activeHistory as emptyActiveHistory,
@@ -141,7 +142,7 @@ it("requests the configured default agent for the global workspace alias", async
   expect(request).toHaveBeenCalledWith(
     "chat.history",
     { sessionKey: "workspace", agentId: "main", limit: 80, maxBytes: 256 * 1024 },
-    { signal: expect.any(AbortSignal) },
+    { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
   );
 });
 
@@ -171,11 +172,18 @@ it.each([false, true])("retains owned subscriptions when releases fail (both=%s)
   await syncSelectedSessionMessageSubscription(state);
   expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(both ? selected.key : previous.key);
   expect(state.chatSessionMessageSubscription).toBe(both ? selected : previous);
-  expect(state.sessionsError).toContain("previous release failed");
+  expect(getChatHistoryLoadState(state)).toMatchObject({
+    phase: "failed",
+    message: expect.stringContaining("previous release failed"),
+  });
+  expect(state.sessionsError).toBeNull();
   expect(release).toHaveBeenNthCalledWith(1, previous);
   expect(release).toHaveBeenNthCalledWith(2, selected);
   if (both) {
-    expect(state.sessionsError).toContain("replacement release failed");
+    expect(getChatHistoryLoadState(state)).toMatchObject({
+      phase: "failed",
+      message: expect.stringContaining("replacement release failed"),
+    });
     await syncSelectedSessionMessageSubscription(state);
     expect(release).toHaveBeenNthCalledWith(3, previous);
     expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(selected.key);

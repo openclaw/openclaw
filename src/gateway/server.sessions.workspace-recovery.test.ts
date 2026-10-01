@@ -167,14 +167,18 @@ describe.each([
     fixture.expectPreserved();
   });
 
-  test.each([
-    "accepted result on offline runner",
-    "available runner",
-    "unknown runner",
-    "stale pending generation",
-    "stale pending environment",
-    "stale pending epoch",
-  ] as const)("keeps the ordinary drain for %s", async (scenario) => {
+  // Both RPCs use the same drain owner; cover each ordinary-drain branch once.
+  const scenarios: RecoveryScenario[] =
+    method === "sessions.patch"
+      ? ["accepted result on offline runner"]
+      : [
+          "available runner",
+          "unknown runner",
+          "stale pending generation",
+          "stale pending environment",
+          "stale pending epoch",
+        ];
+  test.each(scenarios)("keeps the ordinary drain for %s", async (scenario) => {
     const fixture = await seedPendingWorkspace(scenario);
     const result = await directSessionReq(
       method,

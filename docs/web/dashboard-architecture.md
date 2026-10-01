@@ -271,8 +271,12 @@ Managed `[embed ref="..."]` previews use that authenticated path whenever their
 effective sandbox policy permits scripts, including the default with no explicit
 sandbox field. Explicit strict previews remain script-free.
 There is no completed-document cache: Canvas permits replacing named document
-IDs, so a remount reads the current source again. Reconnection retires pending
-results from the previous connection.
+IDs, so a remount reads the current source again. A transient disconnect keeps
+an already-mounted inline iframe and its local interaction state, but retires
+pending results and server-action authority from the previous connection.
+Reconnect revalidates the document: unchanged bytes preserve the frame, while
+changed content or identity replaces it. This is in-memory presentation retention,
+not a durable document cache or permission to replay widget actions.
 
 ### Website widgets
 

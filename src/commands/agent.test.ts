@@ -81,7 +81,6 @@ import { getAgentAttemptExecutionMocks } from "./agent-command-state.test-mocks.
 import {
   createDefaultAgentResult,
   expectOwnedCommandSession,
-  expectSqliteSessionFileMarker,
   readSessionStore,
   useRealCommandSessionPersistence,
   writeSessionStoreSeed,
@@ -260,37 +259,6 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
           }
         }
         return deliveryResult;
-      },
-    ),
-  };
-});
-
-vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
-  return {
-    resolveSessionTranscriptFile: vi.fn(
-      async (params: {
-        sessionId: string;
-        sessionKey: string;
-        sessionEntry?: { sessionFile?: string; sessionId?: string };
-        sessionStore?: Record<string, { sessionFile?: string; sessionId?: string }>;
-        storePath?: string;
-        agentId: string;
-        threadId?: string | number;
-      }) => {
-        const sessionFile =
-          params.sessionEntry?.sessionFile ??
-          `sqlite:${params.agentId}:${params.sessionId}:${params.storePath ?? ""}`;
-        let sessionEntry = params.sessionEntry;
-        if (params.sessionStore && params.sessionKey) {
-          const existingEntry = params.sessionStore[params.sessionKey] ?? {};
-          sessionEntry = {
-            ...existingEntry,
-            sessionId: params.sessionId,
-            sessionFile,
-          };
-          params.sessionStore[params.sessionKey] = sessionEntry;
-        }
-        return { sessionFile, sessionEntry };
       },
     ),
   };
@@ -1897,7 +1865,7 @@ describe("agentCommand", () => {
 
   registerAgentReplyPolicyTests({ withTempHome, mockConfig, runtime });
 
-  it("passes resolved session-id resume files to embedded runs", async () => {
+  it("passes resolved session-id routing context to embedded runs", async () => {
     await withTempHome(async (home) => {
       const resumeStore = path.join(home, "sessions-resume.json");
       await writeSessionStoreSeed(resumeStore, {
@@ -1916,10 +1884,17 @@ describe("agentCommand", () => {
 
       const callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionId).toBe("session-123");
-      expectSqliteSessionFileMarker({
+      expect(callArgs).toMatchObject({
         agentId: "main",
-        sessionFile: callArgs?.sessionFile,
+        sessionKey: "agent:main:foo",
+        sessionFile: "agent:main:foo",
+      });
+      expect(
+        vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+      ).toEqual({
+        agentId: "main",
         sessionId: "session-123",
+        sessionKey: "agent:main:foo",
         storePath: resumeStore,
       });
     });
@@ -2462,9 +2437,17 @@ describe("agentCommand", () => {
       );
       let callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionKey).toBe("agent:ops:main");
-      expectSqliteSessionFileMarker({
+      expect(callArgs?.sessionId).toBeTruthy();
+      expect(callArgs).toMatchObject({
         agentId: "ops",
-        sessionFile: callArgs?.sessionFile,
+        sessionFile: "agent:ops:main",
+      });
+      expect(
+        vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+      ).toEqual({
+        agentId: "ops",
+        sessionId: callArgs?.sessionId,
+        sessionKey: "agent:ops:main",
         storePath: store,
       });
       expect(callArgs?.messageChannel).toBe("slack");
@@ -2578,9 +2561,14 @@ describe("agentCommand", () => {
       let callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
-      expectSqliteSessionFileMarker({
+      expect(callArgs?.sessionId).toBeTruthy();
+      expect(callArgs?.sessionFile).toBe("agent:ops:incident-42");
+      expect(
+        vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+      ).toEqual({
         agentId: "ops",
-        sessionFile: callArgs?.sessionFile,
+        sessionId: callArgs?.sessionId,
+        sessionKey: "agent:ops:incident-42",
         storePath: store,
       });
 
@@ -2597,9 +2585,14 @@ describe("agentCommand", () => {
         const sessionId = expectDefined(callArgs?.sessionId, "embedded session id");
         expect(callArgs?.agentId).toBe("ops");
         expect(callArgs?.sessionKey).toBe(sessionKey);
-        expectSqliteSessionFileMarker({
+        expect(sessionId).toBeTruthy();
+        expect(callArgs?.sessionFile).toBe(sessionKey);
+        expect(
+          vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+        ).toEqual({
           agentId: "ops",
-          sessionFile: callArgs?.sessionFile,
+          sessionId,
+          sessionKey,
           storePath: store,
         });
         expectOwnedCommandSession({
@@ -2696,9 +2689,14 @@ describe("agentCommand", () => {
         const sessionId = expectDefined(callArgs?.sessionId, "embedded session id");
         expect(callArgs?.agentId).toBe("ops");
         expect(callArgs?.sessionKey).toBe(sessionKey);
-        expectSqliteSessionFileMarker({
+        expect(sessionId).toBeTruthy();
+        expect(callArgs?.sessionFile).toBe(sessionKey);
+        expect(
+          vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+        ).toEqual({
           agentId: "ops",
-          sessionFile: callArgs?.sessionFile,
+          sessionId,
+          sessionKey,
           storePath: store,
         });
         expectOwnedCommandSession({

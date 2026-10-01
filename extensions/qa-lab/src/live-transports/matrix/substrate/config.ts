@@ -55,13 +55,6 @@ type MatrixQaDmConfigOverrides = {
   sessionScope?: "per-room" | "per-user";
   threadReplies?: MatrixQaThreadRepliesMode;
 };
-type MatrixQaThreadBindingsConfigOverrides = {
-  enabled?: boolean;
-  idleHours?: number;
-  maxAgeHours?: number;
-  spawnSessions?: boolean;
-  defaultSpawnContext?: "isolated" | "fork";
-};
 type MatrixQaExecApprovalsConfigOverrides = {
   agentFilter?: string[];
   approvers?: string[];
@@ -93,7 +86,7 @@ export type MatrixQaConfigOverrides = {
   startupVerification?: "if-unverified" | "off";
   streaming?: MatrixQaStreamingMode | MatrixQaStreamingConfig | boolean;
   textChunkLimit?: number;
-  threadBindings?: MatrixQaThreadBindingsConfigOverrides;
+  threadBindings?: NonNullable<OpenClawConfig["session"]>["threadBindings"];
   threadReplies?: MatrixQaThreadRepliesMode;
   audio?: MatrixQaAudioConfigOverrides;
   mediaModels?: MatrixQaMediaModelsOverrides;

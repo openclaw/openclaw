@@ -293,16 +293,18 @@ Isolated scheduled jobs can wait for an inline reply, but receive no detached re
 
 These reply deliveries apply to new or follow-up turns. Default sends with no reply wait to your own running child skip separate reply delivery and leave completion with the active run's owner. `mode: "steer"` returns admission only for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acceptance is not proof of transcript persistence or model consumption, and does not make the in-memory steering queue restart-durable. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
 
+An operator with `operator.sessions.write` can use `mode: "notify"` for an authorized session they own, including an owned child. Notifications retain the requester's current authority and target-session checks before queueing. They remain in memory and do not start a run.
+
 Child coordination stays in agent context and raw transcripts. The receiving chat hides child reports and automatic coordination replies, while normal task-completion summaries and direct human answers remain visible. Historical messages without source provenance cannot be classified as child traffic.
 
 Pass `watch: true` to also register the sender as a state-change watcher of the target: when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince`. Registration happens after successful dispatch, targets the session that actually received the message, and starts at its current state version, so only later changes produce notices. The result reports `watched: true` when registration succeeded. See [Session state awareness](/concepts/session-state).
 
-For a nonblocking follow-up to your existing native child, `watch: true` also
-gives the current requester turn a completion claim before the tool returns.
+Every nonblocking follow-up to your existing native child gives the current
+requester turn a completion claim before the tool returns; `watch` is not required.
 Call `sessions_yield` after acceptance to wait for that completion, including
 when the follow-up is queued behind the child's active run. The normal child
 settlement path delivers the result once. Sends without a requester turn keep
-the ordinary state-watch behavior. A watched steer can claim an existing child's
+the ordinary reply-delivery behavior. A watched steer can claim an existing child's
 pending announcing completion for the current turn without creating another
 completion or changing the child's task identity.
 If steering was admitted but its completion can no longer be claimed, the tool

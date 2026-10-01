@@ -4703,13 +4703,14 @@ jobs:
           install-bun: "false"
           install-deps: "false"
 
-      - name: Install Mermaid renderer dependencies
+      - name: Install native asset dependencies
         if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
         env:
           CI: "true"
         run: &mermaid_renderer_install_run >-
           pnpm install --frozen-lockfile --prefer-offline --optional
           --filter '@openclaw/mermaid-renderer...'
+          --filter '@openclaw/gateway-protocol...'
           --config.ignore-scripts=false
           --config.engine-strict=false
           --config.enable-pre-post-scripts=true
@@ -5738,7 +5739,7 @@ jobs:
           install-bun: "false"
           install-deps: "false"
 
-      - name: Install Mermaid renderer dependencies
+      - name: Install native asset dependencies
         if: needs.preflight.outputs.use_compatible_android_ci != 'true'
         env:
           CI: "true"

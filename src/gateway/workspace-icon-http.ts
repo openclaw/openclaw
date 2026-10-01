@@ -4,9 +4,13 @@ import { close } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  getAgentWorkspaceAccess,
+  isWorkspaceAccessUnavailableError,
+} from "../agents/workspace-access.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFile, readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { LruCache } from "../infra/lru-cache.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
@@ -19,6 +23,10 @@ import {
 } from "./http-image-response.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiSessionOwnerReadRequestOrReply } from "./http-utils.js";
+import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
+import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 
 /**
  * Conventional project icon locations in deterministic product precedence.
@@ -62,7 +70,6 @@ export const WORKSPACE_ICON_MAX_BYTES = HTTP_IMAGE_MAX_BYTES;
 /** Vector icons are markup the renderer must parse, so they get a tighter cap. */
 export const SVG_ICON_MAX_BYTES = HTTP_SVG_MAX_BYTES;
 const WORKSPACE_ICON_CACHE_MAX_ENTRIES = 32;
-const SESSION_WORKSPACE_ICON_CACHE_MAX_ENTRIES = 128;
 const closeFileDescriptor = promisify(close);
 type WorkspaceIcon = HttpImageRepresentation;
 
@@ -72,13 +79,9 @@ type WorkspaceIconResolution = WorkspaceIcon | null;
 let workspaceIconCache = new LruCache<Promise<WorkspaceIconResolution>>(
   WORKSPACE_ICON_CACHE_MAX_ENTRIES,
 );
-let sessionWorkspaceIconCache = new LruCache<Promise<WorkspaceIconResolution>>(
-  SESSION_WORKSPACE_ICON_CACHE_MAX_ENTRIES,
-);
 
 export function clearWorkspaceIconCacheForTest(): void {
   workspaceIconCache = new LruCache(WORKSPACE_ICON_CACHE_MAX_ENTRIES);
-  sessionWorkspaceIconCache = new LruCache(SESSION_WORKSPACE_ICON_CACHE_MAX_ENTRIES);
 }
 
 async function readWorkspaceIconCandidate(
@@ -117,9 +120,9 @@ async function scanWorkspaceIcon(workspaceRoot: string): Promise<WorkspaceIconRe
 }
 
 /**
- * Resolves a workspace icon once per Gateway process. Project icons are
- * process-stable metadata like plugin manifests: a changed icon is picked up on
- * the next Gateway start, never by re-scanning the workspace on a hot path.
+ * Reuses immutable icon bytes while the workspace remains in the bounded cache.
+ * Only cold/evicted roots scan the fixed candidate list; ordinary requests never
+ * freshness-poll project files.
  */
 export function resolveWorkspaceIcon(workspaceRoot: string): Promise<WorkspaceIconResolution> {
   const cacheKey = path.resolve(workspaceRoot);
@@ -132,41 +135,24 @@ export function resolveWorkspaceIcon(workspaceRoot: string): Promise<WorkspaceIc
   return pending;
 }
 
-const getSessionsFilesModule = createLazyRuntimeModule(
-  () => import("./server-methods/sessions-files.js"),
-);
-
-/**
- * Prepares the immutable icon snapshot while opening a chat. The HTTP asset
- * request only reads this map: no session-store or filesystem work is allowed
- * on that hot path, and icon changes become visible after Gateway restart.
- */
-export async function prepareSessionWorkspaceIcon(params: {
-  sessionKey: string;
-  agentId?: string;
-}): Promise<void> {
-  const preparation = (async (): Promise<WorkspaceIconResolution> => {
-    const workspaceRoot = (await getSessionsFilesModule()).resolveLocalSessionWorkspaceRoot(params);
-    return workspaceRoot ? await resolveWorkspaceIcon(workspaceRoot) : null;
-  })();
-  // A failed optional preparation still becomes a stable fallback snapshot;
-  // the returned promise rejects separately so chat.startup can record it.
-  sessionWorkspaceIconCache.set(
-    params.sessionKey,
-    preparation.catch(() => null),
-  );
-  await preparation;
+function respondWorkspaceIconUnavailable(res: ServerResponse) {
+  res.statusCode = 503;
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("retry-after", "1");
+  res.end("workspace icon snapshot is not ready");
 }
 
 /**
- * Serves the icon snapshot prepared when the chat opened. The request names a
- * session, never a path, and performs no filesystem or session-store work.
+ * Resolve cold and evicted icons through the existing prepared session-row owner.
+ * Store reads stay in its worker; bounded filesystem reads are asynchronous and
+ * the current session/root and request authority fence publication of the bytes.
  */
 export async function handleWorkspaceIconHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: GatewayHttpRequestAuthOptions & {
     basePath?: string;
+    sessionRowProjectionOwner?: object;
   },
 ): Promise<boolean> {
   const pathname = req.url ? new URL(req.url, "http://localhost").pathname : undefined;
@@ -194,24 +180,58 @@ export async function handleWorkspaceIconHttpRequest(
     respondNotFound(res);
     return true;
   }
-  const prepared = sessionWorkspaceIconCache.get(parsed.value);
-  if (!prepared) {
-    // The header can paint before chat.startup finishes. Keep this state
-    // retryable so it cannot be cached as the workspace's resolved fallback.
-    res.statusCode = 503;
-    res.setHeader("cache-control", "no-store");
-    res.setHeader("retry-after", "1");
-    res.end("workspace icon snapshot is not ready");
+  const projection = getSessionRowProjection(opts);
+  if (!projection) {
+    respondWorkspaceIconUnavailable(res);
     return true;
   }
-  const icon = await prepared;
+  const sessionKey = parsed.value;
+  const queries = (cfg: OpenClawConfig) => {
+    const { agentId, canonicalKey } = resolveSessionStoreIdentity({ cfg, sessionKey });
+    return [{ agentId, key: canonicalKey }] as const;
+  };
+  const select = (read: SessionRowReadView) => {
+    const query = queries(read.state.cfg)[0];
+    const row = read.describe(query);
+    const entry = row?.storedEntry ?? row?.entry;
+    const root =
+      row && entry?.sessionId && !entry.execNode && !entry.repositoryWorkspaceId
+        ? resolveSessionWorkspaceRoots(read.state.cfg, row.agentId, entry).root
+        : undefined;
+    let localRoot = root;
+    if (localRoot) {
+      try {
+        if (getAgentWorkspaceAccess(localRoot)) {
+          localRoot = undefined;
+        }
+      } catch (error) {
+        if (!isWorkspaceAccessUnavailableError(error)) {
+          throw error;
+        }
+        // A stopped remote owner must never expose a coincident local path.
+        localRoot = undefined;
+      }
+    }
+    return { generation: row?.generation, sessionId: entry?.sessionId, root: localRoot };
+  };
+  const selected = await withReadySessionRows(projection, queries, select);
   requestAuth.assertCurrent();
-  if (!icon) {
-    res.setHeader("cache-control", "no-store");
-    respondNotFound(res);
-    return true;
-  }
-
-  sendHttpImageResponse({ req, res, image: icon, filename: "workspace-icon" });
+  const icon = selected.root ? await resolveWorkspaceIcon(selected.root) : null;
+  await withReadySessionRows(projection, queries, (read) => {
+    requestAuth.assertCurrent();
+    const current = select(read);
+    if (
+      current.generation !== selected.generation ||
+      current.sessionId !== selected.sessionId ||
+      current.root !== selected.root
+    ) {
+      respondWorkspaceIconUnavailable(res);
+    } else if (!icon) {
+      res.setHeader("cache-control", "no-store");
+      respondNotFound(res);
+    } else {
+      sendHttpImageResponse({ req, res, image: icon, filename: "workspace-icon" });
+    }
+  });
   return true;
 }

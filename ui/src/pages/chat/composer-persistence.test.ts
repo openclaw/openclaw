@@ -1,12 +1,29 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { readChatOutboxRecovery } from "../../lib/chat/outbox-recovery.ts";
-import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
+import {
+  captureChatOutboxRecoveryDestination,
+  readChatOutboxRecovery,
+  restoreChatOutboxRecovery,
+} from "../../lib/chat/outbox-recovery.ts";
+import { storageTargetForComposer, storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
-  admitStoredChatComposerQueueItem,
-  ChatComposerPersistence,
+  legacyStorageKeyForGateway,
+  createState,
+  reconnectItem,
+  legacyReconnectItem,
+  admitItem,
+  reviewLegacyItem,
+  fillOutboxes,
+  releaseOutbox,
+  startPersistence,
+  reloadStorage,
+} from "./composer-persistence.test-support.ts";
+import {
+  type ChatComposerPersistence,
   listStoredChatOutboxes,
   loadChatComposerDraftRevision as readRevision,
   loadChatComposerSnapshot as snapshot,
@@ -20,83 +37,16 @@ type ComposerState = Parameters<typeof persist>[0] & {
   selectedChatSessionIncognito: boolean;
 };
 
-const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
-const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
-
-function legacyStorageKeyForGateway(gatewayUrl: string | null | undefined): string {
-  return `${LEGACY_STORAGE_KEY_PREFIX}${encodeURIComponent(gatewayUrl?.trim() || "default").slice(0, 240)}`;
-}
-
-function storageKeyForGateway(gatewayUrl: string | null | undefined): string {
-  return `${STORAGE_KEY_PREFIX}${encodeURIComponent(gatewayUrl?.trim() || "default")}`;
-}
-
-function createState(overrides: Partial<ComposerState> = {}): ComposerState {
-  return {
-    settings: { gatewayUrl: "ws://gateway.test/control" },
-    sessionKey: "agent:lily:main",
-    chatMessage: "",
-    chatQueue: [],
-    selectedChatSessionIncognito: false,
-    ...overrides,
-  };
-}
-
-function reconnectItem(id: string, createdAt: number): ChatQueueItem {
-  return {
-    id,
-    text: `message ${id}`,
-    createdAt,
-    sendRunId: `run-${id}`,
-    sendState: "waiting-reconnect",
-  };
-}
-
-function admitItem(state: ComposerState, item: ChatQueueItem, sessionKey = state.sessionKey) {
-  return admitStoredChatComposerQueueItem(
-    state,
-    captureChatOutboxAdmission(state, sessionKey, item.agentId),
-    item,
-  );
-}
-
-function fillOutboxes(prefix: string, count = 20) {
-  return Array.from({ length: count }, (_, index) => {
-    const state = createState({ sessionKey: `agent:lily:${prefix}:${index}` });
-    const item = reconnectItem(`${prefix}-${index}`, index);
-    expect(admitItem(state, item)).toBe(true);
-    return { state, item };
-  });
-}
-
-function releaseOutbox({ state, item }: ReturnType<typeof fillOutboxes>[number]) {
-  expect(removeItem(state, state.sessionKey, item.id, item)).toBe(true);
-}
-
-function startPersistence(state: ComposerState) {
-  const persistence = new ChatComposerPersistence(() => state);
-  persistence.start();
-  return persistence;
-}
-
-function reloadStorage(state: ComposerState) {
-  const storageKey = storageKeyForGateway(state.settings?.gatewayUrl);
-  const stored = sessionStorage.getItem(storageKey);
-  expect(stored).not.toBeNull();
-  const freshStorage = createStorageMock();
-  freshStorage.setItem(storageKey, stored!);
-  vi.stubGlobal("sessionStorage", freshStorage);
-}
-
 function seedSessions(
   sessions: Record<string, unknown>,
   version = 1,
   gatewayUrl = "ws://gateway.test/control",
 ) {
-  const key =
-    version === 1
-      ? legacyStorageKeyForGateway(gatewayUrl)
-      : storageKeyForGateway(gatewayUrl).replace(".v4:", `.v${version}:`);
+  const target =
+    version === 4
+      ? storageTargetForComposer(createState({ settings: { gatewayUrl } }))
+      : storageTargetForGateway(gatewayUrl);
+  const key = version === 1 ? target.legacyKey : target.key.replace(".v4:", `.v${version}:`);
   sessionStorage.setItem(
     key,
     JSON.stringify({
@@ -223,14 +173,14 @@ it("normalizes an existing whitespace-only stored draft during restore", () => {
   expect(state.chatMessage).toBe("");
 });
 
-it("loads legacy steer rows as generic mode-bearing sends and never rewrites old fields", () => {
-  const state = createState();
-  const storageKey = storageKeyForGateway(state.settings?.gatewayUrl);
+it("reviews legacy steer rows as generic mode-bearing sends and never rewrites old fields", () => {
+  const state = createState({ agentsList: { defaultId: "lily", mainKey: "main" } });
+  const storageKey = storageTargetForComposer(state).key;
   seedSession(
     {
       queue: [
         {
-          ...reconnectItem("steer-reload", 1),
+          ...legacyReconnectItem("steer-reload", 1),
           kind: "steered",
           sendRunId: "steer-request",
           sendState: "steering",
@@ -242,9 +192,10 @@ it("loads legacy steer rows as generic mode-bearing sends and never rewrites old
     2,
   );
 
-  const restored = snapshot(state, state.sessionKey)?.queue[0];
+  const restored = reviewLegacyItem(state, "steer-reload");
   expect(restored).toMatchObject({
     id: "steer-reload",
+    storageScope: outboxStorageScope(state),
     queueMode: "steer",
     sendRunId: "steer-request",
     sendState: "unconfirmed",
@@ -374,7 +325,7 @@ it("rejects stale updates and deletes after an attachment payload replacement", 
     tabId: "versioned-tab",
   };
   const original: ChatQueueItem = {
-    ...reconnectItem("versioned", 1),
+    ...reconnectItem("versioned", 1, state),
     attachments: [{ id: "versioned-file", mimeType: "image/png", sizeBytes: 3 }],
     attachmentPayload: reference,
   };
@@ -420,7 +371,7 @@ it("keeps unresolved bare main and raw global independent until their owners res
 });
 
 it("retains ambiguous shipped main rows for explicit destination confirmation", () => {
-  const item = reconnectItem("legacy-main", 1);
+  const item = legacyReconnectItem("legacy-main", 1);
   seedSessions({ "main\u0000agent:previous": { queue: [item], updatedAt: 1 } });
   const state = createState({ agentsList: { defaultId: "work", mainKey: "main" } });
   expect(listStoredChatOutboxes(state)).toEqual([]);
@@ -456,27 +407,40 @@ it("keeps newly admitted unknown non-main routes agentless", () => {
   expect(listStoredChatOutboxes(state)).toEqual([outbox(item, state.sessionKey)]);
 });
 
-it("migrates and mutates shipped selected-agent opaque rows", () => {
+it("reviews shipped selected-agent opaque rows without passively adopting either draft", () => {
   const sessionKey = "matrix:group:RoomCase";
-  const first = reconnectItem("legacy-work", 1);
-  const second = reconnectItem("legacy-alpha", 2);
+  const first = legacyReconnectItem("legacy-work", 1);
+  const second = legacyReconnectItem("legacy-alpha", 2);
   seedSessions({
-    [`${sessionKey}\u0000agent:work`]: { draft: "older draft", queue: [first], updatedAt: 1 },
-    [`${sessionKey}\u0000agent:alpha`]: { draft: "newer draft", queue: [second], updatedAt: 2 },
+    [sessionKey + "\u0000agent:work"]: { draft: "older draft", queue: [first], updatedAt: 1 },
+    [sessionKey + "\u0000agent:alpha"]: { draft: "newer draft", queue: [second], updatedAt: 2 },
   });
-  const state = createState({ assistantAgentId: "alpha", sessionKey });
+  const state = createState({
+    assistantAgentId: "alpha",
+    sessionKey,
+    agentsList: { defaultId: "alpha", mainKey: "main" },
+  });
+  const restored = reviewLegacyItem(state, first.id);
+  const expected = {
+    ...first,
+    storageScope: outboxStorageScope(state),
+    sendState: "failed" as const,
+    sendError: "Recovered message. Review this destination and retry only if it did not arrive.",
+  };
+  expect(listStoredChatOutboxes(state)).toEqual([outbox(expected, sessionKey)]);
+  expectDraft(state, "older draft", outbox(expected, sessionKey).queue);
 
-  expect(listStoredChatOutboxes(state)).toEqual([outbox(first, sessionKey)]);
-  expectDraft(state, "older draft", outbox(first, sessionKey).queue);
-
-  const attempted = { ...first, sendAttempts: 1, sessionKey };
-  expect(updateItem(state, sessionKey, { ...first, sessionKey }, attempted)).toBe(true);
+  const attempted = { ...restored, sendAttempts: 1 };
+  expect(updateItem(state, sessionKey, restored, attempted)).toBe(true);
   expect(removeItem(state, sessionKey, first.id, attempted)).toBe(true);
   expectDraft(state, "older draft");
+  expect(readChatOutboxRecovery(state).entries).toHaveLength(1);
   expect(readChatOutboxRecovery(state).entries[0]?.session).toMatchObject({
     draft: "newer draft",
     queue: [second],
   });
+  const stored = JSON.parse(sessionStorage.getItem(storageTargetForComposer(state).key)!);
+  expect(Object.keys(stored.sessions)).toEqual([sessionKey + "\u0000agent:main"]);
 });
 
 it("keeps readable migrated composer state when the migration write fails", () => {
@@ -499,42 +463,85 @@ it("keeps readable migrated composer state when the migration write fails", () =
   expectDraft(resolved, "unresolved draft", outbox(item, "global", "work").queue);
 });
 
-it("migrates full v1 main and global queues while consuming legacy tombstones", () => {
-  const globalQueue = Array.from({ length: 50 }, (_, i) => reconnectItem(`global-${i}`, i));
-  const mainQueue = Array.from({ length: 50 }, (_, i) => reconnectItem(`main-${i}`, i + 50));
+it("reviews full v1 main and global queues while consuming legacy tombstones", () => {
+  const globalQueue = Array.from({ length: 50 }, (_, i) => legacyReconnectItem(`global-${i}`, i));
+  const mainQueue = Array.from({ length: 50 }, (_, i) => legacyReconnectItem(`main-${i}`, i + 50));
   const mainKey = "agent:work:main";
   seedSessions({
     "global\u0000agent:work": { queue: globalQueue, updatedAt: 2 },
     "agent:work:notes\u0000agent:work": { draft: "draft only", updatedAt: 1 },
-    [`${mainKey}\u0000agent:work`]: {
+    [mainKey + "\u0000agent:work"]: {
       draft: "legacy draft",
-      queue: [reconnectItem("removed", 100), ...mainQueue],
+      queue: [legacyReconnectItem("removed", 100), ...mainQueue],
       removedQueueItemIds: ["removed"],
       updatedAt: 1,
     },
   });
-  const state = createState({ assistantAgentId: "work", sessionKey: mainKey });
+  const state = createState({
+    assistantAgentId: "work",
+    sessionKey: mainKey,
+    agentsList: { defaultId: "work", mainKey: "main", scope: "per-sender" },
+  });
+  for (const sessionKey of ["global", mainKey, "agent:work:notes"]) {
+    expect(snapshot(state, sessionKey)).toBeNull();
+  }
+  expect(listStoredChatOutboxes(state)).toEqual([]);
+  const entries = readChatOutboxRecovery(state).entries;
+  expect(entries).toHaveLength(3);
+  expect(sessionStorage.getItem(storageTargetForComposer(state).key)).toBeNull();
+  for (const [sessionKey, queue] of [
+    ["global", globalQueue],
+    [mainKey, mainQueue],
+  ] as const) {
+    const expectedQueue = structuredClone(queue);
+    for (const item of expectedQueue) {
+      item.sessionKey = sessionKey;
+      item.agentId = "work";
+    }
+    expect(
+      entries.find((entry) => entry.sourceScopeKey === sessionKey + "\u0000agent:work")?.session
+        .queue,
+    ).toEqual(expectedQueue);
+  }
+  for (const sessionKey of ["global", mainKey, "agent:work:notes"]) {
+    const entry = entries.find(
+      (candidate) => candidate.sourceScopeKey === sessionKey + "\u0000agent:work",
+    );
+    expect(entry).toBeDefined();
+    const destination = captureChatOutboxRecoveryDestination(
+      state,
+      resolveUiConversationIdentity(state, sessionKey, "work"),
+    );
+    expect(destination).not.toBeNull();
+    expect(restoreChatOutboxRecovery(state, entry!, destination!)).toBe("restored");
+  }
+  const reviewedItem = (item: ChatQueueItem) => ({
+    ...item,
+    storageScope: outboxStorageScope(state),
+    sendState: "failed" as const,
+    sendError: "Recovered message. Review this destination and retry only if it did not arrive.",
+  });
   expect(snapshot(state, "agent:work:notes")?.draft).toBe("draft only");
   expectDraft(
     state,
     "legacy draft",
-    mainQueue.map((item) => ({ ...item, sessionKey: mainKey, agentId: "work" })),
+    mainQueue.map((item) => ({ ...reviewedItem(item), sessionKey: mainKey, agentId: "work" })),
   );
   expect(snapshot(state, "global")?.queue).toEqual(
-    globalQueue.map((item) => ({ ...item, sessionKey: "global", agentId: "work" })),
+    globalQueue.map((item) => ({ ...reviewedItem(item), sessionKey: "global", agentId: "work" })),
   );
   expect(
     listStoredChatOutboxes(state)
       .flatMap((box) => box.queue)
       .map((item) => item.id),
   ).toEqual([...globalQueue, ...mainQueue].map((item) => item.id));
+  expect(readChatOutboxRecovery(state).entries).toEqual([]);
   state.chatMessage = "updated draft";
   expect(persist(state)).toBe(true);
-  const gatewayUrl = state.settings?.gatewayUrl;
-  expect(sessionStorage.getItem(storageKeyForGateway(gatewayUrl))).not.toContain(
+  expect(sessionStorage.getItem(storageTargetForComposer(state).key)).not.toContain(
     "removedQueueItemIds",
   );
-  expect(sessionStorage.getItem(legacyStorageKeyForGateway(gatewayUrl))).toBeNull();
+  expect(sessionStorage.getItem(legacyStorageKeyForGateway(state.settings?.gatewayUrl))).toBeNull();
 });
 
 it.each([
@@ -572,23 +579,26 @@ it.each([
 
 it("isolates long same-prefix gateways in owner-tagged v4 buckets", () => {
   const sharedPrefix = `wss://gateway.test/${"a".repeat(260)}`;
-  const gateways = ["first", "second"].map((route, index) => ({
-    route,
-    state: createState({
+  const gateways = ["first", "second"].map((route, index) => {
+    const state = createState({
       chatMessage: `${route} gateway draft`,
       settings: { gatewayUrl: `${sharedPrefix}?route=${route}` },
-    }),
-    item: reconnectItem(`${route}-long-gateway`, index + 1),
-  }));
+    });
+    return { route, state, item: reconnectItem(`${route}-long-gateway`, index + 1, state) };
+  });
+  expect(legacyStorageKeyForGateway(gateways[0]!.state.settings?.gatewayUrl)).toBe(
+    legacyStorageKeyForGateway(gateways[1]!.state.settings?.gatewayUrl),
+  );
+  expect(storageTargetForComposer(gateways[0]!.state).key).not.toBe(
+    storageTargetForComposer(gateways[1]!.state).key,
+  );
   for (const { state, item } of gateways) {
     expect(persist(state)).toBe(true);
     expect(admitItem(state, item)).toBe(true);
   }
   for (const { route, state, item } of gateways) {
     expectDraft(state, `${route} gateway draft`, outbox(item, state.sessionKey, "lily").queue);
-    const stored = JSON.parse(
-      sessionStorage.getItem(storageKeyForGateway(state.settings?.gatewayUrl)) ?? "{}",
-    );
+    const stored = JSON.parse(sessionStorage.getItem(storageTargetForComposer(state).key) ?? "{}");
     expect(stored).toMatchObject({ gatewayOwner: state.settings?.gatewayUrl, version: 4 });
   }
 });
@@ -601,7 +611,7 @@ it("does not replay an exact-240 legacy key to a longer same-prefix gateway", ()
   expect(legacyStorageKeyForGateway(exactGatewayUrl)).toBe(
     legacyStorageKeyForGateway(longerGatewayUrl),
   );
-  const item = reconnectItem("ambiguous-legacy-owner", 1);
+  const item = legacyReconnectItem("ambiguous-legacy-owner", 1);
   seedSessions(
     { "agent:lily:main\u0000agent:lily": { queue: [item], updatedAt: 1 } },
     1,
@@ -612,7 +622,9 @@ it("does not replay an exact-240 legacy key to a longer same-prefix gateway", ()
     const state = createState({ settings: { gatewayUrl } });
     expect(snapshot(state, state.sessionKey)).toBeNull();
     expect(listStoredChatOutboxes(state)).toEqual([]);
-    expect(sessionStorage.getItem(storageKeyForGateway(gatewayUrl))).toBeNull();
+    expect(sessionStorage.getItem(storageTargetForComposer(state).key)).toBeNull();
+    expect(readChatOutboxRecovery(state).entries).toEqual([]);
+    expect(sessionStorage.getItem(legacyStorageKeyForGateway(gatewayUrl))).toContain(item.id);
   }
 });
 

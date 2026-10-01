@@ -435,6 +435,14 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       : resolveSharedAuthStorePath();
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
     const peerConfig = params.cfg ?? {};
+    const fenceTerminalPeers = (credential: OAuthCredential) =>
+      fenceOAuthRefreshPeers({
+        cfg: peerConfig,
+        ownerDatabasePath: authPath,
+        profileId: params.profileId,
+        generation: credential,
+        fence: credential,
+      });
 
     let observation: ReturnType<typeof beginOAuthRefreshObservation> | undefined;
     let observationTransferred = false;
@@ -586,15 +594,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             if (isPendingOAuthRefreshFence(cred)) {
               return { kind: "observe", ownerAgentDir, generation: cred };
             }
-            const peerClaims = personalProfile
-              ? []
-              : await fenceOAuthRefreshPeers({
-                  cfg: peerConfig,
-                  ownerDatabasePath: authPath,
-                  profileId: params.profileId,
-                  generation: cred,
-                  fence: cred,
-                });
+            const peerClaims = personalProfile ? [] : await fenceTerminalPeers(cred);
             failOAuthRefreshPeerClaims({
               profileId: params.profileId,
               fence: cred,
@@ -665,15 +665,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               };
             }
             if (isOAuthRefreshFence(current)) {
-              const peerClaims = personalProfile
-                ? []
-                : await fenceOAuthRefreshPeers({
-                    cfg: peerConfig,
-                    ownerDatabasePath: authPath,
-                    profileId: params.profileId,
-                    generation: current,
-                    fence: current,
-                  });
+              const peerClaims = personalProfile ? [] : await fenceTerminalPeers(current);
               failOAuthRefreshPeerClaims({
                 profileId: params.profileId,
                 fence: current,

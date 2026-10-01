@@ -387,11 +387,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         ...(message ? { message } : {}),
       });
     }
-    if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
-      return;
-    }
-    span.end(evt.ts);
+    completeTrackedLifecycleSpan(trackedSpan ? trustedTrace : undefined, span, evt.ts);
   };
 
   return {

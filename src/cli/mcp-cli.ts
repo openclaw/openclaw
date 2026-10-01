@@ -2,7 +2,10 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  parseStrictFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -380,7 +383,7 @@ async function collectMcpDoctorIssues(params: {
   const { name, server } = params;
   const resolved = resolveMcpTransportConfig(name, server);
   const disabled = server.enabled === false;
-  if (server.enabled === false) {
+  if (disabled) {
     issues.push(issue("warning", "server is disabled"));
   }
   if (!disabled) {
@@ -636,11 +639,7 @@ function createMcpProbeRuntime(
 const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
 
 function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record<string, unknown> {
-  if (
-    typeof server.connectionTimeoutMs === "number" &&
-    Number.isFinite(server.connectionTimeoutMs) &&
-    server.connectionTimeoutMs > 0
-  ) {
+  if (asPositiveFiniteNumber(server.connectionTimeoutMs) !== undefined) {
     return server;
   }
   return {

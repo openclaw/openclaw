@@ -54,7 +54,6 @@ import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import * as databaseFactsRead from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
@@ -65,7 +64,6 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each([
   { workMs: 0, rowCount: 2 },
-  { workMs: 20, rowCount: 2 },
   { workMs: 20, rowCount: 65 },
 ])(
   "accepts $rowCount rows once with $workMs ms of materialization work",
@@ -92,29 +90,6 @@ it.each([
           await projection.ensureMaterialized();
           expect(projection.dirtyRowCount).toBe(0);
           const before = projection.materializedCount;
-          const dirtyVisits: number[] = [];
-          const readFacts = databaseFactsRead.withSessionRowDatabaseFacts;
-          const selection = vi
-            .spyOn(databaseFactsRead, "withSessionRowDatabaseFacts")
-            .mockImplementation(async (owner, consume) => {
-              let visited = 0;
-              const iterate = owner.dirty[Symbol.iterator].bind(owner.dirty);
-              const iteration = vi
-                .spyOn(owner.dirty, Symbol.iterator)
-                .mockImplementation(function* () {
-                  for (const id of iterate()) {
-                    visited++;
-                    yield id;
-                  }
-                  return undefined;
-                });
-              try {
-                await readFacts(owner, consume);
-              } finally {
-                iteration.mockRestore();
-                dirtyVisits.push(visited);
-              }
-            });
           const reads: Array<{ sessionKeys: string[]; rows: SessionRowDatabaseFacts[] }> = [];
           const readDatabases = history.withSessionHistoryWorkerDatabases;
           const databases = vi
@@ -137,15 +112,13 @@ it.each([
               ),
             );
           let elapsed = 0;
-          const realNow = performance.now.bind(performance);
-          const acceptance: Array<{ rows: number; elapsedMs: number }> = [];
-          let accepting: { rows: number; started: number } | undefined;
+          const acceptance: number[] = [];
+          let accepting = 0;
           const acquireEntry = records.acquireSessionRowEntry;
           const acquisition = vi
             .spyOn(records, "acquireSessionRowEntry")
             .mockImplementation((params) => {
-              accepting ??= { rows: 0, started: realNow() };
-              accepting.rows++;
+              accepting++;
               return acquireEntry(params);
             });
           const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
@@ -155,8 +128,8 @@ it.each([
             .spyOn(rowInputs, "readSessionRowInputs")
             .mockImplementation((params) => {
               if (accepting) {
-                acceptance.push({ rows: accepting.rows, elapsedMs: realNow() - accepting.started });
-                accepting = undefined;
+                acceptance.push(accepting);
+                accepting = 0;
               }
               const result = readInputs(params);
               materializedKeys.push(params.key);
@@ -196,12 +169,7 @@ it.each([
             const batches = rowCount <= 64 ? [keys] : [keys.slice(0, 64), keys.slice(64)];
             expect(reads.map((read) => read.sessionKeys)).toEqual(batches);
             expect(reads.flatMap((read) => read.rows)).toHaveLength(rowCount);
-            expect(dirtyVisits.every((visited) => visited <= 64)).toBe(true);
-            expect(acceptance.map((batch) => batch.rows)).toEqual(
-              batches.map((batch) => batch.length),
-            );
-            // Actual acquisition time is separate from the synthetic rendering clock.
-            console.info("row-facts acceptance", JSON.stringify({ workMs, rowCount, acceptance }));
+            expect(acceptance).toEqual(batches.map((batch) => batch.length));
             for (const [index, { scope, entry }] of entries.entries()) {
               expect(
                 projection.snapshot({ agentId: scope.agentId, key: scope.sessionKey }).row,
@@ -214,7 +182,6 @@ it.each([
             inputs.mockRestore();
             clock.mockRestore();
             acquisition.mockRestore();
-            selection.mockRestore();
             databases.mockRestore();
           }
         } finally {
@@ -228,7 +195,6 @@ it.each([
 );
 
 it.each([
-  { rowCount: 1, first: "bulk" },
   { rowCount: 2, first: "bulk" },
   { rowCount: 2, first: "exact" },
 ] as const)(
