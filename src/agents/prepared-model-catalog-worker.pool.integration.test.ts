@@ -36,9 +36,31 @@ import {
   usePreparedCatalogWorkerFixtures,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
+const runtimeWarnings = vi.hoisted((): string[] => []);
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "agents/prepared-model-runtime"
+        ? {
+            ...logger,
+            warn: (message: string, meta?: Record<string, unknown>) => {
+              runtimeWarnings.push(message);
+              logger.warn(message, meta);
+            },
+          }
+        : logger;
+    },
+  };
+});
+
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
+const workerFailureWarnings = () =>
+  runtimeWarnings.filter((message) => message.startsWith("model catalog worker failed"));
 
 describe("Gateway catalog worker pool", () => {
   beforeEach(() => {
@@ -65,6 +87,8 @@ describe("Gateway catalog worker pool", () => {
         ),
       );
       expect(spawned).toHaveLength(1);
+      const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
+      const warnings = workerFailureWarnings().length;
       writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
       await spawned[0]!.terminate();
       await expect(
@@ -83,10 +107,56 @@ describe("Gateway catalog worker pool", () => {
       );
       expect(spawned).toHaveLength(2);
       expect(peakWorkers).toBe(1);
+      // The replacement pool restarts its own counters; the failure survives it.
       expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
         maxWorkers: 1,
         workers: 1,
+        workersCreated: 1,
+        workerFailures: workerFailures + 1,
       });
+      expect(workerFailureWarnings().slice(warnings)).toEqual([
+        expect.stringMatching(
+          /^model catalog worker failed; \d+ agent catalog\(s\) will be republished on a new worker \(failure \d+ since start\): .*worker exited with code 1/,
+        ),
+      ]);
+    } finally {
+      workerChannel.unsubscribe(recordWorker);
+    }
+  });
+
+  it("logs and counts an idle catalog worker exit before a request recovers it", async () => {
+    const spawned: Worker[] = [];
+    const workerChannel = channel("worker_threads");
+    const recordWorker = (message: unknown) => {
+      if (isRecord(message) && message.worker instanceof Worker) {
+        spawned.push(message.worker);
+      }
+    };
+    try {
+      const fixture = await createFleetFixture(() => workerChannel.subscribe(recordWorker));
+      await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
+      const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
+      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
+        workers: 1,
+        activeTasks: 0,
+        pendingTasks: 0,
+      });
+      const warnings = workerFailureWarnings().length;
+      await spawned[0]!.terminate();
+      // No request is waiting; the exit is still counted and logged before recovery starts.
+      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
+        workers: 0,
+        workerFailures: workerFailures + 1,
+      });
+      expect(workerFailureWarnings().slice(warnings)).toEqual([
+        expect.stringMatching(/^model catalog worker failed; .*worker exited with code 1/),
+      ]);
+      await expect(
+        loadPreparedModelRuntimeAuth(fixture.snapshots[0]!, { providerIds: [] }),
+      ).rejects.toThrow();
+      // Recovery replaces the worker without counting or logging the same failure again.
+      expect(getPreparedModelCatalogWorkerPoolSnapshot().workerFailures).toBe(workerFailures + 1);
+      expect(workerFailureWarnings()).toHaveLength(warnings + 1);
     } finally {
       workerChannel.unsubscribe(recordWorker);
     }
@@ -413,6 +483,8 @@ describe("Gateway catalog worker pool", () => {
         }
       });
       const before = fs.readFileSync(fixture.marker, "utf8");
+      const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
+      const warnings = workerFailureWarnings().length;
       fs.writeFileSync(`${fixture.marker}.hold`, "");
       const renewal = fixture.snapshots[0]!.loadFullModelCatalog!({ refresh: true });
       void renewal.catch(() => undefined);
@@ -443,7 +515,9 @@ describe("Gateway catalog worker pool", () => {
           workers: 0,
           activeTasks: 0,
           pendingTasks: 0,
+          workerFailures,
         });
+        expect(workerFailureWarnings()).toHaveLength(warnings);
       } finally {
         fs.rmSync(`${fixture.marker}.hold`, { force: true });
         await Promise.allSettled([renewal, queued, closing]);

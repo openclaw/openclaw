@@ -51,11 +51,11 @@ import {
   fingerprintPreparedModelCatalogPluginContext,
   fingerprintPreparedModelWorkerRequest,
   type PreparedModelCatalogWorkerInput,
-  type PreparedModelCatalogWorkerData,
   type PreparedModelCatalogWorkerTask,
   type PreparedModelWorkerRequest,
   type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
+import type { PreparedModelCatalogWorkerData } from "./prepared-model-catalog-worker.pool.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   ownPreparedPluginGeneration,
