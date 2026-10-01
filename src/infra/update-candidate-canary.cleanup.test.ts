@@ -26,14 +26,20 @@ const mocks = vi.hoisted(() => ({
   signal: vi.fn(),
   port: vi.fn(),
 }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: mocks.spawn,
-}));
-vi.mock("../process/exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../process/exec.js")>()),
-  runCommandBuffered: mocks.snapshot,
-}));
+vi.mock("node:child_process", async (importOriginal) =>
+  (await import("./update-candidate-canary-mocks.test-support.js")).mockCanaryChildProcesses(
+    await importOriginal<typeof import("node:child_process")>(),
+    mocks.spawn,
+  ),
+);
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const { mockCanarySnapshotCommands } =
+    await import("./update-candidate-canary-mocks.test-support.js");
+  return mockCanarySnapshotCommands(
+    await importOriginal<typeof import("../process/exec.js")>(),
+    mocks.snapshot,
+  );
+});
 vi.mock("../process/kill-tree.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/kill-tree.js")>()),
   signalProcessTree: mocks.signal,
@@ -288,7 +294,6 @@ describe("canary teardown evidence", () => {
   it.each(["completed", "deadline"] as const)(
     "records the disposable-copy wait after a passed canary (%s)",
     async (outcome) => {
-      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       const removalStarted = createDeferredCore<string>();
       const removal = createDeferredCore();
       const remove = fs.rm.bind(fs);
@@ -303,7 +308,12 @@ describe("canary teardown evidence", () => {
         return remove(target, options);
       });
       const onProgress = vi.fn();
-      const onStep = vi.fn();
+      const onStep = vi.fn((step: { name: string }) => {
+        if (step.name === "candidate-gateway-startup") {
+          // Snapshot subprocess settlement must finish before virtualizing the cleanup clock.
+          vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+        }
+      });
       const pending = validateUpdateCandidateCanary({
         ...canaryStateOptions(3_000),
         onProgress,

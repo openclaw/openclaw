@@ -187,7 +187,8 @@ async function expectEditableDraft(
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await expect(textarea).toBeFocused();
   await textarea.fill("First line\nSecond line\nThird line\nLast line");
-  await page.keyboard.press("ControlOrMeta+End");
+  // macOS Chromium binds no editing command to Cmd+Home/End; the caret would stay put.
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
   await page.keyboard.type(" typed");
   await expect(textarea).toHaveValue("First line\nSecond line\nThird line\nLast line typed");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
@@ -207,7 +208,7 @@ async function expectEditableDraft(
   expect(last.lineTop).toBeGreaterThanOrEqual(Math.max(last.top, last.conversationTop));
   expect(last.lineBottom).toBeLessThanOrEqual(Math.min(last.bottom, visibleBottom));
   await expectReachableAction(page, "Send message", visibleBottom, mobile);
-  await page.keyboard.press("ControlOrMeta+Home");
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
   await page.keyboard.type("Edited ");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
   await page.mouse.wheel(0, -1000);

@@ -161,7 +161,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     await prepared.cleanup?.();
   });
 
-  it("preserves explicit type and still strips transport on user mcp.servers", async () => {
+  it("encodes canonical transport when stale CLI type remains on user mcp.servers", async () => {
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-user-servers-transport-explicit-",
     );
@@ -187,7 +187,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       mcpServers?: Record<string, { type?: string; transport?: string }>;
     };
 
-    expect(raw.mcpServers?.mixed?.type).toBe("http");
+    expect(raw.mcpServers?.mixed?.type).toBe("sse");
     expect(raw.mcpServers?.mixed?.transport).toBeUndefined();
 
     await prepared.cleanup?.();

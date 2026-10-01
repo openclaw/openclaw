@@ -16,7 +16,7 @@ import {
 } from "../src/browser/extension-install-layout.js";
 import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
 import { useNativeHostLaunchFixture } from "../src/browser/extension-install.test-support.js";
-import { handleGatewayExtensionUpgrade } from "../src/browser/extension-relay/gateway-relay-route.js";
+import { getGatewayExtensionRelayModule } from "../src/browser/extension-relay.runtime.js";
 import { getPageForTargetId } from "../src/browser/pw-session.js";
 import { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.js";
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
@@ -221,6 +221,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           },
           ...launchFixture,
         };
+        const { handleGatewayExtensionUpgrade } = await getGatewayExtensionRelayModule();
         const gatewayServer = http.createServer((req, res) => {
           if (req.url === "/browser-owner-proof") {
             diagnostic.mark("http.request", true);

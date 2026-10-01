@@ -64,6 +64,15 @@ function logGatewayPluginDiagnostics(params: {
   }
 }
 
+/** The caller joins accepted cleanup even when synchronous publication throws. */
+export type GatewayPluginRuntimePreparation = (
+  loaded: ReturnType<typeof prepareGatewayPluginLoad>,
+  trackActivationCleanup: (completion: Promise<void>) => void,
+) => Promise<{
+  publish: () => void;
+  afterCommit: () => void;
+}>;
+
 /** Prepares gateway plugin runtime and returns the loaded plugin registry state. */
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
   return withPluginCache(

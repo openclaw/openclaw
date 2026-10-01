@@ -445,6 +445,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }
   if (
+    command.type === "userModelAccounts.links" ||
     command.type === "userProfiles.reconcile" ||
     command.type === "userProfiles.avatar.inspect" ||
     command.type === "userProfiles.channelIdentity.list" ||

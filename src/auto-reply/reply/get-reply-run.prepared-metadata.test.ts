@@ -41,6 +41,7 @@ it("keeps the admitted Gateway generation active through a different reply works
   } as never;
   const pluginRegistry = { registrations: [] } as never;
   const pluginGeneration = {
+    remoteCatalog: null,
     configuredCatalogEntries: [],
     inlineProviderModels: [],
     pluginMetadataSnapshot: metadataSnapshot,

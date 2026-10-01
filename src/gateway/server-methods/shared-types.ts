@@ -275,6 +275,12 @@ type GatewayKernelContext = {
     agentIds: readonly string[],
   ) => Promise<PreparedGatewayModelCatalogReadResult[]>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
+  readPreparedModelsList?: (
+    params: import("./models-list-context.js").PreparedModelsListRequest,
+  ) => Promise<
+    | import("../../../packages/gateway-protocol/src/schema/model-catalog.js").ModelsListResult
+    | undefined
+  >;
   readChatStartupProjection?: (
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;

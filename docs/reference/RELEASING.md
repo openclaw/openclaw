@@ -39,6 +39,11 @@ line retires when it falls outside the two supported completed months.
 Versions use `year.month.patch`, without zero-padding. The patch is a release
 number within the month, not a day of the month. Regular releases use patches
 below `33`; extended-stable starts at `33`. Git tags add `v`, as in `v2026.9.6`.
+Release tags are annotated and signed. The shared publication workflow verifies
+the tag signature before checkout or evidence downloads and refuses lightweight,
+unsigned, or unverified tags. This also applies to recovery and republishing:
+historical unsigned tags are not eligible for the shared publication workflow,
+and recovery must use a new signed release version rather than replacing a tag.
 
 Published npm versions and release tags are never replaced. A fix receives a
 new version. Historical alpha-only versions do not advance the regular release

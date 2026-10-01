@@ -7,7 +7,7 @@ import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { activeSessions } from "../transcripts/capture.js";
+import { activeSessions } from "../transcripts/capture-startup.js";
 import type {
   TranscriptOccupancyWatchRequest,
   TranscriptSourceProvider,

@@ -14,7 +14,7 @@ import {
   configuredOwnersAreRequestVisible,
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
-import { refreshPreparedModelRuntimeSnapshotsNow } from "./prepared-model-runtime.configured-refresh.js";
+import * as configuredRefresh from "./prepared-model-runtime.configured-refresh.js";
 import {
   capturePreparedModelRuntimeLifetime,
   closePreparedModelRuntimeSnapshots,
@@ -25,7 +25,6 @@ import {
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
-  advancePreparedModelRuntimeOwnerConfig,
   hasSameLifecycleInput,
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
@@ -145,6 +144,7 @@ export function cancelPreparedModelRuntimeRefresh(): void {
 
 async function closeModelRuntime(error: Error): Promise<void> {
   refreshRequestEpoch += 1;
+  remoteCatalogPublication.cancel(error);
   authPublication.reset(error);
   pendingModelRuntimeReplacement?.reject(error);
   pendingModelRuntimeReplacement = undefined;
@@ -173,18 +173,6 @@ async function closeModelRuntime(error: Error): Promise<void> {
   if (failures.length) {
     throw new AggregateError(failures, "Prepared model work failed to close");
   }
-}
-
-/** Advances model-neutral config identity without rebuilding prepared generation artifacts. */
-export function advancePreparedModelRuntimeConfig(config: OpenClawConfig): void {
-  for (const owner of owners.values()) {
-    // Read-only owners include the config hash in their map key and remain bound to their lease.
-    if (owner.input.readOnly) {
-      continue;
-    }
-    advancePreparedModelRuntimeOwnerConfig(owner, config);
-  }
-  replyDispatchPublication.advanceConfig(config);
 }
 
 /** Resolves a published owner or activates a standalone lifecycle owner. */
@@ -524,6 +512,17 @@ const recoverRetiredConfiguredPluginGeneration = createPreparedModelRuntimePlugi
     !pendingModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 );
+const remoteCatalogPublication = configuredRefresh.createRemoteCatalogPublication({
+  ...preparedModelRuntimeLeaseContext,
+  publicationQueue,
+  replyDispatchPublication,
+  getEpoch: () => refreshRequestEpoch,
+  getCancellationSignal: () => refreshCancellation.signal,
+  getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
+  onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
+});
+export const { applyRemoteModelCatalogUpdate, advancePreparedModelRuntimeConfig } =
+  remoteCatalogPublication;
 
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
@@ -621,7 +620,7 @@ export function refreshPreparedModelRuntimeSnapshots(
         : resolveSafeRefreshAgentIds(currentConfig, options, owners);
       retainedGatewayRunOwners.clear(owners);
       gatewayLifecycleActive ||= options.gatewayLifecycle === true;
-      await refreshPreparedModelRuntimeSnapshotsNow(
+      await configuredRefresh.refreshPreparedModelRuntimeSnapshotsNow(
         currentConfig,
         { ...options, agentIds: publicationAgentIds },
         {
