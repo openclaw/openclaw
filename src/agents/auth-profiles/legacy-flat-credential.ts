@@ -11,16 +11,13 @@ function inferLegacyCredentialType(
   if (explicit === "api_key" || explicit === "token" || explicit === "oauth") {
     return explicit;
   }
-  if (readNonEmptyString(record.key) ?? readNonEmptyString(record.apiKey)) {
+  if (
+    (readNonEmptyString(record.key) ?? readNonEmptyString(record.apiKey)) ||
+    coerceSecretRef(record.keyRef)
+  ) {
     return "api_key";
   }
-  if (coerceSecretRef(record.keyRef)) {
-    return "api_key";
-  }
-  if (readNonEmptyString(record.token)) {
-    return "token";
-  }
-  if (coerceSecretRef(record.tokenRef)) {
+  if (readNonEmptyString(record.token) || coerceSecretRef(record.tokenRef)) {
     return "token";
   }
   if (

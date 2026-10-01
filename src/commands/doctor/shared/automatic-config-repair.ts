@@ -246,11 +246,22 @@ async function writeAutomaticConfigRepair(
     baseHash: resolveConfigSnapshotHash(snapshot) ?? undefined,
     // Preflight can commit before the later Doctor health write. Preserve moved
     // references here, under the same snapshot/hash and read-time environment.
-    transform: (_current, { snapshot: currentSnapshot }) => {
+    transform: async (_current, { snapshot: currentSnapshot }) => {
+      options.assertCurrent?.();
       assertShippedPluginInstallConfigImportCurrent(
         currentSnapshot,
         options.pluginInstallConfigImport,
       );
+      const { repairLegacyCronOwnersBeforeConfigWrite } = await import("../cron/legacy-owner.js");
+      const changes = await repairLegacyCronOwnersBeforeConfigWrite({
+        snapshot: currentSnapshot,
+        nextConfig: plan.writeConfig,
+        assertCurrent: options.assertCurrent,
+      });
+      if (changes.length > 0) {
+        const { note } = await import("../../../../packages/terminal-core/src/note.js");
+        note(changes.join("\n"), "Doctor changes");
+      }
       return {
         nextConfig: plan.writeConfig,
       };

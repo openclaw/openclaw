@@ -39,7 +39,9 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       abort: () => undefined,
     };
     const opts = {
-      prompt: "create an automation",
+      message: "create an automation",
+      allowModelOverride: false,
+      privateCompletion: true,
       cronCreatorAuthorityCapability: forgedCapability,
       skillLibraryAuthoring: { target: "personal", invoke: async () => ({}) },
       pinnedWidgetAuthoring: true,
@@ -55,10 +57,11 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
         scopes: ["operator.admin"],
         assertCurrent: () => {},
       },
-    } as unknown as AgentCommandIngressOpts;
+    };
 
     expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
-      prompt: "create an automation",
+      message: "create an automation",
+      privateCompletion: undefined,
       cronCreatorAuthorityCapability: undefined,
       skillLibraryAuthoring: undefined,
       pinnedWidgetAuthoring: undefined,

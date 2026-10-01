@@ -260,10 +260,8 @@ import {
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronExecutionIdentityAdmission, CronServiceState } from "../cron/service/state.js";
 import type { CronJob, CronJobCreate } from "../cron/types.js";
-import {
-  buildGatewayCronService as buildGatewayCronServiceRuntime,
-  fireOnExitJob,
-} from "./server-cron.js";
+import { fireOnExitJob } from "./server-cron-event-dispatch.js";
+import { buildGatewayCronService as buildGatewayCronServiceRuntime } from "./server-cron.js";
 
 function buildGatewayCronService(params: Parameters<typeof buildGatewayCronServiceRuntime>[0]) {
   const legacyStore = (params.cfg.cron as { store?: unknown } | undefined)?.store;

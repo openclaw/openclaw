@@ -1,4 +1,3 @@
-// Silent reply policy tests cover reply suppression decision rules.
 import { describe, expect, it } from "vitest";
 import {
   classifySilentReplyConversationType,
@@ -52,13 +51,16 @@ describe("resolveSilentReplyPolicyFromPolicies", () => {
     ).toBe("disallow");
   });
 
-  it("always disallows direct silent replies", () => {
-    expect(
-      resolveSilentReplyPolicyFromPolicies({
-        conversationType: "direct",
-        defaultPolicy: { group: "allow" },
-        surfacePolicy: { group: "allow" },
-      }),
-    ).toBe("disallow");
-  });
+  it.each(["direct", "internal"] as const)(
+    "always disallows %s silent replies",
+    (conversationType) => {
+      expect(
+        resolveSilentReplyPolicyFromPolicies({
+          conversationType,
+          defaultPolicy: { group: "allow" },
+          surfacePolicy: { group: "allow" },
+        }),
+      ).toBe("disallow");
+    },
+  );
 });

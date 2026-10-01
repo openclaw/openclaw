@@ -13,9 +13,9 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["filesystem", "microtask"] as const)(
+it.for(["filesystem", "microtask"] as const)(
   "keeps the runner event loop responsive while verifying a completed generation (%s reads)",
-  async (completion) => {
+  async (completion, { signal }) => {
     const directory = tempDirs.make("vitest-worker-verification-");
     fs.mkdirSync(path.join(directory, "dist"));
     const manifest: VitestWorkerManifest = {
@@ -39,35 +39,53 @@ it.each(["filesystem", "microtask"] as const)(
       files.add(outputPath);
     }
 
+    const held = path.join(directory, "input-0.ts");
+    const started = createDeferred();
+    const release = createDeferred();
     const observedReads: string[] = [];
     const readFile = fs.readFile.bind(fs);
-    const reader =
-      completion === "microtask"
-        ? vi.spyOn(fs, "readFile").mockImplementation((...args) => {
-            const [filename, callback] = args;
-            if (typeof filename !== "string" || !files.has(filename)) {
-              return readFile(...args);
-            }
-            observedReads.push(filename);
-            queueMicrotask(() => callback(null, Buffer.from(source)));
-          })
-        : undefined;
+    const reader = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
+      const [filename, callback] = args;
+      if (completion === "filesystem") {
+        if (filename === held) {
+          started.resolve();
+          void release.promise.then(() => readFile(...args));
+          return;
+        }
+        return readFile(...args);
+      }
+      if (typeof filename !== "string" || !files.has(filename)) {
+        return readFile(...args);
+      }
+      observedReads.push(filename);
+      queueMicrotask(() => callback(null, Buffer.from(source)));
+    });
     let completed = false;
     // Supply the manifest so an asynchronous manifest read alone cannot satisfy
     // the assertion: the source/artifact traversal itself must yield to I/O.
-    const verification = Promise.resolve(verifyVitestWorkerArtifacts(directory, manifest)).then(
-      () => {
-        completed = true;
-      },
-    );
+    let verification: Promise<void> | undefined;
     try {
+      verification = Promise.resolve(verifyVitestWorkerArtifacts(directory, manifest)).then(() => {
+        completed = true;
+      });
+      if (completion === "filesystem") {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            started.promise,
+            verification,
+            "verification bypassed async reads",
+          ),
+          signal,
+        );
+      }
       await nextTurn();
       expect(completed, "verification blocked the runner until every file was hashed").toBe(false);
     } finally {
+      release.resolve();
       try {
         await verification;
       } finally {
-        reader?.mockRestore();
+        reader.mockRestore();
       }
     }
     if (completion === "microtask") {

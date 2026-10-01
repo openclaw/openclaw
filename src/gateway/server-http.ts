@@ -345,6 +345,7 @@ export function createGatewayHttpServer(opts: {
         resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
       });
       const controlUiRouteOptions = {
+        sessionRowProjectionOwner: opts.getGatewayRequestContext?.()?.sessionRowProjectionOwner,
         basePath: controlUiBasePath,
         config: configSnapshot,
         ...routeAuth,

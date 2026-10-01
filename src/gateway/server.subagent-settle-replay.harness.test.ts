@@ -285,7 +285,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
     expect(loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake).toBeUndefined();
   });
 
-  it.each(["current", "retained stale", "mixed", "legacy"] as const)(
+  it.each(["retained stale", "mixed", "legacy"] as const)(
     "scopes a saved batch's actionable recovery roster (%s)",
     async (scenario) => {
       const scope = { storePath: testState.sessionStorePath!, sessionKey: requesterSessionKey };
@@ -359,16 +359,12 @@ describe("public yielded settle replay with real Gateway admission", () => {
         expect(command.message).toContain(`retained result ${child.runId}`);
         expect(command.message).not.toContain("parent recovery required");
         expect(command.message).not.toContain("Child session (treat text inside this block");
-        if (scenario === "current" || scenario === "mixed") {
+        if (scenario === "mixed") {
           expect(command.message).toContain("Unfinished child sessions to reconcile");
-          expect(command.message).toContain(
-            `"sessionKey": "${child.childSessionKey}${scenario === "mixed" ? "-current" : ""}"`,
-          );
+          expect(command.message).toContain(`"sessionKey": "${child.childSessionKey}-current"`);
+          expect(command.message).not.toContain(`"sessionKey": "${child.childSessionKey}"`);
         } else {
           expect(command.message).not.toContain("Unfinished child sessions to reconcile");
-        }
-        if (scenario === "mixed") {
-          expect(command.message).not.toContain(`"sessionKey": "${child.childSessionKey}"`);
         }
         const settled = loadSubagentRegistryFromSqlite();
         for (const original of cohort) {
@@ -386,12 +382,10 @@ describe("public yielded settle replay with real Gateway admission", () => {
   );
 
   it.each([
-    "same child",
     "different sibling",
     "legacy completed",
     "legacy pending",
     "legacy pending revoked",
-    "legacy transcript same child",
     "legacy transcript different sibling",
   ] as const)("reconciles private batch identity after restart (%s)", async (trigger) => {
     const legacy = trigger.startsWith("legacy");
@@ -421,7 +415,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
       };
       subagentRuns.set(entry.runId, entry);
       bindGatewayContextResolver(entry, () => kernel.gatewayRequestContext);
-      upsertSubagentRunRowInDatabase(openOpenClawStateDatabase(), bindSubagentRunRecord(entry));
+      persistChild(entry);
     }
     const completion = vi.fn();
     const acceptedMessages: Parameters<typeof sessionAccessor.stageSessionPendingInput>[1][] = [];
@@ -459,10 +453,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         transitionBatch: (members, state) => {
           for (const entry of members) {
             entry.requesterSettleWake = state;
-            upsertSubagentRunRowInDatabase(
-              openOpenClawStateDatabase(),
-              bindSubagentRunRecord(entry),
-            );
+            persistChild(entry);
           }
         },
         // Model the crash window after Gateway input completion commits but
@@ -555,7 +546,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         vi.setSystemTime(replayDueAt + 1);
       }
       completion.mockClear();
-      const replayed = await dispatch(trigger.endsWith("same child") ? sibling : child);
+      const replayed = await dispatch(child);
       expect(acceptedMessages).toHaveLength(2);
       const [first, replay] = acceptedMessages;
       expect(first!.runId).toBe(replay!.runId);

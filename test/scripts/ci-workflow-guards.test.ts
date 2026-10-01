@@ -873,9 +873,26 @@ AFTER_CD
       ]);
       expect(workflow.on.pull_request.paths).toContain(workflowPath);
       expect(workflow.on.pull_request.paths).not.toContain(".github/workflows/**");
-      expect(workflow.jobs[jobName].if).toBe(
-        "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
-      );
+      for (const [eventName, draft, result, cancelled, admitted] of [
+        ["pull_request", false, "skipped", false, true],
+        ["pull_request", true, "skipped", false, false],
+        ["pull_request", false, "skipped", true, false],
+        ["workflow_dispatch", false, "success", false, true],
+        ["workflow_dispatch", false, "failure", false, false],
+        ["workflow_dispatch", false, "success", true, false],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(workflow.jobs[jobName].if, {
+            eventName,
+            draft,
+            cancelled,
+            additionalNeeds: { admission: { outputs: {}, result } },
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+          }),
+          `${workflowPath}: ${eventName}, admission=${result}, cancelled=${cancelled}`,
+        ).toBe(admitted);
+      }
     }
   });
 

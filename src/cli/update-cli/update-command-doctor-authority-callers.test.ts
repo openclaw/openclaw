@@ -358,6 +358,7 @@ describe("unproved Doctor authority callers", () => {
         signal: new AbortController().signal,
         run: <T>(operation: () => T) => operation(),
         repairSqliteNoCow: async () => {},
+        cleanupRetainedRuntimes: async () => {},
         releaseState: vi.fn(async () => {}),
         finish: vi.fn(async () => {}),
         release: vi.fn(async () => {}),
@@ -471,6 +472,7 @@ describe("unproved Doctor authority callers", () => {
         signal: new AbortController().signal,
         run: (operation) => operation(),
         repairSqliteNoCow: async () => {},
+        cleanupRetainedRuntimes: async () => {},
         releaseState: async () => {},
         release: async () => {},
         finish: async () => {
