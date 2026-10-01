@@ -92,7 +92,7 @@ it.each(["unchanged", "before", "during"])(
   },
 );
 
-it("attributes a NOCOW physical replacement to the retained Doctor maintenance interval", async () => {
+it("refuses automatic restore after a NOCOW physical replacement during Doctor maintenance", async () => {
   vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
     readUpdateDatabaseGenerations(paths),
   );
@@ -116,8 +116,10 @@ it("attributes a NOCOW physical replacement to the retained Doctor maintenance i
   await maintenance!.repairSqliteNoCow([pathname]);
   await maintenance!.release();
   expect(rewrite).toHaveBeenCalledOnce();
+  // Independent SQLite writers are not excluded during the rewrite, so even this
+  // Doctor-owned replacement cannot be attributed and must not be auto-restored.
   expect(maintenance!.databaseWrites).toEqual({
-    unchanged: true,
+    unchanged: false,
     fromGenerations: generations,
     generations: readUpdateDatabaseGenerations([pathname]),
   });
