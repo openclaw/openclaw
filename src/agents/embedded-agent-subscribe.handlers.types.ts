@@ -220,6 +220,8 @@ export type EmbeddedAgentSubscribeState = {
   messageToolOnlySourceReplyDelivered: boolean;
   sourceReplyDelivered?: true;
   sourceReplyDeliveryState?: ReplyDeliveryState;
+  /** Latest tool batch: "open" before any result, "progress" while it only sent source progress. */
+  toolBatchSourceProgress?: "open" | "progress";
   successfulCronAdds: number;
   pendingToolMediaUrls: string[];
   pendingToolMediaAttachments?: ReplyMediaAttachment[];
@@ -388,6 +390,7 @@ type ToolHandlerState = Pick<
   | "messageToolOnlySourceReplyDelivered"
   | "sourceReplyDelivered"
   | "sourceReplyDeliveryState"
+  | "toolBatchSourceProgress"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"

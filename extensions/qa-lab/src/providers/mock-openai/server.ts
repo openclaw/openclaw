@@ -60,6 +60,7 @@ import {
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
+  QA_GROUP_PROGRESS_THEN_EMPTY_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
@@ -1405,6 +1406,21 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("message", {
         action: "send",
         message: marker,
+      });
+    }
+    return buildAssistantEvents("");
+  }
+  if (QA_GROUP_PROGRESS_THEN_EMPTY_PROMPT_RE.test(allInputText)) {
+    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-PROGRESS-OK";
+    // A real model asked to finalize restates the progress it already sent.
+    if (isSettledToolContinuation) {
+      return buildAssistantEvents(`Still running, I will report back. ${marker}`);
+    }
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: `Started the run, I will report back. ${marker}`,
+        final: false,
       });
     }
     return buildAssistantEvents("");

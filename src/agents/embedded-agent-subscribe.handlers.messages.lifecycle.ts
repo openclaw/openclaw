@@ -73,6 +73,7 @@ export function handleMessageEnd(
     ctx.state.deterministicApprovalPromptPending = false;
     ctx.state.deterministicApprovalPromptSent = false;
     ctx.state.currentSourceMessagingToolSentTextsNormalized.length = 0;
+    ctx.state.toolBatchSourceProgress = undefined;
     ctx.state.lastAssistant = undefined;
     return;
   }
@@ -93,6 +94,30 @@ export function handleMessageEnd(
     emitReasoningEnd(ctx);
   }
   ctx.noteLastAssistant(assistantMessage);
+  // Progress sent as the last tool batch was written after every other tool
+  // result. An empty stop after it leaves nothing to add, so it is the reply.
+  const progressEndsTurn = ctx.state.toolBatchSourceProgress === "progress";
+  const startsToolBatch = assistantMessage.content.some((block) => block.type === "toolCall");
+  ctx.state.toolBatchSourceProgress = startsToolBatch ? "open" : undefined;
+  const closingText = extractEmbeddedAssistantText(assistantMessage).trim();
+  if (
+    progressEndsTurn &&
+    !startsToolBatch &&
+    assistantMessage.stopReason === "stop" &&
+    (!closingText || isSilentReplyText(closingText, SILENT_REPLY_TOKEN))
+  ) {
+    for (const send of [
+      ctx.state.messagingToolSentTargets.findLast((target) => target.sourceReplyFinal === false),
+      ctx.state.messagingToolSourceReplyPayloads.findLast(
+        (payload) => payload.sourceReplyFinal === false,
+      ),
+    ]) {
+      if (send) {
+        send.sourceReplyFinal = true;
+      }
+    }
+    ctx.state.sourceReplyDeliveryState = "delivered";
+  }
   if (suppressVisibleAssistantOutput) {
     appendRawStream(
       () => ({
