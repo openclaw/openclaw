@@ -69,7 +69,12 @@ type ChatPaneHeaderProps = {
   workspaceRoot: string | null;
   workspaceLabel: string | null;
   /** Gateway-resolved project icon for the chip; absent keeps the folder glyph. */
-  workspaceIcon: { routeUrl: string; authTokens: readonly string[]; authReady: boolean } | null;
+  workspaceIcon: {
+    routeUrl: string;
+    authTokens: readonly string[];
+    authReady: boolean;
+    connectionId?: string;
+  } | null;
   parentSession: ChatPaneParentSession | null;
   branch: string | null;
   branches: SessionBranch[];
@@ -281,6 +286,7 @@ function renderWorkspaceChipIcon(icon: ChatPaneHeaderProps["workspaceIcon"]) {
         .routeUrl=${icon.routeUrl}
         .authTokens=${icon.authTokens}
         .authReady=${icon.authReady}
+        .connectionId=${icon.connectionId}
       ></openclaw-workspace-icon>`
     : icons.folder;
 }
@@ -644,5 +650,6 @@ export function resolveChatPaneWorkspaceIcon(
     routeUrl: buildControlUiResourcePath("workspaceIcon", context.resourceBasePath, sessionKey),
     authTokens,
     authReady: Boolean(gateway.snapshot.hello || authTokens.length),
+    connectionId: gateway.snapshot.hello?.server?.connId,
   };
 }

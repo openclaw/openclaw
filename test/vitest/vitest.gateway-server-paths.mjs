@@ -374,6 +374,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/workspace-result-repository.test.ts",
   "src/gateway/worker-workspace-recovery-binding.test.ts",
   "src/gateway/worker-workspace-recovery-transcript.test.ts",
+  "src/gateway/workspace-icon-http.test.ts",
   "test/plugins/browser-session-authority.gateway.test.ts",
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
