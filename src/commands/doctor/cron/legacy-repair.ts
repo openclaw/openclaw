@@ -479,10 +479,10 @@ export async function applyLegacyCronStoreRepair(params: {
       }
     } catch (err) {
       rethrowSqliteSchemaVersionError(err);
-      const storeChanged = collectErrorGraphCandidates(err, (current) => [current.cause]).some(
+      const snapshotChanged = collectErrorGraphCandidates(err, (current) => [current.cause]).some(
         (cause) => cause instanceof CronJobsStoreChangedError,
       );
-      const failure = storeChanged
+      const failure = snapshotChanged
         ? `Cron store at ${shortenHomePath(state.storePath)} changed while doctor was waiting, so no rows were rewritten; re-run ${formatCliCommand("openclaw doctor --fix")} to repair from a fresh snapshot.`
         : `Failed writing migrated cron store at ${shortenHomePath(state.storePath)}: ${errorMessage(err)}`;
       return { changes, warnings: [...warnings, failure] };

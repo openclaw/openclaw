@@ -738,11 +738,15 @@ it.each([
         }
       });
       expect(
-        backedUpRows.filter((rows) => !rows.some((row) => row.job_id === "json-import")),
+        backedUpRows.filter(
+          (snapshotRows) => !snapshotRows.some((row) => row.job_id === "json-import"),
+        ),
       ).toEqual([original]);
       if (customStore) {
         const beforeOwnership = expectDefined(
-          backedUpRows.find((rows) => rows.some((row) => row.job_id === "json-import")),
+          backedUpRows.find((snapshotRows) =>
+            snapshotRows.some((row) => row.job_id === "json-import"),
+          ),
           "backup after legacy import and before ownership repair",
         );
         expect(beforeOwnership.map((row) => row.job_id).toSorted()).toEqual(

@@ -36,7 +36,6 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createCronCreatorAuthorityRunScope,
