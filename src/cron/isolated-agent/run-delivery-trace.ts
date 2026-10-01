@@ -185,7 +185,11 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
   agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
 }): Promise<CronRunDiagnostics | undefined> {
   const toolsAllow = params.agentPayload?.toolsAllow;
-  if (!toolsAllowRequestsWebSearch(toolsAllow)) {
+  // An automatic creator snapshot never asked for web_search; it only recorded it.
+  if (
+    params.agentPayload?.toolsAllowIsDefault === true ||
+    !toolsAllowRequestsWebSearch(toolsAllow)
+  ) {
     return undefined;
   }
   try {

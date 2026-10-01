@@ -215,6 +215,18 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     expect(result.diagnostics).toBeUndefined();
   });
 
+  it("does not warn about web_search recorded in an automatic snapshot", options, async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(
+        ["read", "web_search"],
+        { toolsAllowIsDefault: true },
+        { trigger: { script: "return { fire: true }" } },
+      ),
+    );
+    expect(result.status).toBe("ok");
+    expect(result.diagnostics).toBeUndefined();
+  });
+
   it("keeps missing web_search provider diagnostics when the run aborts", options, async () => {
     runWithModelFallbackMock.mockResolvedValueOnce({
       result: { result: { payloads: [], meta: { aborted: true, agentMeta: {} } } },
