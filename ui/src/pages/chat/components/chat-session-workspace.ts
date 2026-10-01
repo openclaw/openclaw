@@ -19,6 +19,8 @@ import { pathDisplayName } from "../../../lib/path-display.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
+import { isAbsolutePath } from "../../new-session/path.ts";
+import { resolveAttachmentSidebarSource } from "./chat-message-attachments.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
 import {
   clearWorkspaceTimer,
@@ -91,6 +93,57 @@ function unsupportedFileSidebarContent(
     kind: "markdown",
     content,
     rawText: content,
+  };
+}
+
+function attachmentKindForMimeType(mimeType: string | undefined) {
+  const normalized = mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  for (const kind of ["image", "audio", "video"] as const) {
+    if (normalized.startsWith(`${kind}/`)) {
+      return kind;
+    }
+  }
+  return "document" as const;
+}
+
+/**
+ * Binary workspace files stream through the same access-checked media route as
+ * local chat attachments, so PDFs get the bounded preview and other files a download.
+ */
+function binaryFileSidebarContent(
+  file: SessionWorkspaceGetResult["file"],
+  root: string | undefined,
+  fallbackPath: string,
+  name: string,
+  owner: { sessionKey: string; agentId?: string },
+): SidebarContent {
+  const filePath = file.workspacePath || file.path || fallbackPath;
+  // Files outside the workspace root (readable on main since host reads) arrive absolute.
+  const absolute = isAbsolutePath(filePath);
+  if (!root && !absolute) {
+    return { ...unsupportedFileSidebarContent(file, fallbackPath), fileLinkSessionKey: owner.sessionKey };
+  }
+  const attachment = {
+    url: absolute ? filePath : workspaceBrowserFilePath(root, filePath),
+    kind: attachmentKindForMimeType(file.mimeType),
+    label: name,
+    ...(file.mimeType ? { mimeType: file.mimeType } : {}),
+    ...(typeof file.size === "number" ? { sizeBytes: file.size } : {}),
+  };
+  return {
+    kind: "attachment",
+    attachmentKind: attachment.kind,
+    title: name,
+    mimeType: file.mimeType ?? null,
+    sizeBytes: attachment.sizeBytes,
+    sourceIdentity: attachment.url,
+    rawText: filePath,
+    resolveSource: (onRequestUpdate, runtime) =>
+      resolveAttachmentSidebarSource(attachment, onRequestUpdate, {
+        ...runtime,
+        sessionKey: owner.sessionKey,
+        agentId: owner.agentId,
+      }),
   };
 }
 
@@ -217,10 +270,10 @@ function openFile(
         };
       }
       if (file.previewKind === "unsupported") {
-        return {
-          ...unsupportedFileSidebarContent(file, path),
-          fileLinkSessionKey: result.sessionKey,
-        };
+        return binaryFileSidebarContent(file, result.root, path, name, {
+          sessionKey: result.sessionKey,
+          agentId,
+        });
       }
       if (
         file.previewKind !== "text" ||
