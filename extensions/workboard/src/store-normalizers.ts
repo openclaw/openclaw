@@ -629,10 +629,7 @@ function normalizeAttachment(value: unknown): WorkboardAttachment | null {
   const cardId = normalizeBoundedString(record.cardId, undefined, 120, "card id");
   const fileName = normalizeBoundedString(record.fileName, undefined, 240, "attachment file name");
   const createdAt = normalizeTimestamp(record.createdAt, 0);
-  const byteSize =
-    typeof record.byteSize === "number" && Number.isFinite(record.byteSize)
-      ? Math.max(0, Math.trunc(record.byteSize))
-      : 0;
+  const byteSize = normalizeTimestamp(record.byteSize, 0);
   if (!id || !cardId || !fileName || !createdAt || byteSize <= 0) {
     return null;
   }

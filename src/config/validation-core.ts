@@ -11,6 +11,7 @@ import {
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
+import { collectLegacyToolsBySenderIssues } from "../commands/doctor/shared/legacy-tools-by-sender.js";
 import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -420,6 +421,10 @@ export function validateConfigObjectRaw(
   const mcpServerNameIssues = collectMcpServerNameIssues(opts?.sourceRaw).filter(
     (issue) => !normalizedMcpServerNameIssueKeys.has(JSON.stringify([issue.path, issue.message])),
   );
+  const senderPolicyIssues = collectLegacyToolsBySenderIssues(normalizedRaw);
+  if (senderPolicyIssues.length > 0) {
+    return { ok: false, issues: senderPolicyIssues };
+  }
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success || mcpServerNameIssues.length > 0) {

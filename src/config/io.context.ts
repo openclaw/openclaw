@@ -42,7 +42,6 @@ import type {
   ConfigRecoveryCandidatePreparation,
 } from "./io.types.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
-import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { copyConfigResolutionFacts } from "./resolution-facts.js";
@@ -225,12 +224,11 @@ export function createConfigIoContext(
       includeFileTargets,
     );
     const resolution = resolveConfigForRead(resolvedIncludes, env, deps.lowerPrecedenceEnv);
-    const contextBudgetConfig = migrateLegacyContextBudgetConfig(
-      resolution.resolvedConfigRaw,
-    ).config;
     return coerceConfig(
-      migratePersistedImplicitMainRoster(contextBudgetConfig, { env, homedir: deps.homedir })
-        .config,
+      migratePersistedImplicitMainRoster(resolution.resolvedConfigRaw, {
+        env,
+        homedir: deps.homedir,
+      }).config,
     );
   }
 

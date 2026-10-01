@@ -96,6 +96,7 @@ export type RunStepOptions = {
   cwd: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  input?: string;
   progress?: UpdateStepProgress;
   stepIndex: number;
   totalSteps: number;

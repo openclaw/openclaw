@@ -65,17 +65,6 @@ const SOURCE_WIDE_BATCH_MAX_REQUESTS = 50000;
 
 const log = createSubsystemLogger("memory");
 
-function resolveEmbeddingSecondsTimeoutMs(seconds: number): number {
-  if (!Number.isFinite(seconds)) {
-    return MAX_TIMER_TIMEOUT_MS;
-  }
-  const timeoutMs = Math.floor(seconds * 1000);
-  return resolveTimerTimeoutMs(
-    Number.isFinite(timeoutMs) ? timeoutMs : MAX_TIMER_TIMEOUT_MS,
-    MAX_TIMER_TIMEOUT_MS,
-  );
-}
-
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 
 type PreparedMemoryIndexEntry = {
@@ -128,7 +117,7 @@ function resolveEmbeddingTimeoutMs(params: {
     typeof configuredTimeoutSeconds === "number" &&
     configuredTimeoutSeconds > 0
   ) {
-    return resolveEmbeddingSecondsTimeoutMs(configuredTimeoutSeconds);
+    return resolveTimerTimeoutMs(configuredTimeoutSeconds * 1000, MAX_TIMER_TIMEOUT_MS);
   }
   const defaults = EMBEDDING_TIMEOUTS_MS[params.kind];
   const runtimeTimeoutMs =

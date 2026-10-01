@@ -4,7 +4,7 @@ import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as realDelay } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
-import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { killPidIfAlive } from "../../../test-utils/process-tree.js";
 import { mockProcessPlatform } from "../../../test-utils/vitest-spies.js";
@@ -70,14 +70,11 @@ function createRetainedDescendantFixture() {
       descendant.unref();
     `,
     readPid,
-    releaseAndJoin: async <T>(waitForExtinction: () => Promise<T>) => {
+    releaseAndJoin: async <T>(waitForExtinction: () => Promise<T>, signal: AbortSignal) => {
       await writeFile(releasePath, "", "utf8");
       // Read again on failure paths where readiness was not observed before cleanup.
       const pid = await readPid();
-      await Promise.all([
-        withTestTimeout(waitForExtinction(), 5_000, "retained descendant scope did not close"),
-        waitFor(() => !isAlive(pid)),
-      ]);
+      await Promise.all([withinTest(waitForExtinction(), signal), waitFor(() => !isAlive(pid))]);
       activePids.delete(pid);
     },
   };
@@ -356,7 +353,9 @@ describeSpawnTransports("service-managed child lifecycle", () => {
     }
   });
 
-  it("flushes incomplete UTF-8 before exposing a root result with retained authority", async () => {
+  it("flushes incomplete UTF-8 before exposing a root result with retained authority", async ({
+    signal,
+  }) => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const fixture = createRetainedDescendantFixture();
     const rootScript = `
@@ -379,11 +378,7 @@ describeSpawnTransports("service-managed child lifecycle", () => {
     });
     try {
       const descendantPid = await fixture.readPid();
-      const exit = await withTestTimeout(
-        run.wait(),
-        5_000,
-        "root result waited for descendant release",
-      );
+      const exit = await withinTest(run.wait(), signal);
 
       expect(exit).toMatchObject({ reason: "exit", exitCode: 0, exitSignal: null });
       expect(exit.stdout).toBe("X�");
@@ -393,9 +388,9 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       await expectPending(run.waitForExtinction!());
     } finally {
       try {
-        await fixture.releaseAndJoin(run.waitForExtinction!);
+        await fixture.releaseAndJoin(run.waitForExtinction!, signal);
       } finally {
-        await withTestTimeout(supervisor.shutdown(), 5_000, "supervisor cleanup did not finish");
+        await supervisor.shutdown();
       }
     }
   });

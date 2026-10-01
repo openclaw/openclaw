@@ -123,6 +123,17 @@ Long-press a session in the sidebar or Sessions screen to open its session actio
 
 A colored session has a narrow leading stripe in session lists and a small dot beside its title in Chat. Unset colors show neither marker. The Gateway stores color names, not hex values; the app adjusts their hues for light and dark appearances.
 
+## Reactions
+
+Saved prompts and assistant replies show emoji reaction chips with counts and
+reactor names for VoiceOver. Tap a chip to toggle your reaction, or long-press a
+message and choose **Add Reaction** for the quick palette. **More…** accepts one
+typed or pasted emoji. Reactions update live while the session is open and do
+not create notifications. Reaction controls follow the Gateway's advertised
+methods, operator scopes, session cap, and current sharing role; sessions you
+can only view show the chips without reaction controls. Archived and catalog
+sessions do not offer reaction controls.
+
 ## Message times and models
 
 Completed message groups show relative time for the past week and a compact

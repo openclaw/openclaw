@@ -37,7 +37,7 @@ import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import {
   allowedSessionVisibilities,
   canManageSessionSharing,
@@ -236,10 +236,7 @@ function createSessionMembersListHandler(
     if (!managed) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     const profiles = await measureSessionCollaborationPhase(`${method}.profiles`, () =>
       listProfiles(),
     );
@@ -559,10 +556,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
     if (!managed) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     const profiles = await listProfiles();
     do {
       await projection.ensureMaterialized();

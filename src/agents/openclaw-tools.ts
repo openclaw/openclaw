@@ -339,7 +339,6 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           createSessionsTool({
             ...options,
             stopAllowed: options?.swarmCollector !== true,
-            controlOnly: options?.senderIsOwner === false,
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentSessionId: options?.sessionId,
             requesterAgentIdOverride: sessionAgentId,

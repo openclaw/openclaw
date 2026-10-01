@@ -23,6 +23,7 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveOptionalNativeText
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.nonBlankString
@@ -8684,8 +8685,6 @@ private fun messageContentIdentityKey(message: ChatMessage): String? {
 
   return listOf(role, contentFingerprint).joinToString(separator = "|")
 }
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun parseSessionEditorAttachments(value: JsonElement?): List<SessionEditorAttachment> =
   value.asArrayOrNull()?.mapNotNull { element ->
