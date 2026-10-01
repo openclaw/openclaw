@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveNpmCommand } from "./npm-command.js";
+import { resolveBundledNpmCommand, resolveNpmCommand } from "./npm-command.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
@@ -238,13 +238,49 @@ function hasNpmEnvConfigKey(env: NodeJS.ProcessEnv, key: string): boolean {
   });
 }
 
-/** Returns whether npm config explicitly defines a key outside its built-in defaults. */
-export function hasNpmConfigKey(
+/** Finds keys npm resolves from explicit config layers rather than built-in defaults. */
+export function findExplicitNpmConfigKeys(
   env: NodeJS.ProcessEnv,
-  key: string,
+  keys: readonly string[],
   scope: NpmConfigScope = {},
-): boolean {
-  return hasNpmEnvConfigKey(env, key) || hasRawNpmConfigKey(env, key, scope);
+): Set<string> {
+  const found = new Set(keys.filter((key) => hasNpmEnvConfigKey(env, key)));
+  const remaining = keys.filter((key) => !found.has(key));
+  if (remaining.length === 0) {
+    return found;
+  }
+
+  const [command, ...args] = resolveBundledNpmCommand([
+    "config",
+    "list",
+    "--location=project",
+    "--json=false",
+    "--long=false",
+  ]);
+  try {
+    const raw = execFileSync(command, args, {
+      cwd: scope.npmConfigCwd?.trim() || tryProcessCwd() || undefined,
+      encoding: "utf-8",
+      env: {
+        ...createNpmConfigPathProbeEnv(env),
+        ...(scope.npmConfigPrefix ? { npm_config_prefix: scope.npmConfigPrefix } : {}),
+      },
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    });
+    const [installConfig] = raw.split(/^; "publishConfig" from /mu, 1);
+    for (const key of remaining) {
+      const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+      if (new RegExp(`^${escapedKey}\\s*=`, "mu").test(installConfig)) {
+        found.add(key);
+      }
+    }
+  } catch {
+    for (const key of remaining) {
+      found.add(key);
+    }
+  }
+  return found;
 }
 
 function resolveNpmFreshnessBypassMode(
