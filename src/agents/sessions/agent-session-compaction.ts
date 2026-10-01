@@ -74,10 +74,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     this.assertContextReplacementActive = assertActive;
   }
 
-  // =========================================================================
-  // Compaction
-  // =========================================================================
-
   /**
    * Manually compact the session context.
    * Aborts current agent operation first.
@@ -179,17 +175,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
   }
 
-  /**
-   * Cancel in-progress compaction (manual or auto).
-   */
+  /** Cancel in-progress compaction (manual or auto). */
   abortCompaction(): void {
     this.compactionAbortController?.abort();
     this.autoCompactionAbortController?.abort();
   }
 
-  /**
-   * Cancel in-progress branch summarization.
-   */
+  /** Cancel in-progress branch summarization. */
   abortBranchSummary(): void {
     this.branchSummaryAbortController?.abort();
   }
@@ -497,7 +489,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return false;
     }
 
-    // Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
     if (skipAbortedCheck && assistantMessage.stopReason === "aborted") {
       return false;
     }
@@ -581,9 +572,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     return false;
   }
 
-  /**
-   * Internal: Run auto-compaction with events.
-   */
   private async runAutoCompaction(
     reason: Exclude<CompactionReason, "manual">,
     willRetry: boolean,
@@ -616,11 +604,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         settings,
         signal: abortController.signal,
       });
-      if (outcome.status === "skipped") {
-        this.emit({ type: "compaction_end", reason, itemId, outcome });
-        return false;
-      }
-      if (outcome.status === "aborted") {
+      if (outcome.status !== "completed") {
         this.emit({ type: "compaction_end", reason, itemId, outcome });
         return false;
       }
@@ -675,13 +659,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         this.autoCompactionAbortController = undefined;
       }
     }
-  }
-
-  /**
-   * Toggle auto-compaction setting.
-   */
-  setAutoCompactionEnabled(enabled: boolean): void {
-    this.settingsManager.setCompactionEnabled(enabled);
   }
 
   /** Whether auto-compaction is enabled */

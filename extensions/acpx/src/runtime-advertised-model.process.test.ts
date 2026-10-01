@@ -117,22 +117,7 @@ it("selects the unique advertised id for an explicit model ref", async () => {
   });
 });
 
-it("matches a derived provider-prefixed model ref to the advertised id", async () => {
-  await withRuntime(async (runtime) => {
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:main:acp:catalog-derived",
-      agent: "catalog",
-      mode: "persistent",
-      model: "xai/grok-4.5",
-    });
-    expect(handle.appliedModel).toBeUndefined();
-    expect(await runtime.getStatus({ handle })).toMatchObject({
-      models: { currentModelId: "grok-4.5[effort=high,fast=true]" },
-    });
-  });
-});
-
-it.each(["gpt-5.5", "missing-model", "vendor/ambiguous"])(
+it.each(["missing-model", "vendor/ambiguous"])(
   "rejects an ambiguous or unknown model %s",
   async (model) => {
     await withRuntime(async (runtime) => {

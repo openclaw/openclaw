@@ -1,4 +1,6 @@
+import { prepareDevicePairingBinding } from "./device-pairing-binding.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
+import type { DevicePairingBinding } from "./device-pairing-read.types.js";
 import {
   getPairedDevice,
   hasEffectivePairedDeviceRole,
@@ -12,21 +14,7 @@ import type { NodeApprovalSurface } from "./node-pairing-surface.js";
 export type { NodePairingGeneration } from "./device-pairing.js";
 
 /** Registry projection of a paired device's authenticated node-role state. */
-export type PairedDeviceNodeBinding = {
-  identity: string;
-  generation?: string;
-};
-
-function toPairedDeviceNodeBinding(
-  state: NodePairingState | null,
-): PairedDeviceNodeBinding | undefined {
-  return state
-    ? {
-        identity: state.identity.key,
-        ...(state.generation ? { generation: state.generation.key } : {}),
-      }
-    : undefined;
-}
+export type PairedDeviceNodeBinding = DevicePairingBinding;
 
 /** Project only authenticated node-role bindings from the caller's loaded device snapshot. */
 export function projectPairedDeviceNodeBindings(
@@ -34,7 +22,7 @@ export function projectPairedDeviceNodeBindings(
 ): Map<string, PairedDeviceNodeBinding> {
   const bindings = new Map<string, PairedDeviceNodeBinding>();
   for (const device of pairedDevices) {
-    const binding = toPairedDeviceNodeBinding(resolveNodePairingState(device));
+    const { binding } = prepareDevicePairingBinding(device.deviceId, device);
     if (binding) {
       bindings.set(device.deviceId, binding);
     }

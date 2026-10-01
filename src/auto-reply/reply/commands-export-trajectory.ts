@@ -1,4 +1,3 @@
-// Implements trajectory export command packaging for the active session agent.
 import { createExecTool } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ReplyPayload } from "../types.js";
@@ -153,12 +152,8 @@ type TrajectoryExportCliRequest = {
   agent: string;
 };
 
-type TrajectoryExportExecRequest = {
-  argv: string[];
-  command: string;
-  env: Record<string, string> | undefined;
+type TrajectoryExportExecRequest = ReturnType<typeof buildCurrentOpenClawCliExecRequest> & {
   displayCommand: string;
-  encodedRequest: string;
   request: TrajectoryExportCliRequest;
 };
 
@@ -185,7 +180,6 @@ function buildTrajectoryExportExecRequest(
   return {
     ...buildCurrentOpenClawCliExecRequest(args),
     displayCommand: ["openclaw", ...args].join(" "),
-    encodedRequest,
     request,
   };
 }

@@ -190,6 +190,10 @@ export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
     join(rootDir, "scripts", "lib", "docker-e2e-container.sh"),
   );
   await copyFile(
+    join(repoRoot, "scripts", "lib", "docker-e2e-watchdog.mjs"),
+    join(rootDir, "scripts", "lib", "docker-e2e-watchdog.mjs"),
+  );
+  await copyFile(
     join(repoRoot, "scripts", "lib", "docker-e2e-resource-diagnostics.sh"),
     join(rootDir, "scripts", "lib", "docker-e2e-resource-diagnostics.sh"),
   );

@@ -1,5 +1,14 @@
 import type { BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
 
+/** Source that determined managed Chrome headless mode. */
+export type ManagedBrowserHeadlessSource =
+  | "request"
+  | "env"
+  | "profile"
+  | "config"
+  | "linux-display-fallback"
+  | "default";
+
 /** Runtime browser profile settings resolved from global and profile config. */
 export type ResolvedBrowserProfile = {
   name: string;

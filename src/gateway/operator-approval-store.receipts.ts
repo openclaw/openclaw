@@ -60,32 +60,20 @@ function operatorApprovalReasonCode(record: OperatorApprovalRecord): string {
   }
 }
 
+const TERMINAL_APPROVAL_POLICY_REFS = {
+  user: "operator-approval:human-decision",
+  timeout: "operator-approval:deadline",
+  "no-route": "operator-approval:delivery-route-required",
+  "run-aborted": "operator-approval:run-lifecycle",
+  "gateway-restart": "operator-approval:runtime-lifecycle",
+  "malformed-verdict": "operator-approval:valid-verdict-required",
+  "storage-corrupt": "operator-approval:fail-closed-storage",
+} satisfies Record<NonNullable<OperatorApprovalRecord["terminalReason"]>, string>;
+
 function operatorApprovalPolicyRefs(record: OperatorApprovalRecord): string[] {
   const refs = ["operator-approval:first-answer-wins"];
-  switch (record.terminalReason) {
-    case "user":
-      refs.push("operator-approval:human-decision");
-      break;
-    case "timeout":
-      refs.push("operator-approval:deadline");
-      break;
-    case "no-route":
-      refs.push("operator-approval:delivery-route-required");
-      break;
-    case "run-aborted":
-      refs.push("operator-approval:run-lifecycle");
-      break;
-    case "gateway-restart":
-      refs.push("operator-approval:runtime-lifecycle");
-      break;
-    case "malformed-verdict":
-      refs.push("operator-approval:valid-verdict-required");
-      break;
-    case "storage-corrupt":
-      refs.push("operator-approval:fail-closed-storage");
-      break;
-    case null:
-      break;
+  if (record.terminalReason !== null) {
+    refs.push(TERMINAL_APPROVAL_POLICY_REFS[record.terminalReason]);
   }
   return refs.toSorted();
 }

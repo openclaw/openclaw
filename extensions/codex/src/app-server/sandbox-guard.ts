@@ -6,6 +6,7 @@ import { tryResolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtim
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveSandboxRuntimeStatus, type SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexRemoteExecPlacementSandbox } from "./config-parsing.js";
 import {
   formatCodexNativeNodeExecBlock,
@@ -97,15 +98,9 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
 }
 
 /** Resolves the generic native-execution block for sandboxed or node-hosted sessions. */
-export function resolveCodexNativeExecutionBlock(params: {
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  sandbox?: Pick<SandboxContext, "enabled"> | null;
-  sandboxEnvironmentSelected?: boolean;
-  surface: string;
-}): string | undefined {
+export function resolveCodexNativeExecutionBlock(
+  params: Parameters<typeof resolveCodexNativeSandboxBlock>[0],
+): string | undefined {
   return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
 }
 
@@ -149,25 +144,21 @@ export function resolveCodexNativeSandboxBlock(params: {
 }
 
 function hasOpenClawSandboxEnvironmentSelection(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const environments = (value as { environments?: unknown }).environments;
+  const environments = value.environments;
   return (
     Array.isArray(environments) &&
     environments.length > 0 &&
-    environments.every((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return false;
-      }
-      const environment = entry as { environmentId?: unknown; cwd?: unknown };
-      return (
+    environments.every(
+      (environment) =>
+        isRecord(environment) &&
         typeof environment.environmentId === "string" &&
         environment.environmentId.startsWith("openclaw-sandbox-") &&
         typeof environment.cwd === "string" &&
-        environment.cwd.trim().length > 0
-      );
-    })
+        environment.cwd.trim().length > 0,
+    )
   );
 }
 

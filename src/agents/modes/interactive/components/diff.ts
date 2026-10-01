@@ -86,7 +86,6 @@ export function renderDiff(diffText: string): string {
     }
 
     if (parsed.prefix === "-") {
-      // Collect consecutive removed lines
       const removedLines: { lineNum: string; content: string }[] = [];
       while (i < lines.length) {
         const currentLine = lines.at(i);
@@ -98,7 +97,6 @@ export function renderDiff(diffText: string): string {
         i++;
       }
 
-      // Collect consecutive added lines
       const addedLines: { lineNum: string; content: string }[] = [];
       while (i < lines.length) {
         const currentLine = lines.at(i);
@@ -138,11 +136,9 @@ export function renderDiff(diffText: string): string {
         }
       }
     } else if (parsed.prefix === "+") {
-      // Standalone added line
       result.push(theme.fg("toolDiffAdded", `+${parsed.lineNum} ${replaceTabs(parsed.content)}`));
       i++;
     } else {
-      // Context line
       result.push(theme.fg("toolDiffContext", ` ${parsed.lineNum} ${replaceTabs(parsed.content)}`));
       i++;
     }

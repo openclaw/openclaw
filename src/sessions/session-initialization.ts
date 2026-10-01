@@ -42,10 +42,6 @@ type Source = {
   assertCurrent: () => void;
   assertRollbackCurrent: () => void;
 };
-type InitializationOwner = {
-  assertCurrent: () => void;
-  assertRollbackCurrent: () => void;
-};
 // Built core chunks and source plugins must redeem the same process-local owner.
 const { rollbackOwner, sources } = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionInitialization"),
@@ -78,9 +74,7 @@ export async function withSessionInitializationSource<T>(
   }
 }
 
-export function captureSessionInitializationOwner(
-  harnessId: string | undefined,
-): InitializationOwner {
+export function captureSessionInitializationOwner(harnessId: string | undefined): Source {
   const source = sources.getStore();
   const scopedRegistry = () =>
     getPluginRuntimeGenerationRegistry() ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry;

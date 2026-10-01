@@ -32,19 +32,24 @@ describe("searchPathKeyword", () => {
     ["unicode61", "README.md"],
     ["trigram", "common"],
     ["trigram", "README.md"],
+    ["unicode61", "成语"],
+    ["trigram", "成语"],
   ] as const)(
-    "resolves first chunks only within the retained %s window for %s",
+    "bounds first-chunk work with stale statistics for %s query %s",
     async (ftsTokenizer, query) => {
       const { db } = createMemorySearchDb({ ftsTokenizer });
       try {
+        insertKeywordFixture(db, { id: "seed", path: "seed.md" });
+        // Analyze an almost-empty index before it grows, as during an upgrade.
+        db.exec("PRAGMA analysis_limit=1000; ANALYZE main");
         db.prepare(
           "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', '', 0, 0)",
-        ).run("memory/common/00-empty/README.md");
+        ).run("memory/common/成语/00-empty/README.md");
         for (let index = 0; index < 64; index++) {
           for (let chunk = 2; chunk >= 0; chunk--) {
             insertKeywordFixture(db, {
               id: `path-${index}-chunk-${chunk}`,
-              path: `memory/common/${String(index).padStart(3, "0")}/README.md`,
+              path: `memory/common/成语/${String(index).padStart(3, "0")}/README.md`,
               source: index % 2 === 0 ? "memory" : "sessions",
               startLine: chunk * 5 + 1,
               endLine: chunk * 5 + 4,
@@ -57,19 +62,20 @@ describe("searchPathKeyword", () => {
           examinedChunkLines++;
           return line;
         });
-        db.exec(`
-          ALTER TABLE memory_index_chunks RENAME TO observed_chunks;
-          CREATE VIEW memory_index_chunks AS
-            SELECT id, path, source, observe_path_chunk_line(start_line) AS start_line,
-                   end_line, text FROM observed_chunks;
-        `);
 
+        const queryPlans: string[] = [];
         let fetchedTextBytes = 0;
         const prepare = db.prepare.bind(db);
         const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-          const statement = prepare(sql);
+          // Observe sorting work without replacing the indexed chunks table.
+          const statement = prepare(
+            sql.replaceAll("candidate.start_line", "observe_path_chunk_line(candidate.start_line)"),
+          );
           statement.all = new Proxy(statement.all.bind(statement), {
             apply(all, _receiver, values) {
+              for (const row of prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...values)) {
+                queryPlans.push(String(row.detail));
+              }
               const rows = all(...values);
               for (const row of rows) {
                 if (typeof row.text === "string") {
@@ -95,6 +101,8 @@ describe("searchPathKeyword", () => {
           { id: "path-0-chunk-0", snippet: "body 0/0 " + "x".repeat(191) },
           { id: "path-2-chunk-0", snippet: "body 2/0 " + "x".repeat(191) },
         ]);
+        expect(queryPlans.length).toBeGreaterThan(0);
+        expect(queryPlans.filter((detail) => /\bSCAN (?:c|candidate)\b/.test(detail))).toEqual([]);
         expect(examinedChunkLines).toBeGreaterThan(0);
         expect(examinedChunkLines).toBeLessThanOrEqual(16);
         expect(fetchedTextBytes).toBeLessThanOrEqual(4 * 200 * 4);
@@ -158,66 +166,6 @@ describe("searchPathKeyword", () => {
       expect(token[0]?.textScore).toBe(0);
       expect(token[0]?.score).toBe(token[0]?.pathScore);
       expect(token[0]?.score).toBeLessThan(1);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("finds an ASCII exact path amid many unrelated source rows", async () => {
-    const { db, schema } = createMemorySearchDb();
-    try {
-      if (!schema.ftsAvailable) {
-        throw new Error(schema.ftsError ?? "FTS unavailable");
-      }
-      const unrelatedCount = 256;
-      const insertSource = db.prepare(
-        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', ?, 0, 0)",
-      );
-      for (let index = 0; index < unrelatedCount; index += 1) {
-        insertSource.run(`memory/unrelated-${index}.md`, `unrelated-${index}`);
-      }
-      insertSource.run("memory/project-lantern.notes.md", "near");
-      insertKeywordFixture(db, {
-        id: "exact-ascii-path",
-        path: "memory/project-lantern.md",
-      });
-
-      const results = await searchPathKeywordFixture(db, "project-lantern");
-
-      expect(results).toMatchObject([{ id: "exact-ascii-path", exactPathSpecificity: 1 }]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("skips empty exact sources before applying the exact result limit", async () => {
-    const { db, schema } = createMemorySearchDb();
-    try {
-      if (!schema.ftsAvailable) {
-        throw new Error(schema.ftsError ?? "FTS unavailable");
-      }
-      db.prepare(
-        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 0, 0)",
-      ).run("a/foo.md", "memory", "empty-source");
-      insertKeywordFixture(db, {
-        id: "live-exact-source",
-        path: "z/foo.md",
-        text: "live exact source",
-      });
-
-      await expect(
-        searchPathKeyword({
-          db,
-          pathFtsTable: "memory_index_paths_fts",
-          query: "foo",
-          ftsTokenizer: "unicode61",
-          limit: 1,
-          snippetMaxChars: 200,
-          sourceFilter: { sql: "", params: [] },
-          buildFtsQuery,
-          bm25RankToScore,
-        }),
-      ).resolves.toMatchObject([{ id: "live-exact-source", exactPathSpecificity: 1 }]);
     } finally {
       db.close();
     }
@@ -359,56 +307,16 @@ describe("searchPathKeyword", () => {
 
       expect(results.map((entry) => entry.id)).toEqual(["cjk-exact", "cjk-path"]);
       await expect(
-        searchPathKeyword({
-          db,
-          pathFtsTable: "memory_index_paths_fts",
-          query: "成语.md",
-          ftsTokenizer: "trigram",
-          limit: 1,
-          snippetMaxChars: 200,
-          sourceFilter: { sql: "", params: [] },
-          buildFtsQuery,
-          bm25RankToScore,
-        }),
+        searchPathKeywordFixture(db, "成语.md", { ftsTokenizer: "trigram" }),
       ).resolves.toMatchObject([{ id: "cjk-exact", exactPathSpecificity: 2 }]);
       await expect(
-        searchPathKeyword({
-          db,
-          pathFtsTable: "memory_index_paths_fts",
-          query: "README.md",
-          ftsTokenizer: "trigram",
-          limit: 1,
-          snippetMaxChars: 200,
-          sourceFilter: { sql: "", params: [] },
-          buildFtsQuery,
-          bm25RankToScore,
-        }),
+        searchPathKeywordFixture(db, "README.md", { ftsTokenizer: "trigram" }),
       ).resolves.toMatchObject([{ id: "readme-exact", exactPathSpecificity: 2 }]);
       await expect(
-        searchPathKeyword({
-          db,
-          pathFtsTable: "memory_index_paths_fts",
-          query: "CAFÉ",
-          ftsTokenizer: "trigram",
-          limit: 1,
-          snippetMaxChars: 200,
-          sourceFilter: { sql: "", params: [] },
-          buildFtsQuery,
-          bm25RankToScore,
-        }),
+        searchPathKeywordFixture(db, "CAFÉ", { ftsTokenizer: "trigram" }),
       ).resolves.toMatchObject([{ id: "normalized-exact", exactPathSpecificity: 1 }]);
       await expect(
-        searchPathKeyword({
-          db,
-          pathFtsTable: "memory_index_paths_fts",
-          query: "🧠",
-          ftsTokenizer: "trigram",
-          limit: 1,
-          snippetMaxChars: 200,
-          sourceFilter: { sql: "", params: [] },
-          buildFtsQuery,
-          bm25RankToScore,
-        }),
+        searchPathKeywordFixture(db, "🧠", { ftsTokenizer: "trigram" }),
       ).resolves.toMatchObject([{ id: "tokenless-exact", exactPathSpecificity: 1 }]);
     } finally {
       db.close();

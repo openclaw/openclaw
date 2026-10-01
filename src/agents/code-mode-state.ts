@@ -26,6 +26,7 @@ import type {
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-runtime.js";
+import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -80,7 +81,12 @@ let nextPendingBridgeSettlementSequence = 0;
 let activeRunExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Catalog ownership spans worker legs and continuations; parking never closes the cell. */
-export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeModeConfig) {
+export function createCodeModeRunOwner(
+  ctx: ToolSearchToolContext,
+  config: CodeModeConfig,
+  initialRequired = false,
+) {
+  let required = initialRequired;
   const inbox = new CodeModeProgramDataInbox(config);
   // A parked cell still owns pending calls and their output. Re-admission waits
   // for its final exec/wait result rather than stranding or replaying that work.
@@ -203,6 +209,13 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
     void close();
   };
   const owner = {
+    get completionRequired() {
+      return required;
+    },
+    requireCompletion() {
+      signal.throwIfAborted();
+      required = true;
+    },
     runId,
     signal,
     inbox,
@@ -258,10 +271,6 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
   return owner;
 }
 
-export function createCodeModeBridgeDispatchState(): CodeModeBridgeDispatchState {
-  return { started: false };
-}
-
 // One unreferenced timer owns parked continuations even when no later exec or wait
 // arrives; otherwise expired runs keep their VM bytes and live tool calls.
 function scheduleActiveRunExpiry(): void {
@@ -296,7 +305,9 @@ export function removeExpiredRuns(now = Date.now()): void {
         state.agentWaitRetainUntil !== undefined &&
         isFutureDateTimestampMs(state.agentWaitRetainUntil, { nowMs: now })
       ) {
-        const renewed = resolveCodeModeSnapshotExpiresAt(now, state.config.snapshotTtlSeconds);
+        const renewed = resolveExpiresAtMsFromDurationSeconds(state.config.snapshotTtlSeconds, {
+          nowMs: now,
+        });
         if (renewed !== undefined) {
           state.expiresAt = Math.min(renewed, state.agentWaitRetainUntil);
           continue;
@@ -420,20 +431,12 @@ export function waitForPendingBridgeSettlement(
   return settlement.then(() => undefined);
 }
 
-function resolveCodeModeSnapshotExpiresAt(now: number, ttlSeconds: number): number | undefined {
-  return resolveExpiresAtMsFromDurationSeconds(ttlSeconds, { nowMs: now });
-}
-
-function enforceActiveRunLimit(): void {
-  removeExpiredRuns();
-  if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
-    throw new ToolInputError("too many suspended code mode runs.");
-  }
-}
-
 export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   if (ownedRunId === undefined) {
-    enforceActiveRunLimit();
+    removeExpiredRuns();
+    if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
+      throw new ToolInputError("too many suspended code mode runs.");
+    }
   } else {
     const state = activeRuns.get(ownedRunId);
     if (!state) {
@@ -477,6 +480,7 @@ function isPendingBridgeRequestReplaySafe(
     request.method === "agentSpawn" ||
     request.method === "agentWait" ||
     request.method === "skillsList" ||
+    request.method === "skillsSearch" ||
     request.method === "skillsRead" ||
     request.method === "sleep"
   ) {
@@ -510,6 +514,7 @@ export function createPendingBridgeStates(
     parentToolCallId: string;
     codeModeRunId: string;
     remainingMs: number;
+    completionRequired?: boolean;
     activeRunId?: string;
     ctx: ToolSearchToolContext;
     signal: AbortSignal;
@@ -546,6 +551,7 @@ export function createPendingBridgeStates(
       codeModeRunId: params.codeModeRunId,
       reply,
       remainingMs: Math.max(1, params.remainingMs),
+      completionRequired: params.completionRequired,
       ctx: params.ctx,
       request,
       signal,
@@ -567,9 +573,9 @@ export function createPendingBridgeStates(
         if (state.method === "agentWait" && params.activeRunId) {
           const active = activeRuns.get(params.activeRunId);
           if (active?.pending.includes(state)) {
-            const renewed = resolveCodeModeSnapshotExpiresAt(
-              Date.now(),
+            const renewed = resolveExpiresAtMsFromDurationSeconds(
               active.config.snapshotTtlSeconds,
+              { nowMs: Date.now() },
             );
             if (renewed !== undefined) {
               active.expiresAt = renewed;
@@ -589,29 +595,21 @@ export function createPendingBridgeStates(
   });
 }
 
-export function storeSuspendedRun(params: {
-  owner: CodeModeRunOwner;
-  replayId: string;
-  pending: PendingBridgeState[];
-  replaySafe: boolean;
-  settlementMode: CodeModeSettlementMode;
-  continuation: CodeModeExecutorContinuation;
-  parentToolCallId: string;
-  ctx: ToolSearchToolContext;
-  config: CodeModeConfig;
-  runtime: ToolSearchRuntime;
-  catalogProjection: CodeModeCatalogProjection;
-  namespaceRuntime: CodeModeNamespaceRuntime;
-  output: CodeModeOutputState;
-  bridgeDispatch: CodeModeBridgeDispatchState;
-}) {
+export function storeSuspendedRun(
+  params: Omit<CodeModeRunState, "runId" | "expiresAt" | "agentWaitRetainUntil">,
+) {
   const runId = params.owner.runId;
+  if (params.owner.completionRequired) {
+    throw new ToolInputError("Required Code Mode work cannot publish an unfinished continuation.");
+  }
   if (params.owner.signal.aborted) {
     cancelPendingBridgeStates(params.pending);
     return codeModeAbortedResult(params);
   }
   const now = Date.now();
-  const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
+  const expiresAt = resolveExpiresAtMsFromDurationSeconds(params.config.snapshotTtlSeconds, {
+    nowMs: now,
+  });
   if (expiresAt === undefined) {
     throw new ToolInputError("code mode run expiry is unavailable.");
   }
@@ -619,30 +617,12 @@ export function storeSuspendedRun(params: {
     (entry) => entry.method === "agentWait" && !entry.settled,
   );
   const agentWaitRetainUntil = hasPendingAgentWait
-    ? resolveCodeModeSnapshotExpiresAt(
-        now,
+    ? resolveExpiresAtMsFromDurationSeconds(
         params.config.snapshotTtlSeconds * MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS,
+        { nowMs: now },
       )
     : undefined;
-  const state: CodeModeRunState = {
-    runId,
-    replayId: params.replayId,
-    parentToolCallId: params.parentToolCallId,
-    ctx: params.ctx,
-    config: params.config,
-    continuation: params.continuation,
-    pending: params.pending,
-    settlementMode: params.settlementMode,
-    replaySafe: params.replaySafe,
-    output: params.output,
-    expiresAt,
-    agentWaitRetainUntil,
-    runtime: params.runtime,
-    catalogProjection: params.catalogProjection,
-    namespaceRuntime: params.namespaceRuntime,
-    bridgeDispatch: params.bridgeDispatch,
-    owner: params.owner,
-  };
+  const state: CodeModeRunState = { ...params, runId, expiresAt, agentWaitRetainUntil };
   const result = params.output.takeResult(
     {
       status: "waiting" as const,
@@ -658,7 +638,7 @@ export function storeSuspendedRun(params: {
   // A result that cannot expose its continuation must not leave an unreachable parked cell.
   activeRuns.set(runId, state);
   scheduleActiveRunExpiry();
-  return result;
+  return recordCodeModeToolOutcome(result, result, params.pending);
 }
 
 export function codeModeAbortedResult(params: {

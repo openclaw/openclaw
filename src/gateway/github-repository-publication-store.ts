@@ -1,12 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { SessionEntry } from "../config/sessions/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type {
   RepositoryGitHubPublicationRow,
   RepositoryGitHubPublicationReceiptTarget,
@@ -15,7 +13,6 @@ import {
   decodeGitHubPublicationRequester,
   matchesGitHubPublicationRequester,
 } from "../state/github-publication-requester.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { ensureRepositoryGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -26,11 +23,6 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
 import { createGitHubPublicationExecutionEffects } from "./github-publication-execution-effects.js";
-import {
-  readSharedGitHubPublicationWorkspace,
-  type SharedGitHubPublicationSession,
-  type SharedGitHubPublicationSelector,
-} from "./github-publication-shared-read.js";
 import { assertReadableSharedGitHubPublication } from "./github-publication-store.js";
 import {
   checkRepositoryGitHubPublication as checked,
@@ -58,90 +50,6 @@ function changed(
   checked(row);
   deferSharedGitHubPublicationChanged(db, row);
   return row;
-}
-
-/** Filter the mixed table before decoding; a private request ID never grants shared access. */
-export function readSharedRepositoryGitHubPublication(
-  session: SharedGitHubPublicationSession,
-  selector: SharedGitHubPublicationSelector,
-  entry: SessionEntry,
-): RepositoryGitHubPublicationRow | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) =>
-    runSqliteDeferredTransactionSync(db, () => {
-      if (!tableExists(db, table)) {
-        return undefined;
-      }
-      let selection = query(db)
-        .selectFrom(table)
-        .selectAll()
-        .where("owner_profile_id", "is", null)
-        .where("session_key", "=", session.sessionKey)
-        .where("agent_id", "=", session.agentId);
-      if ("requestId" in selector) {
-        selection = selection.where("request_id", "=", selector.requestId);
-        const row = executeSqliteQueryTakeFirstSync(db, selection);
-        if (!row) {
-          return undefined;
-        }
-        checked(row);
-        assertReadableSharedGitHubPublication(row);
-        if (terminalRepositoryGitHubPublication(row)) {
-          return row;
-        }
-      } else {
-        if (selector.idempotencyKey !== undefined) {
-          selection = selection.where("idempotency_key", "=", selector.idempotencyKey);
-        }
-        // No shared receipt means there is no workspace evidence to qualify. Personal-only
-        // recovery must not depend on an unrelated shared workspace being available.
-        if (!executeSqliteQueryTakeFirstSync(db, selection.limit(1))) {
-          return undefined;
-        }
-      }
-      const workspace = readSharedGitHubPublicationWorkspace(db, session, entry);
-      if (workspace?.kind !== "repository") {
-        return undefined;
-      }
-      const revision = entry.lifecycleRevision ?? null;
-      const ordered = selection
-        .orderBy("created_at_ms", "desc")
-        .orderBy("request_id", "desc")
-        .limit(64);
-      let cursor: RepositoryGitHubPublicationRow | undefined;
-      for (;;) {
-        const after = cursor;
-        const page = after
-          ? ordered.where((eb) =>
-              eb.or([
-                eb("created_at_ms", "<", after.created_at_ms),
-                eb.and([
-                  eb("created_at_ms", "=", after.created_at_ms),
-                  eb("request_id", "<", after.request_id),
-                ]),
-              ]),
-            )
-          : ordered;
-        const rows = executeSqliteQuerySync(db, page).rows;
-        for (const row of rows) {
-          // Validate before scope filtering: a corrupted binding is not evidence of absence.
-          checked(row);
-          assertReadableSharedGitHubPublication(row);
-          if (
-            row.session_id === session.sessionId &&
-            row.session_lifecycle_revision === revision &&
-            row.workspace_id === workspace.workspaceId &&
-            row.branch === workspace.branch
-          ) {
-            return row;
-          }
-        }
-        if (rows.length < 64) {
-          return undefined;
-        }
-        cursor = rows[rows.length - 1]!;
-      }
-    }),
-  );
 }
 
 export function listRepositoryGitHubPublications(

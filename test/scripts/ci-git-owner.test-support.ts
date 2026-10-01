@@ -145,10 +145,21 @@ export async function runCiGitStep(options: {
   commandResults?: Record<string, { code: FetchResult; output?: string }>;
   workflowRuns?: {
     id: number;
+    run_attempt: number;
     created_at: string;
     status: string;
     conclusion: string | null;
     head_sha: string;
+  }[];
+  workflowJobs?: {
+    runId: number;
+    runAttempt: number;
+    jobs: {
+      name: string;
+      status: string;
+      conclusion: string | null;
+      steps: { name: string; status: string; conclusion: string | null }[];
+    }[];
   }[];
   publishPath?: "directory" | "file" | "symlink";
   checkoutResults?: number[];
@@ -423,6 +434,7 @@ def main():`,
           diffResult: options.diffResult,
           commandResults: options.commandResults,
           workflowRuns: options.workflowRuns,
+          workflowJobs: options.workflowJobs,
           docsAgent,
           docsPublish,
           maturity,

@@ -1,9 +1,8 @@
-// Openai provider module implements model/runtime integration.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
@@ -42,12 +41,6 @@ type OpenAITtsProviderConfig = {
   extraBody?: Record<string, unknown>;
 };
 
-type OpenAITtsProviderOverrides = {
-  model?: string;
-  voice?: string;
-  speed?: number;
-};
-
 function resolveOpenAISpeechApiKey(config: OpenAITtsProviderConfig): string | undefined {
   return (
     normalizeOptionalString(config.apiKey) ?? normalizeOptionalString(process.env.OPENAI_API_KEY)
@@ -61,21 +54,16 @@ function normalizeOpenAISpeechResponseFormat(
   if (!next) {
     return undefined;
   }
-  if (
-    OPENAI_SPEECH_RESPONSE_FORMATS.includes(next as (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number])
-  ) {
-    return next as OpenAiSpeechResponseFormat;
+  const format = OPENAI_SPEECH_RESPONSE_FORMATS.find((candidate) => candidate === next);
+  if (format) {
+    return format;
   }
   throw new Error(`Invalid OpenAI speech responseFormat: ${next}`);
 }
 
 function isGroqSpeechBaseUrl(baseUrl: string): boolean {
-  try {
-    const hostname = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
-    return hostname === "groq.com" || hostname.endsWith(".groq.com");
-  } catch {
-    return false;
-  }
+  const hostname = normalizeLowercaseStringOrEmpty(URL.parse(baseUrl)?.hostname);
+  return hostname === "groq.com" || hostname.endsWith(".groq.com");
 }
 
 function resolveSpeechResponseFormat(
@@ -155,25 +143,9 @@ function readOpenAIProviderConfig(config: SpeechProviderConfig): OpenAITtsProvid
   };
 }
 
-function readOpenAIOverrides(
-  overrides: SpeechProviderOverrides | undefined,
-  baseUrl: string,
-): OpenAITtsProviderOverrides {
-  if (!overrides) {
-    return {};
-  }
-  return {
-    model: normalizeOptionalString(overrides.model),
-    voice: normalizeOptionalString(overrides.voice),
-    speed: normalizeOpenAISpeechSpeed(overrides.speed, baseUrl),
-  };
-}
-
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
+function parseDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
   const baseUrl = normalizeOptionalString(asOptionalRecord(ctx.providerConfig)?.baseUrl);
   switch (ctx.key) {
     case "voice":
@@ -220,7 +192,10 @@ async function resolveOpenAITtsRequest(
   responseFormatOverride?: "pcm",
 ): Promise<Parameters<typeof openaiTTS>[0]> {
   const config = readOpenAIProviderConfig(req.providerConfig);
-  const overrides = readOpenAIOverrides(req.providerOverrides, config.baseUrl);
+  const model = normalizeOptionalString(req.providerOverrides?.model) ?? config.model;
+  const voice = normalizeOptionalString(req.providerOverrides?.voice) ?? config.voice;
+  const speed =
+    normalizeOpenAISpeechSpeed(req.providerOverrides?.speed, config.baseUrl) ?? config.speed;
   const apiKey = resolveOpenAISpeechApiKey(config);
   if (!apiKey) {
     throw new Error("OpenAI API key missing");
@@ -234,9 +209,9 @@ async function resolveOpenAITtsRequest(
     text: req.text,
     apiKey,
     baseUrl: config.baseUrl,
-    model: overrides.model ?? config.model,
-    voice: overrides.voice ?? config.voice,
-    speed: overrides.speed ?? config.speed,
+    model,
+    voice,
+    speed,
     instructions: config.instructions,
     responseFormat,
     extraBody: config.extraBody,
@@ -270,18 +245,12 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
                 path: "talk.providers.openai.apiKey",
               }),
             }),
-        ...(normalizeOptionalString(talkProviderConfig.baseUrl) == null ? {} : { baseUrl }),
-        ...(normalizeOptionalString(talkProviderConfig.modelId) == null
-          ? {}
-          : { model: normalizeOptionalString(talkProviderConfig.modelId) }),
-        ...(normalizeOptionalString(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voice: normalizeOptionalString(talkProviderConfig.voiceId) }),
-        ...(speed == null ? {} : { speed }),
-        ...(normalizeOptionalString(talkProviderConfig.instructions) == null
-          ? {}
-          : { instructions: normalizeOptionalString(talkProviderConfig.instructions) }),
-        ...(responseFormat == null ? {} : { responseFormat }),
+        baseUrl,
+        model: normalizeOptionalString(talkProviderConfig.modelId) ?? base.model,
+        voice: normalizeOptionalString(talkProviderConfig.voiceId) ?? base.voice,
+        speed: speed ?? base.speed,
+        instructions: normalizeOptionalString(talkProviderConfig.instructions) ?? base.instructions,
+        responseFormat: responseFormat ?? base.responseFormat,
       };
     },
     resolveTalkOverrides: ({ params }) => ({

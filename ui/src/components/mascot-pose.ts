@@ -28,12 +28,9 @@ export type MascotPose = {
   mouthCurve: number;
   mouthOpen: number;
   mouthRound: number;
-  blush: number;
   hardHat: number;
   bodyTilt: number;
   bodyStretch: number;
-  dizzy: number;
-  dizzyPhase: number;
   effect: MascotEffect;
   effectPhase: number;
 };
@@ -72,12 +69,9 @@ export function createMascotPose(): MascotPose {
     mouthCurve: 0,
     mouthOpen: 0,
     mouthRound: 0,
-    blush: 0,
     hardHat: 0,
     bodyTilt: 0,
     bodyStretch: 1,
-    dizzy: 0,
-    dizzyPhase: 0,
     effect: "none",
     effectPhase: 0,
   };
@@ -114,11 +108,9 @@ export function clampMascotPose(pose: MascotPose): MascotPose {
   pose.mouthCurve = clampMascotValue(pose.mouthCurve, -1, 1);
   pose.mouthOpen = clampMascotValue(pose.mouthOpen, 0, 1);
   pose.mouthRound = clampMascotValue(pose.mouthRound, 0, 1);
-  pose.blush = clampMascotValue(pose.blush, 0, 1);
   pose.hardHat = clampMascotValue(pose.hardHat, 0, 1);
   pose.bodyTilt = clampMascotValue(pose.bodyTilt, -8, 8);
   pose.bodyStretch = clampMascotValue(pose.bodyStretch, 0.86, 1.05);
-  pose.dizzy = clampMascotValue(pose.dizzy, 0, 1);
   return pose;
 }
 

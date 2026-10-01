@@ -1,14 +1,17 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { expect, vi } from "vitest";
+import { expect } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import { createNodeEvalArgs, resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { waitForPidToExit } from "../../test-utils/process-tree.js";
 import { bashOutputSpillEntrypoints } from "./bash-output-spill-entrypoints.test-support.js";
 
 export const nativeBashSpillScenarios = ["fault-large", "writable-large", "fault-small"] as const;
@@ -17,8 +20,9 @@ const producerSource = String.raw`
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
-const [control, size, tracePath] = process.argv.slice(2);
+const [control, size, tracePath, releasePort] = process.argv.slice(2);
 let traceCount = 0;
 function trace(phase, fields = {}) {
   const line = JSON.stringify({ actor: "producer", phase, at: Date.now(), ...fields }) + "\n";
@@ -27,25 +31,22 @@ function trace(phase, fields = {}) {
 }
 let written = false;
 let finished = false;
-const timer = setTimeout(() => {
-  fs.writeFileSync(path.join(control, "deadline"), "deadline");
-  trace("deadline", { written, finished, releasePresent: fs.existsSync(path.join(control, "release")) });
-  process.exit(92);
-}, 5000);
+let released = false;
 function advance() {
-  if (!written || finished || !fs.existsSync(path.join(control, "release"))) return;
+  if (!written || finished || !released) return;
   finished = true;
   trace("release-observed");
   trace("final-write-started");
   process.stdout.write("FINAL: preserve Ω🙂\n", () => {
     fs.writeFileSync(path.join(control, "completed"), "completed");
     trace("completed");
-    clearTimeout(timer);
-    clearInterval(readiness);
   });
 }
-// Read the owned marker: filesystem notifications can miss a release entirely.
-const readiness = setInterval(advance, 5);
+// The runner owns release; its connection also ends a stranded producer if it exits.
+const release = net.createConnection({ host: "127.0.0.1", port: Number(releasePort) });
+release.once("data", () => { released = true; advance(); });
+release.once("end", () => { if (!released) process.exit(93); });
+release.once("error", () => process.exit(93));
 const pgid = Number(execFileSync("/bin/ps", ["-p", String(process.pid), "-o", "pgid="], {
   encoding: "utf8", timeout: 1000, env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
 }).trim());
@@ -64,9 +65,12 @@ import assert from "node:assert/strict";
 import { errorMonitor } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 const { root, tracePath, entrypoint, scenario, toolUrl, executorUrl, startedAt } = fixture;
+const controller = new AbortController();
+process.stdin.once("data", () => controller.abort());
 let traceCount = 0;
 function trace(phase, fields = {}) {
   const line = JSON.stringify({ actor: "runner", phase, at: Date.now(), ...fields }) + "\n";
@@ -88,6 +92,13 @@ process.env.TMPDIR = process.env.TMP = process.env.TEMP = spillRoot;
 assert.equal(os.tmpdir(), spillRoot);
 assert.equal(fs.existsSync(spillRoot), !fault);
 let released = false;
+let releaseSocket;
+const releaseServer = net.createServer((socket) => {
+  releaseSocket = socket;
+  if (released) socket.end("release");
+});
+await new Promise((resolve) => releaseServer.listen(0, "127.0.0.1", resolve));
+const releasePort = releaseServer.address().port;
 let settled = false;
 let nativeError;
 let observerFailed = false;
@@ -99,6 +110,7 @@ function release() {
   fs.writeFileSync(path.join(root, "release"), "release", { flag: "wx", mode: 0o600 });
   released = true;
   trace("release-created");
+  releaseSocket?.end("release");
 }
 function observe(action) {
   // A receipt failure must not replace the native stream error under test.
@@ -149,22 +161,22 @@ fs.createWriteStream = function (...args) {
 syncBuiltinESMExports();
 const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
 const command = "exec " + quote(process.execPath) + " " + quote(path.join(root, "producer.mjs")) +
-  " " + quote(root) + " " + (small ? "small" : "large") + " " + quote(tracePath);
+  " " + quote(root) + " " + (small ? "small" : "large") + " " + quote(tracePath) + " " + releasePort;
 try {
   let result;
   let rejection;
   trace("call-started");
   try {
     result = entrypoint === "tool"
-      ? await createBashTool(root, { shellPath: "/bin/bash" }).execute("native-spill", { command }, undefined,
+      ? await createBashTool(root, { shellPath: "/bin/bash" }).execute("native-spill", { command }, controller.signal,
           (update) => onText(update.content.filter((block) => block.type === "text").map((block) => block.text).join("")))
-      : await executeBashWithOperations(command, root, createLocalBashOperations({ shellPath: "/bin/bash" }), { onChunk: onText });
+      : await executeBashWithOperations(command, root, createLocalBashOperations({ shellPath: "/bin/bash" }), { onChunk: onText, signal: controller.signal });
   } catch (error) { rejection = error; }
   settled = true;
   trace("call-settled", { rejected: rejection !== undefined, observerFailed, creations });
   assert.equal(observerFailed, false);
   assert.equal(payloadObserved, true);
-  assert.equal(fs.existsSync(path.join(root, "deadline")), false);
+  assert.equal(fs.existsSync(path.join(root, "release")), true);
   assert.equal(fs.existsSync(path.join(root, "completed")), true);
   if (fault && !small) {
     assert.equal(nativeError?.code, "ENOENT");
@@ -206,12 +218,18 @@ try {
 } finally {
   fs.createWriteStream = createWriteStream;
   syncBuiltinESMExports();
+  releaseSocket?.destroy();
+  await new Promise((resolve, reject) => releaseServer.close((error) => error ? reject(error) : resolve()));
+  process.stdin.destroy();
 }
 `;
+
+type RunnerResult = { error: Error | undefined; stdout: string; stderr: string };
 
 export async function expectNativeBashSpill(
   entrypoint: "tool" | "executor",
   scenario: (typeof nativeBashSpillScenarios)[number],
+  signal: AbortSignal,
 ): Promise<void> {
   // Detached producers must outlive neither their fixture nor its cleanup proof.
   // Keep failure evidence outside the runner's auto-cleaned oc-vt namespace.
@@ -220,14 +238,17 @@ export async function expectNativeBashSpill(
   const root = await realpath(await mkdtemp(join(artifactRoot, "bash-spill-test-")));
   const tracePath = `${root}.trace`;
   let producerStopped = false;
-  let childResult: SpawnSyncReturns<string> | undefined;
+  let producerPid: number | undefined;
+  let runner: ChildProcess | undefined;
+  let runnerCompletion: Promise<RunnerResult> | undefined;
+  let childResult: RunnerResult | undefined;
   let elapsedMs: number | undefined;
   const diagnostics = async () => ({
     entrypoint,
     scenario,
     fixture: root,
-    status: childResult?.status,
-    signal: childResult?.signal,
+    status: runner?.exitCode,
+    signal: runner?.signalCode,
     spawnError: childResult?.error?.message,
     elapsedMs,
     stdout: childResult?.stdout,
@@ -250,7 +271,9 @@ export async function expectNativeBashSpill(
       toolUrl: toolUrl.href,
       executorUrl: executorUrl.href,
     };
-    const result = spawnSync(
+    const completion = createDeferred<RunnerResult>();
+    runnerCompletion = completion.promise;
+    runner = execFile(
       nodeExecPath,
       [
         ...resolveRuntimeWorkerArgv(toolUrl, nodeExecPath).slice(0, -1),
@@ -274,44 +297,72 @@ export async function expectNativeBashSpill(
           TSX_DISABLE_CACHE: "1",
         },
       },
+      (error, stdout, stderr) => {
+        elapsedMs = Date.now() - startedAt;
+        childResult = { error: error ?? undefined, stdout, stderr };
+        completion.resolve(childResult);
+      },
     );
-    elapsedMs = Date.now() - startedAt;
-    childResult = result;
-    // The observed child is closed; release a surviving command before joining it.
-    try {
-      await writeFile(join(root, "release"), "release", { flag: "wx", mode: 0o600 });
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) {
-        throw error;
-      }
-    }
+    runner.stdin?.on("error", () => {});
+    const result = await withinTest(runnerCompletion, signal);
     const producer = JSON.parse(
       await readFile(join(root, "producer.json"), "utf8").catch((error: unknown) => {
         throw new Error(
-          `Missing producer receipt after child status ${result.status}: ${result.stderr}`,
+          `Missing producer receipt after child status ${runner?.exitCode}: ${result.stderr}`,
           { cause: error },
         );
       }),
     );
     expect(producer.control).toBe(root);
-    expect(producer.ppid).toBe(result.pid);
+    expect(producer.ppid).toBe(runner.pid);
     expect(Number.isSafeInteger(producer.pid) && producer.pid > 0).toBe(true);
     expect(producer.pgid).toBe(producer.pid);
-    expect(await waitForPidToExit(producer.pid, 5_000)).toBe(true);
-    await vi.waitFor(() => {
-      expect(() => process.kill(-producer.pgid, 0)).toThrowError(
-        expect.objectContaining({ code: "ESRCH" }),
-      );
-    });
+    producerPid = producer.pid;
+    // The closed runner owns no child handle for its detached producer. Its IPC
+    // connection has closed; only foreign PID/group extinction remains to observe.
+    for (;;) {
+      try {
+        process.kill(-producer.pgid, 0);
+      } catch (error) {
+        if (!hasErrnoCode(error, "ESRCH")) {
+          throw error;
+        }
+        if (!isPidAlive(producer.pid)) {
+          break;
+        }
+      }
+      await delay(10, undefined, { signal }).catch((error: unknown) => {
+        throw new Error("Timed out waiting for Bash producer PID and group to exit", {
+          cause: error,
+        });
+      });
+    }
+    expect(isPidAlive(producer.pid)).toBe(false);
+    expect(() => process.kill(-producer.pgid, 0)).toThrowError(
+      expect.objectContaining({ code: "ESRCH" }),
+    );
     producerStopped = true;
     console.log(JSON.stringify(await diagnostics()));
     expect(result.error).toBeUndefined();
-    expect(result.signal).toBeNull();
-    expect(result.status, result.stderr).toBe(0);
+    expect(runner.signalCode).toBeNull();
+    expect(runner.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toContain("native Bash spill case passed");
   } catch (error) {
     throw new Error(JSON.stringify(await diagnostics()), { cause: error });
   } finally {
+    // Ask the fixture to cancel through the product owner, then join its process;
+    // killing the runner alone could orphan its detached producer during startup.
+    runner?.stdin?.end("abort");
+    await runnerCompletion;
+    if (!producerStopped && producerPid !== undefined) {
+      try {
+        process.kill(-producerPid, "SIGKILL");
+      } catch (error) {
+        if (!hasErrnoCode(error, "ESRCH")) {
+          console.error("Bash producer cleanup failed", error);
+        }
+      }
+    }
     // A missing producer receipt or uncertain teardown must retain its files.
     if (producerStopped) {
       await rm(root, { recursive: true, force: true });

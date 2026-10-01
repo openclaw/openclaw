@@ -271,24 +271,17 @@ async function loadMediaFromRef(
   }
 }
 
-export async function detectAndLoadPromptImages(params: {
-  prompt: string;
-  userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
-  media?: readonly MediaFact[];
-  workspaceDir: string;
-  /** Registered agent workspace, when sandbox execution uses a different directory. */
-  agentWorkspaceDir?: string;
-  model: { input?: string[] };
-  existingImages?: ImageContent[];
-  existingImageFactIndexes?: readonly ImageFactIndex[];
-  imageOrder?: PromptImageOrderEntry[];
-  mediaImageLayout?: MediaImageLayout;
-  maxBytes?: number;
-  maxDimensionPx?: number;
-  workspaceOnly?: boolean;
-  localRoots?: readonly string[];
-  sandbox?: { root: string; bridge: SandboxFsBridge };
-}): Promise<{
+export async function detectAndLoadPromptImages(
+  params: Omit<PromptMediaOptions, "provider" | "signal" | "onCurrentTurnImageFailure"> & {
+    prompt: string;
+    userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
+    media?: readonly MediaFact[];
+    existingImages?: ImageContent[];
+    existingImageFactIndexes?: readonly ImageFactIndex[];
+    imageOrder?: PromptImageOrderEntry[];
+    mediaImageLayout?: MediaImageLayout;
+  },
+): Promise<{
   images: ImageContent[];
   imageFactIndexes: ImageFactIndex[];
   detectedRefs: MediaFileRef[];
@@ -490,6 +483,7 @@ export async function detectAndLoadPromptImages(params: {
 
 type PromptMediaOptions = {
   workspaceDir: string;
+  /** Registered agent workspace, when sandbox execution uses a different directory. */
   agentWorkspaceDir?: string;
   model: { input?: string[] };
   maxBytes?: number;
@@ -620,19 +614,12 @@ async function materializePromptMediaMessages(
       : [{ type: "text" as const, text: message.content }];
     const existingImages = content.filter((block): block is ImageContent => block.type === "image");
     const result = await detectAndLoadPromptImages({
+      ...options,
       prompt: "",
       media: resolvedMedia,
-      workspaceDir: options.workspaceDir,
-      agentWorkspaceDir: options.agentWorkspaceDir,
-      model: options.model,
       existingImages,
       existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
       mediaImageLayout,
-      maxBytes: options.maxBytes,
-      maxDimensionPx: options.maxDimensionPx,
-      workspaceOnly: options.workspaceOnly,
-      localRoots: options.localRoots,
-      sandbox: options.sandbox,
     });
     const projectedContent = await projectOrderedPromptMedia({
       content,
@@ -698,26 +685,15 @@ export async function hydratePromptMediaMessages(
 }
 
 /** Materializes one transient provider context from exact-message media facts. */
-export async function materializeProviderContext(params: {
-  context: Context;
-  signal?: AbortSignal;
-  workspaceDir: string;
-  agentWorkspaceDir?: string;
-  workspaceOnly?: boolean;
-  localRoots?: readonly string[];
-  sandbox?: { root: string; bridge: SandboxFsBridge };
-  onCurrentTurnImageFailure?: (count: number) => void;
-}): Promise<ProviderContext> {
+export async function materializeProviderContext(
+  params: Omit<PromptMediaOptions, "provider" | "model" | "maxBytes" | "maxDimensionPx"> & {
+    context: Context;
+  },
+): Promise<ProviderContext> {
   const messages = await materializePromptMediaMessages(params.context.messages as AgentMessage[], {
-    workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
+    ...params,
     model: { input: ["text", "image"] },
-    workspaceOnly: params.workspaceOnly,
-    localRoots: params.localRoots,
-    sandbox: params.sandbox,
     provider: true,
-    signal: params.signal,
-    onCurrentTurnImageFailure: params.onCurrentTurnImageFailure,
   });
   params.signal?.throwIfAborted();
   return messages === params.context.messages

@@ -50,9 +50,15 @@ describe("node SQLite backup completion", () => {
              assert.equal(copy.prepare("SELECT SUM(length(payload)) AS bytes FROM records").get().bytes, 1048576);
            }
            finally { copy.close(); }
+           const progress = [];
+           const expectedPages = database.prepare("PRAGMA page_count").get().page_count;
+           assert.equal(await backupNodeSqliteDatabase(database, ${JSON.stringify(`${target}.progress`)}, info => progress.push(info)), expectedPages);
+           assert.deepEqual(progress.at(-1), { totalPages: expectedPages, remainingPages: 0 });
            database.exec("ROLLBACK;");
            database.close();
-           await assert.rejects(backupNodeSqliteDatabase(database, ${JSON.stringify(target)}), { code: "ERR_INVALID_STATE" });
+           const failureProgress = [];
+           await assert.rejects(backupNodeSqliteDatabase(database, ${JSON.stringify(target)}, info => failureProgress.push(info)), { code: "ERR_INVALID_STATE" });
+           assert.deepEqual(failureProgress, []);
 
            let nativeFailure;
            sqlite.backup = async (...args) => {

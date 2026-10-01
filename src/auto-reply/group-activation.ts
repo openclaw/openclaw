@@ -1,4 +1,3 @@
-// Group activation command parser for mention/always auto-reply modes.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 /** Supported group activation modes. */
@@ -7,13 +6,7 @@ export type GroupActivationMode = "mention" | "always";
 /** Normalize a raw group activation mode string. */
 export function normalizeGroupActivation(raw?: string | null): GroupActivationMode | undefined {
   const value = normalizeOptionalLowercaseString(raw);
-  if (value === "mention") {
-    return "mention";
-  }
-  if (value === "always") {
-    return "always";
-  }
-  return undefined;
+  return value === "mention" || value === "always" ? value : undefined;
 }
 
 /** Parse `/activation` commands from inbound message text. */

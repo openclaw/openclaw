@@ -2,14 +2,13 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isMissingPathError } from "../../infra/errors.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
 import { requireWorktreeDiskSpace } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { lockState } from "./git-lock.js";
-import { splitNullBuffer } from "./git-path-inventory.js";
+import { rawPathStat, splitNullBuffer } from "./git-path-inventory.js";
 import { commandError, listGitWorktrees, requireGit, requireGitBuffer, runGit } from "./git.js";
 import {
   assertWorktreeRemovalClaim,
@@ -17,20 +16,17 @@ import {
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
 } from "./registry.js";
-import { prepareSnapshotBranchDeletion, withExactStateGitLocks } from "./removal-git.js";
+import {
+  prepareSnapshotBranchDeletion,
+  removeManagedCheckout,
+  withExactStateGitLocks,
+} from "./removal-git.js";
 import { createRemovalRecoveryInventory } from "./removal-recovery-inventory.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { resolveRepository } from "./service-preparation.js";
 
 const preserved = (reason: string) =>
   new Error(`${reason}; remaining source and original snapshot preserved`);
-const stat = async (target: string) =>
-  fs.lstat(target).catch((error: unknown) => {
-    if (isMissingPathError(error)) {
-      return undefined;
-    }
-    throw error;
-  });
 
 /** CLI-only recovery: reconstitute a clean checkout without replacing any surviving file,
  * then let native non-force Git removal own deletion. Dirty/exact-state captures keep their
@@ -67,12 +63,10 @@ async function recoverRemovalWithAllocation(params: {
   ) {
     throw preserved("Worktree repository identity changed");
   }
+  const pendingRef = `refs/openclaw/removals/${record.id}`;
+  const removalRefs = [record.snapshotRef!, pendingRef, `refs/heads/${record.branch}`];
   const assertDirectRefFiles = () => {
-    for (const ref of [
-      record.snapshotRef!,
-      `refs/openclaw/removals/${record.id}`,
-      `refs/heads/${record.branch}`,
-    ]) {
+    for (const ref of removalRefs) {
       const filename = path.join(repository.commonDir, ref);
       const info = fsSync.lstatSync(filename, { throwIfNoEntry: false });
       // Packed refs cannot be symbolic. A loose replacement must be an ordinary
@@ -88,11 +82,7 @@ async function recoverRemovalWithAllocation(params: {
     }
   };
   const assertDirectRefs = async (options: Parameters<typeof runGit>[2]) => {
-    for (const ref of [
-      record.snapshotRef!,
-      `refs/openclaw/removals/${record.id}`,
-      `refs/heads/${record.branch}`,
-    ]) {
+    for (const ref of removalRefs) {
       const symbolic = await runGit(record.repoRoot, ["symbolic-ref", "--quiet", ref], options);
       if (symbolic.code !== 1) {
         throw preserved("Removal refs must remain direct refs");
@@ -127,7 +117,7 @@ async function recoverRemovalWithAllocation(params: {
     };
     await assertDirectRefs(options);
     if (
-      (await stat(record.path)) ||
+      (await rawPathStat(record.path)) ||
       (await listGitWorktrees(record.repoRoot, options)).some(
         (entry) => path.resolve(entry.path) === record.path,
       ) ||
@@ -136,7 +126,6 @@ async function recoverRemovalWithAllocation(params: {
     ) {
       throw preserved("Completed removal identity changed");
     }
-    const pendingRef = `refs/openclaw/removals/${record.id}`;
     const pending = await runGit(
       record.repoRoot,
       ["rev-parse", "--verify", "--quiet", pendingRef],
@@ -206,7 +195,6 @@ async function recoverRemovalWithAllocation(params: {
     killProcessTree: true,
     env: { GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", GIT_OPTIONAL_LOCKS: "0" },
   };
-  const pendingRef = `refs/openclaw/removals/${record.id}`;
   try {
     const provisioned = await getRegistryWorktreeProvisionedPaths(params.env, record.id);
     if (!provisioned || provisioned.length) {
@@ -247,7 +235,7 @@ async function recoverRemovalWithAllocation(params: {
       }
       assertCurrent();
     };
-    await assertRefs(!(await stat(record.path)));
+    await assertRefs(!(await rawPathStat(record.path)));
     const state = await lockState(record);
     if (state.kind === "live" || state.kind === "foreign") {
       throw preserved("Worktree is locked or in use");
@@ -256,7 +244,7 @@ async function recoverRemovalWithAllocation(params: {
     // Match the exact backlink, never infer administrative ownership from its basename.
     const registrations = await listGitWorktrees(record.repoRoot, options);
     const registered = registrations.some((entry) => path.resolve(entry.path) === record.path);
-    const originalRoot = await stat(record.path);
+    const originalRoot = await rawPathStat(record.path);
     if (retiredRegistration && originalRoot) {
       throw preserved("Retired checkout path reappeared");
     }
@@ -265,7 +253,7 @@ async function recoverRemovalWithAllocation(params: {
       const adminRoot = path.join(repository.commonDir, "worktrees");
       for (const name of await fs.readdir(adminRoot)) {
         const candidate = path.join(adminRoot, name);
-        if (!(await stat(candidate))?.isDirectory()) {
+        if (!(await rawPathStat(candidate))?.isDirectory()) {
           continue;
         }
         const backlink = await fs.readFile(path.join(candidate, "gitdir"), "utf8").catch(() => "");
@@ -314,7 +302,7 @@ async function recoverRemovalWithAllocation(params: {
         metadataNames.push(path.basename(shared));
       }
       const worktreeConfig = path.join(gitdir, "config.worktree");
-      const hadWorktreeConfig = Boolean(await stat(worktreeConfig));
+      const hadWorktreeConfig = Boolean(await rawPathStat(worktreeConfig));
       if (hadWorktreeConfig) {
         metadataNames.push("config.worktree");
       }
@@ -430,7 +418,7 @@ async function recoverRemovalWithAllocation(params: {
       );
       // Exclusive creation repairs only this backlink. Never rebuild/replace the index,
       // and never run repository-wide repair or prune as part of recovery.
-      if (!(await stat(gitfile))) {
+      if (!(await rawPathStat(gitfile))) {
         assertIdentity();
         await fs.writeFile(gitfile, `gitdir: ${gitdir}\n`, { flag: "wx", mode: 0o600 });
       }
@@ -466,26 +454,15 @@ async function recoverRemovalWithAllocation(params: {
           }
           await assertRefs();
           assertIdentity();
-          const removed = await withWorktreeGitConfig(
+          await withWorktreeGitConfig(
             record.path,
             true,
             options,
             async (git) =>
-              await runOutsideCommandProcessScope(() =>
-                git.run(record.repoRoot, ["worktree", "remove", "--", record.path], {
-                  beforeRun: () => {
-                    // The trusted status view cannot execute repository filters.
-                    // No await separates the final inventory from native admission.
-                    inventory.assertComplete();
-                  },
-                  killProcessTree: true,
-                  waitForExit: true,
-                }),
-              ),
+              // The trusted status view cannot execute repository filters.
+              // No await separates the final inventory from native admission.
+              await removeManagedCheckout(record, git, true, inventory.assertComplete),
           );
-          if (removed.code !== 0) {
-            throw commandError("git worktree remove", removed);
-          }
         },
         [record.snapshotRef!, pendingRef],
       );
@@ -514,7 +491,7 @@ async function recoverRemovalWithAllocation(params: {
     }
     await assertRefs(true);
     if (
-      (await stat(record.path)) ||
+      (await rawPathStat(record.path)) ||
       (await listGitWorktrees(record.repoRoot, options)).some(
         (entry) => path.resolve(entry.path) === record.path,
       )

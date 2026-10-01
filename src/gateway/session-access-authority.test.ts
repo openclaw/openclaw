@@ -671,6 +671,7 @@ describe("session resource admission", () => {
     emitSessionIdentityMutation({
       kind: "reset",
       agentId: "main",
+      databaseIdentity: Symbol("session-access-fixture-database"),
       previous: { sessionId: "session-1", sessionKeys: [key] },
       current: { sessionId: "session-2", sessionKeys: [key] },
     });

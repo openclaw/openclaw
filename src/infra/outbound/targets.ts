@@ -1,7 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-// Outbound target helpers resolve direct send targets, heartbeat destinations,
-// sender context, and session-route aware heartbeat refinements.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
@@ -18,10 +15,7 @@ import { isSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js"
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
-} from "../../utils/message-channel.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import {
   normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin,
@@ -86,13 +80,6 @@ export function resolveOutboundTarget(params: {
           allowBootstrap: params.allowBootstrap,
         }),
       target: params,
-      onMissingPlugin: () =>
-        params.channel === INTERNAL_MESSAGE_CHANNEL
-          ? undefined
-          : {
-              ok: false,
-              error: new Error(`Unsupported channel: ${params.channel}`),
-            },
     }) ?? {
       ok: false,
       error: new Error(`Unsupported channel: ${params.channel}`),
@@ -710,5 +697,5 @@ export function resolveHeartbeatSenderContext(params: {
     provider,
   });
 
-  return { sender: expectDefined(sender, "resolved sender"), provider, allowFrom };
+  return { sender, provider, allowFrom };
 }

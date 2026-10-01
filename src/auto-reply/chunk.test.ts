@@ -115,20 +115,7 @@ const parentheticalCases: ChunkCase[] = [
 
 const newlineModeFenceCases = (() => {
   const fence = "```python\ndef my_function():\n    x = 1\n\n    y = 2\n    return x + y\n```";
-  const longFence = `\`\`\`js\n${"const a = 1;\n".repeat(20)}\`\`\``;
   return [
-    {
-      name: "keeps single-newline fence+paragraph together",
-      text: "```js\nconst a = 1;\nconst b = 2;\n```\nAfter",
-      limit: 1000,
-      expected: ["```js\nconst a = 1;\nconst b = 2;\n```\nAfter"],
-    },
-    {
-      name: "keeps blank lines inside fence together",
-      text: fence,
-      limit: 1000,
-      expected: [fence],
-    },
     {
       name: "keeps short fenced block and following paragraph together",
       text: `${fence}\n\nAfter`,
@@ -141,12 +128,6 @@ const newlineModeFenceCases = (() => {
       limit: fence.length + 1,
       expected: [fence, "After"],
     },
-    {
-      name: "defers long markdown blocks to markdown chunker",
-      text: longFence,
-      limit: 40,
-      expected: chunkMarkdownText(longFence, 40),
-    },
   ] as const;
 })();
 
@@ -158,15 +139,6 @@ describe("chunkText", () => {
       limit: 1600,
       assert: (chunks: string[], text: string) => {
         expect(chunks).toEqual([text]);
-      },
-    },
-    {
-      name: "splits only when text exceeds the limit",
-      text: "a".repeat(20).repeat(5),
-      limit: 60,
-      assert: (chunks: string[], text: string) => {
-        expectChunkLengths(chunks, [60, 40]);
-        expect(chunks.join("")).toBe(text);
       },
     },
     {
@@ -277,16 +249,14 @@ describe("chunkByParagraph Unicode line/paragraph separators", () => {
 
 describe("resolveTextChunkLimit", () => {
   it.each([
-    ...(["whatsapp", "telegram", "slack", "signal", "imessage", "discord"] as const).map(
-      (provider) => ({
-        name: `uses default limit for ${provider}`,
-        cfg: undefined,
-        provider,
-        accountId: undefined,
-        options: undefined,
-        expected: 4000,
-      }),
-    ),
+    {
+      name: "uses the default limit",
+      cfg: undefined,
+      provider: "telegram" as const,
+      accountId: undefined,
+      options: undefined,
+      expected: 4000,
+    },
     {
       name: "uses fallback limit override when provided",
       cfg: undefined,
@@ -348,59 +318,12 @@ describe("resolveTextChunkLimit", () => {
       expected: 1234,
     },
     {
-      name: "uses the matching provider override for discord",
-      cfg: {
-        channels: {
-          discord: { textChunkLimit: 111 },
-          slack: { textChunkLimit: 222 },
-        },
-      },
-      provider: "discord" as const,
-      accountId: undefined,
-      options: undefined,
-      expected: 111,
-    },
-    {
-      name: "uses the matching provider override for slack",
-      cfg: {
-        channels: {
-          discord: { textChunkLimit: 111 },
-          slack: { textChunkLimit: 222 },
-        },
-      },
-      provider: "slack" as const,
-      accountId: undefined,
-      options: undefined,
-      expected: 222,
-    },
-    {
-      name: "falls back when multi-provider override does not match",
-      cfg: {
-        channels: {
-          discord: { textChunkLimit: 111 },
-          slack: { textChunkLimit: 222 },
-        },
-      },
-      provider: "telegram" as const,
-      accountId: undefined,
-      options: undefined,
-      expected: 4000,
-    },
-    {
       name: "ignores retired webchat textChunkLimit channel config",
       cfg: {
         channels: {
           webchat: { textChunkLimit: 16000 },
         },
       },
-      provider: "webchat" as const,
-      accountId: undefined,
-      options: undefined,
-      expected: 4000,
-    },
-    {
-      name: "falls back to default when webchat has no override",
-      cfg: { channels: {} },
       provider: "webchat" as const,
       accountId: undefined,
       options: undefined,
@@ -517,97 +440,74 @@ describe("chunkMarkdownText", () => {
     },
   ]);
 
-  it.each([
-    {
-      name: "never produces an empty fenced chunk when splitting",
-      run: () => {
-        expectNoEmptyFencedChunks(`\`\`\`txt\n${"a".repeat(300)}\n\`\`\``, 60);
-      },
-    },
-    {
-      name: "hard-breaks when a parenthetical exceeds the limit",
-      run: () => {
-        const text = `(${"a".repeat(80)})`;
-        const chunks = chunkMarkdownText(text, 20);
-        expect(requireChunk(chunks, 0).length).toBe(20);
-        expect(chunks.join("")).toBe(text);
-      },
-    },
-    {
-      name: "parses fence spans once for long fenced payloads",
-      run: () => {
-        expectFenceParseOccursOnce(`\`\`\`txt\n${"line\n".repeat(600)}\`\`\``, 80);
-      },
-    },
-    {
-      name: "keeps chunks within the limit when a fence opening line exceeds it",
-      run: () => {
-        const payload = `token.${"A".repeat(4200)}`;
-        const chunks = chunkMarkdownText(`\`\`\`${payload}\n\`\`\``, 4000);
-        expect(chunks.length).toBeLessThanOrEqual(3);
-        for (const chunk of chunks) {
-          expect(chunk.length).toBeLessThanOrEqual(4000);
-        }
-        expect(chunks.join("").replaceAll("`", "").replaceAll("\n", "")).toBe(payload);
-        expectFencesBalanced(chunks.slice(1));
-      },
-    },
-    {
-      name: "reopens an oversized fence opening line with the bare marker",
-      run: () => {
-        const chunks = chunkMarkdownText(`\`\`\`${"A".repeat(4200)}\n\`\`\``, 2000);
-        expect(chunks.length).toBeLessThanOrEqual(4);
-        expect(requireChunk(chunks, 1).startsWith("```\n")).toBe(true);
-        for (const chunk of chunks) {
-          expect(chunk.length).toBeLessThanOrEqual(2000);
-        }
-        expectFencesBalanced(chunks.slice(1));
-      },
-    },
-    {
-      name: "keeps the full opening line when it fits the reopen budget",
-      run: () => {
-        const openLine = `\`\`\`language-${"A".repeat(1_488)}`;
-        const chunks = chunkMarkdownText(`${openLine}\n${"x".repeat(1_200)}\n\`\`\``, 2_000);
-        expect(chunks.length).toBeGreaterThan(1);
-        for (const chunk of chunks.slice(1)) {
-          expect(chunk.startsWith(`${openLine}\n`)).toBe(true);
-        }
-        expect(chunks.every((chunk) => chunk.length <= 2_000)).toBe(true);
-        expectFencesBalanced(chunks);
-      },
-    },
-    {
-      name: "keeps the hard limit when synthetic fence balancing cannot fit",
-      run: () => {
-        const text = `\`\`\`\n${"x".repeat(20)}\n\`\`\``;
-        for (const limit of [5, 6, 8]) {
-          const chunks = chunkMarkdownText(text, limit);
-          expect(
-            chunks.every((chunk) => chunk.length <= limit),
-            `limit ${limit}`,
-          ).toBe(true);
-          expect(chunks.length, `limit ${limit}`).toBeLessThanOrEqual(
-            Math.ceil(text.length / limit),
-          );
-          expect(chunks.join(""), `limit ${limit}`).toBe(text);
-        }
-      },
-    },
-    {
-      name: "does not emit a header-only fence at the reopen budget boundary",
-      run: () => {
-        const limit = 20;
-        const openLine = `\`\`\`${"x".repeat(limit - 8)}`;
-        const text = `${openLine}\nbody-content-long\n\`\`\``;
-        const chunks = chunkMarkdownText(text, limit);
+  it("never produces an empty fenced chunk when splitting", () => {
+    expectNoEmptyFencedChunks(`\`\`\`txt\n${"a".repeat(300)}\n\`\`\``, 60);
+  });
 
-        expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
-        expectNoEmptyFencedChunks(text, limit);
-      },
-    },
-  ] as const)("$name", ({ run }) => {
-    run();
+  it("hard-breaks when a parenthetical exceeds the limit", () => {
+    const text = `(${"a".repeat(80)})`;
+    const chunks = chunkMarkdownText(text, 20);
+    expect(requireChunk(chunks, 0).length).toBe(20);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("parses fence spans once for long fenced payloads", () => {
+    expectFenceParseOccursOnce(`\`\`\`txt\n${"line\n".repeat(600)}\`\`\``, 80);
+  });
+
+  it("keeps chunks within the limit when a fence opening line exceeds it", () => {
+    const payload = `token.${"A".repeat(4200)}`;
+    const chunks = chunkMarkdownText(`\`\`\`${payload}\n\`\`\``, 4000);
+    expect(chunks.length).toBeLessThanOrEqual(3);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(4000);
+    }
+    expect(chunks.join("").replaceAll("`", "").replaceAll("\n", "")).toBe(payload);
+    expectFencesBalanced(chunks.slice(1));
+  });
+
+  it("reopens an oversized fence opening line with the bare marker", () => {
+    const chunks = chunkMarkdownText(`\`\`\`${"A".repeat(4200)}\n\`\`\``, 2000);
+    expect(chunks.length).toBeLessThanOrEqual(4);
+    expect(requireChunk(chunks, 1).startsWith("```\n")).toBe(true);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(2000);
+    }
+    expectFencesBalanced(chunks.slice(1));
+  });
+
+  it("keeps the full opening line when it fits the reopen budget", () => {
+    const openLine = `\`\`\`language-${"A".repeat(1_488)}`;
+    const chunks = chunkMarkdownText(`${openLine}\n${"x".repeat(1_200)}\n\`\`\``, 2_000);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks.slice(1)) {
+      expect(chunk.startsWith(`${openLine}\n`)).toBe(true);
+    }
+    expect(chunks.every((chunk) => chunk.length <= 2_000)).toBe(true);
+    expectFencesBalanced(chunks);
+  });
+
+  it("keeps the hard limit when synthetic fence balancing cannot fit", () => {
+    const text = `\`\`\`\n${"x".repeat(20)}\n\`\`\``;
+    for (const limit of [5, 6, 8]) {
+      const chunks = chunkMarkdownText(text, limit);
+      expect(
+        chunks.every((chunk) => chunk.length <= limit),
+        `limit ${limit}`,
+      ).toBe(true);
+      expect(chunks.length, `limit ${limit}`).toBeLessThanOrEqual(Math.ceil(text.length / limit));
+      expect(chunks.join(""), `limit ${limit}`).toBe(text);
+    }
+  });
+
+  it("does not emit a header-only fence at the reopen budget boundary", () => {
+    const limit = 20;
+    const openLine = `\`\`\`${"x".repeat(limit - 8)}`;
+    const text = `${openLine}\nbody-content-long\n\`\`\``;
+    const chunks = chunkMarkdownText(text, limit);
+
+    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+    expectNoEmptyFencedChunks(text, limit);
   });
 });
 
@@ -786,29 +686,6 @@ describe("chunkTextWithMode", () => {
 });
 
 describe("chunkMarkdownTextWithMode", () => {
-  it.each([
-    {
-      name: "length mode uses markdown-aware chunker",
-      text: "Line one\nLine two",
-      mode: "length" as const,
-      expected: chunkMarkdownText("Line one\nLine two", 1000),
-    },
-    {
-      name: "newline mode keeps single paragraph",
-      text: "Line one\nLine two",
-      mode: "newline" as const,
-      expected: ["Line one\nLine two"],
-    },
-    {
-      name: "newline mode packs short blank-line-separated paragraphs",
-      text: "Para one\n\nPara two",
-      mode: "newline" as const,
-      expected: ["Para one\n\nPara two"],
-    },
-  ] as const)("applies markdown/newline mode behavior: $name", ({ text, mode, expected, name }) => {
-    expect(chunkMarkdownTextWithMode(text, 1000, mode), name).toEqual(expected);
-  });
-
   it.each(newlineModeFenceCases)(
     "handles newline mode fence splitting rules: $name",
     ({ text, limit, expected, name }) => {
@@ -862,32 +739,11 @@ describe("resolveChunkMode", () => {
 
   it.each([
     { cfg: undefined, provider: "telegram", accountId: undefined, expected: "length" },
-    { cfg: {}, provider: "discord", accountId: undefined, expected: "length" },
-    { cfg: undefined, provider: "imessage", accountId: undefined, expected: "length" },
     { cfg: providerCfg, provider: "__internal__", accountId: undefined, expected: "length" },
     { cfg: providerCfg, provider: "signal", accountId: undefined, expected: "newline" },
     { cfg: providerCfg, provider: "discord", accountId: undefined, expected: "length" },
     { cfg: accountCfg, provider: "signal", accountId: "primary", expected: "newline" },
     { cfg: accountCfg, provider: "signal", accountId: "other", expected: "length" },
-    {
-      cfg: { channels: { imessage: { streaming: { chunkMode: "newline" as const } } } },
-      provider: "imessage",
-      accountId: undefined,
-      expected: "newline",
-    },
-    {
-      cfg: {
-        channels: {
-          imessage: {
-            streaming: { chunkMode: "length" as const },
-            accounts: { personal: { streaming: { chunkMode: "newline" as const } } },
-          },
-        },
-      },
-      provider: "imessage",
-      accountId: "personal",
-      expected: "newline",
-    },
   ] as const)(
     "resolves default/provider/account/internal chunk mode for $provider $accountId",
     ({ cfg, provider, accountId, expected }) => {

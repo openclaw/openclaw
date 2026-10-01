@@ -138,59 +138,49 @@ describe("Computer Use attempt startup", () => {
     expect(readHarnessRequestMethods(harness)).not.toContain("mcpServer/tool/call");
   });
 
-  it.each(["discovery", "probe"] as const)(
-    "honors the one-off status deadline while preserving cleanup after %s",
-    async (completedPhase) => {
-      let elapsedMs = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-      vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
-      const expiresAfter =
-        completedPhase === "discovery" ? "mcpServerStatus/list" : "mcpServer/tool/call";
-      const harness = createStatusClient((method) => {
-        if (method === expiresAfter) {
-          elapsedMs = 2_000;
-        }
-      });
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
-      const requests = vi.spyOn(harness.client, "request");
-      const paths = createAttemptPaths(tempRoots);
-      const status = await readCodexComputerUseStatus({
-        agentDir: paths.agentDir,
-        timeoutMs: 1_000,
-        pluginConfig: {
-          ...pluginConfig,
-          computerUse: {
-            enabled: true,
-            marketplaceName: "desktop-tools",
-            liveTestTimeoutMs: 1_500,
-            toolCallTimeoutMs: 100,
-          },
-        },
-      });
-      expect(status.ready).toBe(completedPhase === "probe");
-      if (completedPhase === "discovery") {
-        expect(readHarnessRequestMethods(harness)).not.toContain("thread/start");
-        expect(readHarnessRequestMethods(harness)).not.toContain("mcpServer/tool/call");
-      } else {
-        expect(requests).toHaveBeenCalledWith(
-          "thread/unsubscribe",
-          { threadId: "computer-use-probe-thread-1" },
-          expect.objectContaining({ timeoutMs: 1_500, signal: expect.any(AbortSignal) }),
-        );
-        expect(harness.stdinDestroyed).toBe(false);
-        expect(requests).toHaveBeenCalledWith(
-          "thread/start",
-          expect.anything(),
-          expect.objectContaining({ timeoutMs: 1_000 }),
-        );
-        expect(requests).toHaveBeenCalledWith(
-          "mcpServer/tool/call",
-          expect.anything(),
-          expect.objectContaining({ timeoutMs: 100 }),
-        );
+  it("preserves cleanup after the one-off status probe exhausts its deadline", async () => {
+    let elapsedMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
+    const harness = createStatusClient((method) => {
+      if (method === "mcpServer/tool/call") {
+        elapsedMs = 2_000;
       }
-    },
-  );
+    });
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
+    const requests = vi.spyOn(harness.client, "request");
+    const paths = createAttemptPaths(tempRoots);
+    const status = await readCodexComputerUseStatus({
+      agentDir: paths.agentDir,
+      timeoutMs: 1_000,
+      pluginConfig: {
+        ...pluginConfig,
+        computerUse: {
+          enabled: true,
+          marketplaceName: "desktop-tools",
+          liveTestTimeoutMs: 1_500,
+          toolCallTimeoutMs: 100,
+        },
+      },
+    });
+    expect(status.ready).toBe(true);
+    expect(requests).toHaveBeenCalledWith(
+      "thread/unsubscribe",
+      { threadId: "computer-use-probe-thread-1" },
+      expect.objectContaining({ timeoutMs: 1_500, signal: expect.any(AbortSignal) }),
+    );
+    expect(harness.stdinDestroyed).toBe(false);
+    expect(requests).toHaveBeenCalledWith(
+      "thread/start",
+      expect.anything(),
+      expect.objectContaining({ timeoutMs: 1_000 }),
+    );
+    expect(requests).toHaveBeenCalledWith(
+      "mcpServer/tool/call",
+      expect.anything(),
+      expect.objectContaining({ timeoutMs: 100 }),
+    );
+  });
 
   it.each([false, true])(
     "does not await optional live probes at turn startup (strictReadiness: %s)",

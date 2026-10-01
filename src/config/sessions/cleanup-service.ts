@@ -19,6 +19,7 @@ import {
   applySessionEntryLifecycleMutation,
   inspectTranscriptEventsSync,
   listSessionEntriesCore,
+  listSessionEntriesReadOnly,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
@@ -80,11 +81,10 @@ function loadCleanupSessionStore(
   target: SessionStoreTarget,
   options: { createIfMissing?: boolean } = {},
 ): Record<string, SessionEntry> {
-  if (options.createIfMissing !== true && !fs.existsSync(resolveCleanupSqlitePath(target))) {
-    return {};
-  }
+  const listEntries =
+    options.createIfMissing === true ? listSessionEntriesCore : listSessionEntriesReadOnly;
   return Object.fromEntries(
-    listSessionEntriesCore({
+    listEntries({
       agentId: target.agentId,
       storePath: target.storePath,
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),

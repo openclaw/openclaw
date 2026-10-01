@@ -443,42 +443,6 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
-  it("keeps a claimed recovery interrupted until its lifecycle owner settles", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      abortedLastRun: true,
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 1,
-        chargedAttempts: 1,
-      },
-    };
-    const next: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 2,
-      abortedLastRun: false,
-      mainRestartRecovery: undefined,
-    };
-    const current: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 3,
-      mainRestartRecovery: {
-        ...initialRecovery.mainRestartRecovery!,
-        revision: 2,
-        foregroundClaims: {
-          lifecycleGeneration: "generation-1",
-          tokens: ["owner-1"],
-        },
-      },
-    };
-
-    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
-
-    expect(merged.abortedLastRun).toBe(true);
-    expect(merged.restartRecoveryRuns).toBeUndefined();
-    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
-  });
-
   it("preserves the safe-tools guard when a newer recovery owner wins a stale clear", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
@@ -617,6 +581,8 @@ describe("session snapshot merge", () => {
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
     expect(merged.abortedLastRun).toBe(true);
+    expect(merged.restartRecoveryRuns).toBeUndefined();
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
     expect(merged.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["owner-1", "owner-2"]);
   });
 

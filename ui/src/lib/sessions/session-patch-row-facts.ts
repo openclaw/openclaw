@@ -43,7 +43,7 @@ export function projectSessionPatchRowFields(
   if (typeof patch.archived === "boolean") {
     fields.push(projectSessionArchiveFields(patch.archived, entry));
   }
-  for (const key of ["category", "boardPresentation", "boardFace"] as const) {
+  for (const key of ["label", "category", "boardPresentation", "boardFace"] as const) {
     if (patch[key] !== undefined) {
       fields.push({ [key]: entry[key] });
     }
@@ -54,6 +54,7 @@ export function projectSessionPatchRowFields(
       unread: deriveSessionUnread(entry),
       lastReadAt: entry.lastReadAt,
       markedUnreadAt: entry.markedUnreadAt,
+      agentStatus: entry.agentStatus,
     };
     fields.push(
       patch.pinned === undefined ? read : patch.unread === false ? { ...pin, ...read } : pin,

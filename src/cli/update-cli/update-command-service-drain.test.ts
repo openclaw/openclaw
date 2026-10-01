@@ -178,20 +178,12 @@ function fixture(
   };
 }
 
-it.each([25_000, undefined])(
-  "stops an idle resident with budget %s after lifecycle preparation",
-  async (budget) => {
-    const f = fixture({
-      resident: {
-        pid: 42,
-        ...(budget === undefined ? {} : { shutdownBudget: { timeoutMs: budget } }),
-      },
-    });
-    await expect(withGatewayMaintenanceDrain(f.params, f.stop)).resolves.toBe("stopped");
-    expect(f.events).toEqual(["status", "observe:ready", "stop"]);
-    expect(f.warn).not.toHaveBeenCalled();
-  },
-);
+it("prepares an idle resident whose shutdown budget is unknown before stopping", async () => {
+  const f = fixture({ resident: { pid: 42 } });
+  await expect(withGatewayMaintenanceDrain(f.params, f.stop)).resolves.toBe("stopped");
+  expect(f.events).toEqual(["status", "observe:ready", "stop"]);
+  expect(f.warn).not.toHaveBeenCalled();
+});
 
 it("waits for admitted work to become idle before stopping", async () => {
   const f = fixture({ observations: [draining("embedded-run", "1 active agent turn"), ready()] });
@@ -221,44 +213,24 @@ it("uses the existing update deadline before warning about interrupted admitted 
   expect(f.events.at(-2)).toMatch(/^warning:/);
 });
 
-it.each(["session-mutation", "terminal-persistence"] as const)(
-  "refuses deadline custody in %s and releases the suspension",
-  async (kind) => {
-    const f = fixture({ observations: [draining(kind, `1 active ${kind} owner`)] });
-    const outcome = withGatewayMaintenanceDrain(f.params, f.stop).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(1_000);
-    const error = await outcome;
-    expect(error).toBeInstanceOf(GatewayServiceStopUnsafeError);
-    expect(error).toMatchObject({ message: expect.stringContaining(`owner phase ${kind}`) });
-    expect(f.stop).not.toHaveBeenCalled();
-    expect(f.warn).not.toHaveBeenCalled();
-    expect(f.events.at(-1)).toBe("resume");
-    expect(mocks.call).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "gateway.suspend.resume",
-        params: { suspensionId: "resident-suspension" },
-      }),
-    );
-  },
-);
-
-it.each(["migration", "backup"])(
-  "refuses only the reported %s phase at the deadline",
-  async (phase) => {
-    const observation = {
-      ...draining("root-request", "1 active request"),
-      writeCustody: [{ phase, count: 1 }],
-    };
-    const f = fixture({ observations: [observation] });
-    const outcome = withGatewayMaintenanceDrain(f.params, f.stop).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-    expect(await outcome).toMatchObject({
-      message: expect.stringContaining(`owner phase ${phase} (1)`),
-    });
-    expect(f.stop).not.toHaveBeenCalled();
-    expect(f.events.at(-1)).toBe("resume");
-  },
-);
+it("refuses deadline custody in session-mutation and releases the suspension", async () => {
+  const kind = "session-mutation";
+  const f = fixture({ observations: [draining(kind, `1 active ${kind} owner`)] });
+  const outcome = withGatewayMaintenanceDrain(f.params, f.stop).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(1_000);
+  const error = await outcome;
+  expect(error).toBeInstanceOf(GatewayServiceStopUnsafeError);
+  expect(error).toMatchObject({ message: expect.stringContaining(`owner phase ${kind}`) });
+  expect(f.stop).not.toHaveBeenCalled();
+  expect(f.warn).not.toHaveBeenCalled();
+  expect(f.events.at(-1)).toBe("resume");
+  expect(mocks.call).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "gateway.suspend.resume",
+      params: { suspensionId: "resident-suspension" },
+    }),
+  );
+});
 
 it("gives the final custody observation its normal RPC budget at the deadline", async () => {
   const f = fixture({
@@ -281,7 +253,11 @@ it("gives the final custody observation its normal RPC budget at the deadline", 
   const outcome = withGatewayMaintenanceDrain(f.params, f.stop).catch((error: unknown) => error);
   await vi.advanceTimersByTimeAsync(f.params.timeoutMs + 100);
   expect(await outcome).toBeInstanceOf(GatewayServiceStopUnsafeError);
+  expect(await outcome).toMatchObject({
+    message: expect.stringContaining("owner phase backup (1)"),
+  });
   expect(f.stop).not.toHaveBeenCalled();
+  expect(f.events.at(-1)).toBe("resume");
 });
 
 it("warns and stops when a published resident cannot distinguish root/cron custody", async () => {
@@ -392,6 +368,15 @@ it("rejects a replacement boot before sending suspension or stopping", async () 
 const juneStaleConnection = "gateway closed (1011): gateway message handler unavailable";
 const legacyResident = { pid: 42, state: "alive", path: "/tmp/openclaw-fixture/gateway.lock" };
 
+async function expectNormalDeadline(f: ReturnType<typeof fixture>) {
+  const running = withGatewayMaintenanceDrain(f.params, f.stop);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.stop).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
+  await expect(running).resolves.toBe("stopped");
+  expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline reached"));
+}
+
 function staleConnectionError(message: string) {
   return message === juneStaleConnection
     ? createGatewayCloseTransportError({
@@ -463,49 +448,19 @@ it.each([
   const f = fixture();
   mocks.legacyLock.mockResolvedValue(legacy);
   mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
-  const running = withGatewayMaintenanceDrain(f.params, f.stop);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.stop).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-  await expect(running).resolves.toBe("stopped");
-  expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline reached"));
-});
-
-it.each([
-  "unknown method: gateway.suspend.prepare",
-  "device identity required",
-  "gateway closed (1011): unrelated failure",
-  "gateway closed (1011): gateway message handler unavailable for another reason",
-])("does not shorten the deadline for %s", async (message) => {
-  const f = fixture();
-  mocks.legacyLock.mockResolvedValue(legacyResident);
-  mocks.call.mockRejectedValue(new Error(message));
-  const running = withGatewayMaintenanceDrain(f.params, f.stop);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.stop).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-  await expect(running).resolves.toBe("stopped");
-  expect(mocks.legacyLock).not.toHaveBeenCalled();
-  expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline reached"));
+  await expectNormalDeadline(f);
 });
 
 it.each<PortUsage>([
-  { port: 18789, status: "free", listeners: [], hints: [] },
   { port: 18789, status: "unknown", listeners: [], hints: [] },
   { port: 18789, status: "busy", listeners: [{}], hints: [] },
-  { port: 18789, status: "busy", listeners: [{ pid: 43 }], hints: [] },
   { port: 18789, status: "busy", listeners: [{ pid: 42 }, { pid: 43 }], hints: [] },
 ])("does not shorten the June deadline without owned listener attribution: %j", async (usage) => {
   const f = fixture();
   mocks.legacyLock.mockResolvedValue(legacyResident);
   mocks.portUsage.mockResolvedValue(usage);
   mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
-  const running = withGatewayMaintenanceDrain(f.params, f.stop);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.stop).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-  await expect(running).resolves.toBe("stopped");
-  expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline reached"));
+  await expectNormalDeadline(f);
 });
 
 it.each(["plain error", "protocol response", "extended close reason"])(
@@ -536,12 +491,8 @@ it.each(["plain error", "protocol response", "extended close reason"])(
       error = new Error(juneStaleConnection);
     }
     mocks.call.mockRejectedValue(error);
-    const running = withGatewayMaintenanceDrain(f.params, f.stop);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.stop).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-    await expect(running).resolves.toBe("stopped");
-    expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline reached"));
+    await expectNormalDeadline(f);
+    expect(mocks.legacyLock).not.toHaveBeenCalled();
   },
 );
 

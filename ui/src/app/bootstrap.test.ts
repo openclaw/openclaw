@@ -1,5 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -14,52 +14,29 @@ import type { ApplicationContext } from "./context.ts";
 import * as gatewayStore from "./gateway-store.ts";
 import { autoPromptNotificationsOnSend } from "./notifications-auto-prompt.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
-import { normalizeLegacyTerminalViewLocation } from "./startup-settings.ts";
 
 // Startup progress (dynamic imports, gateway subscribe, router start) is not a
 // performance assertion, so these waits must not inherit vi.waitFor's 1s default:
 // under a loaded CI runner that budget expires before startup reaches the step.
 const STARTUP_STEP_WAIT = { timeout: 15_000 };
 
-describe("normalizeLegacyTerminalViewLocation", () => {
-  it.each([
-    {
-      location: { pathname: "/", search: "?view=terminal&keep=yes", hash: "#pane" },
-      basePath: "",
-      expected: { pathname: "/focus/terminal", search: "?keep=yes", hash: "#pane" },
-    },
-    {
-      location: {
-        pathname: "/openclaw/",
-        search: "?keep=yes&view=terminal",
-        hash: "#pane",
-      },
-      basePath: "/openclaw",
-      expected: {
-        pathname: "/openclaw/focus/terminal",
-        search: "?keep=yes",
-        hash: "#pane",
-      },
-    },
-  ])("normalizes the released terminal query at $basePath", ({ location, basePath, expected }) => {
-    expect(normalizeLegacyTerminalViewLocation(location, basePath)).toEqual(expected);
-  });
-
-  it.each([
-    { pathname: "/", search: "?view=desktop", hash: "" },
-    { pathname: "/", search: "?view=dashboard", hash: "" },
-    { pathname: "/settings/appearance", search: "?view=terminal", hash: "" },
-  ])("does not normalize an unsupported legacy location $pathname$search", (location) => {
-    expect(normalizeLegacyTerminalViewLocation(location, "")).toBe(location);
-  });
-});
-
 describe("bootstrapApplication", () => {
+  let previousSettings: ReturnType<typeof loadSettings>;
+  let previousUrl: string;
+
+  beforeEach(() => {
+    previousSettings = loadSettings();
+    previousUrl = window.location.href;
+  });
+
+  afterEach(() => {
+    window.history.replaceState({}, "", previousUrl);
+    saveSettings(previousSettings);
+  });
+
   it.each([false, true])(
     "owns native health reporting across startup and stop (early stop: %s)",
     async (stopEarly) => {
-      const previousUrl = window.location.href;
-      const previousSettings = loadSettings();
       window.history.replaceState({}, "", "/focus/terminal");
       const postMessage = vi.fn();
       vi.stubGlobal("webkit", { messageHandlers: { openclawGateways: { postMessage } } });
@@ -94,15 +71,11 @@ describe("bootstrapApplication", () => {
         window.removeEventListener("openclaw:native-gateway-health-changed", changed);
         Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__");
         vi.unstubAllGlobals();
-        window.history.replaceState({}, "", previousUrl);
-        saveSettings(previousSettings);
       }
     },
   );
 
   it("starts native notifications before Gateway use and preserves synchronous permission requests", async () => {
-    const previousUrl = window.location.href;
-    const previousSettings = loadSettings();
     const promptKey = "openclaw.control.notificationsAutoPrompt.v1";
     const previousPrompt = localStorage.getItem(promptKey);
     localStorage.removeItem(promptKey);
@@ -142,8 +115,6 @@ describe("bootstrapApplication", () => {
       runtime.stop();
       startGateway.mockRestore();
       vi.unstubAllGlobals();
-      window.history.replaceState({}, "", previousUrl);
-      saveSettings(previousSettings);
       if (previousPrompt === null) {
         localStorage.removeItem(promptKey);
       } else {
@@ -153,8 +124,6 @@ describe("bootstrapApplication", () => {
   });
 
   it("does not install native notification listeners when stop wins startup", async () => {
-    const previousUrl = window.location.href;
-    const previousSettings = loadSettings();
     window.history.replaceState({}, "", "/focus/terminal");
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawNotifications: { postMessage } } });
@@ -169,8 +138,6 @@ describe("bootstrapApplication", () => {
     } finally {
       runtime.stop();
       vi.unstubAllGlobals();
-      window.history.replaceState({}, "", previousUrl);
-      saveSettings(previousSettings);
     }
   });
 
@@ -185,8 +152,6 @@ describe("bootstrapApplication", () => {
   ] as const)(
     "warms only explicit application routes at startup: $pathname",
     async ({ pathname, routeId, warmed }) => {
-      const previousUrl = window.location.href;
-      const previousSettings = loadSettings();
       window.history.replaceState({}, "", pathname);
       const runtime = bootstrapApplication();
       const route = runtime.router.getRoute(routeId);
@@ -211,8 +176,6 @@ describe("bootstrapApplication", () => {
         component.mockRestore();
         loader.mockRestore();
         startGateway.mockRestore();
-        window.history.replaceState({}, "", previousUrl);
-        saveSettings(previousSettings);
       }
     },
   );
@@ -394,8 +357,6 @@ describe("bootstrapApplication", () => {
       expectedDocumentMode: null,
     },
   ])("synchronously removes $name while preserving Gateway authentication", (testCase) => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     saveSettings({
       ...previousSettings,
       token: "",
@@ -427,14 +388,10 @@ describe("bootstrapApplication", () => {
       warn.mockRestore();
       replaceState.mockRestore();
       runtime?.stop();
-      window.history.replaceState({}, "", previousUrl);
-      saveSettings(previousSettings);
     }
   });
 
   it("does not rewrite browser history when startup contains no URL credentials", () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     window.history.replaceState({}, "", "/settings/appearance?keep=yes#tab=keep");
     const replaceState = vi.spyOn(window.history, "replaceState");
     let runtime: ReturnType<typeof bootstrapApplication> | undefined;
@@ -448,14 +405,10 @@ describe("bootstrapApplication", () => {
     } finally {
       replaceState.mockRestore();
       runtime?.stop();
-      window.history.replaceState({}, "", previousUrl);
-      saveSettings(previousSettings);
     }
   });
 
   it("keeps an inferred route namespace separate from the root resource mount", async () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     const previousResourceBasePath = document.documentElement.getAttribute(
       CONTROL_UI_BASE_PATH_ATTRIBUTE,
     );
@@ -477,8 +430,6 @@ describe("bootstrapApplication", () => {
       expect(window.location.pathname).toBe("/__openclaw__/new");
     } finally {
       runtime.stop();
-      saveSettings(previousSettings);
-      window.history.replaceState({}, "", previousUrl);
       if (previousResourceBasePath === null) {
         document.documentElement.removeAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
       } else {
@@ -491,8 +442,6 @@ describe("bootstrapApplication", () => {
   });
 
   it("keeps the focused terminal route outside the application router", async () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     window.history.replaceState({}, "", "/focus/terminal");
     const runtime = bootstrapApplication();
     const routerStart = vi.spyOn(runtime.router, "start");
@@ -509,8 +458,6 @@ describe("bootstrapApplication", () => {
       expect(routerStart).not.toHaveBeenCalled();
     } finally {
       runtime.stop();
-      window.history.replaceState({}, "", previousUrl);
-      saveSettings(previousSettings);
     }
   });
 
@@ -528,8 +475,6 @@ describe("bootstrapApplication", () => {
   ])(
     "rewrites the released terminal query at the $basePath application boundary",
     async ({ initialUrl, expectedUrl, basePath }) => {
-      const previousSettings = loadSettings();
-      const previousUrl = window.location.href;
       window.history.replaceState({}, "", initialUrl);
       const replaceState = vi.spyOn(window.history, "replaceState");
       const runtime = bootstrapApplication();
@@ -552,8 +497,6 @@ describe("bootstrapApplication", () => {
       } finally {
         runtime.stop();
         replaceState.mockRestore();
-        window.history.replaceState({}, "", previousUrl);
-        saveSettings(previousSettings);
       }
     },
   );
@@ -561,8 +504,6 @@ describe("bootstrapApplication", () => {
   it.each(["desktop", "dashboard"])(
     "does not recognize the removed %s query presentation",
     (view) => {
-      const previousSettings = loadSettings();
-      const previousUrl = window.location.href;
       const initialUrl = `/?view=${view}&keep=yes#pane`;
       window.history.replaceState({}, "", initialUrl);
       const replaceState = vi.spyOn(window.history, "replaceState");
@@ -577,15 +518,11 @@ describe("bootstrapApplication", () => {
       } finally {
         runtime.stop();
         replaceState.mockRestore();
-        window.history.replaceState({}, "", previousUrl);
-        saveSettings(previousSettings);
       }
     },
   );
 
   it("strips startup credentials before rewriting the released terminal query", () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     window.history.replaceState({}, "", "/?view=terminal#token=startup-token&pane=1");
     const replaceState = vi.spyOn(window.history, "replaceState");
     const runtime = bootstrapApplication();
@@ -603,14 +540,10 @@ describe("bootstrapApplication", () => {
     } finally {
       runtime.stop();
       replaceState.mockRestore();
-      window.history.replaceState({}, "", previousUrl);
-      saveSettings(previousSettings);
     }
   });
 
   it("does not recognize the terminal query outside the application root", () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     const initialUrl = "/settings/appearance?view=terminal&keep=yes#pane";
     window.history.replaceState({}, "", initialUrl);
     const runtime = bootstrapApplication();
@@ -622,14 +555,10 @@ describe("bootstrapApplication", () => {
       );
     } finally {
       runtime.stop();
-      window.history.replaceState({}, "", previousUrl);
-      saveSettings(previousSettings);
     }
   });
 
   it("keeps the latest navigation requested before router start", async () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     saveSettings({
       ...previousSettings,
       sessionKey: "agent:main:main",
@@ -654,14 +583,10 @@ describe("bootstrapApplication", () => {
     } finally {
       pushState.mockRestore();
       runtime.stop();
-      saveSettings(previousSettings);
-      window.history.replaceState({}, "", previousUrl);
     }
   });
 
   it("replaces instead of pushing when re-navigating to the active location", async () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     saveSettings({
       ...previousSettings,
       sessionKey: "main",
@@ -688,14 +613,10 @@ describe("bootstrapApplication", () => {
       pushState.mockRestore();
       replaceState.mockRestore();
       runtime.stop();
-      saveSettings(previousSettings);
-      window.history.replaceState({}, "", previousUrl);
     }
   });
 
   it("does not restart routing after stop wins early startup", async () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     saveSettings({
       ...previousSettings,
       sessionKey: "agent:main:main",
@@ -722,14 +643,10 @@ describe("bootstrapApplication", () => {
       expect(redirectSubscription).not.toHaveBeenCalled();
     } finally {
       runtime.stop();
-      saveSettings(previousSettings);
-      window.history.replaceState({}, "", previousUrl);
     }
   });
 
   it("consumes an unscoped initial-location abort after stop wins early startup", async () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     saveSettings({
       ...previousSettings,
       sessionKey: "main",
@@ -750,14 +667,10 @@ describe("bootstrapApplication", () => {
     } finally {
       window.removeEventListener("unhandledrejection", unhandledRejection);
       runtime.stop();
-      saveSettings(previousSettings);
-      window.history.replaceState({}, "", previousUrl);
     }
   });
 
   it("stops a cold released-link startup without leaking its readiness subscription", async () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     saveSettings({
       ...previousSettings,
       sessionKey: "agent:main:main",
@@ -819,14 +732,10 @@ describe("bootstrapApplication", () => {
     } finally {
       runtime.stop();
       gatewayFactory.mockRestore();
-      saveSettings(previousSettings);
-      window.history.replaceState({}, "", previousUrl);
     }
   });
 
   it("stops the router immediately and again after an in-flight start settles", async () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     saveSettings({
       ...previousSettings,
       sessionKey: "main",
@@ -849,14 +758,10 @@ describe("bootstrapApplication", () => {
       expect(routerStop).toHaveBeenCalledTimes(2);
     } finally {
       runtime.stop();
-      saveSettings(previousSettings);
-      window.history.replaceState({}, "", previousUrl);
     }
   });
 
   it("resolves runtime startup when the initial route is not found", async () => {
-    const previousSettings = loadSettings();
-    const previousUrl = window.location.href;
     saveSettings({
       ...previousSettings,
       sessionKey: "main",
@@ -873,13 +778,10 @@ describe("bootstrapApplication", () => {
       expect(routerStart).toHaveBeenCalledOnce();
     } finally {
       runtime.stop();
-      saveSettings(previousSettings);
-      window.history.replaceState({}, "", previousUrl);
     }
   });
 
   it("applies and refreshes the saved accent before the gateway connects", () => {
-    const previousSettings = loadSettings();
     saveSettings({ ...previousSettings, accent: "#48D6C2" });
     const runtime = bootstrapApplication();
 
@@ -899,7 +801,6 @@ describe("bootstrapApplication", () => {
   });
 
   it("synchronizes every theme-color meta with the resolved theme background", () => {
-    const previousSettings = loadSettings();
     const style = document.createElement("style");
     style.textContent = ':root[data-theme="light"] { --bg: #123456; }';
     const lightMeta = document.createElement("meta");
@@ -922,12 +823,10 @@ describe("bootstrapApplication", () => {
       style.remove();
       lightMeta.remove();
       darkMeta.remove();
-      saveSettings(previousSettings);
     }
   });
 
   it("refreshes chat browser chrome on route and breakpoint changes", () => {
-    const previousSettings = loadSettings();
     const listeners = new Set<() => void>();
     let mobile = false;
     const removeEventListener = vi.fn((_: string, listener: () => void) => {
@@ -988,7 +887,6 @@ describe("bootstrapApplication", () => {
       expect(removeEventListener).toHaveBeenCalled();
       style.remove();
       meta.remove();
-      saveSettings(previousSettings);
       vi.unstubAllGlobals();
     }
   });

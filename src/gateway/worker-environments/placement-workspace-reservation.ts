@@ -3,6 +3,7 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infr
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { find } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
@@ -125,12 +126,7 @@ export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRu
             assertOwned();
             assertReconciled(runtime.read(), identity, workspace);
             const current = find(runtime.read(), identity.sessionId);
-            if (
-              current?.generation !== initial?.generation ||
-              current?.state !== initial?.state ||
-              current?.environmentId !== initial?.environmentId ||
-              current?.activeOwnerEpoch !== initial?.activeOwnerEpoch
-            ) {
+            if (!matchesWorkerPlacementTarget(current, initial)) {
               throw new Error("The session workspace placement changed during publication.");
             }
           };

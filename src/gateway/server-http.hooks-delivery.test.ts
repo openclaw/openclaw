@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { HookMappingResolved } from "./hooks-mapping.js";
 import { createHooksConfig } from "./hooks-test-helpers.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "./hooks.js";
@@ -50,6 +51,7 @@ function createDeliveryHandler(params?: {
     agentPolicy: { ...canonicalConfig.agentPolicy, ...params?.agentPolicy },
   };
   const handler = createHooksRequestHandler({
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getHooksConfig: () => hooksConfig,
     bindHost: "127.0.0.1",
     port: 18789,

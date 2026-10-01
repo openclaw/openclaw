@@ -36,7 +36,7 @@ internal object WearScreenshotFixture {
       gatewayState = WearGatewayState.CONNECTED,
       agents =
         listOf(
-          WearAgentSummary(
+          WearAgent(
             id = "main",
             name = "Molty",
             emoji = "M",

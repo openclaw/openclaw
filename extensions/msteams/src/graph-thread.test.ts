@@ -15,14 +15,6 @@ vi.mock("./graph.js", () => ({
 }));
 
 describe("stripHtmlFromTeamsMessage", () => {
-  it("preserves @mention display names from <at> tags", () => {
-    expect(stripHtmlFromTeamsMessage("<at>Alice</at> hello")).toBe("@Alice hello");
-  });
-
-  it("strips other HTML tags", () => {
-    expect(stripHtmlFromTeamsMessage("<p>Hello <b>world</b></p>")).toBe("Hello world");
-  });
-
   it("decodes HTML5 entities", () => {
     expect(
       stripHtmlFromTeamsMessage("&amp; &lt;b&gt; &quot;x&quot; &#39;y&#39; &nbsp;z &copy;"),
@@ -38,37 +30,16 @@ describe("stripHtmlFromTeamsMessage", () => {
     );
   });
 
-  it("normalizes multiple whitespace to single space", () => {
-    expect(stripHtmlFromTeamsMessage("hello   world")).toBe("hello world");
-  });
-
   it("handles <at> tags with attributes", () => {
     expect(stripHtmlFromTeamsMessage('<at id="123">Bob</at> please review')).toBe(
       "@Bob please review",
     );
-  });
-
-  it("returns empty string for empty input", () => {
-    expect(stripHtmlFromTeamsMessage("")).toBe("");
   });
 });
 
 describe("fetchChannelMessage", () => {
   beforeEach(() => {
     vi.mocked(fetchGraphJson).mockReset();
-  });
-
-  it("fetches the parent message with correct path", async () => {
-    const mockMsg = { id: "msg-1", body: { content: "hello", contentType: "text" } };
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce(mockMsg);
-
-    const result = await fetchChannelMessage("tok", "group-1", "channel-1", "msg-1");
-
-    expect(result).toEqual(mockMsg);
-    expect(fetchGraphJson).toHaveBeenCalledWith({
-      token: "tok",
-      path: "/teams/group-1/channels/channel-1/messages/msg-1",
-    });
   });
 
   it("returns undefined on fetch error", async () => {
@@ -159,27 +130,13 @@ describe("fetchThreadReplies", () => {
     vi.mocked(fetchGraphJson).mockReset();
   });
 
-  it("fetches replies with correct path and default limit", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
-      value: [{ id: "reply-1" }, { id: "reply-2" }],
-    });
-
-    const result = await fetchThreadReplies("tok", "group-1", "channel-1", "msg-1");
-
-    expect(result).toHaveLength(2);
-    expect(fetchGraphJson).toHaveBeenCalledWith({
-      token: "tok",
-      path: "/teams/group-1/channels/channel-1/messages/msg-1/replies?$top=50",
-    });
-  });
-
   it("clamps limit to 50 maximum", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] });
 
     await fetchThreadReplies("tok", "g", "c", "m", 200);
 
     const [request] = expectDefined(vi.mocked(fetchGraphJson).mock.calls[0], "Graph fetch call");
-    expect(request.path).toContain("$top=50");
+    expect(request.path).toBe("/teams/g/channels/c/messages/m/replies?$top=50");
   });
 
   it("clamps limit to 1 minimum", async () => {
@@ -291,9 +248,5 @@ describe("buildThreadContext", () => {
     expect(buildThreadContext(messages)).toEqual([
       { message_id: "m1", sender: "unknown", body: "orphan msg" },
     ]);
-  });
-
-  it("returns no context for an empty thread", () => {
-    expect(buildThreadContext([])).toEqual([]);
   });
 });

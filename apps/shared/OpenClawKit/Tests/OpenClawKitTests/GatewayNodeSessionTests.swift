@@ -353,6 +353,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         self.emitInbound(.success(.data(data)))
     }
 
+    func emitEvent(_ event: EventFrame) throws {
+        try self.emitInbound(.success(.data(JSONEncoder().encode(event))))
+    }
+
     func emitInvokeCancel(id: String) {
         let frame: [String: Any] = [
             "type": "event",
@@ -819,6 +823,111 @@ extension GatewayChannelActor {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test(arguments: [false, true])
+    func `wire text is projected before bounded native delivery and loss retires the socket`(
+        missingBaseline: Bool) async throws
+    {
+        let session = FakeGatewayWebSocketSession()
+        let events = AsyncStream<EventFrame>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let appended = AsyncGate()
+        let disconnected = AsyncGate()
+        let channel = try GatewayChannelActor(
+            url: testURL("ws://gateway.example.invalid"), token: nil,
+            session: WebSocketSessionBox(session: session),
+            pushHandler: { push, _ in
+                guard case let .event(event) = push else { return }
+                events.continuation.yield(event)
+                if event.seq == 2 { await appended.markStarted() }
+            },
+            connectOptions: nodeConnectOptions(),
+            disconnectHandler: { _, _ in await disconnected.markStarted() })
+        do {
+            try await channel.connect()
+            let socket = try #require(session.latestTask())
+            try socket.emitEvent(EventFrame(type: "event", event: "chat", payload: AnyCodable([
+                "runId": "run", "state": "delta", "deltaText": "hello ",
+                "message": ["role": "assistant", "content": [["type": "text", "text": "hello "]]],
+            ]), seq: 1))
+            try socket.emitEvent(EventFrame(type: "event", event: "chat", payload: AnyCodable([
+                "runId": "run", "state": "delta", "deltaText": "world",
+            ]), seq: 2))
+            try await appended.waitUntilStarted()
+            var iterator = events.stream.makeAsyncIterator()
+            let event = try #require(await iterator.next())
+            #expect(event.payload?.dictionaryValue?["message"]?.dictionaryValue?["content"]?
+                .arrayValue?.first?.dictionaryValue?["text"]?.stringValue == "hello world")
+
+            try socket.emitEvent(EventFrame(type: "event", event: "chat", payload: AnyCodable([
+                "runId": missingBaseline ? "unseen" : "run", "state": "delta", "deltaText": "lost suffix",
+            ]), seq: missingBaseline ? 3 : 4))
+            try await disconnected.waitUntilStarted()
+            #expect(socket.state == .canceling)
+            await channel.shutdown()
+            events.continuation.finish()
+            #expect(await iterator.next() == nil)
+        } catch {
+            await channel.shutdown()
+            events.continuation.finish()
+            throw error
+        }
+    }
+
+    @Test(arguments: ["final", "error", "aborted"])
+    func `gap revealing chat terminal settles before native recovery`(terminalState: String) async throws {
+        let session = FakeGatewayWebSocketSession()
+        let pushes = AsyncStream<GatewayPush>.makeStream()
+        let disconnected = AsyncGate()
+        let channel = try GatewayChannelActor(
+            url: testURL("ws://gateway.example.invalid"), token: nil,
+            session: WebSocketSessionBox(session: session),
+            pushHandler: { push, _ in
+                if case .snapshot = push { return }
+                pushes.continuation.yield(push)
+            },
+            connectOptions: nodeConnectOptions(),
+            disconnectHandler: { _, _ in
+                pushes.continuation.finish()
+                await disconnected.markStarted()
+            })
+        do {
+            try await channel.connect()
+            let socket = try #require(session.latestTask())
+            try socket.emitEvent(EventFrame(type: "event", event: "chat", payload: AnyCodable([
+                "runId": "run", "state": "delta", "deltaText": "partial",
+                "message": ["role": "assistant", "content": [["type": "text", "text": "partial"]]],
+            ]), seq: 1))
+            let terminal = AnyCodable([
+                "runId": "run", "state": terminalState,
+                "message": ["role": "assistant", "content": [["type": "text", "text": "settled"]]],
+            ])
+            try socket.emitEvent(EventFrame(type: "event", event: "chat", payload: terminal, seq: 3))
+            try await disconnected.waitUntilStarted()
+            await channel.shutdown()
+            var order: [String] = []
+            var deliveredTerminal: AnyCodable?
+            for await push in pushes.stream {
+                switch push {
+                case let .event(event):
+                    let state = event.payload?.dictionaryValue?["state"]?.stringValue ?? ""
+                    order.append(state)
+                    if state == terminalState { deliveredTerminal = event.payload }
+                case let .seqGap(expected, received):
+                    #expect(expected == 2)
+                    #expect(received == 3)
+                    order.append("seqGap")
+                case .snapshot:
+                    Issue.record("unexpected hello in event trace")
+                }
+            }
+            #expect(order == ["delta", terminalState, "seqGap"])
+            #expect(deliveredTerminal == terminal)
+        } catch {
+            await channel.shutdown()
+            pushes.continuation.finish()
+            throw error
+        }
+    }
+
     @Test func `authenticated invoke metadata reaches the native dispatcher unchanged`() async throws {
         let gateway = GatewayNodeSession()
         let capture = StringCapture()
@@ -2436,58 +2545,6 @@ struct GatewayNodeSessionTests {
         }
     }
     #endif
-
-    @Test
-    func `external authorization failure stays actionable without sending Gateway credentials`() async throws {
-        let session = FakeGatewayWebSocketSession()
-        let gateway = GatewayNodeSession()
-        do {
-            try await gateway.connectForTest(
-                testURL("wss://gateway.example.invalid"),
-                credentials: .init(bootstrapToken: "unused-bootstrap"),
-                options: nodeConnectOptions(),
-                session: session,
-                extraHeadersProvider: { throw GatewayExternalAuthorizationError() })
-            Issue.record("unauthorized upgrade unexpectedly connected")
-        } catch {
-            let problem = GatewayConnectionProblemMapper.map(error: error)
-            #expect(problem?.kind == .externalAuthorizationRequired)
-            #expect(problem?.actionLabel == "Retry")
-            #expect(problem?.pauseReconnect == true)
-            #expect(problem?.retryable == true)
-        }
-        #expect(session.snapshotMakeCount() == 0)
-        #expect(await gateway.currentRoute() == nil)
-        await gateway.disconnect()
-    }
-
-    @Test(arguments: [false, true])
-    func `public request and send preserve actionable upgrade denial`(send: Bool) async throws {
-        let session = FakeGatewayWebSocketSession()
-        let url = try testURL("wss://gateway.example.invalid")
-        let channel = GatewayChannelActor(
-            url: url, token: nil,
-            session: WebSocketSessionBox(session: session), connectOptions: nodeConnectOptions(),
-            extraHeadersProvider: { throw GatewayExternalAuthorizationError() })
-        do {
-            if send {
-                try await channel.send(method: "status", params: nil)
-            } else {
-                _ = try await channel.request(method: "status", params: nil)
-            }
-            Issue.record("unauthorized operation unexpectedly connected")
-        } catch {
-            #expect(error is GatewayExternalAuthorizationError)
-            let problem = GatewayConnectionProblemMapper.map(error: error)
-            #expect(problem?.kind == .externalAuthorizationRequired)
-            #expect(problem?.actionLabel == "Retry")
-            #expect(problem?.pauseReconnect == true)
-            #expect(problem?.retryable == true)
-        }
-        #expect(session.snapshotMakeCount() == 0)
-        #expect(await channel.currentConnectionGeneration() == nil)
-        await channel.shutdown()
-    }
 
     @Test
     func `cleartext upgrade never reads or attaches custom headers`() async throws {

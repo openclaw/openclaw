@@ -3,16 +3,25 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createExecTool } from "../agents/bash-tools.exec-run.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import {
   buildConversationToolPolicyPipelineSteps,
   resolveConversationToolPolicies,
 } from "../agents/conversation-tool-policy-pipeline.js";
+import { createReadTool } from "../agents/sessions/tools/read.js";
 import { applyToolPolicyPipeline } from "../agents/tool-policy-pipeline.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+} from "../agents/tool-search-catalog.js";
+import { resolveToolSearchConfig } from "../agents/tool-search-config.js";
+import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -21,8 +30,11 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { applyClawMigrationPlan, buildClawMigrationPlan } from "./migrate.js";
 import { persistClawInstallRecord } from "./provenance.js";
 import { makeProvenancePlan, stateEnv } from "./provenance.test-helpers.js";
+import { prepareCapturedClawToolPolicyConsent } from "./tool-policy-runtime.js";
+import type { ClawOpenClawProfile } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -32,7 +44,181 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function makeToolConsentPlan(
+  root: string,
+  tools: NonNullable<ClawOpenClawProfile["agent"]["tools"]> = { profile: "full", allow: ["read"] },
+  agentId = "worker",
+) {
+  return makeProvenancePlan(
+    root,
+    { schemaVersion: 1, agent: { id: agentId } },
+    {
+      openClawProfile: { schemaVersion: 1, agent: { tools } },
+    },
+  );
+}
+
+async function migrateToolConsentAgent() {
+  const root = tempDirs.make("openclaw-adopted-claw-tool-consent-");
+  const env = stateEnv(root);
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, "AGENTS.md"), "Use the existing workspace.\n");
+  const config = {
+    agents: {
+      defaults: {
+        workspace: root,
+        model: "openai/gpt-4.1",
+        sandbox: { mode: "all" as const },
+      },
+      entries: {
+        worker: { workspace, tools: { profile: "full" as const, allow: ["read"] } },
+      },
+    },
+  };
+  const migration = await buildClawMigrationPlan({ agentId: "worker", config, options: { env } });
+  await applyClawMigrationPlan({ migration, config, options: { env } });
+  return { root, config, env };
+}
+
 describe("Claw tool policy consent provenance", () => {
+  it("runs an adopted agent with frozen tools and inherited settings after restart", async () => {
+    const { config, env } = await migrateToolConsentAgent();
+    const workspace = config.agents.entries.worker.workspace;
+    const read = createReadTool(workspace);
+    const exec = createExecTool({ cwd: workspace, host: "gateway", security: "full", ask: "off" });
+    const executeRead = vi.spyOn(read, "execute");
+    const executeExec = vi.spyOn(exec, "execute");
+    const marker = join(workspace, "forbidden-exec-marker");
+    const execInput = { command: "touch forbidden-exec-marker" };
+    const prepareDispatcher = (activeConfig: OpenClawConfig) => {
+      const capabilityProfile = resolveConversationCapabilityProfile({
+        agentId: "worker",
+        config: activeConfig,
+      });
+      const policies = resolveConversationToolPolicies({ capabilityProfile });
+      const filtered = applyToolPolicyPipeline({
+        tools: [read, exec, { ...read, name: "future_tool" }],
+        toolMeta: (tool) => (tool.name === "future_tool" ? { pluginId: "read" } : undefined),
+        warn: () => {},
+        steps: buildConversationToolPolicyPipelineSteps({
+          capabilityProfile,
+          policies,
+          includeRuntimeToolPolicy: true,
+        }),
+      });
+      expect(filtered.map((tool) => tool.name)).toEqual(["read"]);
+      const catalogRef = createToolSearchCatalogRef();
+      registerHeadlessToolSearchCatalog({ catalogRef, tools: filtered });
+      return new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(), {
+        validateInput: true,
+      });
+    };
+    closeOpenClawStateDatabase();
+    setRuntimeConfigSnapshot(config);
+    const captured = structuredClone(config);
+    prepareCapturedClawToolPolicyConsent(captured, { env });
+    const dispatcher = prepareDispatcher(captured);
+    const readResult = await dispatcher.call("read", { path: "AGENTS.md" });
+    expect(readResult.result.content).toContainEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("Use the existing workspace."),
+      }),
+    );
+    expect(executeRead).toHaveBeenCalledOnce();
+    await expect(dispatcher.call("exec", execInput)).rejects.toThrow("Unknown tool");
+    expect(executeExec).not.toHaveBeenCalled();
+    expect(existsSync(marker)).toBe(false);
+
+    const changedConfigs: OpenClawConfig[] = [
+      {
+        agents: {
+          ...config.agents,
+          defaults: { ...config.agents.defaults, model: "openai/gpt-4.1-mini" },
+        },
+      },
+      {
+        agents: {
+          ...config.agents,
+          defaults: { ...config.agents.defaults, sandbox: { mode: "off" } },
+        },
+      },
+      {
+        agents: {
+          ...config.agents,
+          defaults: { ...config.agents.defaults, compaction: { mode: "default" } },
+        },
+      },
+      {
+        agents: {
+          ...config.agents,
+          entries: {
+            worker: {
+              ...config.agents.entries.worker,
+              tools: { profile: "full", allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    ];
+    for (const changed of changedConfigs) {
+      setRuntimeConfigSnapshot(changed);
+      await expect(
+        (async () => prepareDispatcher(changed).call("exec", execInput))(),
+      ).rejects.toThrow("Cannot verify the installed tool authority");
+    }
+    setRuntimeConfigSnapshot(config);
+    openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabase();
+    await expect((async () => prepareDispatcher(config).call("exec", execInput))()).rejects.toThrow(
+      "Cannot verify the installed tool authority",
+    );
+    expect(executeRead).toHaveBeenCalledOnce();
+    expect(executeExec).not.toHaveBeenCalled();
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("keeps mixed legacy, created, and adopted consent isolated after restart", async () => {
+    const { root, config, env } = await migrateToolConsentAgent();
+    mkdirSync(join(root, "created"));
+    mkdirSync(join(root, "legacy"));
+    const { plan: created } = await makeToolConsentPlan(
+      join(root, "created"),
+      undefined,
+      "created",
+    );
+    const { plan: legacy } = await makeToolConsentPlan(join(root, "legacy"), undefined, "legacy");
+    persistClawInstallRecord(created, { env });
+    persistClawInstallRecord(legacy, { env });
+    openOpenClawStateDatabase({ env })
+      .db
+      /* sqlite-allow-raw: test-only downgrade verifies mixed stored consent versions. */
+      .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
+      .run("openclaw.clawInstallRecord.v1", "legacy");
+    closeOpenClawStateDatabase();
+    const mixedConfig = {
+      agents: {
+        ...config.agents,
+        entries: {
+          ...config.agents.entries,
+          created: created.agent.config,
+          legacy: legacy.agent.config,
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(mixedConfig);
+    for (const agentId of ["worker", "created"]) {
+      expect(() =>
+        resolveConversationCapabilityProfile({ agentId, config: mixedConfig }),
+      ).not.toThrow();
+    }
+    expect(() =>
+      resolveConversationCapabilityProfile({ agentId: "legacy", config: mixedConfig }),
+    ).toThrow("legacy dynamic tool policy");
+  });
+
   it("refreshes runtime consent without copying the live database on each catalog generation", async () => {
     const root = tempDirs.make("openclaw-claw-runtime-consent-");
     const env = stateEnv(root);
@@ -145,16 +331,7 @@ describe("Claw tool policy consent provenance", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = resolveOpenClawStateSqlitePath(env);
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-    const { plan } = await makeProvenancePlan(
-      root,
-      { schemaVersion: 1, agent: { id: "worker" } },
-      {
-        openClawProfile: {
-          schemaVersion: 1,
-          agent: { tools: { profile: "full", allow: ["read"] } },
-        },
-      },
-    );
+    const { plan } = await makeToolConsentPlan(root);
     persistClawInstallRecord(plan, { env });
     closeOpenClawStateDatabase();
     writeFileSync(databasePath, "not a sqlite database");
@@ -177,16 +354,7 @@ describe("Claw tool policy consent provenance", () => {
     const root = tempDirs.make("openclaw-closed-claw-tool-consent-");
     const env = stateEnv(root);
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-    const { plan } = await makeProvenancePlan(
-      root,
-      { schemaVersion: 1, agent: { id: "worker" } },
-      {
-        openClawProfile: {
-          schemaVersion: 1,
-          agent: { tools: { profile: "full", allow: ["read"] } },
-        },
-      },
-    );
+    const { plan } = await makeToolConsentPlan(root);
     persistClawInstallRecord(plan, { env });
     const config = { agents: { list: [plan.agent.config] } };
     setRuntimeConfigSnapshot(config);
@@ -204,16 +372,7 @@ describe("Claw tool policy consent provenance", () => {
     const root = tempDirs.make("openclaw-modified-claw-tool-consent-");
     const env = stateEnv(root);
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-    const { plan } = await makeProvenancePlan(
-      root,
-      { schemaVersion: 1, agent: { id: "worker" } },
-      {
-        openClawProfile: {
-          schemaVersion: 1,
-          agent: { tools: { profile: "full", allow: ["read"] } },
-        },
-      },
-    );
+    const { plan } = await makeToolConsentPlan(root);
     persistClawInstallRecord(plan, { env });
     const config = {
       agents: {
@@ -239,16 +398,7 @@ describe("Claw tool policy consent provenance", () => {
     const root = tempDirs.make("openclaw-claw-tool-consent-");
     const env = stateEnv(root);
     vi.stubEnv("OPENCLAW_STATE_DIR", join(root, "state"));
-    const { plan } = await makeProvenancePlan(
-      root,
-      { schemaVersion: 1, agent: { id: "worker" } },
-      {
-        openClawProfile: {
-          schemaVersion: 1,
-          agent: { tools: { profile: "coding", allow: ["read"] } },
-        },
-      },
-    );
+    const { plan } = await makeToolConsentPlan(root, { profile: "coding", allow: ["read"] });
     persistClawInstallRecord(plan, { env });
 
     const config = { agents: { list: [plan.agent.config] } };
@@ -300,16 +450,7 @@ describe("Claw tool policy consent provenance", () => {
     const root = tempDirs.make("openclaw-claw-full-tool-consent-");
     const env = stateEnv(root);
     vi.stubEnv("OPENCLAW_STATE_DIR", join(root, "state"));
-    const { plan } = await makeProvenancePlan(
-      root,
-      { schemaVersion: 1, agent: { id: "worker" } },
-      {
-        openClawProfile: {
-          schemaVersion: 1,
-          agent: { tools: { profile: "full", allow: ["read"] } },
-        },
-      },
-    );
+    const { plan } = await makeToolConsentPlan(root);
     persistClawInstallRecord(plan, { env });
     openOpenClawStateDatabase({ env })
       .db /* sqlite-allow-raw: test-only downgrade simulates a legacy unbounded full profile. */
@@ -348,25 +489,15 @@ describe("Claw tool policy consent provenance", () => {
     mkdirSync(validRoot);
     mkdirSync(invalidRoot);
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-    const { plan: validPlan } = await makeProvenancePlan(
+    const { plan: validPlan } = await makeToolConsentPlan(
       validRoot,
-      { schemaVersion: 1, agent: { id: "valid" } },
-      {
-        openClawProfile: {
-          schemaVersion: 1,
-          agent: { tools: { profile: "full", allow: ["read"] } },
-        },
-      },
+      { profile: "full", allow: ["read"] },
+      "valid",
     );
-    const { plan: invalidPlan } = await makeProvenancePlan(
+    const { plan: invalidPlan } = await makeToolConsentPlan(
       invalidRoot,
-      { schemaVersion: 1, agent: { id: "invalid" } },
-      {
-        openClawProfile: {
-          schemaVersion: 1,
-          agent: { tools: { profile: "full", allow: ["read"] } },
-        },
-      },
+      { profile: "full", allow: ["read"] },
+      "invalid",
     );
     persistClawInstallRecord(validPlan, { env });
     persistClawInstallRecord(invalidPlan, { env });
@@ -398,16 +529,7 @@ describe("Claw tool policy consent provenance", () => {
     const root = tempDirs.make("openclaw-claw-standalone-tool-consent-");
     const env = stateEnv(root);
     vi.stubEnv("OPENCLAW_STATE_DIR", join(root, "state"));
-    const { plan } = await makeProvenancePlan(
-      root,
-      { schemaVersion: 1, agent: { id: "worker" } },
-      {
-        openClawProfile: {
-          schemaVersion: 1,
-          agent: { tools: { allow: ["read"] } },
-        },
-      },
-    );
+    const { plan } = await makeToolConsentPlan(root, { allow: ["read"] });
     persistClawInstallRecord(plan, { env });
 
     const config = {

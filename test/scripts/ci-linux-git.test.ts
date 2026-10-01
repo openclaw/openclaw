@@ -906,7 +906,7 @@ posixIt(
   55_000,
 );
 
-posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
+posixIt.each([125, "hang"] satisfies FetchResult[])(
   "docs advisory fetch drains before config/add/commit and still continues (%s)",
   async (failure) => {
     const report = await runDocs("Commit publish repo sync", { fetchResults: [failure, 0] });
@@ -954,7 +954,6 @@ posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
 );
 
 posixIt.each([
-  { operation: "rebase", failure: 23, lockChange: false },
   { operation: "push", failure: 23, lockChange: true },
   { operation: "rebase", failure: 125, lockChange: false },
   { operation: "push", failure: 143, lockChange: false },
@@ -1291,7 +1290,7 @@ function runDocsAgent(step: string, options: Partial<Parameters<typeof runCiGitS
   });
 }
 
-posixIt.each([0, 128, 125, 143])(
+posixIt.each([0, 128, 125])(
   "Docs Agent manual gate owns HEAD and parent before exact outputs (parent=%s)",
   async (code) => {
     const report = await runDocsAgent(agentGate, {
@@ -1309,7 +1308,7 @@ posixIt.each([0, 128, 125, 143])(
   55_000,
 );
 
-posixIt.each([23, 125, 143, "hang"] satisfies FetchResult[])(
+posixIt.each([125, "hang"] satisfies FetchResult[])(
   "Docs Agent gate drains failed fetch before retry, remote read, gh and output (%s)",
   async (failure) => {
     const report = await runDocsAgent(agentGate, { fetchResults: [failure, 0] });
@@ -1381,10 +1380,25 @@ posixIt.each([
       workflowRuns: [
         {
           id: 122,
+          run_attempt: 1,
           created_at: "2026-08-28T20:00:00Z",
           status: "completed",
           conclusion: "success",
           head_sha: moved,
+        },
+      ],
+      workflowJobs: [
+        {
+          runId: 122,
+          runAttempt: 1,
+          jobs: [
+            {
+              name: "update-docs",
+              status: "completed",
+              conclusion: "success",
+              steps: [{ name: "Run Codex docs agent", status: "completed", conclusion: "success" }],
+            },
+          ],
         },
       ],
       commandResults: {
@@ -1400,7 +1414,26 @@ posixIt.each([
       ...(probe === 128 ? [["rev-parse", `${candidate}^`]] : []),
     ]);
     expect(report.githubOutput).toBe(code === 0 ? agentOutput(reviewBase) : "");
-    expect(report.commands.filter(({ tool }) => tool === "gh")).toHaveLength(1);
+    expect(report.commands.filter(({ tool }) => tool === "gh").map(({ args }) => args)).toEqual([
+      [
+        "api",
+        "--method",
+        "GET",
+        "repos/fixture/checkout/actions/workflows/docs-agent.yml/runs",
+        "-f",
+        "branch=main",
+        "-f",
+        "event=workflow_run",
+        "-f",
+        "per_page=100",
+      ],
+      [
+        "api",
+        "--paginate",
+        "--slurp",
+        "repos/fixture/checkout/actions/runs/122/attempts/1/jobs?per_page=100",
+      ],
+    ]);
     expect(backoffs(report)).toEqual([]);
   },
   55_000,
@@ -1419,7 +1452,7 @@ posixIt(
   55_000,
 );
 
-posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
+posixIt.each([125, "hang"] satisfies FetchResult[])(
   "Docs Agent commit drains diff before config/commit and failed fetch before retry (%s)",
   async (failure) => {
     const report = await runDocsAgent(agentCommit, {

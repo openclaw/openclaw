@@ -53,7 +53,8 @@ describe("compaction toolResult details stripping", () => {
   });
 
   it("does not pass toolResult.details into generateSummary", async () => {
-    const messages: AgentMessage[] = [makeAssistantToolCall(1), makeToolResultWithDetails(2)];
+    const assistant = makeAssistantToolCall(1);
+    const messages: AgentMessage[] = [structuredClone(assistant), makeToolResultWithDetails(2)];
 
     const summary = await summarizeInStages({
       parts: 1,
@@ -76,31 +77,7 @@ describe("compaction toolResult details stripping", () => {
       agentSessionMocks.generateSummary.mock.calls as unknown as Array<[AgentMessage[]]>
     )[0]?.[0];
     expect(chunk).toStrictEqual([
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "browser", arguments: { action: "tabs" } },
-        ],
-        api: "openai-responses",
-        model: "gpt-5.4",
-        provider: "openai",
-        stopReason: "toolUse",
-        timestamp: 1,
-        usage: {
-          cacheRead: 0,
-          cacheWrite: 0,
-          cost: {
-            cacheRead: 0,
-            cacheWrite: 0,
-            input: 0,
-            output: 0,
-            total: 0,
-          },
-          input: 0,
-          output: 0,
-          totalTokens: 0,
-        },
-      },
+      assistant,
       {
         role: "toolResult",
         toolCallId: "call_1",

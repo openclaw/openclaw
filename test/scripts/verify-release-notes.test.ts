@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   canonicalMainCommitMatches,
   canonicalPullRequests,
+  classifyUnavailableContextualReferences,
   collectReleaseProvenanceOverrides,
   contaminatingPullRequestReferences,
   contributionRecordTarget,
@@ -22,6 +23,7 @@ import {
   cumulativeShippedPullRequests,
   defaultGithubSnapshotPath,
   githubApiWithSnapshot,
+  githubNotFoundReferences,
   highlightCountError,
   isEligibleHandle,
   ledgerChecks,
@@ -165,6 +167,176 @@ describe("release-note verification", () => {
         ].join("\n"),
       }),
     ).toBe(target);
+  });
+
+  it("reports deleted contextual references without rendering or crediting them", () => {
+    const cwd = tempDirs.make("openclaw-release-notes-deleted-ref-");
+    git(cwd, ["init", "-q", "-b", "main"]);
+    writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
+    git(cwd, ["add", "CHANGELOG.md"]);
+    git(cwd, ["commit", "-qm", "chore: baseline"]);
+    const base = git(cwd, ["rev-parse", "HEAD"]);
+    git(cwd, [
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "fix: preserve release references (#156166)",
+      "-m",
+      "#155121 took a similar approach and was closed by its author.",
+    ]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const gh = join(cwd, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+const errors = [];
+const pullRequest = {
+  __typename: "PullRequest", number: 156166, title: "fix: preserve release references",
+  baseRefName: "main", mergedAt: "2026-01-01T00:00:00Z",
+  mergeCommit: { oid: ${JSON.stringify(target)} },
+  author: { __typename: "User", login: "contributor" },
+  closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } },
+};
+for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) {
+  data[alias] = { object: { associatedPullRequests: { nodes: [pullRequest], pageInfo: { hasNextPage: false } } } };
+}
+for (const [, alias] of query.matchAll(/(n\\d+): repository/g)) {
+  data[alias] = { issueOrPullRequest: alias === "n156166" ? pullRequest : null };
+  if (alias === "n155121") errors.push({ type: "NOT_FOUND", path: [alias, "issueOrPullRequest"], message: "Could not resolve ..." });
+}
+console.log(JSON.stringify({ data, errors }));
+process.exitCode = errors.length ? 1 : 0;
+`,
+    );
+    chmodSync(gh, 0o755);
+    splitChangelog({ rootDir: cwd });
+    const manifestPath = join(cwd, "manifest.json");
+    const result = spawnSync(
+      process.execPath,
+      [
+        verifier,
+        "--base",
+        base,
+        "--target",
+        target,
+        "--main-ref",
+        target,
+        "--version",
+        "2026.7.1",
+        "--manifest",
+        manifestPath,
+        "--write-ledger",
+        "--no-github-snapshot",
+        "--json",
+      ],
+      { cwd, encoding: "utf8", env: { ...process.env, PATH: `${cwd}:${process.env.PATH}` } },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("unavailable contextual references (GitHub NOT_FOUND): #155121\n");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.schemaVersion).toBe(3);
+    expect(manifest.unavailableReferences).toEqual([
+      { number: 155121, commits: [target.slice(0, 12)] },
+    ]);
+    expect(manifest.pullRequests).toMatchObject([{ number: 156166, thanks: ["contributor"] }]);
+    expect(manifest.pullRequests).toHaveLength(1);
+    expect(manifest.pullRequests[0].relatedReferences).toEqual([]);
+    expect(JSON.parse(result.stdout).source.references).toBe(1);
+    const record = readFileSync(join(cwd, "CHANGELOG/records/2026.7.1.md"), "utf8");
+    expect(record).toContain("**PR #156166** Thanks @contributor.");
+    expect(record).not.toContain("155121");
+  });
+
+  it("classifies unavailable body context with sorted references and unique commit SHAs", () => {
+    expect(
+      classifyUnavailableContextualReferences({
+        unresolved: [155121, 155120, 155119],
+        notFound: new Set([155120, 155121]),
+        activeCommits: [
+          {
+            hash: "b6b45244ab750".padEnd(40, "0"),
+            subject: "fix: preserve release references (#156166)",
+            body: "#155121 took a similar approach and was closed by its author. See #155121 and #155120.",
+          },
+          {
+            hash: "a".repeat(40),
+            subject: "fix: follow-up",
+            body: "Related discussion: #155121.",
+          },
+        ],
+        protectedReferences: new Set(),
+        highestResolved: 156166,
+      }),
+    ).toEqual({
+      unavailable: [
+        { number: 155120, commits: ["b6b45244ab75"] },
+        { number: 155121, commits: ["aaaaaaaaaaaa", "b6b45244ab75"] },
+      ],
+      stillUnresolved: [155119],
+    });
+  });
+
+  it.each([
+    { name: "subject PR suffix", subject: "fix: implementation (#155121)" },
+    { name: "closing reference", body: "Fixes #155121." },
+    { name: "closing reference list", body: "Resolves #12 and #155121." },
+    { name: "release-note prose/record or provenance", protectedReference: true },
+    { name: "other GraphQL error", errorType: "FORBIDDEN" },
+    { name: "missing node without an error", errorType: "" },
+    { name: "number above the resolved maximum", highestResolved: 155120 },
+    { name: "number equal to the resolved maximum", highestResolved: 155121 },
+    { name: "no resolved references", highestResolved: 0 },
+    { name: "no active body occurrence", body: "No contextual reference." },
+    { name: "subject reference in another active commit", otherSubject: "fix: #155121" },
+  ])("keeps $name unresolved despite contextual mentions", (scenario) => {
+    const number = 155121;
+    const response = {
+      data: { n155121: { issueOrPullRequest: null } },
+      errors:
+        scenario.errorType === ""
+          ? []
+          : [{ type: scenario.errorType ?? "NOT_FOUND", path: ["n155121", "issueOrPullRequest"] }],
+    };
+    expect(
+      classifyUnavailableContextualReferences({
+        unresolved: [number],
+        notFound: new Set(githubNotFoundReferences(response, [number])),
+        activeCommits: [
+          {
+            hash: "a".repeat(40),
+            subject: scenario.subject ?? "fix: implementation (#156166)",
+            body: scenario.body ?? "#155121 took a similar approach.",
+          },
+          { hash: "b".repeat(40), subject: scenario.otherSubject ?? "fix: follow-up", body: "" },
+        ],
+        protectedReferences: new Set(scenario.protectedReference ? [number] : []),
+        highestResolved: scenario.highestResolved ?? 156166,
+      }),
+    ).toEqual({ unavailable: [], stillUnresolved: [number] });
+  });
+
+  it.each([
+    { type: "NOT_FOUND", path: ["n155121", "issueOrPullRequest"], expected: [155121] },
+    { type: "FORBIDDEN", path: ["n155121", "issueOrPullRequest"], expected: [] },
+    { type: "not_found", path: ["n155121", "issueOrPullRequest"], expected: [] },
+    { type: "NOT_FOUND", path: ["n155122", "issueOrPullRequest"], expected: [] },
+    { type: "NOT_FOUND", path: ["n155121"], expected: [] },
+    { type: "NOT_FOUND", path: ["n155121", "issueOrPullRequest", "author"], expected: [] },
+    { type: "NOT_FOUND", path: ["n155121", "otherField"], expected: [] },
+    { type: "NOT_FOUND", path: undefined, expected: [] },
+  ])("captures only exact NOT_FOUND issue/PR paths: %j", ({ type, path, expected }) => {
+    expect(
+      githubNotFoundReferences(
+        {
+          data: { n155121: { issueOrPullRequest: null } },
+          errors: [{ type, path, message: "Could not resolve ..." }],
+        },
+        [155121],
+      ),
+    ).toEqual(expected);
+    expect(githubNotFoundReferences({ data: { n155121: null } }, [155121])).toEqual([]);
   });
 
   it("recovers a vanished PR only from an exact covered commit and prior record", () => {

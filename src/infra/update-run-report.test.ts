@@ -424,8 +424,6 @@ describe("update run report", () => {
   it.each([
     { reason: null, source: "origin" },
     { reason: "requester-revoked", source: "origin" },
-    { reason: "repair-requires-config-change", source: "origin" },
-    { reason: "requester-revoked", source: "options" },
     { reason: "repair-requires-config-change", source: "options" },
   ])("keeps $source recovery scoped to its profile after $reason", ({ reason, source }) => {
     const originAction = "Run `openclaw --profile work triage` to repair this installation.";

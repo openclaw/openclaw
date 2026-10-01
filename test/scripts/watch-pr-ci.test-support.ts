@@ -3,6 +3,7 @@ import { chmodSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 
 export const sha = "a".repeat(40);
 
@@ -14,6 +15,7 @@ export function runWatcher(
   envOverrides: NodeJS.ProcessEnv = {},
   notifierPath?: string,
 ) {
+  const nodeExecPath = requireNodeTool("node");
   return withTempDir("openclaw-watch-pr-ci-", async (binDir) => {
     const ghPath = join(binDir, "gh");
     writeFileSync(ghPath, ghScript);
@@ -45,7 +47,7 @@ if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/wa
     return await new Promise<{ status: number; stdout: string; stderr: string }>(
       (resolve, reject) => {
         execFile(
-          notifierPath ? "/bin/bash" : process.execPath,
+          notifierPath ? "/bin/bash" : nodeExecPath,
           [
             ...(notifierPath
               ? [
@@ -53,7 +55,7 @@ if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/wa
                   'exec 3>"$1"; shift; exec "$@"',
                   "watcher-notifier",
                   notifierPath,
-                  process.execPath,
+                  nodeExecPath,
                 ]
               : []),
             "scripts/watch-pr-ci.mjs",

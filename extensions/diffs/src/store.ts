@@ -1,4 +1,3 @@
-// Diffs plugin module implements store behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,13 +5,13 @@ import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
   PluginBlobStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import type { PluginLogger } from "../api.js";
 import {
   DIFF_ARTIFACT_ID_PATTERN,
   DIFF_ARTIFACT_TOKEN_PATTERN,
@@ -213,10 +212,6 @@ export class DiffArtifactStore {
     await fs.rm(this.artifactDir(id), { recursive: true, force: true }).catch(() => {});
   }
 
-  scheduleCleanup(): void {
-    this.maybeCleanupExpired();
-  }
-
   startCleanup(): void {
     this.cleanupStopped = false;
   }
@@ -332,7 +327,7 @@ export class DiffArtifactStore {
     await fs.rm(this.artifactDir(entry.key), { recursive: true, force: true }).catch(() => {});
   }
 
-  private maybeCleanupExpired(): void {
+  scheduleCleanup(): void {
     const now = Date.now();
     if (this.cleanupStopped || this.cleanupInFlight || now < this.nextCleanupAt) {
       return;

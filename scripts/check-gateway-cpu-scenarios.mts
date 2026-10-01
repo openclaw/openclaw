@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Runs gateway startup and QA scenarios while checking hot CPU observations.
 import {
   spawnSync as defaultSpawnSync,
   type SpawnSyncOptions,
@@ -179,92 +178,56 @@ function readJsonIfExists(filePath: string): unknown {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-function validateStartupReport(report: unknown): string | null {
+function parseStartupReport(report: unknown) {
   if (!isRecord(report)) {
-    return "startup report must be a JSON object";
+    throw new Error("startup report must be a JSON object");
   }
   if (!Array.isArray(report.results)) {
-    return "startup report missing results array";
+    throw new Error("startup report missing results array");
   }
   if (report.results.length === 0) {
-    return "startup report has no measured results";
+    throw new Error("startup report has no measured results");
   }
-  return null;
+  return report;
 }
 
-function readStartupReport(startupOutput: string) {
-  if (!fs.existsSync(startupOutput)) {
+function parseConcurrencyReport(report: unknown): ConcurrencyReport {
+  if (!isRecord(report)) {
+    throw new Error("concurrency report must be a JSON object");
+  }
+  if (report.mode !== "mock-streaming-agent") {
+    throw new Error("concurrency report has an unexpected mode");
+  }
+  if (!Array.isArray(report.runs) || report.runs.length === 0) {
+    throw new Error("concurrency report has no measured runs");
+  }
+  if (!isRecord(report.summary)) {
+    throw new Error("concurrency report missing summary");
+  }
+  return report as ConcurrencyReport;
+}
+
+function readBenchReport<T>(
+  output: string,
+  kind: "startup" | "concurrency",
+  parse: (report: unknown) => T,
+) {
+  if (!fs.existsSync(output)) {
     return {
-      diagnosticFailure: "startup-report-missing",
-      diagnosticDetail: `expected startup bench report at ${startupOutput}`,
+      diagnosticFailure: `${kind}-report-missing`,
+      diagnosticDetail: `expected ${kind} bench report at ${output}`,
       report: null,
     };
   }
   try {
-    const report = readJsonIfExists(startupOutput);
-    const invalidReason = validateStartupReport(report);
-    if (invalidReason) {
-      return {
-        diagnosticFailure: "startup-report-invalid",
-        diagnosticDetail: invalidReason,
-        report: null,
-      };
-    }
     return {
       diagnosticFailure: null,
       diagnosticDetail: null,
-      report,
+      report: parse(readJsonIfExists(output)),
     };
   } catch (error) {
     return {
-      diagnosticFailure: "startup-report-invalid",
-      diagnosticDetail: error instanceof Error ? error.message : String(error),
-      report: null,
-    };
-  }
-}
-
-function validateConcurrencyReport(report: unknown): string | null {
-  if (!isRecord(report)) {
-    return "concurrency report must be a JSON object";
-  }
-  if (report.mode !== "mock-streaming-agent") {
-    return "concurrency report has an unexpected mode";
-  }
-  if (!Array.isArray(report.runs) || report.runs.length === 0) {
-    return "concurrency report has no measured runs";
-  }
-  if (!isRecord(report.summary)) {
-    return "concurrency report missing summary";
-  }
-  return null;
-}
-
-function readConcurrencyReport(concurrencyOutput: string) {
-  if (!fs.existsSync(concurrencyOutput)) {
-    return {
-      diagnosticFailure: "concurrency-report-missing",
-      diagnosticDetail: `expected concurrency bench report at ${concurrencyOutput}`,
-      report: null,
-    };
-  }
-  try {
-    const report = readJsonIfExists(concurrencyOutput);
-    const invalidReason = validateConcurrencyReport(report);
-    return invalidReason
-      ? {
-          diagnosticFailure: "concurrency-report-invalid",
-          diagnosticDetail: invalidReason,
-          report: null,
-        }
-      : {
-          diagnosticFailure: null,
-          diagnosticDetail: null,
-          report: report as ConcurrencyReport,
-        };
-  } catch (error) {
-    return {
-      diagnosticFailure: "concurrency-report-invalid",
+      diagnosticFailure: `${kind}-report-invalid`,
       diagnosticDetail: error instanceof Error ? error.message : String(error),
       report: null,
     };
@@ -421,58 +384,49 @@ async function runGatewayCpuScenarios(
       params,
     );
     steps.push(startupBuild);
-    steps.push(
-      startupBuild.status === 0
-        ? runStep(
-            "startup bench",
-            process.execPath,
-            [
-              "--import",
-              "tsx",
-              "scripts/bench-gateway-startup.ts",
-              "--runs",
-              String(options.runs),
-              "--warmup",
-              String(options.warmup),
-              "--output",
-              startupOutput,
-              ...options.startupCases.flatMap((id) => ["--case", id]),
-            ],
-            { env: baseEnv },
-            params,
-          )
-        : { name: "startup bench", signal: null, status: 1 },
-    );
-    steps.push(
-      startupBuild.status === 0
-        ? runStep(
-            "concurrency bench",
-            process.execPath,
-            [
-              "--import",
-              "tsx",
-              "scripts/bench-gateway-concurrency.ts",
-              "--concurrency",
-              String(DEFAULT_GATEWAY_CONCURRENCY),
-              "--workspace-fanout",
-              // Post-fix readyz/sessions.list p100 is 1.3-2.6s across environments;
-              // 4s still catches the pre-fix 8s+ stalls and handshake timeouts.
-              "--max-control-ms",
-              "4000",
-              "--max-handshake-ms",
-              "2000",
-              "--runs",
-              String(options.runs),
-              "--warmup",
-              String(options.warmup),
-              "--output",
-              concurrencyOutput,
-            ],
-            { env: baseEnv },
-            params,
-          )
-        : { name: "concurrency bench", signal: null, status: 1 },
-    );
+    const runArgs = ["--runs", String(options.runs), "--warmup", String(options.warmup)];
+    for (const bench of [
+      {
+        name: "startup bench",
+        script: "scripts/bench-gateway-startup.ts",
+        args: [
+          ...runArgs,
+          "--output",
+          startupOutput,
+          ...options.startupCases.flatMap((id) => ["--case", id]),
+        ],
+      },
+      {
+        name: "concurrency bench",
+        script: "scripts/bench-gateway-concurrency.ts",
+        args: [
+          "--concurrency",
+          String(DEFAULT_GATEWAY_CONCURRENCY),
+          "--workspace-fanout",
+          // Post-fix readyz/sessions.list p100 is 1.3-2.6s across environments;
+          // 4s still catches the pre-fix 8s+ stalls and handshake timeouts.
+          "--max-control-ms",
+          "4000",
+          "--max-handshake-ms",
+          "2000",
+          ...runArgs,
+          "--output",
+          concurrencyOutput,
+        ],
+      },
+    ]) {
+      steps.push(
+        startupBuild.status === 0
+          ? runStep(
+              bench.name,
+              process.execPath,
+              ["--import", "tsx", bench.script, ...bench.args],
+              { env: baseEnv },
+              params,
+            )
+          : { name: bench.name, signal: null, status: 1 },
+      );
+    }
   }
 
   let privateQaBuildFailed = false;
@@ -528,7 +482,9 @@ async function runGatewayCpuScenarios(
     steps.push(qaStep);
   }
 
-  const startupReportResult = options.skipStartup ? null : readStartupReport(startupOutput);
+  const startupReportResult = options.skipStartup
+    ? null
+    : readBenchReport(startupOutput, "startup", parseStartupReport);
   const startupReportFailure =
     steps.find((step) => step.name === "startup bench")?.status === 0
       ? (startupReportResult?.diagnosticFailure ?? null)
@@ -536,7 +492,7 @@ async function runGatewayCpuScenarios(
   const startup = startupReportResult?.report ?? null;
   const concurrencyReportResult = options.skipStartup
     ? null
-    : readConcurrencyReport(concurrencyOutput);
+    : readBenchReport(concurrencyOutput, "concurrency", parseConcurrencyReport);
   const concurrencyReportFailure =
     steps.find((step) => step.name === "concurrency bench")?.status === 0
       ? (concurrencyReportResult?.diagnosticFailure ?? null)

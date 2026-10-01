@@ -45,23 +45,14 @@ final class CanvasManager {
 
         if !ensured.created {
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
-            controller.applyPreferredPlacement(placement)
-
-            // Existing session: only navigate when an explicit target was provided.
-            if let normalizedTarget {
-                controller.load(target: normalizedTarget)
-            }
-
-            self.refreshDebugStatus()
-            return controller.directoryPath
         }
-
-        controller.applyPreferredPlacement(placement)
-
-        // New session: default to the local document root.
-        controller.showCanvas(path: normalizedTarget ?? "/")
+        controller.preferredPlacement = placement
+        if ensured.created {
+            controller.showCanvas(path: normalizedTarget ?? "/")
+        } else if let normalizedTarget {
+            controller.load(target: normalizedTarget)
+        }
         self.refreshDebugStatus()
-
         return controller.directoryPath
     }
 
@@ -120,9 +111,6 @@ final class CanvasManager {
 
         if let controller = panelController, panelSessionKey == session {
             Self.logger.debug("ensureController reuse existing session=\(session, privacy: .public)")
-            controller.onVisibilityChanged = { [weak self] visible in
-                self?.onPanelVisibilityChanged?(visible)
-            }
             return (controller, false)
         }
 
@@ -135,7 +123,7 @@ final class CanvasManager {
         let controller = try CanvasWindowController(
             sessionKey: session,
             root: Self.canvasRoot,
-            presentation: .panel(anchorProvider: anchorProvider))
+            anchorProvider: anchorProvider)
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
         }

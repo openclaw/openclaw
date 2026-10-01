@@ -1,9 +1,6 @@
 import { Buffer } from "node:buffer";
-import {
-  asFiniteNumber,
-  normalizeOptionalString,
-  readStringField,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type CodexThreadItem, type JsonObject, type JsonValue } from "./protocol.js";
 
 const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX =
@@ -73,7 +70,7 @@ export function readCodexProviderRefusal(
     : undefined;
 }
 
-export function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
+function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
   return {
     provider: "openai",
     category: refusal.category,
@@ -83,10 +80,17 @@ export function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
   };
 }
 
-export { normalizeOptionalString as normalizeNonEmptyString };
-
-export function readNonEmptyString(record: JsonObject, key: string): string | undefined {
-  return normalizeOptionalString(record[key]);
+export function codexProviderRefusalDiagnostics(
+  refusal: CodexProviderRefusal | undefined,
+  timestamp: number,
+): Pick<AssistantMessage, "diagnostics"> {
+  return refusal
+    ? {
+        diagnostics: [
+          { type: "provider_refusal", timestamp, details: codexProviderRefusalDetails(refusal) },
+        ],
+      }
+    : {};
 }
 
 export function readNullableString(record: JsonObject, key: string): string | null | undefined {
@@ -95,11 +99,6 @@ export function readNullableString(record: JsonObject, key: string): string | nu
     return null;
   }
   return typeof value === "string" ? value : undefined;
-}
-
-export function readNonNegativeInteger(record: JsonObject, key: string): number | undefined {
-  const value = asFiniteNumber(record[key]);
-  return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 export function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
@@ -126,13 +125,6 @@ export function readHookOutputEntries(
   });
 }
 
-export function splitPlanText(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/^[-*]\s+/, ""))
-    .filter((line) => line.length > 0);
-}
-
 export function extractRawAssistantText(item: JsonObject): string | undefined {
   const content = Array.isArray(item.content) ? item.content : [];
   const parts = content.flatMap((entry) => {
@@ -147,11 +139,6 @@ export function extractRawAssistantText(item: JsonObject): string | undefined {
     return value === undefined ? [] : [value];
   });
   return parts.length > 0 ? parts.join("").trim() : undefined;
-}
-
-export function readItemString(item: CodexThreadItem, key: string): string | undefined {
-  const value = item[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 export function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {

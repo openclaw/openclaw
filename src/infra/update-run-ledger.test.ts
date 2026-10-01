@@ -4,6 +4,7 @@ import {
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -489,6 +490,41 @@ describe("update run ledger", () => {
     },
   );
 
+  it.each(["running", "terminal"] as const)(
+    "keeps phase capture synchronous and isolated for a %s row",
+    (state) => {
+      const options = isolatedOptions();
+      const created = createUpdateRun({ trigger: "cli", target: { kind: "git" } }, options);
+      const before =
+        state === "terminal"
+          ? finishUpdateRun(created.runId, { status: "failed", reason: "fixture" }, options)
+          : created;
+      let captured: UpdateRunRecord | undefined;
+      const result = recordUpdateRunPhase(
+        created.runId,
+        "staging",
+        { target: { sha: "abcdef1234567890" } },
+        options,
+        (record) => {
+          expect(record).toEqual(before);
+          captured = record;
+          record.target.kind = "package";
+          record.phase = "finished";
+        },
+      );
+      expect(captured).toBeDefined();
+      if (state === "terminal") {
+        expect(result).toEqual(before);
+      } else {
+        expect(result).toMatchObject({
+          phase: "staging",
+          target: { kind: "git", sha: "abcdef1234567890" },
+        });
+      }
+      expect(getUpdateRun(created.runId, options)).toEqual(result);
+    },
+  );
+
   it("keeps phase order and merges repeated steps while preserving terminal outcomes and later boot facts", () => {
     const options = isolatedOptions();
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -674,47 +710,6 @@ describe("update run ledger", () => {
     }
     expect(recordUpdateRunPhase(run.runId, "verifying", {}, options).phase).toBe("verifying");
   });
-
-  it.each([
-    { name: "step count", count: 130, detail: undefined },
-    { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
-    { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512) },
-  ])(
-    "retains notice custody, restoration proof, and finalization history across the $name bound and database reopen",
-    ({ count, detail }) => {
-      const options = isolatedOptions();
-      const run = createUpdateRun({ trigger: "chat" }, options);
-      const notices = [
-        "notice:ack",
-        "notice:activating",
-        "notice:verifying",
-        "previous generation restoration",
-        "finalize:doctor",
-        "finalize:future-phase",
-        // Candidate Doctor's predecessor-stop receipt: identity lives in the key.
-        "finalize:predecessor-stop:1758600000000:1000:631:0123456789abcdef",
-        "post-update verification",
-      ];
-      for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
-        recordUpdateRunStep(run.runId, { step, status: "completed", detail }, options);
-      }
-      for (let index = 0; index < count; index++) {
-        recordUpdateRunStep(
-          run.runId,
-          { step: `diagnostic-${index}`, status: "completed", detail },
-          options,
-        );
-      }
-      closeOpenClawStateDatabaseForTest();
-      const persisted = getUpdateRun(run.runId, options)!;
-      expect(persisted.steps.map((step) => step.step)).toEqual(
-        expect.arrayContaining([...UPDATE_RUN_PHASES, ...notices]),
-      );
-      expect(persisted.steps.every((step) => step.status === "completed")).toBe(true);
-      expect(persisted.steps.length).toBeLessThanOrEqual(128);
-      expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
-    },
-  );
 
   it.each(["bytes", "count"] as const)(
     "rejects oversized retained step %s without changing the row",
@@ -919,7 +914,9 @@ describe("update run ledger", () => {
     }
   });
 
-  it("merges independent CLI and gateway process writes into the same WAL run", async () => {
+  it("merges independent CLI and gateway process writes into the same WAL run", async ({
+    signal,
+  }) => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli" }, options);
     const database = openOpenClawStateDatabase(options);
@@ -969,22 +966,20 @@ describe("update run ledger", () => {
       );
       return { child, ready, written, exited };
     });
-    const deadline = setTimeout(() => {
-      for (const { child } of children) {
-        child.kill();
-      }
-    }, 20_000);
     try {
       const allWritten = Promise.all(children.map(({ written }) => written));
-      await Promise.race([Promise.all(children.map(({ ready }) => ready)), allWritten]);
+      await withinTest(
+        Promise.race([Promise.all(children.map(({ ready }) => ready)), allWritten]),
+        signal,
+      );
       for (const { child } of children) {
         child.send("start");
       }
-      await allWritten;
+      await withinTest(allWritten, signal);
       // Writes stay concurrent; handle retirement must not race another lifecycle writer.
       for (const { child, exited } of children) {
         child.send("close");
-        await exited;
+        await withinTest(exited, signal);
       }
       const persisted = getUpdateRun(run.runId, options);
       const expected = ["cli", "gateway"].flatMap((role) =>
@@ -1011,7 +1006,6 @@ describe("update run ledger", () => {
       } satisfies Partial<UpdateRunRecord>);
       expect(persisted?.confirmedAtMs).toEqual(expect.any(Number));
     } finally {
-      clearTimeout(deadline);
       for (const { child } of children) {
         if (child.exitCode === null) {
           child.kill();

@@ -9,10 +9,10 @@ import {
   type WorkerProviderPreparedIntent,
 } from "./preparation-identity.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
+import type { createWorkerProviderIntent } from "./provider-intent.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
-import type { RepositoryWorkerProjectSnapshot } from "./workspace-git-base.js";
 
 const DEFAULT_READY_WORKERS = 1;
 const DEFAULT_MAX_TOTAL = 4;
@@ -24,17 +24,9 @@ type PoolOptions = {
   resolveProvider: (providerId: string) => WorkerProvider | undefined;
   prepareIntent: (
     profileId: string,
-    options: {
-      projectPath?: string;
-      projectCommit?: string;
-      projectRepository?: RepositoryWorkerProjectSnapshot;
-      runSetupScript?: boolean;
-      machineClass?: string;
-      os?: string;
-      executionMode?: "worker-turn" | "remote-exec";
-      setupAuthorized?: boolean;
-      signal?: AbortSignal;
-    },
+    options: NonNullable<
+      Parameters<ReturnType<typeof createWorkerProviderIntent>["prepareIntent"]>[1]
+    >,
   ) => Promise<WorkerProviderPreparedIntent>;
   assertIntentCurrent: (profileId: string, intent: WorkerProviderPreparedIntent) => void;
   prepareRetention: (

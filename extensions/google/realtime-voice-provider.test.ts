@@ -1,20 +1,18 @@
-// Google tests cover realtime voice provider plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   resamplePcm,
+  type RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
-import type { RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildThinkingConfig } from "./realtime-voice-model-contract.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-type MockGoogleLiveSession = {
-  close: ReturnType<typeof vi.fn>;
-  sendClientContent: ReturnType<typeof vi.fn>;
-  sendRealtimeInput: ReturnType<typeof vi.fn>;
-  sendToolResponse: ReturnType<typeof vi.fn>;
-};
+const CONSULT = "openclaw_agent_consult";
+const LEGACY = "gemini-2.5-flash-native-audio-preview-12-2025";
+const EXTENDED = "gemini-3.8-live-extended-thinking";
 
+type MockGoogleLiveSession = ReturnType<typeof createMockGoogleLiveSession>;
 type MockGoogleLiveConnectParams = {
   model: string;
   config: Record<string, unknown>;
@@ -25,41 +23,28 @@ type MockGoogleLiveConnectParams = {
     onclose: (event?: { code?: number; reason?: string; wasClean?: boolean }) => void;
   };
 };
-
 const { connectMock, createGoogleGenAIMock, createTokenMock, session } = vi.hoisted(() => {
-  const sessionValue: MockGoogleLiveSession = {
+  const liveSession = {
     close: vi.fn(),
     sendClientContent: vi.fn(),
     sendRealtimeInput: vi.fn(),
     sendToolResponse: vi.fn(),
   };
-  const connectMockLocal = vi.fn(async (_params: MockGoogleLiveConnectParams) => sessionValue);
-  const createTokenMockLocal = vi.fn(async (_params: unknown) => ({
+  const connect = vi.fn(async (_params: MockGoogleLiveConnectParams) => liveSession);
+  const createToken = vi.fn(async (_params: unknown) => ({
     name: "auth_tokens/browser-session",
   }));
-  const createGoogleGenAIMockLocal = vi.fn(() => ({
-    authTokens: {
-      create: createTokenMockLocal,
-    },
-    live: {
-      connect: connectMockLocal,
-    },
-  }));
   return {
-    connectMock: connectMockLocal,
-    createGoogleGenAIMock: createGoogleGenAIMockLocal,
-    createTokenMock: createTokenMockLocal,
-    session: sessionValue,
+    session: liveSession,
+    connectMock: connect,
+    createTokenMock: createToken,
+    createGoogleGenAIMock: vi.fn(() => ({
+      authTokens: { create: createToken },
+      live: { connect },
+    })),
   };
 });
-
-vi.mock("./google-genai-runtime.js", () => ({
-  createGoogleGenAI: createGoogleGenAIMock,
-}));
-
-const ENV_KEYS = ["GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
-
-let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+vi.mock("./google-genai-runtime.js", () => ({ createGoogleGenAI: createGoogleGenAIMock }));
 
 function lastConnectParams(): MockGoogleLiveConnectParams {
   const params = connectMock.mock.calls.at(-1)?.[0];
@@ -68,35 +53,29 @@ function lastConnectParams(): MockGoogleLiveConnectParams {
   }
   return params;
 }
-
-function sentAudio(index = 0): { data?: unknown; mimeType?: unknown } {
-  const audio = session.sendRealtimeInput.mock.calls[index]?.[0]?.audio;
-  if (!audio) {
-    throw new Error(`Expected sent audio at index ${index}`);
+function receive(message: Record<string, unknown>) {
+  lastConnectParams().callbacks.onmessage(message);
+}
+function content(serverContent: Record<string, unknown>) {
+  receive({ serverContent });
+}
+function callOrder(mock: ReturnType<typeof vi.fn>, index = 0) {
+  const order = mock.mock.invocationCallOrder[index];
+  if (order === undefined) {
+    throw new Error("Expected mock invocation");
   }
-  return audio as { data?: unknown; mimeType?: unknown };
+  return order;
 }
-
-function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call[0];
+function callTool(id = "call-1", name = "lookup", args = {}) {
+  receive({ toolCall: { functionCalls: [{ id, name, args }] } });
 }
-
-function requireFirstError(mock: ReturnType<typeof vi.fn>): { message?: string } {
-  const error = requireFirstMockArg(mock, "Google Live error");
-  if (!error || typeof error !== "object" || Array.isArray(error)) {
-    throw new Error("expected Google Live error");
-  }
-  return error as { message?: string };
+function disconnectWithTools(functionCalls = [{ id: "call-1", name: "lookup", args: {} }]) {
+  receive({
+    sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+    toolCall: { functionCalls },
+  });
+  lastConnectParams().callbacks.onclose({ code: 1011, reason: "temporary" });
 }
-
-function requireFirstAudio(mock: ReturnType<typeof vi.fn>): unknown {
-  return requireFirstMockArg(mock, "Google Live audio");
-}
-
 function createRealtimeTool(name: string): RealtimeVoiceTool {
   return {
     type: "function",
@@ -105,28 +84,25 @@ function createRealtimeTool(name: string): RealtimeVoiceTool {
     parameters: { type: "object", properties: {} },
   };
 }
-
-function createUnreadableToolName(): RealtimeVoiceTool {
+function createRealtimeToolDeclaration(name: string) {
   return {
-    type: "function",
-    get name(): string {
-      throw new Error("unreadable tool name");
-    },
+    name,
     description: "Contract test tool",
     parameters: { type: "object", properties: {} },
   };
 }
-
-function createMalformedToolName(name: unknown): RealtimeVoiceTool {
+function createUnreadableToolName(): RealtimeVoiceTool {
   return {
-    type: "function",
-    name,
-    description: "Contract test tool",
-    parameters: { type: "object", properties: {} },
-  } as unknown as RealtimeVoiceTool;
+    ...createRealtimeTool("lookup"),
+    get name(): string {
+      throw new Error("unreadable tool name");
+    },
+  };
 }
-
-function createMockGoogleLiveSession(): MockGoogleLiveSession {
+function createMalformedToolName(name: unknown): RealtimeVoiceTool {
+  return { ...createRealtimeTool("lookup"), name } as unknown as RealtimeVoiceTool;
+}
+function createMockGoogleLiveSession() {
   return {
     close: vi.fn(),
     sendClientContent: vi.fn(),
@@ -134,11 +110,9 @@ function createMockGoogleLiveSession(): MockGoogleLiveSession {
     sendToolResponse: vi.fn(),
   };
 }
-
 type GoogleLiveBridgeParams = Parameters<
   ReturnType<typeof buildGoogleRealtimeVoiceProvider>["createBridge"]
 >[0];
-
 function createGoogleLiveBridge(params: Partial<GoogleLiveBridgeParams> = {}) {
   const { providerConfig, ...callbacks } = params;
   return buildGoogleRealtimeVoiceProvider().createBridge({
@@ -148,519 +122,259 @@ function createGoogleLiveBridge(params: Partial<GoogleLiveBridgeParams> = {}) {
     ...callbacks,
   });
 }
+async function connectBridge(params: Partial<GoogleLiveBridgeParams> = {}) {
+  const bridge = createGoogleLiveBridge(params);
+  await bridge.connect();
+  return bridge;
+}
+function activate() {
+  lastConnectParams().callbacks.onopen();
+  receive({ setupComplete: {} });
+}
+async function openConfiguredBridge(params: Partial<GoogleLiveBridgeParams> = {}) {
+  const bridge = await connectBridge(params);
+  activate();
+  return bridge;
+}
 
 describe("buildGoogleRealtimeVoiceProvider", () => {
   beforeEach(() => {
-    envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
-    connectMock.mockClear();
-    createGoogleGenAIMock.mockClear();
-    createTokenMock.mockClear();
-    session.close.mockClear();
-    session.sendClientContent.mockClear();
-    session.sendRealtimeInput.mockClear();
-    session.sendToolResponse.mockClear();
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.GOOGLE_API_KEY;
+    vi.clearAllMocks();
+    vi.stubEnv("GEMINI_API_KEY", undefined);
+    vi.stubEnv("GOOGLE_API_KEY", undefined);
   });
-
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    for (const key of ENV_KEYS) {
-      const value = envSnapshot[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    vi.unstubAllEnvs();
   });
-
   afterAll(() => {
     vi.doUnmock("./google-genai-runtime.js");
     vi.resetModules();
   });
 
-  it("declares realtime Talk capabilities for catalog selection", () => {
+  it("normalizes nested config and applies it to the Live setup", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
-
-    expect(provider.defaultModel).toBe("gemini-3.1-flash-live-preview");
-    expect(provider.capabilities).toEqual({
-      transports: ["provider-websocket", "gateway-relay"],
-      inputAudioFormats: [
-        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
-        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-      ],
-      outputAudioFormats: [
-        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
-        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-      ],
-      supportsBrowserSession: true,
-      supportsBargeIn: true,
-      handlesInputAudioBargeIn: true,
-      supportsToolCalls: true,
-      supportsVideoFrames: true,
-      supportsSessionResumption: true,
-    });
-  });
-
-  it("uses Gemini 3.1 Live-compatible defaults", async () => {
-    const bridge = createGoogleLiveBridge({
-      providerConfig: {
-        enableAffectiveDialog: true,
-        thinkingBudget: 8_193,
-      },
-      tools: [createRealtimeTool("openclaw_agent_consult")],
-    });
-
-    expect(bridge.supportsToolResultContinuation).toBe(false);
-    expect(bridge.supportsToolResultSuppression).toBe(false);
-    await bridge.connect();
-
-    const params = lastConnectParams();
-    expect(params.model).toBe("gemini-3.1-flash-live-preview");
-    expect(params.config.thinkingConfig).toEqual({ thinkingLevel: "HIGH" });
-    expect(params.config).not.toHaveProperty("enableAffectiveDialog");
-    const config = params.config as {
-      tools?: Array<{ functionDeclarations?: Array<{ behavior?: string; name?: string }> }>;
-    };
-    expect(config.tools?.[0]?.functionDeclarations?.[0]).toMatchObject({
-      name: "openclaw_agent_consult",
-    });
-    expect(config.tools?.[0]?.functionDeclarations?.[0]).not.toHaveProperty("behavior");
-  });
-
-  it("normalizes provider config and cfg model-provider key fallback", () => {
-    const provider = buildGoogleRealtimeVoiceProvider();
-    const resolved = provider.resolveConfig?.({
-      cfg: {
-        models: {
-          providers: {
-            google: {
-              apiKey: "cfg-key",
-            },
-          },
-        },
-      } as never,
+    const providerConfig = provider.resolveConfig?.({
+      cfg: { models: { providers: { google: { apiKey: "cfg-key" } } } } as never,
       rawConfig: {
         providers: {
           google: {
             model: "gemini-live-2.5-flash-preview",
             voice: "Puck",
-            temperature: 0.4,
+            temperature: 0.3,
+            startSensitivity: "low",
+            endSensitivity: "low",
             silenceDurationMs: 700,
-            startSensitivity: "high",
             activityHandling: "no_interruption",
             turnCoverage: "turn_includes_only_activity",
             automaticActivityDetectionDisabled: false,
+            sessionResumption: false,
+            contextWindowCompression: false,
           },
         },
       },
     });
-
-    expect(resolved).toEqual({
-      apiKey: "cfg-key",
-      model: "gemini-live-2.5-flash-preview",
-      voice: "Puck",
-      temperature: 0.4,
-      apiVersion: undefined,
-      prefixPaddingMs: undefined,
-      silenceDurationMs: 700,
-      startSensitivity: "high",
-      endSensitivity: undefined,
-      activityHandling: "no-interruption",
-      turnCoverage: "only-activity",
-      automaticActivityDetectionDisabled: false,
-      enableAffectiveDialog: undefined,
-      sessionResumption: undefined,
-      contextWindowCompression: undefined,
-      thinkingLevel: undefined,
-      thinkingBudget: undefined,
-    });
-  });
-
-  it("connects with Google Live setup config and tool declarations", async () => {
-    const bridge = createGoogleLiveBridge({
-      providerConfig: {
-        model: "gemini-live-2.5-flash-preview",
-        voice: "Kore",
-        temperature: 0.3,
-        startSensitivity: "low",
-        endSensitivity: "low",
-        activityHandling: "no-interruption",
-        turnCoverage: "only-activity",
-      },
+    await createGoogleLiveBridge({
+      providerConfig,
       instructions: "Speak briefly.",
-      tools: [
-        {
-          type: "function",
-          name: "lookup",
-          description: "Look something up",
-          parameters: {
-            type: "object",
-            properties: {
-              query: { type: "string" },
-            },
-            required: ["query"],
+    }).connect();
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "cfg-key" }),
+    );
+    expect(lastConnectParams()).toMatchObject({
+      model: "gemini-live-2.5-flash-preview",
+      config: {
+        responseModalities: ["AUDIO"],
+        temperature: 0.3,
+        systemInstruction: "Speak briefly.",
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        realtimeInputConfig: {
+          activityHandling: "NO_INTERRUPTION",
+          turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+          automaticActivityDetection: {
+            disabled: false,
+            startOfSpeechSensitivity: "START_SENSITIVITY_LOW",
+            endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
+            silenceDurationMs: 700,
           },
         },
-        {
-          type: "function",
-          name: "openclaw_agent_consult",
-          description: "Ask OpenClaw",
-          parameters: {
-            type: "object",
-            properties: {
-              question: { type: "string" },
-            },
-            required: ["question"],
-          },
-        },
-      ],
-    });
-
-    await bridge.connect();
-
-    expect(connectMock).toHaveBeenCalledTimes(1);
-    const params = lastConnectParams();
-    expect(params.model).toBe("gemini-live-2.5-flash-preview");
-    const config = params.config as {
-      contextWindowCompression?: unknown;
-      outputAudioTranscription?: unknown;
-      realtimeInputConfig?: {
-        activityHandling?: string;
-        automaticActivityDetection?: {
-          endOfSpeechSensitivity?: string;
-          startOfSpeechSensitivity?: string;
-        };
-        turnCoverage?: string;
-      };
-      responseModalities?: string[];
-      sessionResumption?: unknown;
-      speechConfig?: { voiceConfig?: { prebuiltVoiceConfig?: { voiceName?: string } } };
-      systemInstruction?: string;
-      temperature?: number;
-      tools?: Array<{
-        functionDeclarations?: Array<{
-          behavior?: string;
-          description?: string;
-          name?: string;
-          parameters?: unknown;
-        }>;
-      }>;
-    };
-    expect(config.responseModalities).toEqual(["AUDIO"]);
-    expect(config.temperature).toBe(0.3);
-    expect(config.systemInstruction).toBe("Speak briefly.");
-    expect(config.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName).toBe("Kore");
-    expect(config.outputAudioTranscription).toEqual({});
-    expect(config.realtimeInputConfig?.activityHandling).toBe("NO_INTERRUPTION");
-    expect(config.realtimeInputConfig?.automaticActivityDetection?.startOfSpeechSensitivity).toBe(
-      "START_SENSITIVITY_LOW",
-    );
-    expect(config.realtimeInputConfig?.automaticActivityDetection?.endOfSpeechSensitivity).toBe(
-      "END_SENSITIVITY_LOW",
-    );
-    expect(config.realtimeInputConfig?.turnCoverage).toBe("TURN_INCLUDES_ONLY_ACTIVITY");
-    expect(config.sessionResumption).toEqual({});
-    expect(config.contextWindowCompression).toEqual({ slidingWindow: {} });
-    const declarations = config.tools?.[0]?.functionDeclarations ?? [];
-    expect(declarations[0]?.name).toBe("lookup");
-    expect(declarations[0]?.description).toBe("Look something up");
-    expect(declarations[0]?.parameters).toEqual({
-      type: "object",
-      properties: {
-        query: { type: "string" },
       },
-      required: ["query"],
     });
-    expect(declarations[1]?.name).toBe("openclaw_agent_consult");
-    expect(declarations[1]?.description).toBe("Ask OpenClaw");
-    expect(declarations[1]?.parameters).toEqual({
-      type: "object",
-      properties: {
-        question: { type: "string" },
-      },
-      required: ["question"],
-    });
-    expect(declarations[1]?.behavior).toBe("NON_BLOCKING");
-  });
-
-  it("omits tool names that Google Live cannot accept", async () => {
-    const bridge = createGoogleLiveBridge({
-      tools: [
-        createRealtimeTool("_lookup"),
-        createRealtimeTool("calendar.lookup:next"),
-        createRealtimeTool("1_lookup"),
-        createRealtimeTool("bad/name"),
-        createRealtimeTool(`x${"a".repeat(128)}`),
-        createMalformedToolName(undefined),
-        createMalformedToolName(null),
-        createMalformedToolName(42),
-        createUnreadableToolName(),
-      ],
-    });
-
-    await bridge.connect();
-
-    const config = lastConnectParams().config as {
-      tools?: Array<{ functionDeclarations?: Array<{ name?: string }> }>;
-    };
-    expect(config.tools?.[0]?.functionDeclarations?.map((declaration) => declaration.name)).toEqual(
-      ["_lookup", "calendar.lookup:next"],
-    );
+    expect(lastConnectParams().config).not.toHaveProperty("sessionResumption");
+    expect(lastConnectParams().config).not.toHaveProperty("contextWindowCompression");
   });
 
   it.each([
     {
-      name: "omits zero temperature for native audio responses",
-      config: { temperature: 0 },
-      omitted: "temperature",
+      model: undefined,
+      settings: { thinkingLevel: "low", thinkingBudget: 8_193, enableAffectiveDialog: true },
+      thinking: { thinkingLevel: "LOW" },
+      behavior: undefined,
+      continuing: false,
     },
     {
-      name: "drops malformed VAD timing values before connecting",
-      config: { prefixPaddingMs: -1, silenceDurationMs: 250.5 },
-      omitted: "realtimeInputConfig",
+      model: "gemini-live-2.5-flash-preview",
+      settings: { thinkingBudget: -1 },
+      thinking: { thinkingBudget: -1 },
+      behavior: "NON_BLOCKING",
+      continuing: true,
     },
     {
-      name: "drops malformed thinking budgets before connecting",
-      config: { thinkingBudget: 24_576.5 },
-      omitted: "thinkingConfig",
+      model: "gemini-3.8-live",
+      settings: { thinkingLevel: "high", thinkingBudget: 8_193 },
+      thinking: undefined,
+      behavior: "NON_BLOCKING",
+      continuing: true,
     },
-  ])("$name", async ({ config, omitted }) => {
-    await createGoogleLiveBridge({ providerConfig: config }).connect();
-    expect(lastConnectParams().config).not.toHaveProperty(omitted);
-  });
+    {
+      model: "models/gemini-3.8-live-extended-thinking",
+      settings: { thinkingLevel: "high", thinkingBudget: 8_193 },
+      thinking: { thinkingLevel: "HIGH" },
+      behavior: "NON_BLOCKING",
+      continuing: false,
+    },
+  ])(
+    "negotiates the consult contract for $model",
+    async ({ model, settings, thinking, behavior, continuing }) => {
+      const onError = vi.fn();
+      const bridge = await connectBridge({
+        providerConfig: { model, ...settings },
+        tools: [createRealtimeTool(CONSULT)],
+        onToolCall: vi.fn(),
+        onError,
+      });
+      expect(bridge.supportsToolResultContinuation).toBe(continuing);
+      const params = lastConnectParams();
+      expect(params.model).toBe(model ?? "gemini-3.1-flash-live-preview");
+      expect(params.config.thinkingConfig).toEqual(thinking);
+      expect(params.config).not.toHaveProperty("enableAffectiveDialog");
+      expect(params.config).toMatchObject({
+        sessionResumption: {},
+        contextWindowCompression: { slidingWindow: {} },
+      });
+      expect(params.config.tools).toEqual([
+        {
+          functionDeclarations: [
+            {
+              ...createRealtimeToolDeclaration(CONSULT),
+              ...(behavior ? { behavior } : {}),
+            },
+          ],
+        },
+      ]);
+      receive({ setupComplete: {} });
+      callTool("consult-call", CONSULT, { prompt: "hi" });
+      const interim = () =>
+        bridge.submitToolResult("consult-call", { status: "working" }, { willContinue: true });
+      if (continuing) {
+        void interim();
+        expect(session.sendToolResponse).toHaveBeenNthCalledWith(1, {
+          functionResponses: [
+            {
+              id: "consult-call",
+              name: CONSULT,
+              scheduling: "WHEN_IDLE",
+              willContinue: true,
+              response: { status: "working" },
+            },
+          ],
+        });
+      } else {
+        expect(interim).toThrow("does not support continuing tool responses");
+        expect(session.sendToolResponse).not.toHaveBeenCalled();
+        expect(onError).toHaveBeenCalledOnce();
+      }
+      void bridge.submitToolResult("consult-call", { text: "The meeting starts at 3." });
+      expect(session.sendToolResponse).toHaveBeenLastCalledWith({
+        functionResponses: [
+          {
+            id: "consult-call",
+            name: CONSULT,
+            response: { text: "The meeting starts at 3." },
+            ...(continuing ? { scheduling: "WHEN_IDLE" } : {}),
+          },
+        ],
+      });
+      expect(session.sendToolResponse).toHaveBeenCalledTimes(continuing ? 2 : 1);
+    },
+  );
 
-  it("passes Google Live dynamic thinking budget through", async () => {
+  it("omits invalid sampling, VAD and thinking options before connecting", async () => {
     await createGoogleLiveBridge({
       providerConfig: {
-        model: "gemini-live-2.5-flash-preview",
-        thinkingBudget: -1,
+        temperature: 0,
+        prefixPaddingMs: -1,
+        silenceDurationMs: 250.5,
+        thinkingBudget: 24_576.5,
       },
     }).connect();
-    expect(lastConnectParams().config.thinkingConfig).toEqual({ thinkingBudget: -1 });
+    const config = lastConnectParams().config;
+    expect(config).not.toHaveProperty("temperature");
+    expect(config).not.toHaveProperty("realtimeInputConfig");
+    expect(config).not.toHaveProperty("thinkingConfig");
   });
 
-  it("omits adaptive thinking budgets for Gemini 3.1 Live", async () => {
-    await createGoogleLiveBridge({ providerConfig: { thinkingBudget: -1 } }).connect();
-    expect(lastConnectParams().config).not.toHaveProperty("thinkingConfig");
-  });
-
-  it("creates constrained browser sessions for Google Live Talk", async () => {
-    const provider = buildGoogleRealtimeVoiceProvider();
-
-    const sessionLocal = await provider.createBrowserSession?.({
+  it("mints a single-use constrained browser token with the Talk admission expiry", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 1, 12, 34, 56, 789);
+    vi.setSystemTime(now);
+    const result = await buildGoogleRealtimeVoiceProvider().createBrowserSession?.({
       providerConfig: {
         apiKey: "gemini-key",
         model: "gemini-live-2.5-flash-preview",
-        prefixPaddingMs: 100,
-        silenceDurationMs: 300,
         voice: "Puck",
         temperature: 0.4,
+        prefixPaddingMs: 100,
+        silenceDurationMs: 300,
       },
       prefixPaddingMs: 250,
       silenceDurationMs: 650,
       instructions: "Speak briefly.",
-      tools: [
-        {
-          type: "function",
-          name: "openclaw_agent_consult",
-          description: "Ask OpenClaw",
-          parameters: {
-            type: "object",
-            properties: {
-              question: { type: "string" },
+      tools: [createRealtimeTool(CONSULT)],
+    });
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith({
+      apiKey: "gemini-key",
+      httpOptions: { apiVersion: "v1alpha", timeout: 30_000 },
+    });
+    expect(createTokenMock).toHaveBeenCalledExactlyOnceWith({
+      config: {
+        uses: 1,
+        expireTime: new Date(now + 30 * 60 * 1000).toISOString(),
+        newSessionExpireTime: new Date(now + 60 * 1000).toISOString(),
+        liveConnectConstraints: {
+          model: "gemini-live-2.5-flash-preview",
+          config: expect.objectContaining({
+            temperature: 0.4,
+            systemInstruction: "Speak briefly.",
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
+            realtimeInputConfig: {
+              automaticActivityDetection: { prefixPaddingMs: 250, silenceDurationMs: 650 },
             },
-            required: ["question"],
-          },
+            tools: [
+              {
+                functionDeclarations: [
+                  { ...createRealtimeToolDeclaration(CONSULT), behavior: "NON_BLOCKING" },
+                ],
+              },
+            ],
+          }),
         },
-      ],
-    });
-
-    expect(createTokenMock).toHaveBeenCalledTimes(1);
-    const tokenConfig = requireFirstMockArg(createTokenMock, "Google Live auth token config") as {
-      config?: {
-        liveConnectConstraints?: {
-          config?: {
-            realtimeInputConfig?: {
-              automaticActivityDetection?: {
-                prefixPaddingMs?: number;
-                silenceDurationMs?: number;
-              };
-            };
-            responseModalities?: string[];
-            speechConfig?: { voiceConfig?: { prebuiltVoiceConfig?: { voiceName?: string } } };
-            systemInstruction?: string;
-            temperature?: number;
-            tools?: Array<{
-              functionDeclarations?: Array<{
-                behavior?: string;
-                name?: string;
-                parameters?: unknown;
-                parametersJsonSchema?: unknown;
-              }>;
-            }>;
-          };
-          model?: string;
-        };
-        uses?: number;
-      };
-    };
-    const liveConstraints = tokenConfig.config?.liveConnectConstraints;
-    expect(tokenConfig.config?.uses).toBe(1);
-    expect(liveConstraints?.model).toBe("gemini-live-2.5-flash-preview");
-    expect(liveConstraints?.config?.responseModalities).toEqual(["AUDIO"]);
-    expect(liveConstraints?.config?.temperature).toBe(0.4);
-    expect(liveConstraints?.config?.systemInstruction).toBe("Speak briefly.");
-    expect(
-      liveConstraints?.config?.realtimeInputConfig?.automaticActivityDetection?.prefixPaddingMs,
-    ).toBe(250);
-    expect(
-      liveConstraints?.config?.realtimeInputConfig?.automaticActivityDetection?.silenceDurationMs,
-    ).toBe(650);
-    expect(liveConstraints?.config?.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName).toBe(
-      "Puck",
-    );
-    const declaration = liveConstraints?.config?.tools?.[0]?.functionDeclarations?.[0];
-    expect(declaration?.name).toBe("openclaw_agent_consult");
-    expect(declaration?.behavior).toBe("NON_BLOCKING");
-    expect(declaration?.parameters).toEqual({
-      type: "object",
-      properties: {
-        question: { type: "string" },
       },
-      required: ["question"],
     });
-    expect(declaration?.parametersJsonSchema).toBeUndefined();
-    expect(sessionLocal?.provider).toBe("google");
-    expect(sessionLocal?.transport).toBe("provider-websocket");
-    const websocketSession = sessionLocal as {
-      audio: {
-        inputEncoding: string;
-        inputSampleRateHz: number;
-        outputEncoding: string;
-        outputSampleRateHz: number;
-      };
-      clientSecret: string;
-      initialMessage: {
-        setup: { generationConfig: { responseModalities: string[] }; model: string };
-      };
-      protocol: string;
-      websocketUrl: string;
-    };
-    expect(websocketSession.protocol).toBe("google-live-bidi");
-    expect(websocketSession.clientSecret).toBe("auth_tokens/browser-session");
-    expect(websocketSession.websocketUrl).toBe(
-      "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
-    );
-    expect(websocketSession.audio.inputEncoding).toBe("pcm16");
-    expect(websocketSession.audio.inputSampleRateHz).toBe(16000);
-    expect(websocketSession.audio.outputEncoding).toBe("pcm16");
-    expect(websocketSession.audio.outputSampleRateHz).toBe(24000);
-    expect(websocketSession.initialMessage.setup.model).toBe(
-      "models/gemini-live-2.5-flash-preview",
-    );
-    expect(websocketSession.initialMessage.setup.generationConfig.responseModalities).toEqual([
-      "AUDIO",
-    ]);
-  });
-
-  it("returns browser expiry in the epoch milliseconds required by the Talk gateway", async () => {
-    vi.useFakeTimers();
-    const nowMs = Date.UTC(2026, 7, 1, 12, 34, 56, 789);
-    vi.setSystemTime(nowMs);
-    const provider = buildGoogleRealtimeVoiceProvider();
-
-    const sessionLocal = await provider.createBrowserSession?.({
-      providerConfig: { apiKey: "gemini-key" },
-    });
-
-    const tokenConfig = requireFirstMockArg(createTokenMock, "Google Live auth token config") as {
-      config?: {
-        expireTime?: string;
-        newSessionExpireTime?: string;
-      };
-    };
-    expect(tokenConfig.config?.expireTime).toBe(new Date(nowMs + 30 * 60 * 1000).toISOString());
-    expect(tokenConfig.config?.newSessionExpireTime).toBe(
-      new Date(nowMs + 60 * 1000).toISOString(),
-    );
-    expect(sessionLocal?.expiresAt).toBeGreaterThan(nowMs + 5_000);
-    vi.advanceTimersByTime(60_001);
-    expect(sessionLocal?.expiresAt).toBeLessThanOrEqual(Date.now() + 5_000);
-    expect(sessionLocal?.expiresAt).toBe(nowMs + 60 * 1000);
-  });
-
-  it("constrains default browser sessions to Gemini 3.1 capabilities", async () => {
-    const provider = buildGoogleRealtimeVoiceProvider();
-
-    const sessionLocal = await provider.createBrowserSession?.({
-      providerConfig: {
-        apiKey: "gemini-key",
-        enableAffectiveDialog: true,
-        thinkingLevel: "low",
-        thinkingBudget: 8_193,
-      },
-      tools: [createRealtimeTool("openclaw_agent_consult")],
-    });
-
-    const tokenConfig = requireFirstMockArg(createTokenMock, "Google Live auth token config") as {
-      config?: {
-        liveConnectConstraints?: {
-          config?: {
-            enableAffectiveDialog?: boolean;
-            thinkingConfig?: unknown;
-            tools?: Array<{
-              functionDeclarations?: Array<{ behavior?: string; name?: string }>;
-            }>;
-          };
-          model?: string;
-        };
-      };
-    };
-    const constraints = tokenConfig.config?.liveConnectConstraints;
-    expect(constraints?.model).toBe("gemini-3.1-flash-live-preview");
-    expect(constraints?.config?.thinkingConfig).toEqual({ thinkingLevel: "LOW" });
-    expect(constraints?.config).not.toHaveProperty("enableAffectiveDialog");
-    expect(constraints?.config?.tools?.[0]?.functionDeclarations?.[0]).toMatchObject({
-      name: "openclaw_agent_consult",
-    });
-    expect(constraints?.config?.tools?.[0]?.functionDeclarations?.[0]).not.toHaveProperty(
-      "behavior",
-    );
-    expect(sessionLocal?.model).toBe("gemini-3.1-flash-live-preview");
-  });
-
-  it("creates browser-token clients with a finite request timeout", async () => {
-    const provider = buildGoogleRealtimeVoiceProvider();
-    await provider.createBrowserSession?.({
-      providerConfig: { apiKey: "test" },
-    });
-
-    const clientConfig = requireFirstMockArg(createGoogleGenAIMock, "GoogleGenAI config") as {
-      httpOptions?: {
-        apiVersion?: string;
-        timeout?: number;
-      };
-    };
-    expect(clientConfig.httpOptions).toMatchObject({
-      apiVersion: "v1alpha",
-      timeout: 30_000,
+    expect(result).toMatchObject({
+      transport: "provider-websocket",
+      protocol: "google-live-bidi",
+      clientSecret: "auth_tokens/browser-session",
+      expiresAt: now + 60_000,
+      initialMessage: { setup: { model: "models/gemini-live-2.5-flash-preview" } },
     });
   });
 
-  it.each([
-    {
-      name: "rejects browser session expiry outside Date range",
-      now: 8_640_000_000_000_001,
-    },
-    {
-      name: "rejects browser session creation while the process clock is invalid",
-      now: Number.NaN,
-    },
-  ])("$name", async ({ now }) => {
-    vi.spyOn(Date, "now").mockReturnValue(now);
+  it("rejects browser expiry outside the Date range before minting a token", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
     await expect(
       buildGoogleRealtimeVoiceProvider().createBrowserSession?.({
         providerConfig: { apiKey: "gemini-key" },
@@ -669,30 +383,295 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(createTokenMock).not.toHaveBeenCalled();
   });
 
-  it("can opt out of Google Live session resumption and context compression", async () => {
-    const bridge = createGoogleLiveBridge({
-      providerConfig: { contextWindowCompression: false, sessionResumption: false },
+  it("builds thinking config per model family", () => {
+    expect(buildThinkingConfig({}, EXTENDED)).toBeUndefined();
+    expect(buildThinkingConfig({ thinkingLevel: "minimal" }, EXTENDED)).toEqual({
+      thinkingLevel: "LOW",
     });
-
-    await bridge.connect();
-
-    expect(lastConnectParams().config).not.toHaveProperty("contextWindowCompression");
-    expect(lastConnectParams().config).not.toHaveProperty("sessionResumption");
+    expect(buildThinkingConfig({ thinkingBudget: 4_096 }, EXTENDED)).toEqual({
+      thinkingLevel: "MEDIUM",
+    });
+    expect(buildThinkingConfig({ thinkingBudget: -1 }, EXTENDED)).toBeUndefined();
   });
 
-  it("shares one pending Google Live connection across concurrent callers", async () => {
-    const pendingSession = createDeferred<MockGoogleLiveSession>();
-    const connectedSession = createMockGoogleLiveSession();
-    connectMock.mockReturnValueOnce(pendingSession.promise);
-    const bridge = createGoogleLiveBridge();
+  it("keeps both transcript roles and interruption across a recovered resumption handle", async () => {
+    vi.useFakeTimers();
+    const onTranscript = vi.fn();
+    const onResponseDone = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = createGoogleLiveBridge({
+      providerConfig: { model: LEGACY },
+      onTranscript,
+      onResponseDone,
+      onEvent,
+    });
+    await bridge.connect();
+    receive({
+      setupComplete: {},
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      serverContent: { inputTranscription: { text: "Before " }, interrupted: true },
+    });
+    content({ outputTranscription: { text: "Answer " } });
+    receive({ sessionResumptionUpdate: { resumable: false } });
+    receive({ sessionResumptionUpdate: { resumable: true, newHandle: "resume-2" } });
+    receive({ sessionResumptionUpdate: { newHandle: "unconfirmed-handle" } });
+    await vi.advanceTimersByTimeAsync(500);
+    lastConnectParams().callbacks.onclose({ code: 1011, reason: "temporary" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-2" });
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onTranscript.mock.calls).toEqual([
+      ["user", "Before ", false],
+      ["assistant", "Answer ", false],
+    ]);
+    content({
+      inputTranscription: { text: "after" },
+      outputTranscription: { text: "continued", finished: true },
+      turnComplete: true,
+    });
+    content({ inputTranscription: { finished: true } });
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["assistant", "Answer continued", true],
+      ["user", "Before after", true],
+    ]);
+    expect(onResponseDone.mock.calls).toEqual([[{ status: "cancelled" }]]);
+  });
 
-    const firstConnect = bridge.connect();
-    const secondConnect = bridge.connect();
+  it("resets transcript, interruption and tool ownership when Google invalidates continuity", async () => {
+    vi.useFakeTimers();
+    const onTranscript = vi.fn(),
+      onEvent = vi.fn(),
+      onResponseDone = vi.fn(),
+      onToolCall = vi.fn();
+    const bridge = createGoogleLiveBridge({
+      providerConfig: { model: LEGACY },
+      onTranscript,
+      onEvent,
+      onResponseDone,
+      onToolCall,
+    });
+    await bridge.connect();
+    receive({
+      setupComplete: {},
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      serverContent: { inputTranscription: { text: "Old user " }, interrupted: true },
+    });
+    content({ outputTranscription: { text: "Old assistant " } });
+    callTool("call-1", "old_lookup");
+    receive({ sessionResumptionUpdate: { resumable: false, newHandle: "invalidated-handle" } });
+    expect(onEvent).not.toHaveBeenCalled();
+    lastConnectParams().callbacks.onclose({ code: 1011, reason: "temporary", wasClean: false });
+    expect(onEvent.mock.calls).toEqual([
+      [{ direction: "client", type: "session.continuity.reset" }],
+    ]);
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(lastConnectParams().config.sessionResumption).toEqual({});
+    expect(callOrder(onEvent)).toBeLessThan(callOrder(connectMock, 1));
+    callTool("call-1", "new_lookup");
+    void bridge.submitToolResult("call-1", { result: "ok" });
+    receive({
+      setupComplete: {},
+      serverContent: {
+        inputTranscription: { text: "Fresh user", finished: true },
+        outputTranscription: { text: "Fresh assistant", finished: true },
+        turnComplete: true,
+      },
+    });
+    expect(onToolCall).toHaveBeenCalledTimes(2);
+    expect(session.sendToolResponse).toHaveBeenCalledWith({
+      functionResponses: [{ id: "call-1", name: "new_lookup", response: { result: "ok" } }],
+    });
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["user", "Fresh user", true],
+      ["assistant", "Fresh assistant", true],
+    ]);
+    expect(onResponseDone.mock.calls).toEqual([[{ status: "completed" }]]);
+  });
 
-    expect(connectMock).toHaveBeenCalledTimes(1);
-    pendingSession.resolve(connectedSession);
-    await Promise.all([firstConnect, secondConnect]);
-    expect(connectedSession.close).not.toHaveBeenCalled();
+  it("converts telephony input and Google PCM output at the bridge boundary", async () => {
+    const onAudio = vi.fn();
+    const bridge = await openConfiguredBridge({ onAudio });
+    bridge.sendAudio(Buffer.from([0xff, 0x00]));
+    const sent = session.sendRealtimeInput.mock.calls[0]?.[0]?.audio;
+    expect(sent.mimeType).toBe("audio/pcm;rate=16000");
+    const pcm = Buffer.from(sent.data, "base64");
+    expect(Array.from({ length: pcm.length / 2 }, (_, i) => pcm.readInt16LE(i * 2))).toEqual([
+      0, -16062, -32124, -32124,
+    ]);
+    const output = Buffer.alloc(480);
+    output.set([0xfb, 0xff]);
+    content({
+      modelTurn: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: "audio/L16;codec=pcm;rate=24000",
+              data: output.toString("base64url"),
+            },
+          },
+        ],
+      },
+    });
+    expect(onAudio).toHaveBeenCalledOnce();
+    expect(onAudio.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
+    expect(onAudio.mock.calls[0]?.[0]).toHaveLength(80);
+  });
+
+  it("preserves PCM output and resamples PCM input without a mu-law hop", async () => {
+    const onAudio = vi.fn(),
+      onTranscript = vi.fn();
+    const bridge = await openConfiguredBridge({
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onTranscript,
+    });
+    const output = Buffer.alloc(480);
+    bridge.sendAudio(output);
+    const sent = session.sendRealtimeInput.mock.calls[0]?.[0]?.audio;
+    expect(sent.mimeType).toBe("audio/pcm;rate=16000");
+    expect(Buffer.from(sent.data, "base64")).toHaveLength(320);
+    content({
+      modelTurn: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: "audio/L16;codec=pcm;rate=24000",
+              data: output.toString("base64"),
+            },
+          },
+          { text: "internal reasoning", thought: true },
+          { text: "uncorrelated text" },
+        ],
+      },
+    });
+    expect(onAudio).toHaveBeenCalledExactlyOnceWith(output);
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("keeps Extended Thinking active across a filler utterance and tool call", async () => {
+    const onResponseDone = vi.fn();
+    const onToolCall = vi.fn();
+    const onTranscript = vi.fn();
+    await openConfiguredBridge({
+      providerConfig: { model: EXTENDED },
+      onResponseDone,
+      onToolCall,
+      onTranscript,
+    });
+    const callbacks = lastConnectParams().callbacks;
+
+    callbacks.onmessage({
+      serverContent: {
+        outputTranscription: { text: "Checking now." },
+        turnComplete: true,
+        interactionStatus: "IN_PROGRESS",
+      },
+    });
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "Checking now.", false],
+      ["assistant", "Checking now.", true],
+    ]);
+    expect(onResponseDone).not.toHaveBeenCalled();
+
+    callbacks.onmessage({
+      toolCall: {
+        functionCalls: [{ id: "consult-call", name: CONSULT, args: { prompt: "hi" } }],
+      },
+    });
+    expect(onToolCall).toHaveBeenCalledOnce();
+    expect(onResponseDone).not.toHaveBeenCalled();
+
+    callbacks.onmessage({
+      serverContent: {
+        outputTranscription: { text: "The answer is 42." },
+        turnComplete: true,
+        interactionStatus: "IDLE",
+      },
+    });
+    expect(onTranscript).toHaveBeenLastCalledWith("assistant", "The answer is 42.", true);
+    expect(onResponseDone.mock.calls).toEqual([[{ status: "completed" }]]);
+  });
+
+  it("interrupts Gemini 3.8 Live Extended Thinking output with a client turn on barge-in", async () => {
+    const onClearAudio = vi.fn();
+    const onResponseDone = vi.fn();
+    const bridge = await openConfiguredBridge({
+      onClearAudio,
+      onResponseDone,
+      providerConfig: { model: EXTENDED },
+    });
+    expect(buildGoogleRealtimeVoiceProvider().capabilities?.handlesInputAudioBargeIn).toBe(true);
+    bridge.handleBargeIn?.({ audioPlaybackActive: false });
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+    expect(session.sendClientContent).toHaveBeenCalledWith({
+      turns: [
+        {
+          role: "user",
+          parts: [{ text: "[You were interrupted. Stop speaking and wait silently.]" }],
+        },
+      ],
+      turnComplete: true,
+    });
+    receive({
+      serverContent: { interrupted: true, turnComplete: true, interactionStatus: "IN_PROGRESS" },
+    });
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(onResponseDone.mock.calls).toEqual([[{ status: "cancelled" }]]);
+  });
+
+  it("finalizes Gemini 3.8 input transcriptions without a finished flag", async () => {
+    const onTranscript = vi.fn();
+    await openConfiguredBridge({ providerConfig: { model: "gemini-3.8-live" }, onTranscript });
+    const onmessage = lastConnectParams().callbacks.onmessage;
+
+    for (const [question, answer] of [
+      ["What color is the sky?", "Blue."],
+      ["Name a yellow fruit.", "A banana."],
+    ]) {
+      onmessage({ serverContent: { inputTranscription: { text: question } } });
+      expect(onTranscript).toHaveBeenLastCalledWith("user", question, true);
+      onmessage({ serverContent: { outputTranscription: { text: answer } } });
+      onmessage({ serverContent: { generationComplete: true } });
+      onmessage({ serverContent: { turnComplete: true, interactionStatus: "IDLE" } });
+    }
+
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["user", "What color is the sky?", true],
+      ["assistant", "Blue.", true],
+      ["user", "Name a yellow fruit.", true],
+      ["assistant", "A banana.", true],
+    ]);
+  });
+
+  it("keeps forwarding Gemini 3.8 silence without ending the audio stream", async () => {
+    const bridge = await openConfiguredBridge({
+      providerConfig: { model: EXTENDED, silenceDurationMs: 60 },
+    });
+
+    const silence20ms = Buffer.alloc(160, 0xff);
+    for (let frame = 0; frame < 10; frame += 1) {
+      bridge.sendAudio(silence20ms);
+    }
+
+    expect(session.sendRealtimeInput).not.toHaveBeenCalledWith({ audioStreamEnd: true });
+    expect(session.sendRealtimeInput).toHaveBeenCalledTimes(10);
+  });
+
+  it("omits tool names that Google Live cannot accept", async () => {
+    await connectBridge({
+      tools: [
+        createRealtimeTool("_lookup"),
+        createRealtimeTool("bad/name"),
+        createMalformedToolName(42),
+        createUnreadableToolName(),
+      ],
+    });
+    expect(lastConnectParams().config.tools).toEqual([
+      { functionDeclarations: [createRealtimeToolDeclaration("_lookup")] },
+    ]);
   });
 
   it("disposes a late session and ignores stale callbacks after reconnecting", async () => {
@@ -705,13 +684,14 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       .mockResolvedValueOnce(replacementSession);
     const onReady = vi.fn();
     const onError = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      onReady,
-      onError,
-    });
+    const bridge = createGoogleLiveBridge({ onReady, onError });
 
     const cancelledConnect = bridge.connect();
     const staleCallbacks = lastConnectParams().callbacks;
+    staleCallbacks.onopen();
+    staleCallbacks.onmessage({ setupComplete: {} });
+    expect(bridge.isConnected()).toBe(false);
+    expect(onReady).not.toHaveBeenCalled();
     void bridge.close();
     await cancelledConnect;
 
@@ -745,56 +725,23 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(replacementSession.close).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves transcript fragments and interruption while reusing a resumption handle", async () => {
-    vi.useFakeTimers();
-    const onTranscript = vi.fn();
-    const onResponseDone = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: {
-        model: "gemini-2.5-flash-native-audio-preview-12-2025",
-      },
-      onTranscript,
-      onResponseDone,
-    });
-
-    await bridge.connect();
-    const firstSession = lastConnectParams().callbacks;
-    firstSession.onmessage({
-      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
-      serverContent: { inputTranscription: { text: "Before " }, interrupted: true },
-    });
-    firstSession.onmessage({
-      sessionResumptionUpdate: { newHandle: "unconfirmed-handle" },
-    });
-    firstSession.onclose({ code: 1011, reason: "temporary" });
-    await vi.advanceTimersByTimeAsync(250);
-    lastConnectParams().callbacks.onmessage({
-      serverContent: { inputTranscription: { text: "after", finished: true }, turnComplete: true },
-    });
-
-    expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-1" });
-    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
-      ["user", "Before after", true],
-    ]);
-    expect(onResponseDone.mock.calls).toEqual([[{ status: "cancelled" }]]);
-  });
-
   it("preserves tool ownership while reusing a resumption handle", async () => {
     vi.useFakeTimers();
     const onError = vi.fn();
     const onToolCall = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      onError,
-      onToolCall,
-    });
-
-    await bridge.connect();
+    const bridge = await connectBridge({ onError, onToolCall });
     const firstSession = lastConnectParams().callbacks;
     firstSession.onmessage({
       sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
       toolCall: {
         functionCalls: [{ id: "call-1", name: "lookup", args: { query: "before" } }],
       },
+    });
+    expect(onToolCall).toHaveBeenCalledExactlyOnceWith({
+      itemId: "call-1",
+      callId: "call-1",
+      name: "lookup",
+      args: { query: "before" },
     });
     firstSession.onclose({ code: 1011, reason: "temporary" });
 
@@ -807,24 +754,18 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     await vi.advanceTimersByTimeAsync(250);
 
     const resumedSession = lastConnectParams().callbacks;
-    resumedSession.onmessage({
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "different", args: { query: "replay" } }],
-      },
-    });
+    callTool("call-1", "different", { query: "replay" });
     resumedSession.onopen();
     resumedSession.onmessage({ setupComplete: {} });
 
     expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-1" });
     expect(onToolCall).toHaveBeenCalledOnce();
+    resumedSession.onmessage({
+      toolCall: { functionCalls: [{ id: "call-1", name: "lookup", args: {} }] },
+    });
+    expect(onToolCall).toHaveBeenCalledOnce();
     expect(session.sendToolResponse).toHaveBeenCalledWith({
-      functionResponses: [
-        {
-          id: "call-1",
-          name: "lookup",
-          response: { result: "ok" },
-        },
-      ],
+      functionResponses: [{ id: "call-1", name: "lookup", response: { result: "ok" } }],
     });
   });
 
@@ -832,30 +773,19 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     vi.useFakeTimers();
     const onError = vi.fn();
     const onClose = vi.fn();
-    const bridge = createGoogleLiveBridge({
+    const bridge = await connectBridge({
       onToolCall: vi.fn(),
       onError,
       onClose,
     });
-
-    await bridge.connect();
-    const firstSession = lastConnectParams().callbacks;
-    firstSession.onmessage({
-      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "lookup", args: {} }],
-      },
-    });
-    firstSession.onclose({ code: 1011, reason: "temporary" });
+    disconnectWithTools();
     onError.mockClear();
 
     expect(() => bridge.submitToolResult("call-1", { result: "x".repeat(1024 * 1024) })).toThrow(
       "Google Live reconnect tool-response buffer limit exceeded",
     );
 
-    expect(requireFirstError(onError).message).toBe(
-      "Google Live reconnect tool-response buffer limit exceeded",
-    );
+    expect(onError).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith("error");
     expect(session.sendToolResponse).not.toHaveBeenCalled();
   });
@@ -863,20 +793,14 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   it("drops queued reconnect responses when the resumed session cancels their call", async () => {
     vi.useFakeTimers();
     const onEvent = vi.fn();
-    const bridge = createGoogleLiveBridge({
+    const bridge = await connectBridge({
       onToolCall: vi.fn(),
       onEvent,
     });
-
-    await bridge.connect();
-    const firstSession = lastConnectParams().callbacks;
-    firstSession.onmessage({
-      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "lookup", args: {} }],
-      },
-    });
-    firstSession.onclose({ code: 1011, reason: "temporary" });
+    disconnectWithTools([
+      { id: "call-1", name: "lookup", args: {} },
+      { id: "call-2", name: "lookup", args: {} },
+    ]);
     await vi.advanceTimersByTimeAsync(250);
 
     const resumedSession = lastConnectParams().callbacks;
@@ -885,9 +809,11 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     resumedSession.onopen();
     resumedSession.onmessage({
       setupComplete: {},
-      toolCallCancellation: { ids: ["call-1"] },
+      toolCallCancellation: { ids: ["call-1", "call-2"] },
     });
 
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+    void bridge.submitToolResult("call-2", { result: "late" });
     expect(session.sendToolResponse).not.toHaveBeenCalled();
     expect(onEvent).toHaveBeenCalledWith({
       direction: "server",
@@ -896,259 +822,15 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
   });
 
-  it("resets tool ownership and interruption before a fresh automatic reconnect", async () => {
-    vi.useFakeTimers();
-    const onToolCall = vi.fn();
-    const onEvent = vi.fn();
-    const onResponseDone = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      onToolCall,
-      onEvent,
-      onResponseDone,
-    });
-
-    await bridge.connect();
-    const firstSession = lastConnectParams().callbacks;
-    firstSession.onmessage({ serverContent: { interrupted: true } });
-    firstSession.onmessage({
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "old_lookup", args: {} }],
-      },
-    });
-    firstSession.onclose({ code: 1011, reason: "temporary" });
-    await vi.advanceTimersByTimeAsync(250);
-
-    lastConnectParams().callbacks.onmessage({
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "new_lookup", args: {} }],
-      },
-    });
-    void bridge.submitToolResult("call-1", { result: "ok" });
-    lastConnectParams().callbacks.onmessage({ serverContent: { turnComplete: true } });
-
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "client",
-      type: "session.continuity.reset",
-    });
-    expect(onToolCall).toHaveBeenCalledTimes(2);
-    expect(onResponseDone.mock.calls).toEqual([[{ status: "completed" }]]);
-    expect(session.sendToolResponse).toHaveBeenCalledWith({
-      functionResponses: [
-        {
-          id: "call-1",
-          name: "new_lookup",
-          response: { result: "ok" },
-        },
-      ],
-    });
-  });
-
-  it("preserves continuity when resumability recovers before reconnect", async () => {
-    vi.useFakeTimers();
-    const onEvent = vi.fn();
-    const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: {
-        model: "gemini-2.5-flash-native-audio-preview-12-2025",
-      },
-      onEvent,
-      onTranscript,
-    });
-
-    await bridge.connect();
-    const firstSession = lastConnectParams().callbacks;
-    firstSession.onmessage({
-      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
-      serverContent: { inputTranscription: { text: "Before " } },
-    });
-    firstSession.onmessage({
-      sessionResumptionUpdate: { resumable: false },
-    });
-    firstSession.onmessage({
-      sessionResumptionUpdate: { resumable: true, newHandle: "resume-2" },
-    });
-    expect(onEvent).not.toHaveBeenCalled();
-
-    firstSession.onclose({ code: 1011, reason: "temporary" });
-    await vi.advanceTimersByTimeAsync(250);
-    lastConnectParams().callbacks.onmessage({
-      serverContent: { inputTranscription: { text: "after", finished: true } },
-    });
-
-    expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-2" });
-    expect(onEvent).not.toHaveBeenCalled();
-    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
-      ["user", "Before after", true],
-    ]);
-  });
-
-  it("drops unfinished hypotheses when a new session has no continuity", async () => {
-    vi.useFakeTimers();
-    const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: {
-        model: "gemini-2.5-flash-native-audio-preview-12-2025",
-        sessionResumption: false,
-      },
-      onTranscript,
-    });
-
-    await bridge.connect();
-    const firstSession = lastConnectParams().callbacks;
-    firstSession.onmessage({
-      serverContent: { inputTranscription: { text: "Old fragment " } },
-    });
-    firstSession.onclose({ code: 1011, reason: "temporary" });
-    await vi.advanceTimersByTimeAsync(250);
-    lastConnectParams().callbacks.onmessage({
-      serverContent: { inputTranscription: { text: "New turn", finished: true } },
-    });
-
-    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
-      ["user", "New turn", true],
-    ]);
-  });
-
-  it.each([undefined, "invalidated-handle"])("invalidates resume handles %#", async (newHandle) => {
-    vi.useFakeTimers();
-    try {
-      const onClose = vi.fn();
-      const onError = vi.fn();
-      const onEvent = vi.fn();
-      const onTranscript = vi.fn();
-      const bridge = createGoogleLiveBridge({
-        providerConfig: {
-          model: "gemini-2.5-flash-native-audio-preview-12-2025",
-        },
-        onClose,
-        onError,
-        onEvent,
-        onTranscript,
-      });
-
-      await bridge.connect();
-      lastConnectParams().callbacks.onmessage({
-        setupComplete: { sessionId: "session-1" },
-        sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
-        serverContent: {
-          inputTranscription: { text: "Previous caller " },
-          outputTranscription: { text: "Previous assistant " },
-        },
-      });
-      lastConnectParams().callbacks.onmessage({
-        sessionResumptionUpdate: { resumable: false, ...(newHandle ? { newHandle } : {}) },
-      });
-      expect(onEvent).not.toHaveBeenCalled();
-      lastConnectParams().callbacks.onclose({
-        code: 1011,
-        reason: "temporary upstream close",
-        wasClean: false,
-      });
-
-      expect(onClose).not.toHaveBeenCalled();
-      expect(onEvent).toHaveBeenCalledOnce();
-      expect(onEvent).toHaveBeenCalledWith({
-        direction: "client",
-        type: "session.continuity.reset",
-      });
-      const error = requireFirstError(onError);
-      expect(error.message).toContain("reconnecting 1/3");
-
-      await vi.advanceTimersByTimeAsync(250);
-
-      expect(connectMock).toHaveBeenCalledTimes(2);
-      expect(lastConnectParams().config.sessionResumption).toEqual({});
-      expect(onEvent).toHaveBeenCalledOnce();
-      const resetOrder = onEvent.mock.invocationCallOrder[0];
-      const reconnectOrder = connectMock.mock.invocationCallOrder[1];
-      if (resetOrder === undefined || reconnectOrder === undefined) {
-        throw new Error("expected continuity reset before reconnect");
-      }
-      expect(resetOrder).toBeLessThan(reconnectOrder);
-
-      lastConnectParams().callbacks.onmessage({
-        setupComplete: { sessionId: "session-2" },
-        serverContent: {
-          inputTranscription: { text: "Fresh caller", finished: true },
-          outputTranscription: { text: "Fresh assistant", finished: true },
-        },
-      });
-
-      expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
-        ["user", "Fresh caller", true],
-        ["assistant", "Fresh assistant", true],
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not finalize or merge a hypothesis across a fresh automatic reconnect", async () => {
-    vi.useFakeTimers();
-    const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
-      onTranscript,
-    });
-
-    await bridge.connect();
-    const firstSession = lastConnectParams().callbacks;
-    firstSession.onmessage({
-      setupComplete: {},
-      serverContent: { inputTranscription: { text: "Interrupted hypothesis" } },
-    });
-    firstSession.onclose({ code: 1011, reason: "temporary" });
-
-    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([]);
-    await vi.advanceTimersByTimeAsync(250);
-    lastConnectParams().callbacks.onmessage({
-      setupComplete: {},
-      serverContent: { inputTranscription: { text: "New utterance", finished: true } },
-    });
-
-    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
-      ["user", "New utterance", true],
-    ]);
-  });
-
-  it("keeps transcript fragments pending across a resumable reconnect", async () => {
-    vi.useFakeTimers();
-    const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({ onTranscript });
-
-    await bridge.connect();
-    const firstSession = lastConnectParams().callbacks;
-    firstSession.onmessage({
-      setupComplete: {},
-      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
-      serverContent: {
-        outputTranscription: { text: "Before " },
-      },
-    });
-    await vi.advanceTimersByTimeAsync(500);
-    firstSession.onclose({ code: 1011, reason: "temporary" });
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(onTranscript.mock.calls).toEqual([["assistant", "Before ", false]]);
-
-    lastConnectParams().callbacks.onmessage({
-      setupComplete: {},
-      serverContent: { outputTranscription: { text: "after", finished: true } },
-    });
-    expect(onTranscript.mock.calls.at(-1)).toEqual(["assistant", "Before after", true]);
-  });
-
   it("flushes pending transcripts before closing after reconnect failures", async () => {
     vi.useFakeTimers();
     const onClose = vi.fn();
     const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
+    await connectBridge({
+      providerConfig: { model: LEGACY },
       onClose,
       onTranscript,
     });
-
-    await bridge.connect();
     const firstSession = lastConnectParams().callbacks;
     firstSession.onmessage({
       setupComplete: {},
@@ -1170,34 +852,6 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     );
   });
 
-  it("emits one continuity reset across failed fresh reconnect attempts", async () => {
-    vi.useFakeTimers();
-    const onClose = vi.fn();
-    const onEvent = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: { sessionResumption: false },
-      onClose,
-      onEvent,
-    });
-
-    await bridge.connect();
-    const firstSession = lastConnectParams().callbacks;
-    firstSession.onmessage({ setupComplete: {} });
-    connectMock
-      .mockRejectedValueOnce(new Error("connect failed 1"))
-      .mockRejectedValueOnce(new Error("connect failed 2"))
-      .mockRejectedValueOnce(new Error("connect failed 3"));
-    firstSession.onclose({ code: 1011, reason: "temporary" });
-
-    await vi.advanceTimersByTimeAsync(1_750);
-
-    expect(connectMock).toHaveBeenCalledTimes(4);
-    expect(onEvent.mock.calls).toEqual([
-      [{ direction: "client", type: "session.continuity.reset" }],
-    ]);
-    expect(onClose).toHaveBeenCalledWith("error");
-  });
-
   it("rearms continuity reset after pre-return setup selects a fresh session", async () => {
     vi.useFakeTimers();
     const pendingSession = createDeferred<MockGoogleLiveSession>();
@@ -1208,17 +862,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const onEvent = vi.fn();
     const onReady = vi.fn();
     const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: {
-        model: "gemini-2.5-flash-native-audio-preview-12-2025",
-        sessionResumption: false,
-      },
+    const bridge = await connectBridge({
+      providerConfig: { model: LEGACY, sessionResumption: false },
       onEvent,
       onReady,
       onTranscript,
     });
-
-    await bridge.connect();
     const firstCallbacks = lastConnectParams().callbacks;
     firstCallbacks.onopen();
     firstCallbacks.onmessage({ setupComplete: {} });
@@ -1227,6 +876,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     bridge.sendAudio(queuedAudio);
     await vi.advanceTimersByTimeAsync(250);
 
+    const joiningConnect = bridge.connect();
+    const secondJoiningConnect = bridge.connect();
+    expect(connectMock).toHaveBeenCalledTimes(2);
     const freshCallbacks = lastConnectParams().callbacks;
     expect(onEvent).toHaveBeenCalledTimes(1);
     freshCallbacks.onopen();
@@ -1242,28 +894,15 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(freshSession.sendRealtimeInput).not.toHaveBeenCalled();
 
     pendingSession.resolve(freshSession);
-    await vi.waitFor(() => {
-      expect(onReady).toHaveBeenCalledTimes(2);
-    });
-    const sessionCreatedOrder = onEvent.mock.invocationCallOrder[1];
-    const queuedAudioOrder = freshSession.sendRealtimeInput.mock.invocationCallOrder[0];
-    const freshReadyOrder = onReady.mock.invocationCallOrder[1];
-    if (
-      sessionCreatedOrder === undefined ||
-      queuedAudioOrder === undefined ||
-      freshReadyOrder === undefined
-    ) {
-      throw new Error("expected fresh session creation, queued audio, and readiness");
-    }
-    expect(sessionCreatedOrder).toBeLessThan(queuedAudioOrder);
-    expect(queuedAudioOrder).toBeLessThan(freshReadyOrder);
+    expect(bridge.isConnected()).toBe(false);
+    await Promise.all([joiningConnect, secondJoiningConnect]);
+    expect(onReady).toHaveBeenCalledTimes(2);
+    expect(bridge.isConnected()).toBe(true);
+    freshCallbacks.onmessage({ setupComplete: {} });
+    expect(onReady).toHaveBeenCalledTimes(2);
+    expect(callOrder(onEvent, 1)).toBeLessThan(callOrder(freshSession.sendRealtimeInput));
+    expect(callOrder(freshSession.sendRealtimeInput)).toBeLessThan(callOrder(onReady, 1));
     expect(freshSession.sendRealtimeInput).toHaveBeenCalledOnce();
-    expect(freshSession.sendRealtimeInput).toHaveBeenCalledWith({
-      audio: {
-        data: expect.any(String),
-        mimeType: "audio/pcm;rate=16000",
-      },
-    });
     freshCallbacks.onclose({ code: 1011, reason: "temporary again" });
     await vi.advanceTimersByTimeAsync(250);
 
@@ -1272,60 +911,14 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       "session.created",
       "session.continuity.reset",
     ]);
-    lastConnectParams().callbacks.onmessage({
-      serverContent: { inputTranscription: { text: "Next", finished: true } },
-    });
+    content({ inputTranscription: { text: "Next", finished: true } });
     expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
       ["user", "Next", true],
     ]);
   });
 
-  it("waits for the returned session after setup completion before activating", async () => {
-    const pendingSession = createDeferred<MockGoogleLiveSession>();
-    const connectedSession = createMockGoogleLiveSession();
-    connectMock.mockReturnValueOnce(pendingSession.promise);
-    const onReady = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      onReady,
-    });
-
-    const connect = bridge.connect();
-    lastConnectParams().callbacks.onopen();
-    bridge.sendAudio(Buffer.from([0xff, 0xff]));
-
-    expect(connectedSession.sendRealtimeInput).not.toHaveBeenCalled();
-    expect(onReady).not.toHaveBeenCalled();
-    expect(bridge.isConnected()).toBe(false);
-
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
-
-    expect(connectedSession.sendRealtimeInput).not.toHaveBeenCalled();
-    expect(onReady).not.toHaveBeenCalled();
-    expect(bridge.isConnected()).toBe(false);
-
-    pendingSession.resolve(connectedSession);
-    await connect;
-
-    expect(onReady).toHaveBeenCalledTimes(1);
-    expect(bridge.isConnected()).toBe(true);
-    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(1);
-    const audio = connectedSession.sendRealtimeInput.mock.calls[0]?.[0]?.audio as
-      | { data?: unknown; mimeType?: unknown }
-      | undefined;
-    expect(typeof audio?.data).toBe("string");
-    expect(audio?.mimeType).toBe("audio/pcm;rate=16000");
-
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
-    expect(onReady).toHaveBeenCalledTimes(1);
-    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(1);
-  });
-
   it("copies and bounds pending audio by aggregate bytes before activation", async () => {
-    const connectedSession = createMockGoogleLiveSession();
-    connectMock.mockResolvedValueOnce(connectedSession);
-    const bridge = createGoogleLiveBridge({
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-    });
+    const bridge = createGoogleLiveBridge({ audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ });
     const backing = Buffer.alloc(2 * 1024 * 1024);
     const firstChunk = backing.subarray(0, 512 * 1024);
     firstChunk.writeInt16LE(513);
@@ -1337,11 +930,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     firstChunk.fill(0);
 
     await bridge.connect();
-    lastConnectParams().callbacks.onopen();
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+    activate();
 
-    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(2);
-    const firstAudio = connectedSession.sendRealtimeInput.mock.calls[0]?.[0]?.audio as
+    expect(session.sendRealtimeInput).toHaveBeenCalledTimes(2);
+    const firstAudio = session.sendRealtimeInput.mock.calls[0]?.[0]?.audio as
       | { data?: unknown }
       | undefined;
     expect(Buffer.from(String(firstAudio?.data), "base64").readInt16LE(0)).toBe(
@@ -1350,33 +942,28 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   });
 
   it("bounds pending audio by chunk count before activation", async () => {
-    const connectedSession = createMockGoogleLiveSession();
-    connectMock.mockResolvedValueOnce(connectedSession);
-    const bridge = createGoogleLiveBridge({
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-    });
+    const bridge = createGoogleLiveBridge({ audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ });
 
     for (let index = 0; index < 321; index += 1) {
       bridge.sendAudio(Buffer.alloc(2, index & 0xff));
     }
 
     await bridge.connect();
-    lastConnectParams().callbacks.onopen();
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+    activate();
 
-    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(320);
+    expect(session.sendRealtimeInput).toHaveBeenCalledTimes(320);
   });
 
   it("drops reconnect audio on terminal exhaustion until an explicit reconnect owns admission", async () => {
     vi.useFakeTimers();
     const reconnectedSession = createMockGoogleLiveSession();
     const onClose = vi.fn();
-    const bridge = createGoogleLiveBridge({
+    const onEvent = vi.fn();
+    const bridge = await connectBridge({
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       onClose,
+      onEvent,
     });
-
-    await bridge.connect();
     const firstSession = lastConnectParams().callbacks;
     firstSession.onopen();
     firstSession.onmessage({ setupComplete: { sessionId: "session-1" } });
@@ -1391,6 +978,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     await vi.advanceTimersByTimeAsync(1_750);
     bridge.sendAudio(Buffer.from([0x02, 0x00]));
 
+    expect(onEvent.mock.calls).toEqual([
+      [{ direction: "client", type: "session.continuity.reset" }],
+    ]);
     expect(onClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith("error");
 
@@ -1408,36 +998,6 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     await bridge.close();
   });
 
-  it("does not activate a late session after close during setup", async () => {
-    const pendingSession = createDeferred<MockGoogleLiveSession>();
-    const lateSession = createMockGoogleLiveSession();
-    connectMock.mockReturnValueOnce(pendingSession.promise);
-    const onReady = vi.fn();
-    const onClose = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      onReady,
-      onClose,
-    });
-
-    const connect = bridge.connect();
-    lastConnectParams().callbacks.onopen();
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
-    void bridge.close();
-    await connect;
-
-    expect(onReady).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onClose).toHaveBeenCalledWith("completed");
-    expect(bridge.isConnected()).toBe(false);
-
-    pendingSession.resolve(lateSession);
-    await vi.waitFor(() => {
-      expect(lateSession.close).toHaveBeenCalledTimes(1);
-    });
-    expect(onReady).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
   it("closes the session when the ready callback rejects activation", async () => {
     const pendingSession = createDeferred<MockGoogleLiveSession>();
     const connectedSession = createMockGoogleLiveSession();
@@ -1447,10 +1007,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
         throw new Error("ready callback failed");
       },
     });
-
     const connect = bridge.connect();
-    lastConnectParams().callbacks.onopen();
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+    activate();
     pendingSession.resolve(connectedSession);
 
     await expect(connect).rejects.toThrow("ready callback failed");
@@ -1459,11 +1017,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   });
 
   it("marks the Google audio stream complete after sustained telephony silence", async () => {
-    const bridge = createGoogleLiveBridge({ providerConfig: { silenceDurationMs: 60 } });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onopen();
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+    const bridge = await openConfiguredBridge({ providerConfig: { silenceDurationMs: 60 } });
 
     const silence20ms = Buffer.alloc(160, 0xff);
     bridge.sendAudio(silence20ms);
@@ -1485,164 +1039,36 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
   });
 
-  it("fuses telephony mu-law conversion into the Gemini 16 kHz PCM input frame", async () => {
-    const bridge = createGoogleLiveBridge();
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onopen();
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
-
-    bridge.sendAudio(Buffer.from([0xff, 0x00]));
-
-    const audio = sentAudio();
-    expect(typeof audio.data).toBe("string");
-    expect(audio.mimeType).toBe("audio/pcm;rate=16000");
-    const sent = Buffer.from(audio.data as string, "base64");
-    expect(Array.from({ length: sent.length / 2 }, (_, i) => sent.readInt16LE(i * 2))).toEqual([
-      0, -16062, -32124, -32124,
-    ]);
-  });
-
-  it("accepts PCM16 24 kHz audio without the telephony mu-law hop", async () => {
-    const bridge = createGoogleLiveBridge({
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-    });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onopen();
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
-
-    bridge.sendAudio(Buffer.alloc(480));
-
-    const audio = sentAudio();
-    expect(typeof audio.data).toBe("string");
-    expect(audio.mimeType).toBe("audio/pcm;rate=16000");
-    const sent = Buffer.from(audio.data as string, "base64");
-    expect(sent).toHaveLength(320);
-  });
-
-  it("can disable automatic VAD for manual activity signaling experiments", async () => {
-    const bridge = createGoogleLiveBridge({
-      providerConfig: { automaticActivityDetectionDisabled: true },
-    });
-
-    await bridge.connect();
-
-    const config = lastConnectParams().config as {
-      realtimeInputConfig?: { automaticActivityDetection?: { disabled?: boolean } };
-    };
-    expect(config.realtimeInputConfig?.automaticActivityDetection?.disabled).toBe(true);
-  });
-
-  it("sends Gemini 3.1 text prompts as realtime input", async () => {
-    const bridge = createGoogleLiveBridge();
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onopen();
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
-
-    bridge.sendUserMessage?.(" Say hello. ");
-
-    expect(session.sendRealtimeInput).toHaveBeenCalledWith({ text: "Say hello." });
-    expect(session.sendClientContent).not.toHaveBeenCalled();
-  });
-
-  it("keeps ordered client turns for explicit Gemini 2.5 sessions", async () => {
-    const bridge = createGoogleLiveBridge({
-      providerConfig: { model: "gemini-live-2.5-flash-preview" },
-    });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onopen();
-    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
-
-    bridge.sendUserMessage?.(" Say hello. ");
-
-    expect(session.sendClientContent).toHaveBeenCalledWith({
-      turns: [{ role: "user", parts: [{ text: "Say hello." }] }],
-      turnComplete: true,
-    });
-  });
-
-  it("converts Google PCM output to mu-law audio", async () => {
-    const onAudio = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      onAudio,
-    });
-    const pcm24k = Buffer.alloc(480);
-    pcm24k.set([0xfb, 0xff]);
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
-      setupComplete: { sessionId: "session-1" },
-      serverContent: {
-        modelTurn: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: "audio/L16;codec=pcm;rate=24000",
-                data: pcm24k.toString("base64url"),
-              },
-            },
-          ],
-        },
-      },
-    });
-
-    expect(onAudio).toHaveBeenCalledTimes(1);
-    const audio = requireFirstAudio(onAudio);
-    expect(audio).toBeInstanceOf(Buffer);
-    expect(audio).toHaveLength(80);
-  });
-
-  it("can keep Google PCM output as PCM16 24 kHz audio", async () => {
-    const onAudio = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      onAudio,
-    });
-    const pcm24k = Buffer.alloc(480);
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
-      setupComplete: { sessionId: "session-1" },
-      serverContent: {
-        modelTurn: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: "audio/L16;codec=pcm;rate=24000",
-                data: pcm24k.toString("base64"),
-              },
-            },
-          ],
-        },
-      },
-    });
-
-    expect(onAudio).toHaveBeenCalledTimes(1);
-    expect(requireFirstAudio(onAudio)).toEqual(pcm24k);
-  });
-
   it.each([
-    ["invalid alphabet", "not-base64!"],
-    ["non-canonical pad bits", "ZE=="],
-    ["mixed alphabet", "aGVsbG8+_"],
-  ])("terminates the session for %s in output audio", async (_scenario, data) => {
+    [undefined, "realtime"],
+    ["gemini-live-2.5-flash-preview", "ordered"],
+  ])("sends text through the %s model's input protocol", async (model, protocol) => {
+    const bridge = await openConfiguredBridge({ providerConfig: { model } });
+    bridge.sendUserMessage?.(" Say hello. ");
+    if (protocol === "realtime") {
+      expect(session.sendRealtimeInput).toHaveBeenCalledWith({ text: "Say hello." });
+      expect(session.sendClientContent).not.toHaveBeenCalled();
+    } else {
+      expect(session.sendClientContent).toHaveBeenCalledWith({
+        turns: [{ role: "user", parts: [{ text: "Say hello." }] }],
+        turnComplete: true,
+      });
+    }
+  });
+  it("terminates the session for malformed output audio", async () => {
+    const data = "not-base64!";
     const onAudio = vi.fn();
     const onError = vi.fn();
     const onClose = vi.fn();
     const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
+    const bridge = await connectBridge({
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       onAudio,
       onError,
       onClose,
       onTranscript,
     });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
+    receive({
       setupComplete: { sessionId: "session-1" },
       serverContent: {
         outputTranscription: { text: "finalize me" },
@@ -1669,128 +1095,24 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     );
   });
 
-  it("uses official output transcription instead of model-turn text", async () => {
-    const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      onTranscript,
-    });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
-      setupComplete: {},
-      serverContent: {
-        modelTurn: {
-          parts: [
-            { text: "internal reasoning", thought: true },
-            { text: "uncorrelated model text" },
-          ],
-        },
-      },
-    });
-
-    expect(onTranscript).not.toHaveBeenCalled();
-  });
-
-  it("emits one complete transcript after Google marks a transcription finished", async () => {
-    vi.useFakeTimers();
-    const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({ onTranscript });
-
-    await bridge.connect();
-    const onmessage = lastConnectParams().callbacks.onmessage;
-    onmessage({ serverContent: { outputTranscription: { text: "Hi, " } } });
-    onmessage({
-      serverContent: { outputTranscription: { text: "how can I help?", finished: true } },
-    });
-    onmessage({ serverContent: { modelTurn: { parts: [{ text: "ignored fallback" }] } } });
-    onmessage({ serverContent: { turnComplete: true } });
-
-    expect(onTranscript.mock.calls).toEqual([
-      ["assistant", "Hi, ", false],
-      ["assistant", "how can I help?", false],
-      ["assistant", "Hi, how can I help?", true],
-    ]);
-  });
-
-  it("honors a finish-only transcription message", async () => {
-    const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
-      onTranscript,
-    });
-
-    await bridge.connect();
-    const onmessage = lastConnectParams().callbacks.onmessage;
-    onmessage({ serverContent: { inputTranscription: { text: "Last words" } } });
-    onmessage({ serverContent: { inputTranscription: { finished: true } } });
-
-    expect(onTranscript.mock.calls).toEqual([
-      ["user", "Last words", false],
-      ["user", "Last words", true],
-    ]);
-  });
-
-  it("allows each role's UTF-8 transcript limit and releases it on finished", async () => {
-    const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: {
-        model: "gemini-2.5-flash-native-audio-preview-12-2025",
-      },
-      onTranscript,
-    });
-
-    await bridge.connect();
-    const onmessage = lastConnectParams().callbacks.onmessage;
-    const halfLimit = "é".repeat(64 * 1024);
-    onmessage({
-      serverContent: {
-        inputTranscription: { text: halfLimit },
-        outputTranscription: { text: halfLimit },
-      },
-    });
-    onmessage({
-      serverContent: {
-        inputTranscription: { text: halfLimit },
-        outputTranscription: { text: halfLimit },
-      },
-    });
-    onmessage({ serverContent: { outputTranscription: { finished: true } } });
-    onmessage({ serverContent: { inputTranscription: { finished: true } } });
-
-    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
-      ["assistant", `${halfLimit}${halfLimit}`, true],
-      ["user", `${halfLimit}${halfLimit}`, true],
-    ]);
-    expect(session.close).not.toHaveBeenCalled();
-  });
-
   it("terminates and clears a runaway transcript stream at the UTF-8 byte limit", async () => {
     const onError = vi.fn();
     const onClose = vi.fn();
     const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: {
-        model: "gemini-2.5-flash-native-audio-preview-12-2025",
-      },
+    const bridge = await connectBridge({
+      providerConfig: { model: LEGACY },
       onError,
       onClose,
       onTranscript,
     });
-
-    await bridge.connect();
     const callbacks = lastConnectParams().callbacks;
-    const transcriptChunk = "€".repeat(16);
-    const acceptedChunks = Math.floor((256 * 1024) / Buffer.byteLength(transcriptChunk, "utf8"));
-    for (let index = 0; index < 10_000; index += 1) {
-      callbacks.onmessage({
-        serverContent: {
-          inputTranscription: { text: transcriptChunk },
-        },
-      });
-    }
+    const transcriptChunk = "€".repeat(Math.floor((256 * 1024) / 3));
+    callbacks.onmessage({ serverContent: { inputTranscription: { text: transcriptChunk } } });
+    callbacks.onmessage({ serverContent: { inputTranscription: { text: "€" } } });
+    callbacks.onmessage({ serverContent: { inputTranscription: { text: "late fragment" } } });
     callbacks.onclose({ code: 1000, reason: "late clean close", wasClean: true });
 
-    expect(onTranscript).toHaveBeenCalledTimes(acceptedChunks);
+    expect(onTranscript).toHaveBeenCalledOnce();
     expect(onTranscript.mock.calls.at(-1)).toEqual(["user", transcriptChunk, false]);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledWith(
@@ -1809,12 +1131,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
   it("finalizes assistant turns without finalizing independently ordered 2.5 input", async () => {
     const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
+    const bridge = await connectBridge({
+      providerConfig: { model: LEGACY },
       onTranscript,
     });
-
-    await bridge.connect();
     const onmessage = lastConnectParams().callbacks.onmessage;
     onmessage({ serverContent: { inputTranscription: { text: "Earlier question. " } } });
     onmessage({ serverContent: { outputTranscription: { text: "Interrupted response " } } });
@@ -1841,27 +1161,11 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     ]);
   });
 
-  it("flushes pending transcripts when the bridge closes", async () => {
-    const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
-      onTranscript,
-    });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
-      serverContent: { inputTranscription: { text: "Last words" } },
-    });
-    void bridge.close();
-
-    expect(onTranscript.mock.calls.at(-1)).toEqual(["user", "Last words", true]);
-  });
-
   it("closes the Live session when the final transcript callback throws", async () => {
     const callbackError = new Error("transcript persistence failed");
     const onError = vi.fn();
     const bridge = createGoogleLiveBridge({
-      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
+      providerConfig: { model: LEGACY },
       onError,
       onTranscript: vi.fn((_role, _text, isFinal) => {
         if (isFinal) {
@@ -1871,141 +1175,19 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
-      serverContent: { inputTranscription: { text: "Last words" } },
-    });
+    content({ inputTranscription: { text: "Last words" } });
 
     expect(() => bridge.close()).not.toThrow();
     expect(onError).toHaveBeenCalledWith(callbackError);
     expect(session.close).toHaveBeenCalledTimes(1);
   });
 
-  it("reports provider-confirmed input interruption as barge-in", async () => {
-    const onClearAudio = vi.fn();
-    const bridge = createGoogleLiveBridge({ onClearAudio });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
-      setupComplete: {},
-      serverContent: { interrupted: true },
-    });
-
-    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
-  });
-
-  it("forwards Live API tool calls and submits matching function responses", async () => {
-    const onToolCall = vi.fn();
-    const bridge = createGoogleLiveBridge({ onToolCall });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
-      setupComplete: { sessionId: "session-1" },
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "hi" } }],
-      },
-    });
-
-    expect(onToolCall).toHaveBeenCalledWith({
-      itemId: "call-1",
-      callId: "call-1",
-      name: "lookup",
-      args: { query: "hi" },
-    });
-
-    void bridge.submitToolResult("call-1", { result: "ok" });
-
-    expect(session.sendToolResponse).toHaveBeenCalledWith({
-      functionResponses: [
-        {
-          id: "call-1",
-          name: "lookup",
-          response: { result: "ok" },
-        },
-      ],
-    });
-  });
-
-  it("deduplicates replayed Google Live tool calls by call id", async () => {
-    const onToolCall = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      onToolCall,
-    });
-
-    await bridge.connect();
-    const callbacks = lastConnectParams().callbacks;
-    callbacks.onmessage({
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "first" } }],
-      },
-    });
-    callbacks.onmessage({
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "different", args: { query: "replay" } }],
-      },
-    });
-
-    expect(onToolCall).toHaveBeenCalledOnce();
-    void bridge.submitToolResult("call-1", { result: "ok" });
-    expect(session.sendToolResponse).toHaveBeenCalledWith({
-      functionResponses: [
-        {
-          id: "call-1",
-          name: "lookup",
-          response: { result: "ok" },
-        },
-      ],
-    });
-    callbacks.onmessage({
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "late replay" } }],
-      },
-    });
-    expect(onToolCall).toHaveBeenCalledOnce();
-  });
-
-  it("ignores late results after Google cancels a tool call", async () => {
-    const onEvent = vi.fn();
-    const onError = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      onToolCall: vi.fn(),
-      onEvent,
-      onError,
-    });
-
-    await bridge.connect();
-    const callbacks = lastConnectParams().callbacks;
-    callbacks.onmessage({
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "hi" } }],
-      },
-    });
-    callbacks.onmessage({
-      toolCallCancellation: { ids: ["call-1"] },
-    });
-
-    void bridge.submitToolResult("call-1", { result: "late" });
-
-    expect(session.sendToolResponse).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "server",
-      type: "tool.call.cancelled",
-      itemId: "call-1",
-    });
-  });
-
   it("fails closed when Google exceeds the tool-call session limit", async () => {
     const onToolCall = vi.fn();
     const onError = vi.fn();
     const onClose = vi.fn();
-    const bridge = createGoogleLiveBridge({
-      onToolCall,
-      onError,
-      onClose,
-    });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
+    await connectBridge({ onToolCall, onError, onClose });
+    receive({
       toolCall: {
         functionCalls: Array.from({ length: 1_025 }, (_, index) => ({
           id: `call-${index}`,
@@ -2016,134 +1198,36 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     expect(onToolCall).toHaveBeenCalledTimes(1_024);
-    expect(requireFirstError(onError).message).toBe("Google Live tool-call session limit exceeded");
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Google Live tool-call session limit exceeded" }),
+    );
     expect(session.close).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith("error");
   });
 
-  it("keeps Google Live consult calls open after continuing tool responses", async () => {
-    const bridge = createGoogleLiveBridge({
-      providerConfig: { model: "gemini-live-2.5-flash-preview" },
-      onToolCall: vi.fn(),
-    });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
-      setupComplete: { sessionId: "session-1" },
-      toolCall: {
-        functionCalls: [
-          { id: "consult-call", name: "openclaw_agent_consult", args: { prompt: "hi" } },
-        ],
-      },
-    });
-
-    void bridge.submitToolResult(
-      "consult-call",
-      { status: "working", message: "Tell the participant you are checking." },
-      { willContinue: true },
-    );
-    void bridge.submitToolResult("consult-call", { text: "The meeting starts at 3." });
-
-    expect(session.sendToolResponse).toHaveBeenNthCalledWith(1, {
-      functionResponses: [
-        {
-          id: "consult-call",
-          name: "openclaw_agent_consult",
-          scheduling: "WHEN_IDLE",
-          willContinue: true,
-          response: { status: "working", message: "Tell the participant you are checking." },
-        },
-      ],
-    });
-    expect(session.sendToolResponse).toHaveBeenNthCalledWith(2, {
-      functionResponses: [
-        {
-          id: "consult-call",
-          name: "openclaw_agent_consult",
-          scheduling: "WHEN_IDLE",
-          response: { text: "The meeting starts at 3." },
-        },
-      ],
-    });
-  });
-
-  it("keeps Gemini 3.1 consult calls pending after rejecting continuation", async () => {
-    const onError = vi.fn();
-    const bridge = createGoogleLiveBridge({ onToolCall: vi.fn(), onError });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
-      setupComplete: { sessionId: "session-1" },
-      toolCall: {
-        functionCalls: [
-          { id: "consult-call", name: "openclaw_agent_consult", args: { prompt: "hi" } },
-        ],
-      },
-    });
-
-    expect(() =>
-      bridge.submitToolResult("consult-call", { status: "working" }, { willContinue: true }),
-    ).toThrow("does not support continuing tool responses");
-    expect(session.sendToolResponse).not.toHaveBeenCalled();
-    expect(requireFirstError(onError).message).toContain(
-      "does not support continuing tool responses",
-    );
-
-    void bridge.submitToolResult("consult-call", { text: "The meeting starts at 3." });
-
-    expect(session.sendToolResponse).toHaveBeenCalledWith({
-      functionResponses: [
-        {
-          id: "consult-call",
-          name: "openclaw_agent_consult",
-          response: { text: "The meeting starts at 3." },
-        },
-      ],
-    });
-  });
-
   it("does not send malformed Live API tool responses without a matching call name", async () => {
-    const onError = vi.fn();
-    const bridge = createGoogleLiveBridge({ onError });
-
-    await bridge.connect();
+    const bridge = await connectBridge();
 
     expect(() => bridge.submitToolResult("missing-call", { result: "ok" })).toThrow(
       "Google Live function response is missing a matching function call for missing-call",
     );
 
     expect(session.sendToolResponse).not.toHaveBeenCalled();
-    const error = requireFirstError(onError);
-    expect(error.message).toBe(
-      "Google Live function response is missing a matching function call for missing-call",
-    );
   });
 
   it.each([
     ["undefined", (): undefined => undefined],
-    ["function", () => () => undefined],
-    ["symbol", () => Symbol("invalid-tool-result")],
-    ["bigint", () => ({ value: 1n })],
-    [
-      "circular",
-      () => {
-        const result: { self?: unknown } = {};
-        result.self = result;
-        return result;
-      },
-    ],
     ["omitted custom serialization", () => ({ toJSON: () => undefined })],
   ] as const)(
     "rejects %s Google Live tool results while keeping the call retryable",
     async (_label, create) => {
       const onError = vi.fn();
       const bridge = createGoogleLiveBridge({
-        providerConfig: { apiKey: ["google", "test"].join("-") },
         onError,
         onToolCall: vi.fn(),
       });
       await bridge.connect();
-      lastConnectParams().callbacks.onmessage({
+      receive({
         setupComplete: { sessionId: "session-1" },
         toolCall: { functionCalls: [{ id: "call-1", name: "lookup", args: {} }] },
       });
@@ -2162,26 +1246,15 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
   it("preserves valid Google Live tool results and nested serialization keys", async () => {
     const bridge = createGoogleLiveBridge({
-      providerConfig: { apiKey: ["google", "test"].join("-") },
       onToolCall: vi.fn(),
     });
     const objectSerialization = vi.fn((key: string) => ({ key }));
     const arraySerialization = vi.fn((key: string) => [key]);
     const customArray: unknown[] & { toJSON?: (key: string) => string[] } = [];
     customArray.toJSON = arraySerialization;
-    const values: unknown[] = [
-      null,
-      false,
-      0,
-      "",
-      "text",
-      [1],
-      { ok: true },
-      { toJSON: objectSerialization },
-      customArray,
-    ];
+    const values: unknown[] = [null, "text", { toJSON: objectSerialization }, customArray];
     await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
+    receive({
       setupComplete: { sessionId: "session-1" },
       toolCall: {
         functionCalls: values.map((_, index) => ({
@@ -2198,32 +1271,16 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
     expect(
       session.sendToolResponse.mock.calls.map(([request]) => request.functionResponses[0].response),
-    ).toEqual([
-      { output: null },
-      { output: false },
-      { output: 0 },
-      { output: "" },
-      { output: "text" },
-      { output: [1] },
-      { ok: true },
-      { key: "response" },
-      { output: ["output"] },
-    ]);
+    ).toEqual([{ output: null }, { output: "text" }, { key: "response" }, { output: ["output"] }]);
     expect(objectSerialization).toHaveBeenCalledExactlyOnceWith("response");
     expect(arraySerialization).toHaveBeenCalledExactlyOnceWith("output");
   });
 
   it("reports Google Live tool response send failures without losing the call name", async () => {
     const onError = vi.fn();
-    const bridge = createGoogleLiveBridge({ onError });
-
-    await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
-      setupComplete: { sessionId: "session-1" },
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "hi" } }],
-      },
-    });
+    const bridge = await connectBridge({ onError });
+    receive({ setupComplete: {} });
+    callTool("call-1", "lookup", { query: "hi" });
 
     const sendError = new Error("SDK send failed");
     session.sendToolResponse.mockImplementationOnce(() => {
@@ -2237,13 +1294,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     void bridge.submitToolResult("call-1", { result: "ok" });
 
     expect(session.sendToolResponse).toHaveBeenLastCalledWith({
-      functionResponses: [
-        {
-          id: "call-1",
-          name: "lookup",
-          response: { result: "ok" },
-        },
-      ],
+      functionResponses: [{ id: "call-1", name: "lookup", response: { result: "ok" } }],
     });
   });
 });

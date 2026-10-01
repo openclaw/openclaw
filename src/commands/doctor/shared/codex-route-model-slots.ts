@@ -4,13 +4,30 @@ import {
 } from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isBlockedLegacyCodexModelRef,
-  normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import type { CodexRouteHit, MutableRecord } from "./codex-route-types.js";
+
+export function visitChannelModelSlots(
+  cfg: OpenClawConfig,
+  visit: (slot: { container: MutableRecord; key: string; path: string }) => void,
+): void {
+  const modelByChannel = asMutableRecord(cfg.channels?.modelByChannel);
+  for (const [channelId, channelMap] of Object.entries(modelByChannel ?? {})) {
+    const container = asMutableRecord(channelMap);
+    if (!container) {
+      continue;
+    }
+    for (const key of Object.keys(container)) {
+      visit({ container, key, path: `channels.modelByChannel.${channelId}.${key}` });
+    }
+  }
+}
 
 export function recordCodexModelHit(params: {
   hits: CodexRouteHit[];
@@ -118,7 +135,7 @@ export function collectCodexRuntimeModelPolicyRefs(params: {
     if (!trimmed) {
       continue;
     }
-    const runtime = normalizeRuntimeString(
+    const runtime = normalizeOptionalAgentRuntimeId(
       asMutableRecord(asMutableRecord(entry)?.agentRuntime)?.id,
     );
     if (runtime === "codex") {

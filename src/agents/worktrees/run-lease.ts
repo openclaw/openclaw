@@ -3,24 +3,30 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import { readRegistryWorktree } from "./registry-read.js";
 import {
-  abortWorktreeRemovalRow,
-  admitWorktreeRunLeaseRow,
   claimWorktreeRemovalRow,
-  finalizeWorktreeRemovalRows,
   getRegistryWorktree,
   hasLiveWorktreeRunLeaseRow,
   listRegistryWorktrees,
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
 import type { RunLeaseOwnerChecks } from "./run-lease-owner.js";
-import { releaseWorktreeRunLeaseRowAsync } from "./run-lease-store.js";
+import {
+  admitWorktreeRunLeaseRowAsync,
+  releaseWorktreeRunLeaseRowAsync,
+} from "./run-lease-store.js";
 import type { ManagedWorktreeRecord } from "./types.js";
+
+export {
+  abortWorktreeRemovalRow as abortWorktreeRemoval,
+  finalizeWorktreeRemovalRows as finalizeWorktreeRemoval,
+} from "./registry.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -45,36 +51,23 @@ let releaseRunLeaseRow = releaseWorktreeRunLeaseRowAsync;
 let unlockWorktreeImpl = unlockWorktree;
 
 // A cleanup that could not finish (persistent state-database delete or git unlock
-// failure) is retained here so the process keeps ownership of it and retries on the
-// next lease acquisition and at exit, instead of stranding the row and git guard.
+// failure) is retained here for lifecycle retries. Unknown native admission stays
+// fenced until process death permits stale-owner reaping; deletion could race a late insert.
 type LeaseCleanup = {
   env: NodeJS.ProcessEnv;
   context: OpenClawStateWorkerContext;
   id: string;
   token: string;
   rowDeleted: boolean;
+  admissionSettled: boolean;
+  gitRetained: boolean;
   refcountReleased: boolean;
 };
 const pendingLeaseCleanups = new Set<LeaseCleanup>();
 let exitCleanupRegistered = false;
 
-async function withGitLockTransition<T>(id: string, operation: () => Promise<T>): Promise<T> {
-  const previous = gitLockTransitionTails.get(id) ?? Promise.resolve();
-  let finish!: () => void;
-  const current = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  const tail = previous.then(() => current);
-  gitLockTransitionTails.set(id, tail);
-  await previous;
-  try {
-    return await operation();
-  } finally {
-    finish();
-    if (gitLockTransitionTails.get(id) === tail) {
-      gitLockTransitionTails.delete(id);
-    }
-  }
+function withGitLockTransition<T>(id: string, task: () => Promise<T>): Promise<T> {
+  return enqueueKeyedTask({ tails: gitLockTransitionTails, key: id, task });
 }
 
 async function retainGitLock(context: OpenClawStateWorkerContext, id: string): Promise<void> {
@@ -211,13 +204,16 @@ async function deleteRunLeaseRowWithRetries(cleanup: LeaseCleanup): Promise<bool
 // row and the git guard are released. Keeps everything until each step succeeds so a
 // removal stays correctly blocked while cleanup is still owed.
 async function runLeaseCleanup(cleanup: LeaseCleanup): Promise<boolean> {
+  if (!cleanup.admissionSettled) {
+    return false;
+  }
   if (!cleanup.rowDeleted) {
     if (!(await deleteRunLeaseRowWithRetries(cleanup))) {
       return false;
     }
     cleanup.rowDeleted = true;
   }
-  return await releaseGitLock(cleanup);
+  return !cleanup.gitRetained || (await releaseGitLock(cleanup));
 }
 
 async function drainPendingLeaseCleanups(): Promise<void> {
@@ -233,11 +229,10 @@ function ensureExitCleanupRegistered(): void {
     return;
   }
   exitCleanupRegistered = true;
-  // A row that never deleted keeps its worktree unremovable until this process ends;
-  // delete it synchronously on exit so a live-pid lease row does not linger.
+  // Only settled admissions can be deleted synchronously; unknown writers may still insert.
   process.on("exit", () => {
     for (const cleanup of pendingLeaseCleanups) {
-      if (!cleanup.rowDeleted) {
+      if (cleanup.admissionSettled && !cleanup.rowDeleted) {
         try {
           cleanup.context.admission.assertCurrent();
           releaseWorktreeRunLeaseRow(cleanup.context.environment, cleanup.id, cleanup.token);
@@ -261,31 +256,39 @@ export async function acquireWorktreeRunLease(
   const pid = process.pid;
   const startTime = resolveSelfStartTime(pid);
   const context = captureOpenClawStateWorkerContext({ env });
-  admitWorktreeRunLeaseRow(env, {
-    worktreeId: id,
-    token,
-    pid,
-    startTime,
-    now: Date.now(),
-    checks: ownerChecks,
-    ...(opts.exclusive ? { exclusive: true } : {}),
-  });
   const cleanup: LeaseCleanup = {
     env,
     context,
     id,
     token,
     rowDeleted: false,
-    refcountReleased: false,
+    admissionSettled: false,
+    gitRetained: false,
+    refcountReleased: true,
   };
   // Serialize refcount and Git transitions so a cleanup retry cannot unlock a
   // newer same-process holder after a prior generation's unlock failed.
   try {
+    await admitWorktreeRunLeaseRowAsync(
+      context,
+      {
+        worktreeId: id,
+        token,
+        pid,
+        startTime,
+        now: Date.now(),
+        ...(opts.exclusive ? { exclusive: true } : {}),
+      },
+      (kind) => {
+        cleanup.admissionSettled = kind !== "unknown";
+        cleanup.rowDeleted = kind === "not-entered";
+      },
+    );
     await retainGitLock(context, id);
+    cleanup.gitRetained = true;
+    cleanup.refcountReleased = false;
+    context.admission.assertCurrent();
   } catch (error) {
-    // The failed retain already discarded its in-memory holder; cleanup owns only
-    // the durable row and keeps it fenced if deletion cannot complete yet.
-    cleanup.refcountReleased = true;
     if (!(await runLeaseCleanup(cleanup))) {
       pendingLeaseCleanups.add(cleanup);
     }
@@ -324,18 +327,6 @@ export function claimWorktreeRemoval(
   });
 }
 
-export function finalizeWorktreeRemoval(env: NodeJS.ProcessEnv, worktreeId: string): void {
-  finalizeWorktreeRemovalRows(env, worktreeId);
-}
-
-export function abortWorktreeRemoval(
-  env: NodeJS.ProcessEnv,
-  worktreeId: string,
-  token: string,
-): void {
-  abortWorktreeRemovalRow(env, worktreeId, token);
-}
-
 export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
   return hasLiveWorktreeRunLeaseRow(env, worktreeId, ownerChecks);
 }
@@ -354,9 +345,7 @@ const testing = {
   setUnlockImplForTest(impl: typeof unlockWorktree | null): void {
     unlockWorktreeImpl = impl ?? unlockWorktree;
   },
-  async drainPendingCleanupsForTest(): Promise<void> {
-    await drainPendingLeaseCleanups();
-  },
+  drainPendingCleanupsForTest: drainPendingLeaseCleanups,
   resetForTest(): void {
     heldGitLocks.clear();
     gitLockTransitionTails.clear();

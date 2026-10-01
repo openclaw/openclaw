@@ -8,7 +8,7 @@ export {
   formatThreadBindingDurationLabel,
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
-} from "./thread-bindings.messages.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
 export {
   resolveThreadBindingPersona,
   resolveThreadBindingPersonaFromRecord,

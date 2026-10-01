@@ -283,8 +283,8 @@ async function childMain(fixturePath: string): Promise<void> {
   const manifests =
     fixture.scenario === "manifest"
       ? await importOwner<
-          typeof import("../src/gateway/worker-environments/workspace-reconcile-core.js")
-        >(fixture.source, "src/gateway/worker-environments/workspace-reconcile-core.ts")
+          typeof import("../src/gateway/worker-environments/workspace-manifest-worker.js")
+        >(fixture.source, "src/gateway/worker-environments/workspace-manifest-worker.ts")
       : undefined;
   const staging =
     fixture.scenario === "delta" ||
@@ -367,7 +367,7 @@ async function childMain(fixturePath: string): Promise<void> {
             };
           }
           if (manifests) {
-            const result = await manifests.readActualWorkspaceManifest({
+            const result = await manifests.captureWorkspaceManifest({
               root,
               baseCommit: null,
               signal: AbortSignal.timeout(fixture.timeoutMs),
@@ -539,10 +539,7 @@ async function runSource(
   const samples: Sample[] = [];
   try {
     const ready = await receive();
-    assert.equal(ready.type, "ready");
-    if (ready.type !== "ready") {
-      throw new Error("child did not become ready");
-    }
+    assert.equal<"ready">(ready.type, "ready");
     const url = `http://127.0.0.1:${ready.port}/readyz`;
     const initial = await fetch(url, { signal: AbortSignal.timeout(options.timeoutMs) });
     assert.equal(initial.status, 200);

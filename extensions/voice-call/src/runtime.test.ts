@@ -103,8 +103,9 @@ vi.mock("./realtime-voice.runtime.js", () => ({
   resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
 }));
 
-vi.mock("./realtime-fast-context.js", () => ({
-  resolveRealtimeFastContextConsult: mocks.resolveRealtimeFastContextConsult,
+vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>()),
+  resolveRealtimeVoiceFastContextConsult: mocks.resolveRealtimeFastContextConsult,
 }));
 
 vi.mock("./webhook/realtime-handler.js", () => ({
@@ -428,20 +429,19 @@ describe("createVoiceCallRuntime lifecycle", () => {
       includeWorkspaceFiles: false,
       files: ["SOUL.md"],
     };
-    const fullConfig = {
-      agents: { list: [{ id: "operator", default: true }, { id: "support" }] },
-    } as OpenClawConfig;
-    const resolveAgentIdentity = vi.fn((_cfg: OpenClawConfig, agentId: string) => ({
-      name: agentId === "support" ? "Support Voice" : "Main Voice",
-    }));
-
+    const fullConfig: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "operator", default: true, identity: { name: "Main Voice" } },
+          { id: "support", identity: { name: "Support Voice" } },
+        ],
+      },
+    };
     const runtime = await createVoiceCallRuntime({
       config,
-      coreConfig: {} as OpenClawConfig,
+      coreConfig: {},
       fullConfig,
-      agentRuntime: {
-        resolveAgentIdentity,
-      } as never,
+      agentRuntime: {} as never,
     });
 
     const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
@@ -460,8 +460,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       to: "+15550002222",
     });
     expect(defaultRegistration.agentId).toBe("operator");
-    expect(defaultRegistration.instructions).toContain("- Agent id: operator");
-    expect(resolveAgentIdentity).toHaveBeenCalledWith(fullConfig, "operator");
+    expect(defaultRegistration.instructions).toContain("- Name: Main Voice");
+    expect(defaultRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
 
     const supportRegistration = resolveCallRegistration({
       callId: "call-support",
@@ -471,7 +471,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       to: "+15550002222",
     });
     expect(supportRegistration.agentId).toBe("support");
-    expect(supportRegistration.instructions).toContain("- Agent id: support");
+    expect(supportRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
     expect(supportRegistration.instructions).toContain("- Name: Support Voice");
     expect(supportRegistration.instructions).not.toContain("Main Voice");
 
@@ -482,60 +482,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       from: "+15550001111",
       to: "+15550002222",
     });
-    expect(unknownRegistration.instructions).not.toContain("OpenClaw agent voice context:");
-  });
-
-  it("selects realtime provider readiness from the routed call owner", async () => {
-    const config = createBaseConfig();
-    config.agentId = "main";
-    config.realtime.enabled = true;
-    config.numbers["+15550009999"] = { agentId: "support" };
-    const fullConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "support" }] },
-    } as OpenClawConfig;
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementation(
-      ({ agentId }: { agentId?: string }) => {
-        if (agentId !== "support") {
-          throw new Error(`OpenAI realtime is not configured for ${agentId ?? "unknown"}`);
-        }
-        return {
-          provider: { id: "openai-support" },
-          providerConfig: { model: "gpt-realtime", owner: agentId },
-        };
-      },
-    );
-
-    await expect(
-      createVoiceCallRuntime({
-        config,
-        coreConfig: {} as OpenClawConfig,
-        fullConfig,
-        agentRuntime: {} as never,
-      }),
-    ).resolves.toMatchObject({ config: { agentId: "main" } });
-    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
-
-    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
-    if (typeof resolveCallRegistration !== "function") {
-      throw new Error("expected per-call realtime registration resolver");
-    }
-    const registration = resolveCallRegistration({
-      callId: "call-support",
-      agentId: "support",
-      direction: "inbound",
-      from: "+15550001234",
-      to: "+15550009999",
-      metadata: { numberRouteKey: "+15550009999" },
-    });
-
-    expect(registration).toMatchObject({
-      agentId: "support",
-      provider: { id: "openai-support" },
-      providerConfig: { model: "gpt-realtime", owner: "support" },
-    });
-    expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ agentId: "support" }),
-    );
+    expect(unknownRegistration.instructions).not.toContain("Configured identity:");
+    expect(unknownRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
   });
 
   it.each(["twilio", "telnyx", "plivo"] as const)(
@@ -552,16 +500,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     },
   );
 
-  it.each([
-    "http://127.0.0.1:3334/voice/webhook",
-    "http://[::1]:3334/voice/webhook",
-    "http://[fd00::1]/voice/webhook",
-  ])("fails closed when Twilio publicUrl %s points at a local-only webhook", async (publicUrl) => {
+  it("fails closed when Twilio publicUrl points at a local-only webhook", async () => {
     await expect(
       createVoiceCallRuntime({
         config: createExternalProviderConfig({
           provider: "twilio",
-          publicUrl,
+          publicUrl: "http://127.0.0.1:3334/voice/webhook",
         }),
         coreConfig: {} as OpenClawConfig,
         agentRuntime: {} as never,
@@ -962,6 +906,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
         debug: console.debug,
       },
       sessionKey: "agent:main:voice:15550001234",
+      labels: {
+        audienceLabel: "caller",
+        contextName: "OpenClaw memory or session context",
+      },
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });

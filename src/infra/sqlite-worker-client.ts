@@ -3,6 +3,7 @@ import { isPromise } from "node:util/types";
 import { serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { Actor, OperationScope, StoreClient } from "./sqlite-worker-broker.types.js";
 import {
   SqliteWorkerError,
@@ -22,13 +23,12 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
   track: (pending: Promise<void>) => () => void,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
-  requireStateLifecycle = false,
 ): Promise<T> {
   if (!client || client.sealed) {
     return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
   }
   const scope: OperationScope = {
-    requireStateLifecycle,
+    maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     createAdmission,
     assertCurrent,
     active: true,

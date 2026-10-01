@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { ensureDevGatewayConfig } from "./dev.js";
@@ -38,11 +39,18 @@ describe("ensureDevGatewayConfig integration", () => {
       },
     );
 
-    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
-      agents?: { entries?: Record<string, { default?: boolean; workspace?: string }> };
-    };
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(config.gateway).toEqual({ mode: "local", bind: "loopback" });
+    expect(config.agents?.defaults).toMatchObject({
+      workspace: `${workspace}-dev`,
+      skipBootstrap: true,
+    });
     expect(config.agents?.entries).toEqual({
-      dev: { default: true, workspace: `${workspace}-dev`, identity: expect.any(Object) },
+      dev: {
+        default: true,
+        workspace: `${workspace}-dev`,
+        identity: { name: "C3-PO", theme: "protocol droid", emoji: "🤖" },
+      },
     });
   });
 

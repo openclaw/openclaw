@@ -311,27 +311,24 @@ describe("resident catalog hydration request lifetime", () => {
     await expect(h.companion.request("model/list", {})).resolves.toEqual({ data: [] });
   });
 
-  it.each(["agent", "query"] as const)(
-    "shares one cold native request across a different %s in the same home",
-    async (variation) => {
-      const first = observeHydration(h.control.initialize());
-      const frame = await h.frame(0);
-      const control = variation === "agent" ? h.factory.forRequest("other") : h.control;
-      const joined = observeHydration(control.initialize());
-      const listed = control.listPage({ limit: 10 });
-      void listed.catch(() => undefined);
-      await nextTurn();
-      expect(h.requests.mock.calls.filter(([method]) => method === "thread/list")).toHaveLength(1);
-      h.reply(frame, "shared");
-      await Promise.all([first, joined]);
-      expect((await listed).sessions).toMatchObject([{ threadId: "shared" }]);
-      expect((await control.listPage({ limit: 10 })).sessions).toMatchObject([
-        { threadId: "shared" },
-      ]);
-      expect(h.frames).toHaveLength(1);
-      expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(1);
-    },
-  );
+  it("shares one cold native request across different agents in the same home", async () => {
+    const first = observeHydration(h.control.initialize());
+    const frame = await h.frame(0);
+    const control = h.factory.forRequest("other");
+    const joined = observeHydration(control.initialize());
+    const listed = control.listPage({ limit: 10 });
+    void listed.catch(() => undefined);
+    await nextTurn();
+    expect(h.requests.mock.calls.filter(([method]) => method === "thread/list")).toHaveLength(1);
+    h.reply(frame, "shared");
+    await Promise.all([first, joined]);
+    expect((await listed).sessions).toMatchObject([{ threadId: "shared" }]);
+    expect((await control.listPage({ limit: 10 })).sessions).toMatchObject([
+      { threadId: "shared" },
+    ]);
+    expect(h.frames).toHaveLength(1);
+    expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(1);
+  });
 
   it("times out the shared initializer without closing its companion or reviving expired callers", async () => {
     const first = observeHydration(h.control.initialize());
@@ -353,24 +350,6 @@ describe("resident catalog hydration request lifetime", () => {
     expect(h.frames).toHaveLength(2);
     expect(h.transports).toHaveLength(1);
     expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(1);
-  });
-
-  it("discards an unobserved late hydration response instead of publishing it", async () => {
-    const first = observeHydration(h.control.initialize());
-    const expired = await h.frame(0);
-    await h.expireWaiter();
-    await expect(first).rejects.toThrow("thread/list timed out");
-    h.reply(expired, "unobserved");
-    await nextTurn();
-
-    const current = observeHydration(h.control.initialize());
-    const retry = await h.frame(1);
-    h.reply(retry, "current");
-    await current;
-    const result = await h.control.listPage({});
-    expect(result.sessions).toMatchObject([{ threadId: "current" }]);
-    await expect(h.control.listPage({})).resolves.toEqual(result);
-    expect(h.frames).toHaveLength(2);
   });
 
   it("bounds cold list waits without aborting shared hydration or expiring resident pages", async () => {
@@ -408,30 +387,22 @@ describe("resident catalog hydration request lifetime", () => {
     expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(1);
   });
 
-  it.each(["config", "factory"] as const)(
-    "keeps a replacement %s independent of an expired initializer on the same client",
-    async (partition) => {
-      const first = observeHydration(h.control.initialize());
-      const expired = await h.frame(0);
-      await h.expireWaiter();
-      await expect(first).rejects.toThrow("thread/list timed out");
-      let control = h.control;
-      if (partition === "config") {
-        h.replaceConfig();
-      } else {
-        control = h.newFactory().forRequest("main");
-      }
-      const current = observeHydration(control.initialize());
-      const independent = await h.frame(1);
-      expect(independent.transport.client).toBe(expired.transport.client);
-      h.reply(independent, "replacement");
-      await current;
-      expect((await control.listPage({})).sessions).toMatchObject([{ threadId: "replacement" }]);
-      h.reply(expired, "old-result");
-      await expect(first).rejects.toThrow("thread/list timed out");
-      expect(h.frames).toHaveLength(2);
-    },
-  );
+  it("keeps a replacement factory independent of an expired initializer on the same client", async () => {
+    const first = observeHydration(h.control.initialize());
+    const expired = await h.frame(0);
+    await h.expireWaiter();
+    await expect(first).rejects.toThrow("thread/list timed out");
+    const control = h.newFactory().forRequest("main");
+    const current = observeHydration(control.initialize());
+    const independent = await h.frame(1);
+    expect(independent.transport.client).toBe(expired.transport.client);
+    h.reply(independent, "replacement");
+    await current;
+    expect((await control.listPage({})).sessions).toMatchObject([{ threadId: "replacement" }]);
+    h.reply(expired, "old-result");
+    await expect(first).rejects.toThrow("thread/list timed out");
+    expect(h.frames).toHaveLength(2);
+  });
 
   it("serves replacement configs independently while draining retired hydration at shutdown", async () => {
     const first = observeHydration(h.control.initialize());

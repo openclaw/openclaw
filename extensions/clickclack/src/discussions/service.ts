@@ -1,14 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
   SessionDiscussionInfo,
   SessionDiscussionProvider,
 } from "openclaw/plugin-sdk/session-discussion";
-import {
-  createClickClackClient,
-  isClickClackChannelNameConflict,
-  type ClickClackClient,
-} from "../http-client.js";
+import { createClickClackClient, type ClickClackClient } from "../http-client.js";
+import { findClickClackWorkspace } from "../resolve.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import {
   clearDiscussionBindingGeneration,
@@ -47,11 +45,10 @@ import {
   assertChannelPatch,
   reconcilePendingDiscussionOpen,
   openClickClackDiscussionBinding,
-  resolveAvailableChannelName,
+  renameDiscussionChannel,
 } from "./service-open.js";
 
 const RECONCILE_INTERVAL_MS = 60_000;
-const CHANNEL_NAME_MUTATION_ATTEMPTS = 4;
 type DiscussionServiceOptions = {
   clientFactory?: (account: ResolvedClickClackAccount) => ClickClackClient;
   installationId?: string;
@@ -72,7 +69,7 @@ export class ClickClackDiscussionService {
   readonly #bindingGenerationFactory: () => string;
   readonly #detachedBindings: DetachedDiscussionBindingRetention;
   readonly #timersEnabled: boolean;
-  readonly #sessionLocks = new Map<string, Promise<unknown>>();
+  readonly #sessionQueue = new KeyedAsyncQueue();
   readonly #reconcileScheduler = new DiscussionReconcileScheduler({
     shouldSchedule: () => !this.#closed,
     run: async (sessionKey) => await this.reconcile(sessionKey),
@@ -112,11 +109,6 @@ export class ClickClackDiscussionService {
     if (options.gatewayEvents) {
       void this.bindGatewayEvents(options.gatewayEvents).catch((error: unknown) => {
         this.#logger().warn(`discussion activation failed: ${String(error)}`);
-      });
-    }
-    if (this.#timersEnabled && !options.gatewayEvents) {
-      void this.#withOperation(() => this.#ensureTimer()).catch((error: unknown) => {
-        this.#logger().warn(`discussion timer initialization failed: ${String(error)}`);
       });
     }
   }
@@ -168,7 +160,7 @@ export class ClickClackDiscussionService {
 
   async info(sessionKey: string): Promise<SessionDiscussionInfo> {
     return await this.#withOperation(() =>
-      this.#withSessionLock(sessionKey, async () => {
+      this.#sessionQueue.enqueue(sessionKey, async () => {
         const accounts = discussionAccounts(this.#currentConfig());
         if (accounts.length !== 1) {
           return { state: "none" };
@@ -202,7 +194,7 @@ export class ClickClackDiscussionService {
 
   async open(sessionKey: string): Promise<SessionDiscussionInfo> {
     return await this.#withOperation(() =>
-      this.#withSessionLock(sessionKey, () => this.#open(sessionKey)),
+      this.#sessionQueue.enqueue(sessionKey, () => this.#open(sessionKey)),
     );
   }
 
@@ -266,7 +258,7 @@ export class ClickClackDiscussionService {
 
   async #reconcile(sessionKey: string): Promise<void> {
     try {
-      await this.#withSessionLock(sessionKey, async () => {
+      await this.#sessionQueue.enqueue(sessionKey, async () => {
         const binding = this.#store.get(sessionKey);
         if (binding) {
           await this.#reconcileBinding(sessionKey, binding);
@@ -314,18 +306,12 @@ export class ClickClackDiscussionService {
     limit: number,
   ): Promise<{ binding?: ClickClackDiscussionBinding; text: string }> {
     return await this.#withOperation(() =>
-      this.#withSessionLock(sessionKey, async () => {
+      this.#sessionQueue.enqueue(sessionKey, async () => {
         const binding = this.#store.get(sessionKey);
         if (!binding) {
           return { text: "No discussion is bound to this session." };
         }
         const resolved = await this.#resolveBindingForUse(binding);
-        if (resolved.state === "retargeted") {
-          return { text: "No discussion is bound to this session." };
-        }
-        if (resolved.state === "stale") {
-          return { text: "No discussion is bound to this session." };
-        }
         if (resolved.state !== "active") {
           return { text: "No discussion is bound to this session." };
         }
@@ -472,31 +458,17 @@ export class ClickClackDiscussionService {
     const client = this.#clientFactory(account);
     let updated: Awaited<ReturnType<ClickClackClient["updateChannel"]>>;
     if (labelChanged) {
-      updated = await this.#withChannelMutationLock(async () => {
-        for (let attempt = 0; attempt < CHANNEL_NAME_MUTATION_ATTEMPTS; attempt += 1) {
-          patch.name = await resolveAvailableChannelName({
-            client,
-            workspaceId: currentBinding.workspaceId,
-            label,
-            sessionKey,
-            agentId: currentBinding.agentId,
-            ownChannelId: currentBinding.channelId,
-          });
-          try {
-            const renamed = await client.updateChannel(currentBinding.channelId, patch);
-            assertChannelPatch(renamed, patch);
-            return renamed;
-          } catch (error) {
-            if (
-              !isClickClackChannelNameConflict(error) ||
-              attempt === CHANNEL_NAME_MUTATION_ATTEMPTS - 1
-            ) {
-              throw error;
-            }
-          }
-        }
-        throw new Error("ClickClack discussion channel name retries were exhausted");
-      });
+      updated = await this.#withChannelMutationLock(() =>
+        renameDiscussionChannel({
+          client,
+          workspaceId: currentBinding.workspaceId,
+          channelId: currentBinding.channelId,
+          label,
+          sessionKey,
+          agentId: currentBinding.agentId,
+          patch,
+        }),
+      );
     } else {
       updated = await client.updateChannel(currentBinding.channelId, patch);
       assertChannelPatch(updated, patch);
@@ -607,12 +579,7 @@ export class ClickClackDiscussionService {
       return resolved;
     }
     const workspaces = await this.#clientFactory(resolved.account).workspaces();
-    const workspace = workspaces.find(
-      (candidate) =>
-        candidate.id === resolved.account.discussions.workspace ||
-        candidate.slug === resolved.account.discussions.workspace ||
-        candidate.name === resolved.account.discussions.workspace,
-    );
+    const workspace = findClickClackWorkspace(workspaces, resolved.account.discussions.workspace);
     const current = resolveDiscussionBindingAccount(this.#currentConfig(), binding);
     if (current.state !== "active") {
       return current;
@@ -676,19 +643,6 @@ export class ClickClackDiscussionService {
       () => this.#operations.delete(operation),
     );
     return operation;
-  }
-
-  async #withSessionLock<T>(sessionKey: string, run: () => Promise<T>): Promise<T> {
-    const previous = this.#sessionLocks.get(sessionKey) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(run);
-    this.#sessionLocks.set(sessionKey, current);
-    try {
-      return await current;
-    } finally {
-      if (this.#sessionLocks.get(sessionKey) === current) {
-        this.#sessionLocks.delete(sessionKey);
-      }
-    }
   }
 
   async #withChannelMutationLock<T>(run: () => Promise<T>): Promise<T> {

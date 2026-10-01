@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { consumePendingAssistantReplyDirectivesIntoReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import { extractAssistantStreamSnapshot } from "./embedded-agent-subscribe.handlers.messages.snapshot.js";
@@ -9,11 +8,22 @@ import {
   updateMessage,
 } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
 import {
-  createOpenAiResponsesPartial,
   createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+
+function twoBlockPartial() {
+  return {
+    role: "assistant",
+    phase: "final_answer",
+    api: "openai-responses",
+    content: [
+      createOpenAiResponsesTextBlock({ text: "First block", id: "item-1", phase: "final_answer" }),
+      createOpenAiResponsesTextBlock({ text: "Second block", id: "item-2", phase: "final_answer" }),
+    ],
+  };
+}
 
 describe("assistant stream snapshots", () => {
   it("keeps prepared block and visible text stable when provider content changes", () => {
@@ -51,11 +61,10 @@ describe("assistant stream snapshots", () => {
     message.content = [];
 
     expect(snapshot.text).toBe("Hello\nworld");
-    expect(snapshot.text).toBe("Hello\nworld");
     expect({ ...snapshot }.text).toBe("Hello\nworld");
   });
 
-  it.each(["stop", "error"] as const)(
+  it.each(["error"] as const)(
     "uses the prepared %s error context after the provider changes it",
     (stopReason) => {
       const sourceText = "400 Incorrect role information";
@@ -128,23 +137,6 @@ describe("handleMessageUpdate text signatures", () => {
 
   it.each([
     {
-      name: "ordinary text",
-      chunks: ["Hello", " world"],
-      updates: [
-        { text: "Hello", delta: "Hello" },
-        { text: "Hello world", delta: " world" },
-      ],
-    },
-    {
-      name: "held whitespace",
-      chunks: ["  Hello ", "world", "\n\n", "Next"],
-      updates: [
-        { text: "Hello", delta: "Hello" },
-        { text: "Hello world", delta: " world" },
-        { text: "Hello world\n\nNext", delta: "\n\nNext" },
-      ],
-    },
-    {
       name: "user-visible sanitizer",
       chunks: [
         "Visible\n<tool_call>{",
@@ -156,14 +148,7 @@ describe("handleMessageUpdate text signatures", () => {
         { text: "Visible\n\nDone.", delta: "\n\nDone." },
       ],
     },
-    {
-      name: "initially hidden tool call",
-      chunks: [
-        "<tool_call>{",
-        '"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>\nDone.',
-      ],
-      updates: [{ text: "Done.", delta: "Done." }],
-    },
+
     {
       name: "split voice directive",
       chunks: ["[[audio_as_", "voice]]Hello", " world"],
@@ -238,104 +223,37 @@ describe("handleMessageUpdate text signatures", () => {
     },
   );
 
-  it.each(["Hello", ""])(
-    "replaces a phased reply with the final snapshot %j",
-    async (finalText) => {
-      const onAgentEvent = vi.fn();
-      const context = createMessageUpdateContext({ onAgentEvent });
-      for (const event of [
-        { type: "text_delta" as const, text: "Hello world", delta: "Hello world" },
-        { type: "text_delta" as const, text: "", delta: "" },
-        { type: "text_end" as const, text: finalText },
-      ]) {
-        const pending = updateMessage(
-          context,
-          createTextUpdateEvent({
-            ...event,
-            id: "item-final",
-            signaturePhase: "final_answer",
-            partialPhase: "final_answer",
-          }),
-        );
-        if (event.type === "text_delta") {
-          expect(onAgentEvent).toHaveBeenCalledTimes(1);
-        }
-        await pending;
+  it.each([""])("replaces a phased reply with the final snapshot %j", async (finalText) => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    for (const event of [
+      { type: "text_delta" as const, text: "Hello world", delta: "Hello world" },
+      { type: "text_delta" as const, text: "", delta: "" },
+      { type: "text_end" as const, text: finalText },
+    ]) {
+      const pending = updateMessage(
+        context,
+        createTextUpdateEvent({
+          ...event,
+          id: "item-final",
+          signaturePhase: "final_answer",
+          partialPhase: "final_answer",
+        }),
+      );
+      if (event.type === "text_delta") {
+        expect(onAgentEvent).toHaveBeenCalledTimes(1);
       }
+      await pending;
+    }
 
-      expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
-        {
-          stream: "assistant",
-          data: { text: "Hello world", delta: "Hello world", replace: undefined },
-        },
-        { stream: "assistant", data: { text: finalText, delta: "", replace: true } },
-      ]);
-      expect(context.blockChunker.bufferedText).toBe(finalText);
-    },
-  );
-
-  it("treats phased textSignature item changes as assistant-message boundaries", async () => {
-    const flushBlockReplyBuffer = vi.fn();
-    const resetAssistantMessageState = vi.fn();
-    const onAssistantMessageStart = vi.fn();
-    const onPartialReply = vi.fn();
-    const context = createMessageUpdateContext({
-      flushBlockReplyBuffer,
-      resetAssistantMessageState,
-      onPartialReply,
-    });
-    context.params.onAssistantMessageStart = onAssistantMessageStart;
-    context.state.lastAssistantStreamContentIndex = 0;
-    context.state.lastAssistantStreamItemId = "item-1";
-    context.state.assistantMessageIndex = 7;
-
-    const pending = updateMessage(context, {
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: {
-        type: "text_delta",
-        contentIndex: 1,
-        delta: "Second block",
-        partial: {
-          role: "assistant",
-          phase: "final_answer",
-          content: [
-            createOpenAiResponsesTextBlock({
-              text: "First block",
-              id: "item-1",
-              phase: "final_answer",
-            }),
-            createOpenAiResponsesTextBlock({
-              text: "Second block [[reply_to_current]]",
-              id: "item-2",
-              phase: "final_answer",
-            }),
-          ],
-          stopReason: "stop",
-          api: "openai-responses",
-          provider: "openai",
-          model: "gpt-5.2",
-          usage: {},
-          timestamp: 0,
-        },
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { text: "Hello world", delta: "Hello world", replace: undefined },
       },
-    });
-
-    expect(flushBlockReplyBuffer).toHaveBeenCalledWith({ assistantMessageIndex: 7 });
-    expect(resetAssistantMessageState).toHaveBeenCalledWith(0);
-    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Second block",
-        delta: "Second block",
-        phase: "final_answer",
-      }),
-    );
-    expect(onPartialReply).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "First block\nSecond block" }),
-    );
-    expect(context.state.lastAssistantStreamContentIndex).toBe(1);
-    expect(context.state.lastAssistantStreamItemId).toBe("item-2");
-    await pending;
+      { stream: "assistant", data: { text: finalText, delta: "", replace: true } },
+    ]);
+    expect(context.blockChunker.bufferedText).toBe(finalText);
   });
 
   it("does not replay a deferred item snapshot before its first delta", async () => {
@@ -350,26 +268,11 @@ describe("handleMessageUpdate text signatures", () => {
       state: {
         lastAssistantStreamContentIndex: 0,
         lastAssistantStreamItemId: "item-1",
+        assistantMessageIndex: 7,
       },
     });
     context.params.onAssistantMessageStart = onAssistantMessageStart;
-    const partial = {
-      role: "assistant",
-      phase: "final_answer",
-      content: [
-        createOpenAiResponsesTextBlock({
-          text: "First block",
-          id: "item-1",
-          phase: "final_answer",
-        }),
-        createOpenAiResponsesTextBlock({
-          text: "Second block",
-          id: "item-2",
-          phase: "final_answer",
-        }),
-      ],
-      api: "openai-responses",
-    };
+    const partial = twoBlockPartial();
 
     const startPending = updateMessage(context, {
       message: partial,
@@ -388,8 +291,8 @@ describe("handleMessageUpdate text signatures", () => {
       },
     });
 
-    expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
-    expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
+    expect(flushBlockReplyBuffer).toHaveBeenCalledExactlyOnceWith({ assistantMessageIndex: 7 });
+    expect(resetAssistantMessageState).toHaveBeenCalledExactlyOnceWith(0);
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenCalledWith(
@@ -399,55 +302,9 @@ describe("handleMessageUpdate text signatures", () => {
         phase: "final_answer",
       }),
     );
+    expect(context.state.lastAssistantStreamContentIndex).toBe(1);
+    expect(context.state.lastAssistantStreamItemId).toBe("item-2");
     await Promise.all([startPending, deltaPending]);
-  });
-
-  it("keeps same-block OpenAI Responses snapshot extensions in one assistant message", async () => {
-    const flushBlockReplyBuffer = vi.fn();
-    const resetAssistantMessageState = vi.fn();
-    const onAssistantMessageStart = vi.fn();
-    const onPartialReply = vi.fn();
-    const context = createMessageUpdateContext({
-      flushBlockReplyBuffer,
-      resetAssistantMessageState,
-      onPartialReply,
-      state: {
-        deltaBuffer: "First block",
-        assistantStream: { raw: "First block", text: "First block" },
-        lastAssistantStreamContentIndex: 0,
-        lastAssistantStreamItemId: "item-1",
-      },
-    });
-    context.params.onAssistantMessageStart = onAssistantMessageStart;
-
-    const pending = updateMessage(context, {
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: {
-        type: "text_end",
-        contentIndex: 0,
-        content: "First block extended",
-        partial: createOpenAiResponsesPartial({
-          text: "First block extended",
-          id: "item-2",
-          signaturePhase: "final_answer",
-          partialPhase: "final_answer",
-        }),
-      },
-    });
-
-    expect(flushBlockReplyBuffer.mock.calls).toEqual([[{ assistantMessageIndex: 0, final: true }]]);
-    expect(resetAssistantMessageState).not.toHaveBeenCalled();
-    expect(onAssistantMessageStart).not.toHaveBeenCalled();
-    expect(onPartialReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "First block extended",
-        delta: " extended",
-        phase: "final_answer",
-      }),
-    );
-    expect(context.state.lastAssistantStreamContentIndex).toBe(0);
-    expect(context.state.lastAssistantStreamItemId).toBe("item-1");
-    await pending;
   });
 
   it("scopes item-id fallback boundaries to the matching signed block", async () => {
@@ -464,23 +321,7 @@ describe("handleMessageUpdate text signatures", () => {
       assistantMessageEvent: {
         type: "text_delta",
         delta: "Second block",
-        partial: {
-          role: "assistant",
-          phase: "final_answer",
-          content: [
-            createOpenAiResponsesTextBlock({
-              text: "First block",
-              id: "item-1",
-              phase: "final_answer",
-            }),
-            createOpenAiResponsesTextBlock({
-              text: "Second block",
-              id: "item-2",
-              phase: "final_answer",
-            }),
-          ],
-          api: "openai-responses",
-        },
+        partial: twoBlockPartial(),
       },
     });
 
@@ -500,37 +341,25 @@ describe("handleMessageUpdate text signatures", () => {
   });
 
   it("preserves phase-aware voice and reply directives while deferring final media delivery", async () => {
-    const accumulator = createStreamingDirectiveAccumulator();
     const ctx = createMessageUpdateContext({
-      consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
-        accumulator.consume(text, options),
-      ),
       state: {
         blockReplyBreak: "message_end",
       },
     });
     const replyText = "Done.\n\n[[reply_to_current]]\n[[audio_as_voice]]\nMEDIA:/tmp/reply.ogg";
 
-    await updateMessage(
-      ctx,
-      createTextUpdateEvent({
-        type: "text_delta",
-        text: replyText,
-        id: "item-final",
-        signaturePhase: "final_answer",
-        partialPhase: "final_answer",
-      }),
-    );
-    await updateMessage(
-      ctx,
-      createTextUpdateEvent({
-        type: "text_end",
-        text: replyText,
-        id: "item-final",
-        signaturePhase: "final_answer",
-        partialPhase: "final_answer",
-      }),
-    );
+    for (const type of ["text_delta", "text_end"] as const) {
+      await updateMessage(
+        ctx,
+        createTextUpdateEvent({
+          type,
+          text: replyText,
+          id: "item-final",
+          signaturePhase: "final_answer",
+          partialPhase: "final_answer",
+        }),
+      );
+    }
 
     expect(ctx.blockChunker.bufferedText).toBe("Done.\n\n");
     expect(

@@ -1,8 +1,8 @@
-import { createRequire } from "node:module";
 import type { DOMWindow } from "jsdom";
 import type { Environment } from "vitest/runtime";
 
-const require = createRequire(import.meta.url);
+// VM tests must use the jsdom instance that created their native window.
+const require = process.getBuiltinModule("module").createRequire(import.meta.url);
 const adapterInstalled = Symbol.for("openclaw.vitest.jsdom-adapter");
 export type JsdomCustomElementDefinition = { name: string };
 
@@ -42,6 +42,19 @@ function bindings() {
   return { utils, eventTarget, blob, formData, registry };
 }
 
+// jsdom 30.1.1 follows the unfocusing steps: blur() focuses the document viewport, so
+// hasFocus() stays true. A fresh document has no focused area; restore that state.
+export function clearJsdomViewportFocus(document: Document): void {
+  const impl = bindings().utils.implForWrapper(document) as {
+    _lastFocusedElement?: unknown;
+    _clearDOMSelector?: () => void;
+  } | null;
+  if (impl && impl._lastFocusedElement === impl) {
+    impl._lastFocusedElement = null;
+    impl._clearDOMSelector?.();
+  }
+}
+
 export function jsdomCustomElementDefinitions(registry: object) {
   const native = bindings().registry;
   return native.is(registry)
@@ -74,7 +87,10 @@ function installJsdomWindowAdapter(): void {
 export function installJsdomEnvironmentAdapter(environment: Environment): void {
   if (Object.hasOwn(environment, adapterInstalled)) return;
   Object.defineProperty(environment, adapterInstalled, { value: true });
-  installJsdomWindowAdapter();
+  // Bun also needs this repair for direct JSDOM consumers in Node-environment tests.
+  if (process.versions.bun) {
+    installJsdomWindowAdapter();
+  }
   const NativeBlob = globalThis.Blob;
   const NativeFile = globalThis.File;
   const NativeURL = globalThis.URL;
@@ -133,6 +149,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   }
 
   environment.setup = async (global, options) => {
+    installJsdomWindowAdapter();
     const originals = new Map(
       ["URL", "Request"].map((key) => [key, Object.getOwnPropertyDescriptor(global, key)]),
     );
@@ -153,6 +170,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   };
   if (setupVM) {
     environment.setupVM = async (options) => {
+      installJsdomWindowAdapter();
       const result = await setupVM(options);
       const context = result.getVmContext();
       installWebApis(context, context.jsdom.window);

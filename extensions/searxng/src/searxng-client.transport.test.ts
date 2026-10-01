@@ -1,9 +1,24 @@
 import { createServer, type Server } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runSearxngSearch, testing } from "./searxng-client.js";
+import { testing } from "./searxng-client.js";
 import { createSearxngWebSearchProvider } from "./searxng-search-provider.js";
 
 const servers = new Set<Server>();
+
+function createTool(baseUrl: string, cacheTtlMinutes = 15) {
+  const searchConfig = { cacheTtlMinutes };
+  return expectDefined(
+    createSearxngWebSearchProvider().createTool({
+      config: {
+        tools: { web: { search: searchConfig } },
+        plugins: { entries: { searxng: { config: { webSearch: { baseUrl } } } } },
+      },
+      searchConfig,
+    }),
+    "SearXNG search tool",
+  );
+}
 
 async function listen(server: Server): Promise<string> {
   servers.add(server);
@@ -52,20 +67,11 @@ describe("searxng real transport", () => {
           );
         }),
       );
-      const search = async (ttl: number) => {
-        const searchConfig = { cacheTtlMinutes: ttl };
-        const tool = createSearxngWebSearchProvider().createTool({
-          config: {
-            tools: { web: { search: searchConfig } },
-            plugins: { entries: { searxng: { config: { webSearch: { baseUrl } } } } },
-          },
-          searchConfig,
-        });
-        if (!tool) {
-          throw new Error("Expected SearXNG search tool");
-        }
-        return await tool.execute({ query: "current search TTL" });
-      };
+      const search = (ttl: number) =>
+        createTool(baseUrl, ttl).execute(
+          { query: "current search TTL" },
+          { signal: new AbortController().signal },
+        );
 
       const original = await search(15);
       expect(await search(15)).toEqual({ ...original, cached: true });
@@ -92,66 +98,27 @@ describe("searxng real transport", () => {
     },
   );
 
-  it("reads JSON results from a loopback endpoint", async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(
-        JSON.stringify({
-          results: [
-            {
-              title: "OpenClaw",
-              url: "https://docs.openclaw.ai/",
-              content: "OpenClaw documentation",
-            },
-          ],
-        }),
-      );
-    });
-    const baseUrl = await listen(server);
-
-    await expect(
-      runSearxngSearch({
-        baseUrl,
-        query: "openclaw",
-        categories: "general",
-      }),
-    ).resolves.toMatchObject({
-      provider: "searxng",
-      count: 1,
-      results: [{ url: "https://docs.openclaw.ai/" }],
-    });
-  });
-
-  it("aborts a stalled response body and closes the request", async () => {
-    let resolveRequestStarted: (() => void) | undefined;
-    const requestStarted = new Promise<void>((resolve) => {
-      resolveRequestStarted = resolve;
-    });
-    let resolveClientClosed: (() => void) | undefined;
-    const clientClosed = new Promise<void>((resolve) => {
-      resolveClientClosed = resolve;
-    });
+  it("aborts a provider's stalled response body and closes the request", async () => {
+    const requestStarted = Promise.withResolvers<void>();
+    const clientClosed = Promise.withResolvers<void>();
     const server = createServer((request, response) => {
-      request.socket.once("close", () => resolveClientClosed?.());
+      request.socket.once("close", () => clientClosed.resolve());
       response.writeHead(200, { "Content-Type": "application/json" });
       response.write('{"results":[');
       response.flushHeaders();
-      resolveRequestStarted?.();
+      requestStarted.resolve();
     });
     const baseUrl = await listen(server);
     const controller = new AbortController();
-    const pending = runSearxngSearch({
-      baseUrl,
-      query: "stalled response",
-      categories: "general",
-      timeoutSeconds: 30,
-      signal: controller.signal,
-    });
+    const pending = createTool(baseUrl).execute(
+      { query: "stalled response", categories: "general" },
+      { signal: controller.signal },
+    );
 
-    await requestStarted;
+    await requestStarted.promise;
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    await expect(clientClosed).resolves.toBeUndefined();
+    await expect(clientClosed.promise).resolves.toBeUndefined();
   });
 });

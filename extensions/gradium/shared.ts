@@ -1,4 +1,3 @@
-// Gradium plugin module implements shared behavior.
 const DEFAULT_GRADIUM_BASE_URL = "https://api.gradium.ai";
 export const GRADIUM_API_HOSTNAME = "api.gradium.ai";
 export const DEFAULT_GRADIUM_VOICE_ID = "YTpq7expH9539ERJ";

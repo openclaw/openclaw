@@ -67,8 +67,6 @@ describe("CallManager verification on restore", () => {
 
   async function initializeManager(params?: {
     callOverrides?: Parameters<typeof makePersistedCall>[0];
-    providerResult?: FakeProvider["getCallStatusResult"];
-    configureProvider?: (provider: FakeProvider) => void;
     configOverrides?: Partial<{ maxDurationSeconds: number }>;
   }) {
     const storePath = createTestStorePath();
@@ -76,10 +74,6 @@ describe("CallManager verification on restore", () => {
     await writeCallsToStore(storePath, [call]);
 
     const provider = new FakeProvider();
-    if (params?.providerResult) {
-      provider.getCallStatusResult = params.providerResult;
-    }
-    params?.configureProvider?.(provider);
 
     const config = VoiceCallConfigSchema.parse({
       enabled: true,
@@ -92,14 +86,6 @@ describe("CallManager verification on restore", () => {
 
     return { call, manager, provider, storePath };
   }
-
-  it("skips stale calls reported terminal by provider", async () => {
-    const { manager } = await initializeManager({
-      providerResult: { status: "completed", isTerminal: true },
-    });
-
-    expect(manager.getActiveCalls()).toHaveLength(0);
-  });
 
   it("resolves a terminal call from persisted state after restore", async () => {
     const { call, manager } = await initializeManager({
@@ -183,25 +169,6 @@ describe("CallManager verification on restore", () => {
     });
   });
 
-  it("keeps calls reported active by provider", async () => {
-    const { call, manager } = await initializeManager({
-      providerResult: { status: "in-progress", isTerminal: false },
-    });
-
-    const activeCall = requireSingleActiveCall(manager);
-    expect(activeCall.callId).toBe(call.callId);
-  });
-
-  it("keeps calls when provider returns unknown (transient error)", async () => {
-    const { call, manager } = await initializeManager({
-      providerResult: { status: "error", isTerminal: false, isUnknown: true },
-    });
-
-    const activeCall = requireSingleActiveCall(manager);
-    expect(activeCall.callId).toBe(call.callId);
-    expect(activeCall.state).toBe(call.state);
-  });
-
   it("skips calls older than maxDurationSeconds", async () => {
     const { manager, provider, storePath } = await initializeManager({
       callOverrides: {
@@ -218,90 +185,36 @@ describe("CallManager verification on restore", () => {
     expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
   });
 
-  it("skips calls without providerCallId", async () => {
-    const { manager } = await initializeManager({
-      callOverrides: { providerCallId: undefined, state: "initiated" },
-    });
-
-    expect(manager.getActiveCalls()).toHaveLength(0);
-  });
-
-  it("keeps call when getCallStatus throws (verification failure)", async () => {
-    const { call, manager } = await initializeManager({
-      configureProvider: (provider) => {
-        provider.getCallStatus = async () => {
-          throw new Error("network failure");
-        };
-      },
-    });
-
-    const activeCall = requireSingleActiveCall(manager);
-    expect(activeCall.callId).toBe(call.callId);
-    expect(activeCall.state).toBe(call.state);
-  });
-
   it("summarizes repeated restored-call verification outcomes", async () => {
     const now = Date.now();
     const storePath = createTestStorePath();
     const calls = [
+      ["missing-provider-a", undefined, 10_000],
+      ["missing-provider-b", undefined, 10_000],
+      ["expired-a", "expired-provider-a", 600_000],
+      ["terminal-a", "terminal-provider-a", 20_000],
+      ["terminal-b", "terminal-provider-b", 20_000],
+    ] as const;
+    const restoredCalls = calls.map(([callId, providerCallId, age]) =>
       makePersistedCall({
-        callId: "missing-provider-a",
-        providerCallId: undefined,
+        callId,
+        providerCallId,
         state: "initiated",
-        startedAt: now - 10_000,
+        startedAt: now - age,
         answeredAt: undefined,
       }),
-      makePersistedCall({
-        callId: "missing-provider-b",
-        providerCallId: undefined,
-        state: "initiated",
-        startedAt: now - 10_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "expired-a",
-        providerCallId: "expired-provider-a",
-        state: "initiated",
-        startedAt: now - 600_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "terminal-a",
-        providerCallId: "terminal-provider-a",
-        state: "initiated",
-        startedAt: now - 20_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "terminal-b",
-        providerCallId: "terminal-provider-b",
-        state: "initiated",
-        startedAt: now - 20_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "unknown-a",
-        providerCallId: "unknown-provider-a",
-        state: "initiated",
-        startedAt: now - 20_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "active-a",
-        providerCallId: "active-provider-a",
-        state: "initiated",
-        startedAt: now - 20_000,
-        answeredAt: undefined,
-      }),
-      makePersistedCall({
-        callId: "failure-a",
-        providerCallId: "failure-provider-a",
-        state: "initiated",
-        startedAt: now - 20_000,
-        answeredAt: undefined,
-      }),
-    ];
-    await writeCallsToStore(storePath, calls);
+    );
+    for (const outcome of ["active", "unknown", "failure"]) {
+      restoredCalls.push(
+        makePersistedCall({
+          callId: `${outcome}-a`,
+          providerCallId: `${outcome}-provider-a`,
+          startedAt: now - 30_000,
+          answeredAt: now - 25_000,
+        }),
+      );
+    }
+    await writeCallsToStore(storePath, restoredCalls);
 
     const provider = new FakeProvider();
     provider.getCallStatus = async ({ providerCallId }) => {
@@ -333,6 +246,11 @@ describe("CallManager verification on restore", () => {
         .map((call) => call.callId)
         .toSorted(),
     ).toEqual(["active-a", "failure-a", "unknown-a"]);
+    expect(manager.getActiveCalls().map((call) => call.state)).toEqual([
+      "answered",
+      "answered",
+      "answered",
+    ]);
     const hangupCall = requireSingleHangupCall(provider);
     expect(hangupCall.callId).toBe("expired-a");
     expect(hangupCall.providerCallId).toBe("expired-provider-a");

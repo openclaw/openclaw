@@ -37,7 +37,11 @@ export function encodeSessionTranscriptWorkerError(
     return { kind: "cold", sessionId: error.sessionId };
   }
   if (error instanceof SessionTranscriptProjectionUnavailableError) {
-    return { kind: "projection", sessionId: error.sessionId };
+    return {
+      kind: "projection",
+      sessionId: error.sessionId,
+      ...(error.reason === "window-changed" ? { reason: error.reason } : {}),
+    };
   }
   if (error instanceof SessionTranscriptReadFenceError) {
     return { kind: "fence", message: error.message };
@@ -74,7 +78,7 @@ export function decodeSessionTranscriptWorkerReadError(
     return new SessionTranscriptColdError(failure.sessionId);
   }
   if (failure.kind === "projection") {
-    return new SessionTranscriptProjectionUnavailableError(failure.sessionId);
+    return new SessionTranscriptProjectionUnavailableError(failure.sessionId, failure.reason);
   }
   if (failure.kind === "syntax") {
     return new SyntaxError(failure.message);

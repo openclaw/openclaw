@@ -34,10 +34,6 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (...args: unknown[]) => replaceConfigFileMock(...args),
 }));
 
-vi.mock("./agents.command-shared.js", () => ({
-  createQuietRuntime: <T>(runtime: T) => runtime,
-}));
-
 vi.mock("./config-validation.js", () => ({
   requireValidConfig: async (_runtime: unknown, opts?: unknown) => {
     const snapshot = (await readConfigFileSnapshotMock(opts)) as

@@ -1,4 +1,3 @@
-// Resolves ClawHub plugin catalog entries and install metadata.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -7,6 +6,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import {
   ARCHIVE_LIMIT_ERROR_CODE,
   ArchiveLimitError,
+  ArchiveSecurityError,
   DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
   DEFAULT_MAX_ENTRIES,
   DEFAULT_MAX_EXTRACTED_BYTES,
@@ -600,36 +600,24 @@ function validateClawHubArchiveMetaJson(params: {
 }
 
 function mapClawHubArchiveReadFailure(error: unknown): ClawHubInstallFailure {
+  let message =
+    "ClawHub archive fallback verification failed while reading the downloaded archive.";
   if (error instanceof ArchiveLimitError) {
-    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT) {
-      return buildClawHubInstallFailure(
+    const messages: Partial<Record<ArchiveLimitError["code"], string>> = {
+      [ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT]:
         "ClawHub archive fallback verification exceeded the archive entry limit.",
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      );
-    }
-    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.ARCHIVE_SIZE_EXCEEDS_LIMIT) {
-      return buildClawHubInstallFailure(
+      [ARCHIVE_LIMIT_ERROR_CODE.ARCHIVE_SIZE_EXCEEDS_LIMIT]:
         "ClawHub archive fallback verification rejected the downloaded archive because it exceeds the ZIP archive size limit.",
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      );
-    }
-    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT) {
-      return buildClawHubInstallFailure(
+      [ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT]:
         "ClawHub archive fallback verification exceeded the total extracted-size limit.",
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      );
-    }
-    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT) {
-      return buildClawHubInstallFailure(
+      [ARCHIVE_LIMIT_ERROR_CODE.ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT]:
         "ClawHub archive fallback verification exceeded the per-file size limit.",
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      );
-    }
+    };
+    message = messages[error.code] ?? message;
+  } else if (error instanceof ArchiveSecurityError) {
+    message = `ClawHub archive fallback verification rejected the downloaded archive: ${formatErrorMessage(error)}`;
   }
-  return buildClawHubInstallFailure(
-    "ClawHub archive fallback verification failed while reading the downloaded archive.",
-    CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-  );
+  return buildClawHubInstallFailure(message, CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH);
 }
 
 async function verifyClawHubExtractedFiles(params: {
@@ -823,7 +811,9 @@ function validateClawHubPluginPackage(params: {
   detail: ClawHubPackageDetail;
   compatibility?: ClawHubPackageCompatibility | null;
   runtimeVersion: string;
-}): ClawHubInstallFailure | null {
+}):
+  | { ok: true; family: ClawHubPluginInstallRecordFields["clawhubFamily"] }
+  | ClawHubInstallFailure {
   const pkg = params.detail.package;
   if (!pkg) {
     return buildClawHubInstallFailure(
@@ -871,7 +861,7 @@ function validateClawHubPluginPackage(params: {
       allowLegacyBareSemver: true,
     });
     if (minGatewayVersionCheck.ok) {
-      return null;
+      return { ok: true, family: pkg.family };
     }
     if (minGatewayVersionCheck.kind === "invalid") {
       return buildClawHubInstallFailure(
@@ -890,7 +880,7 @@ function validateClawHubPluginPackage(params: {
       CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_GATEWAY,
     );
   }
-  return null;
+  return { ok: true, family: pkg.family };
 }
 
 export async function installPluginFromClawHub(
@@ -963,13 +953,13 @@ export async function installPluginFromClawHub(
       return versionState;
     }
     const runtimeVersion = resolveCompatibilityHostVersion(params.env);
-    const validationFailure = validateClawHubPluginPackage({
+    const validation = validateClawHubPluginPackage({
       detail,
       compatibility: versionState.compatibility,
       runtimeVersion,
     });
-    if (validationFailure) {
-      return validationFailure;
+    if (!validation.ok) {
+      return validation;
     }
     const runtimeIdResolution = resolveClawHubExpectedRuntimeId({
       detail,
@@ -978,12 +968,18 @@ export async function installPluginFromClawHub(
     if (!runtimeIdResolution.ok) {
       return runtimeIdResolution;
     }
-    return { ok: true as const, detail, versionState, runtimeIdResolution };
+    return {
+      ok: true as const,
+      detail,
+      versionState,
+      runtimeIdResolution,
+      clawhubFamily: validation.family,
+    };
   });
   if (!resolved.ok) {
     return resolved;
   }
-  const { detail, versionState, runtimeIdResolution } = resolved;
+  const { detail, versionState, runtimeIdResolution, clawhubFamily } = resolved;
   const expectedClawPackSha256 = resolveClawHubClawPackArtifactSha256(versionState.clawpack);
   const canonicalPackageName = detail.package?.name ?? parsed.name;
   const officialClawHubPackage = detail.package
@@ -1216,14 +1212,6 @@ export async function installPluginFromClawHub(
             artifactFormat: "zip",
           } satisfies Partial<ClawHubPluginInstallRecordFields>);
     const expectedTarballName = normalizeOptionalString(versionState.clawpack?.npmTarballName);
-    const clawhubFamily =
-      pkg.family === "code-plugin" || pkg.family === "bundle-plugin" ? pkg.family : null;
-    if (!clawhubFamily) {
-      return buildClawHubInstallFailure(
-        `Unsupported ClawHub package family: ${pkg.family}`,
-        CLAWHUB_INSTALL_ERROR_CODE.UNSUPPORTED_FAMILY,
-      );
-    }
     return {
       ...installResult,
       ...(trustResult?.warning ? { warning: trustResult.warning } : {}),

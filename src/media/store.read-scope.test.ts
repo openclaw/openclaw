@@ -30,6 +30,69 @@ async function* mediaBytes() {
 }
 
 describe("read-owned media publication", () => {
+  it.each(["buffer", "stream"] as const)(
+    "composes a client commit guard with read authority after %s bytes are written",
+    async (kind) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const mediaDir = state.statePath("media", "inbound");
+        await fs.mkdir(mediaDir, { recursive: true });
+        const realMediaDir = await fs.realpath(mediaDir);
+        let allowed = true;
+        let wrote = false;
+        const closed = new Error("client upload policy changed");
+        const assertCommitAllowed = () => {
+          if (!allowed) {
+            throw closed;
+          }
+        };
+        const open = fs.open.bind(fs);
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await open(...args);
+          if (
+            typeof args[0] === "string" &&
+            path.dirname(args[0]) === realMediaDir &&
+            args[1] === "wx"
+          ) {
+            const write = handle.writeFile.bind(handle);
+            vi.spyOn(handle, "writeFile").mockImplementation(async (...writeArgs) => {
+              await write(...writeArgs);
+              wrote = true;
+              allowed = false;
+            });
+          }
+          return handle;
+        });
+        await expect(
+          withChannelReadAuthority(
+            () => {},
+            () =>
+              kind === "buffer"
+                ? saveMediaBuffer(
+                    bytes,
+                    "application/pdf",
+                    "inbound",
+                    undefined,
+                    undefined,
+                    undefined,
+                    { assertCommitAllowed },
+                  )
+                : saveMediaStream(
+                    mediaBytes(),
+                    "application/pdf",
+                    "inbound",
+                    undefined,
+                    undefined,
+                    undefined,
+                    { assertCommitAllowed },
+                  ),
+          ),
+        ).rejects.toBe(closed);
+        expect(wrote).toBe(true);
+        expect(await fs.readdir(mediaDir)).toEqual([]);
+      });
+    },
+  );
+
   it.each(["buffer", "source"] as const)(
     "rejects scoped %s publication when durable file sync fails",
     async (kind) => {

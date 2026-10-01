@@ -4,13 +4,18 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Duplex } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import type {
   ServiceChildAnchorMessage,
@@ -35,11 +40,15 @@ vi.mock("node:child_process", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   hooks.spawned = undefined;
+  vi.restoreAllMocks();
 });
 
 it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
-  "confirms native retirement completed before the deadline while the Node host was blocked",
-  async () => {
+  "confirms process-group retirement completed before the deadline while the Node host was blocked",
+  async ({ signal }) => {
+    // The two-process group relay reaps its anchor independently of the blocked host.
+    // Native custody has no such relay.
+    mockProcessPlatform("darwin");
     const root = tempDirs.make("openclaw-retirement-dispatch-");
     const input = path.join(root, "observe.json");
     const receipt = path.join(root, "retired.json");
@@ -91,10 +100,13 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildRelay),
     );
     try {
-      await withTestTimeout(
-        once(observer, "message"),
-        GRACEFUL_CANCEL_TIMEOUT_MS,
-        "observer startup",
+      await withinTest(
+        awaitGateBeforeSettlement(
+          once(observer, "message"),
+          observerExit,
+          "observer exited before startup",
+        ),
+        signal,
       );
       hooks.spawned = (child, args) => {
         if (
@@ -195,7 +207,7 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       if (relay) {
         adapter?.kill("SIGKILL");
         relay.kill("SIGTERM");
-        await withTestTimeout(relayExit.promise, GRACEFUL_CANCEL_TIMEOUT_MS * 3, "relay cleanup");
+        await relayExit.promise;
       }
       adapter?.dispose();
     }

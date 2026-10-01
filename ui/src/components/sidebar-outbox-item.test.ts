@@ -31,7 +31,7 @@ it.each([
   { phase: "connected", command: true, unconfirmed: true, title: "Your command may not have run" },
   { phase: "connected", command: true, unconfirmed: false, title: "Your command failed" },
 ] as const)(
-  "reviews $title while $phase without sending or clearing it",
+  "reviews $title while $phase without sending or deleting the draft",
   ({ phase, command, unconfirmed, title }) => {
     const request = vi.fn(async () => ({}));
     const harness = createGatewayHarness(client(request));
@@ -46,7 +46,7 @@ it.each([
       command,
       severity: unconfirmed ? "warning" : "error",
       requiresAction: true,
-      dismissal: null,
+      dismissal: { kind: "outbox", signature: "pending-1" },
     };
     let entries: readonly SidebarInboxEntry[] = [entry];
     const navigate = vi.fn();
@@ -87,7 +87,7 @@ it.each([
       search: "?__openclawComposerFocus=1",
     });
     expect(request).not.toHaveBeenCalled();
-    expect(context.sidebarAttention.dismiss).not.toHaveBeenCalled();
+    expect(context.sidebarAttention.dismiss).toHaveBeenCalledExactlyOnceWith(entry.dismissal);
     expect(entries).toEqual([entry]);
     entries = [];
     link.click();

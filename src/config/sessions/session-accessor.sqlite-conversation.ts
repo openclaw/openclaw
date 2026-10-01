@@ -149,39 +149,32 @@ export function upsertConversationIdentity(
   updatedAt: number,
 ): void {
   const db = getSessionKysely(database.db);
+  const identityColumns = () => ({
+    channel: identity.channel,
+    account_id: identity.accountId,
+    kind: identity.kind,
+    peer_id: identity.peerId,
+    delivery_target: identity.deliveryTarget,
+    parent_conversation_id: identity.parentConversationRef ?? null,
+    thread_id: identity.threadId ?? null,
+    native_channel_id: identity.nativeChannelId ?? null,
+    native_direct_user_id: identity.nativeDirectUserId ?? null,
+    label: identity.label ?? null,
+    metadata_json: identity.metadata ? JSON.stringify(identity.metadata) : null,
+  });
   executeSqliteQuerySync(
     database.db,
     db
       .insertInto("conversations")
       .values({
         conversation_id: identity.conversationRef,
-        channel: identity.channel,
-        account_id: identity.accountId,
-        kind: identity.kind,
-        peer_id: identity.peerId,
-        delivery_target: identity.deliveryTarget,
-        parent_conversation_id: identity.parentConversationRef ?? null,
-        thread_id: identity.threadId ?? null,
-        native_channel_id: identity.nativeChannelId ?? null,
-        native_direct_user_id: identity.nativeDirectUserId ?? null,
-        label: identity.label ?? null,
-        metadata_json: identity.metadata ? JSON.stringify(identity.metadata) : null,
+        ...identityColumns(),
         created_at: updatedAt,
         updated_at: updatedAt,
       })
       .onConflict((conflict) =>
         conflict.column("conversation_id").doUpdateSet({
-          channel: identity.channel,
-          account_id: identity.accountId,
-          kind: identity.kind,
-          peer_id: identity.peerId,
-          delivery_target: identity.deliveryTarget,
-          parent_conversation_id: identity.parentConversationRef ?? null,
-          thread_id: identity.threadId ?? null,
-          native_channel_id: identity.nativeChannelId ?? null,
-          native_direct_user_id: identity.nativeDirectUserId ?? null,
-          label: identity.label ?? null,
-          metadata_json: identity.metadata ? JSON.stringify(identity.metadata) : null,
+          ...identityColumns(),
           updated_at: updatedAt,
         }),
       ),

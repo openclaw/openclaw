@@ -51,6 +51,7 @@ export function collectKnownSessionRows(
 
 export async function fetchSessionLineage(params: {
   client: GatewayBrowserClient;
+  sessions: Pick<SessionCapability, "describe">;
   sessionKey: string;
   knownRows: Map<string, GatewaySessionRow>;
   isCurrent: () => boolean;
@@ -96,20 +97,23 @@ export async function fetchSessionLineage(params: {
       }
       if (!row) {
         const reconcile = depth === 0 ? params.captureReconcile() : undefined;
-        const described = await params.client.request<{ session?: GatewaySessionRow | null }>(
-          "sessions.describe",
+        const described = await params.sessions.describe(
           {
             key: currentKey,
             ...(!parseAgentSessionKey(currentKey) && currentAgentId
               ? { agentId: currentAgentId }
               : {}),
           },
+          { client: params.client },
         );
         if (!params.isCurrent()) {
           return null;
         }
         row = described?.session
-          ? { ...described.session, runtimeSampledAt: Date.now() }
+          ? {
+              ...described.session,
+              runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
+            }
           : undefined;
         if (!row) {
           break;

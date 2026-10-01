@@ -91,7 +91,7 @@ describe("Codex local tool environment placement", () => {
     },
   );
 
-  it.each(["local", "unconfigured-local", "websocket", "unix", "proxy", "remote-root", "sandbox"])(
+  it.each(["local", "unconfigured-local", "unix", "proxy", "remote-root", "sandbox"])(
     "applies the prepared tool PATH only to owned local execution: %s",
     async (placement) => {
       const params = createParams(
@@ -119,19 +119,17 @@ describe("Codex local tool environment placement", () => {
           bindingStore: testCodexAppServerBindingStore,
           pluginConfig: {
             appServer:
-              placement === "websocket"
-                ? { transport: "websocket", url: "ws://127.0.0.1:19400" }
-                : placement === "unix"
-                  ? { transport: "unix", homeScope: "user", url: "unix:///fixture/native.sock" }
-                  : {
-                      transport: "stdio",
-                      ...(placement === "remote-root"
-                        ? { remoteWorkspaceRoot: "/remote/workspace" }
-                        : {}),
-                      ...(placement === "proxy"
-                        ? { args: ["app-server", "proxy", "--sock", "/fixture/native.sock"] }
-                        : {}),
-                    },
+              placement === "unix"
+                ? { transport: "unix", homeScope: "user", url: "unix:///fixture/native.sock" }
+                : {
+                    transport: "stdio",
+                    ...(placement === "remote-root"
+                      ? { remoteWorkspaceRoot: "/remote/workspace" }
+                      : {}),
+                    ...(placement === "proxy"
+                      ? { args: ["app-server", "proxy", "--sock", "/fixture/native.sock"] }
+                      : {}),
+                  },
           },
         },
       });

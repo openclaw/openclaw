@@ -11,6 +11,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icon } from "../../components/icons.ts";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
@@ -152,25 +153,14 @@ class PortalsPage extends OpenClawLightDomElement {
     return this.requestedPortalId ? null : this.requestedEnvironmentId;
   }
 
-  private async loadPresentation(): Promise<void> {
-    if (this.pendingEnvironmentId) {
-      await this.loadPendingEnvironment();
-    } else {
-      await this.loadPortals();
-    }
+  private loadPresentation(): Promise<void> {
+    return this.pendingEnvironmentId ? this.loadPendingEnvironment() : this.loadPortals();
   }
 
   private async loadPendingEnvironment(): Promise<void> {
     const environmentId = this.pendingEnvironmentId;
-    const client = this.gateway.client;
     const scope = this.gateway.capture();
-    if (
-      !environmentId ||
-      !client ||
-      !scope ||
-      this.environmentLoading ||
-      (this.embedded && !this.presented)
-    ) {
+    if (!environmentId || !scope || this.environmentLoading || (this.embedded && !this.presented)) {
       return;
     }
     const generation = ++this.environmentRequestGeneration;
@@ -181,7 +171,7 @@ class PortalsPage extends OpenClawLightDomElement {
     this.environmentLoading = true;
     this.environmentFailure = null;
     try {
-      const environment = await client.request<EnvironmentSummary>("environments.status", {
+      const environment = await scope.client.request<EnvironmentSummary>("environments.status", {
         environmentId,
       });
       if (!isCurrent()) {
@@ -312,9 +302,8 @@ class PortalsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const client = this.gateway.client;
     const scope = this.gateway.capture();
-    if (!client || !scope) {
+    if (!scope) {
       return;
     }
     const generation = ++this.requestGeneration;
@@ -322,7 +311,7 @@ class PortalsPage extends OpenClawLightDomElement {
     this.loading = true;
     this.error = null;
     try {
-      const result = await client.request<PortalListResult>("portal.list", {});
+      const result = await scope.client.request<PortalListResult>("portal.list", {});
       if (
         generation === this.requestGeneration &&
         portalSetRevision === this.portalSetRevision &&
@@ -350,15 +339,14 @@ class PortalsPage extends OpenClawLightDomElement {
     if (!this.canClosePortal || this.closingPortalId) {
       return;
     }
-    const client = this.gateway.client;
     const scope = this.gateway.capture();
-    if (!client || !scope) {
+    if (!scope) {
       return;
     }
     this.closingPortalId = portal.id;
     this.error = null;
     try {
-      await client.request<PortalCloseResult>("portal.close", { id: portal.id });
+      await scope.client.request<PortalCloseResult>("portal.close", { id: portal.id });
       if (this.gateway.isCurrent(scope)) {
         void this.loadPortals();
       }
@@ -424,6 +412,12 @@ class PortalsPage extends OpenClawLightDomElement {
     const frameKey = `${portal.id}\u0000${portalUrl}`;
     const probeStatus =
       this.portalProbeState?.key === frameKey ? this.portalProbeState.status : "probing";
+    const noticeKey =
+      probeStatus === "new-tab-required"
+        ? "newTabRequired"
+        : probeStatus === "ingress-required"
+          ? "ingressRequired"
+          : "unreachable";
     return html`
       <section class="portals-preview">
         <header class="portals-preview__header">
@@ -469,23 +463,9 @@ class PortalsPage extends OpenClawLightDomElement {
               ? html`
                   <div class="portals-preview__notice" role="status">
                     <div class="portals-preview__notice-title">
-                      ${t(
-                        probeStatus === "new-tab-required"
-                          ? "portalsPage.newTabRequiredTitle"
-                          : probeStatus === "ingress-required"
-                            ? "portalsPage.ingressRequiredTitle"
-                            : "portalsPage.unreachableTitle",
-                      )}
+                      ${t(`portalsPage.${noticeKey}Title`)}
                     </div>
-                    <p>
-                      ${t(
-                        probeStatus === "new-tab-required"
-                          ? "portalsPage.newTabRequiredBody"
-                          : probeStatus === "ingress-required"
-                            ? "portalsPage.ingressRequiredBody"
-                            : "portalsPage.unreachableBody",
-                      )}
-                    </p>
+                    <p>${t(`portalsPage.${noticeKey}Body`)}</p>
                     <a
                       class="portals-preview__notice-url"
                       href=${portalUrl}
@@ -549,7 +529,10 @@ class PortalsPage extends OpenClawLightDomElement {
       </div>`;
     }
     return html`
-      <section class="content-header content-header--page">
+      <section
+        class="content-header content-header--page"
+        ${shellLayoutTraits({ toolbarHeader: true })}
+      >
         <div>
           <h1 class="page-title">${titleForRoute("portals")}</h1>
         </div>

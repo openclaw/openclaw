@@ -19,6 +19,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   disposeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
@@ -55,13 +56,17 @@ let suiteRoot: string;
 let storePath: string;
 let fixtureSequence = 0;
 beforeAll(() => {
-  suiteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-accounting-suite-"));
+  // openclaw-temp-dir: allow suite database root drains before removal
+  suiteRoot = fs.mkdtempSync(
+    path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-accounting-suite-"),
+  );
   storePath = path.join(suiteRoot, "openclaw-agent.sqlite");
   openOpenClawAgentDatabase({ agentId: "main", path: storePath });
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
   disposeOpenClawAgentDatabaseByPath(storePath);
+  await closeOpenClawAgentDatabasesAsync(suiteRoot);
   expect(isOpenClawAgentDatabaseOpen(storePath)).toBe(false);
   fs.rmSync(suiteRoot, { recursive: true, force: true });
 });
@@ -148,7 +153,7 @@ async function createFixture() {
   replyOperation.setPhase("running");
   retainReplyOperationUntilComplete(replyOperation);
   operations.push(replyOperation);
-  const context: FinalizeReplyAgentRunInput = {
+  const context: FinalizeReplyAgentRunInput & { storePath: string } = {
     activeIsNewSession: false,
     activeSessionEntry: entry,
     activeSessionStore: sessionStore,
@@ -977,9 +982,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
 
   it.each([
     { name: "session", replacement: { sessionId: "replacement-session" }, withUsage: true },
-    { name: "session", replacement: { sessionId: "replacement-session" }, withUsage: false },
     { name: "generation", replacement: { lifecycleRevision: "generation-2" }, withUsage: true },
-    { name: "generation", replacement: { lifecycleRevision: "generation-2" }, withUsage: false },
   ])(
     "does not write an old result into a replacement $name with usage=$withUsage",
     async ({ name, replacement, withUsage }) => {

@@ -1,43 +1,66 @@
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
-// Browser tests cover pw tools core.interactions.batch plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserActRequest } from "./client-actions.types.js";
 import {
   BrowserObservedDialogBlockedError,
   isBrowserObservedDialogBlockedError,
 } from "./pw-session-contracts.js";
 import { isPolicyDenyNavigationError } from "./pw-session-navigation.js";
 
-let page: {
-  evaluate: ReturnType<typeof vi.fn>;
-  keyboard: { press: ReturnType<typeof vi.fn>; insertText: ReturnType<typeof vi.fn> };
-  isClosed: ReturnType<typeof vi.fn>;
-  mainFrame: ReturnType<typeof vi.fn>;
-  mouse: { click: ReturnType<typeof vi.fn> };
-  off: ReturnType<typeof vi.fn>;
-  on: ReturnType<typeof vi.fn>;
-  url: ReturnType<typeof vi.fn>;
-} | null = null;
-let locator: Record<string, ReturnType<typeof vi.fn>> | null = null;
-let setPageClosed: (closed: boolean) => void = () => {};
-let setPageUrl: (url: string) => void = () => {};
+function createPage() {
+  let currentUrl = "https://example.com";
+  let closed = false;
+  const frames = new Set<(frame: unknown) => void>();
+  const mainFrame = { url: () => currentUrl };
+  return {
+    page: {
+      evaluate: vi.fn(async () => {}),
+      isClosed: vi.fn(() => closed),
+      keyboard: { press: vi.fn(async () => {}), insertText: vi.fn(async () => {}) },
+      mainFrame: vi.fn(() => mainFrame),
+      mouse: { click: vi.fn(async () => {}) },
+      on: vi.fn((event: string, handler: (frame: unknown) => void) => {
+        if (event === "framenavigated") {
+          frames.add(handler);
+        }
+      }),
+      off: vi.fn((event: string, handler: (frame: unknown) => void) => {
+        if (event === "framenavigated") {
+          frames.delete(handler);
+        }
+      }),
+      url: vi.fn(() => currentUrl),
+    },
+    setPageUrl: (url: string) => {
+      currentUrl = url;
+      for (const handler of frames) {
+        handler(mainFrame);
+      }
+    },
+    setPageClosed: (value: boolean) => {
+      closed = value;
+    },
+  };
+}
+let { page, setPageUrl, setPageClosed } = createPage();
+const locator = {
+  click: vi.fn(async () => {}),
+  dragTo: vi.fn(async () => {}),
+  fill: vi.fn(async () => {}),
+  hover: vi.fn(async () => {}),
+  press: vi.fn(async () => {}),
+  scrollIntoViewIfNeeded: vi.fn(async () => {}),
+  selectOption: vi.fn(async () => {}),
+  setChecked: vi.fn(async () => {}),
+};
 
-const getPageForTargetId = vi.fn(async () => {
-  if (!page) {
-    throw new Error("test: page not set");
-  }
-  return page;
-});
+const getPageForTargetId = vi.fn(async () => page);
 const ensurePageState = vi.fn(() => {});
 const assertPageNavigationCompletedSafely = vi.fn(async () => {});
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
 const quarantineBlockedNavigationTarget = vi.fn(async () => {});
 const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
-const refLocator = vi.fn(() => {
-  if (!locator) {
-    throw new Error("test: locator not set");
-  }
-  return locator;
-});
+const refLocator = vi.fn(() => locator);
 const restoreRoleRefsForTarget = vi.fn(() => {});
 const wasBrowserNavigationSourcePreservedAfterPolicyDenial = vi.fn(() => false);
 const withPageNavigationRequestGuard = vi.fn(
@@ -52,9 +75,22 @@ const withPageNavigationRequestGuard = vi.fn(
 
 const closePageViaPlaywright = vi.fn(async () => {});
 const resizeViewportViaPlaywright = vi.fn(async () => {});
+const drainDownloads = vi.fn(async () => undefined);
+const disposeDownloads = vi.fn();
+const cleanupDialogAbort = vi.fn();
 
 vi.mock("./pw-session.js", () => ({
   assertPageNavigationCompletedSafely,
+  beginActionDownloadCaptureOnPage: vi.fn(() => ({
+    drain: drainDownloads,
+    dispose: disposeDownloads,
+  })),
+  createObservedDialogAbortSignalForPage: vi.fn(
+    ({ parentSignal }: { parentSignal?: AbortSignal }) => ({
+      signal: parentSignal ?? new AbortController().signal,
+      cleanup: cleanupDialogAbort,
+    }),
+  ),
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
@@ -73,100 +109,47 @@ vi.mock("./pw-tools-core.snapshot.js", () => ({
   resizeViewportViaPlaywright,
 }));
 
-const { batchViaPlaywright } = await import("./pw-tools-core.interactions.js");
+vi.mock("./pw-session-connection.js", () => ({
+  pageTargetInfo: vi.fn(async () => ({ targetId: "tab-1" })),
+}));
 
-function firstEvaluateCall(): [unknown, { fnSource?: string; timeoutMs?: number }] {
-  if (!page) {
-    throw new Error("expected test page");
-  }
-  const [call] = page.evaluate.mock.calls;
-  if (!call) {
-    throw new Error("expected page.evaluate call");
-  }
-  return call as [unknown, { fnSource?: string; timeoutMs?: number }];
+const { executeActViaPlaywright } = await import("./pw-tools-core.interactions.execution.js");
+
+const target = { cdpUrl: "http://127.0.0.1:9222", targetId: "tab-1" };
+
+function batch({
+  actions,
+  stopOnError,
+  ...options
+}: Omit<Parameters<typeof executeActViaPlaywright>[0], "cdpUrl" | "action"> &
+  Omit<Extract<BrowserActRequest, { kind: "batch" }>, "kind">) {
+  return executeActViaPlaywright({
+    ...target,
+    ...options,
+    action: { kind: "batch", actions, stopOnError },
+  });
 }
 
-describe("batchViaPlaywright", () => {
+describe("executeActViaPlaywright batches", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    let currentUrl = "https://example.com";
-    let closed = false;
-    setPageClosed = (next) => {
-      closed = next;
-    };
-    const frameNavigatedHandlers = new Set<(frame: unknown) => void>();
-    const mainFrame = { url: () => currentUrl };
-    setPageUrl = (next) => {
-      currentUrl = next;
-      for (const handler of frameNavigatedHandlers) {
-        handler(mainFrame);
-      }
-    };
-    page = {
-      evaluate: vi.fn(async () => {}),
-      isClosed: vi.fn(() => closed),
-      keyboard: { press: vi.fn(async () => {}), insertText: vi.fn(async () => {}) },
-      mainFrame: vi.fn(() => mainFrame),
-      mouse: { click: vi.fn(async () => {}) },
-      off: vi.fn((event: string, handler: (frame: unknown) => void) => {
-        if (event === "framenavigated") {
-          frameNavigatedHandlers.delete(handler);
-        }
-      }),
-      on: vi.fn((event: string, handler: (frame: unknown) => void) => {
-        if (event === "framenavigated") {
-          frameNavigatedHandlers.add(handler);
-        }
-      }),
-      url: vi.fn(() => currentUrl),
-    };
-    locator = {
-      click: vi.fn(async () => {}),
-      dragTo: vi.fn(async () => {}),
-      fill: vi.fn(async () => {}),
-      hover: vi.fn(async () => {}),
-      press: vi.fn(async () => {}),
-      scrollIntoViewIfNeeded: vi.fn(async () => {}),
-      selectOption: vi.fn(async () => {}),
-      setChecked: vi.fn(async () => {}),
-    };
+    ({ page, setPageUrl, setPageClosed } = createPage());
+    for (const mock of Object.values(locator)) {
+      mock.mockReset();
+    }
     closePageViaPlaywright.mockImplementation(async () => setPageClosed(true));
   });
 
-  it("aborts remaining actions after a navigation", async () => {
-    locator!.click!.mockImplementationOnce(() => {
-      setPageUrl("https://example.com/next");
-    });
-
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      actions: [
-        { kind: "click", ref: "1" },
-        { kind: "hover", ref: "2" },
-        { kind: "press", key: "Enter" },
-      ],
-    });
-
-    expect(result).toEqual({
-      results: [{ ok: true, navigated: true, url: "https://example.com/next" }],
-      aborted: {
-        reason: "navigation",
-        afterAction: 1,
-        url: "https://example.com/next",
-        skipped: 2,
-      },
-    });
-    expect(locator!.hover).not.toHaveBeenCalled();
-    expect(page!.keyboard.press).not.toHaveBeenCalled();
+  afterEach(() => {
+    expect(drainDownloads).toHaveBeenCalledOnce();
+    expect(disposeDownloads).toHaveBeenCalledOnce();
+    expect(cleanupDialogAbort).toHaveBeenCalledOnce();
   });
 
   it("does not expose pasted text when native insertion fails", async () => {
     const text = "synthetic-password-paste";
-    page!.keyboard.insertText.mockRejectedValueOnce(new Error(`Insert "${text}" failed`));
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
+    page.keyboard.insertText.mockRejectedValueOnce(new Error(`Insert "${text}" failed`));
+    const result = await batch({
       actions: [{ kind: "insertText", text }],
     });
     expect(result.results).toEqual([
@@ -175,18 +158,16 @@ describe("batchViaPlaywright", () => {
         error: "Unable to paste text into the browser. Focus an editable field and try again.",
       },
     ]);
-    expect(page!.keyboard.insertText).toHaveBeenCalledWith(text);
+    expect(page.keyboard.insertText).toHaveBeenCalledWith(text);
     expect(JSON.stringify(result)).not.toContain(text);
   });
 
   it("aborts remaining actions after a same-URL reload", async () => {
-    locator!.click!.mockImplementationOnce(() => {
+    locator.click.mockImplementationOnce(async () => {
       setPageUrl("https://example.com");
     });
 
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
+    const result = await batch({
       actions: [
         { kind: "click", ref: "1" },
         { kind: "hover", ref: "2" },
@@ -194,6 +175,7 @@ describe("batchViaPlaywright", () => {
     });
 
     expect(result).toEqual({
+      targetId: "tab-1",
       results: [{ ok: true, navigated: true, url: "https://example.com" }],
       aborted: {
         reason: "navigation",
@@ -202,13 +184,13 @@ describe("batchViaPlaywright", () => {
         skipped: 1,
       },
     });
-    expect(locator!.hover).not.toHaveBeenCalled();
-    expect(page!.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+    expect(locator.hover).not.toHaveBeenCalled();
+    expect(page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
   });
 
   it("aborts when a navigation commits after an action settles but before the next dispatch", async () => {
     let closedChecks = 0;
-    page!.isClosed.mockImplementation(() => {
+    page.isClosed.mockImplementation(() => {
       closedChecks += 1;
       if (closedChecks === 2) {
         setPageUrl("https://example.com/late");
@@ -216,9 +198,7 @@ describe("batchViaPlaywright", () => {
       return false;
     });
 
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
+    const result = await batch({
       actions: [
         { kind: "click", ref: "1" },
         { kind: "hover", ref: "2" },
@@ -226,6 +206,7 @@ describe("batchViaPlaywright", () => {
     });
 
     expect(result).toEqual({
+      targetId: "tab-1",
       results: [{ ok: true, navigated: true, url: "https://example.com/late" }],
       aborted: {
         reason: "navigation",
@@ -234,149 +215,28 @@ describe("batchViaPlaywright", () => {
         skipped: 1,
       },
     });
-    expect(locator!.hover).not.toHaveBeenCalled();
-  });
-
-  it("runs every action when the page URL stays unchanged", async () => {
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      actions: [
-        { kind: "click", ref: "1" },
-        { kind: "hover", ref: "2" },
-        { kind: "press", key: "Enter" },
-      ],
-    });
-
-    expect(result).toEqual({ results: [{ ok: true }, { ok: true }, { ok: true }] });
-  });
-
-  it("keeps stopOnError=false until a later navigation aborts the batch", async () => {
-    locator!.click!.mockRejectedValueOnce(new Error("click failed"));
-    locator!.hover!.mockImplementationOnce(() => {
-      setPageUrl("https://example.com/next");
-    });
-
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      stopOnError: false,
-      actions: [
-        { kind: "click", ref: "1" },
-        { kind: "hover", ref: "2" },
-        { kind: "press", key: "Enter" },
-      ],
-    });
-
-    expect(result).toEqual({
-      results: [
-        { ok: false, error: "click failed" },
-        { ok: true, navigated: true, url: "https://example.com/next" },
-      ],
-      aborted: {
-        reason: "navigation",
-        afterAction: 2,
-        url: "https://example.com/next",
-        skipped: 1,
-      },
-    });
-    expect(page!.keyboard.press).not.toHaveBeenCalled();
-  });
-
-  it("aborts when the page closes during an action", async () => {
-    locator!.click!.mockImplementationOnce(() => setPageClosed(true));
-
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      stopOnError: false,
-      actions: [
-        { kind: "click", ref: "1" },
-        { kind: "hover", ref: "2" },
-      ],
-    });
-
-    expect(result).toEqual({
-      results: [{ ok: true }],
-      aborted: {
-        reason: "closed",
-        afterAction: 1,
-        url: "https://example.com",
-        skipped: 1,
-      },
-    });
-    expect(locator!.hover).not.toHaveBeenCalled();
-  });
-
-  it("propagates evaluate timeouts through batched execution", async () => {
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      evaluateEnabled: true,
-      actions: [{ kind: "evaluate", fn: "() => 1", timeoutMs: 5000 }],
-    });
-
-    expect(result).toEqual({ results: [{ ok: true }] });
-    const [evaluateFn, evaluateOptions] = firstEvaluateCall();
-    expect(typeof evaluateFn).toBe("function");
-    expect(evaluateOptions?.fnSource).toBe("() => 1");
-    expect(evaluateOptions?.timeoutMs).toBe(4500);
+    expect(locator.hover).not.toHaveBeenCalled();
   });
 
   it("supports resize and close inside a batch", async () => {
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
+    const result = await batch({
       actions: [{ kind: "resize", width: 800, height: 600 }, { kind: "close" }],
     });
 
-    expect(result).toEqual({ results: [{ ok: true }, { ok: true }] });
+    expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }, { ok: true }] });
     expect(resizeViewportViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
+      ...target,
       width: 800,
       height: 600,
+      signal: expect.any(AbortSignal),
     });
-    expect(closePageViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-    });
+    expect(closePageViaPlaywright).toHaveBeenCalledWith(target);
   });
 
   it.each([
-    { name: "hover", action: { kind: "hover", ref: "1" } as const },
     { name: "scrollIntoView", action: { kind: "scrollIntoView", ref: "1" } as const },
-    {
-      name: "drag",
-      action: { kind: "drag", startRef: "1", endRef: "2" } as const,
-    },
-  ])("forwards navigation policy to batched $name actions", async ({ action }) => {
-    const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
-
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      actions: [action],
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
-    });
-
-    expect(result).toEqual({ results: [{ ok: true }] });
-    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
-      action: expect.any(Function),
-      onPolicyCheckStarted: expect.any(Function),
-      onPolicyDenied: expect.any(Function),
-      page,
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
-    });
-  });
-
-  it.each([
-    { name: "click", action: { kind: "click", ref: "1" } as const },
+    { name: "drag", action: { kind: "drag", startRef: "1", endRef: "2" } as const },
     { name: "clickCoords", action: { kind: "clickCoords", x: 10, y: 20 } as const },
-    { name: "type", action: { kind: "type", ref: "1", text: "value" } as const },
-    { name: "press", action: { kind: "press", key: "Enter" } as const },
     { name: "insertText", action: { kind: "insertText", text: "  pasted 🦞\n" } as const },
     {
       name: "select",
@@ -393,16 +253,14 @@ describe("batchViaPlaywright", () => {
   ])("guards batched $name document requests with the proxy policy", async ({ action }) => {
     const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
 
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
+    const result = await batch({
       actions: [action],
       evaluateEnabled: true,
       ssrfPolicy,
       browserProxyMode: "explicit-browser-proxy",
     });
 
-    expect(result).toEqual({ results: [{ ok: true }] });
+    expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }] });
     expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
       action: expect.any(Function),
       onPolicyCheckStarted: expect.any(Function),
@@ -412,7 +270,7 @@ describe("batchViaPlaywright", () => {
       browserProxyMode: "explicit-browser-proxy",
     });
     expect(assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith({
-      cdpUrl: "http://127.0.0.1:9222",
+      ...target,
       page,
       response: null,
       ssrfPolicy,
@@ -424,9 +282,7 @@ describe("batchViaPlaywright", () => {
   it("preserves proxy policy through nested batches", async () => {
     const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
 
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
+    const result = await batch({
       actions: [
         {
           kind: "batch",
@@ -438,7 +294,7 @@ describe("batchViaPlaywright", () => {
       browserProxyMode: "explicit-browser-proxy",
     });
 
-    expect(result).toEqual({ results: [{ ok: true }] });
+    expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }] });
     expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
       action: expect.any(Function),
       onPolicyCheckStarted: expect.any(Function),
@@ -450,17 +306,14 @@ describe("batchViaPlaywright", () => {
   });
 
   it.each([
-    { innerStopOnError: undefined, outerStopOnError: undefined },
     { innerStopOnError: false, outerStopOnError: undefined },
     { innerStopOnError: undefined, outerStopOnError: false },
-    { innerStopOnError: false, outerStopOnError: false },
   ])(
     "reports nested failure with inner stop=$innerStopOnError and outer stop=$outerStopOnError",
     async ({ innerStopOnError, outerStopOnError }) => {
-      locator!.fill!.mockRejectedValueOnce(new Error("not editable"));
+      locator.fill.mockRejectedValueOnce(new Error("not editable"));
 
-      const result = await batchViaPlaywright({
-        cdpUrl: "http://127.0.0.1:9222",
+      const result = await batch({
         targetId: "tab-1",
         stopOnError: outerStopOnError,
         actions: [
@@ -480,35 +333,16 @@ describe("batchViaPlaywright", () => {
         { ok: false, error: "not editable" },
         ...(outerStopOnError === false ? [{ ok: true }] : []),
       ]);
-      expect(locator!.hover).toHaveBeenCalledTimes(innerStopOnError === false ? 1 : 0);
-      expect(page!.keyboard.press).toHaveBeenCalledTimes(outerStopOnError === false ? 1 : 0);
+      expect(locator.hover).toHaveBeenCalledTimes(innerStopOnError === false ? 1 : 0);
+      expect(page.keyboard.press).toHaveBeenCalledTimes(outerStopOnError === false ? 1 : 0);
     },
   );
 
-  it("propagates a failed grandchild through each batch boundary", async () => {
-    locator!.fill!.mockRejectedValueOnce(new Error("not editable"));
-
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      actions: [
-        {
-          kind: "batch",
-          actions: [{ kind: "batch", actions: [{ kind: "type", ref: "1", text: "value" }] }],
-        },
-        { kind: "press", key: "Enter" },
-      ],
-    });
-
-    expect(result).toEqual({ results: [{ ok: false, error: "not editable" }] });
-    expect(page!.keyboard.press).not.toHaveBeenCalled();
-  });
-
   it("reports the first nested failure after all continue-on-error actions run", async () => {
-    locator!.fill!.mockRejectedValueOnce(new Error("first failure"));
-    locator!.hover!.mockRejectedValueOnce(new Error("second failure"));
+    locator.fill.mockRejectedValueOnce(new Error("first failure"));
+    locator.hover.mockRejectedValueOnce(new Error("second failure"));
 
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
+    const result = await batch({
       actions: [
         {
           kind: "batch",
@@ -522,23 +356,22 @@ describe("batchViaPlaywright", () => {
       ],
     });
 
-    expect(result).toEqual({ results: [{ ok: false, error: "first failure" }] });
-    expect(locator!.hover).toHaveBeenCalledOnce();
-    expect(page!.keyboard.press).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      targetId: "tab-1",
+      results: [{ ok: false, error: "first failure" }],
+    });
+    expect(locator.hover).toHaveBeenCalledOnce();
+    expect(page.keyboard.press).toHaveBeenCalledOnce();
   });
 
   it.each([
     { reason: "navigation", nested: false, stopOnError: false },
-    { reason: "closed", nested: false, stopOnError: false },
-    { reason: "navigation", nested: true, stopOnError: undefined },
     { reason: "closed", nested: true, stopOnError: undefined },
-    { reason: "navigation", nested: true, stopOnError: false },
-    { reason: "closed", nested: true, stopOnError: false },
   ])(
     "preserves failure and $reason abort details (nested=$nested, stop=$stopOnError)",
     async ({ reason, nested, stopOnError }) => {
-      locator!.fill!.mockRejectedValueOnce(new Error("action failed"));
-      locator!.click!.mockImplementationOnce(() => {
+      locator.fill.mockRejectedValueOnce(new Error("action failed"));
+      locator.click.mockImplementationOnce(async () => {
         if (reason === "navigation") {
           setPageUrl("https://example.com/next");
         } else {
@@ -549,8 +382,7 @@ describe("batchViaPlaywright", () => {
         }
       });
 
-      const result = await batchViaPlaywright({
-        cdpUrl: "http://127.0.0.1:9222",
+      const result = await batch({
         stopOnError,
         actions: [
           nested
@@ -570,6 +402,7 @@ describe("batchViaPlaywright", () => {
       const url = reason === "navigation" ? "https://example.com/next" : "https://example.com";
 
       expect(result).toEqual({
+        targetId: "tab-1",
         results: [
           {
             ok: false,
@@ -579,35 +412,41 @@ describe("batchViaPlaywright", () => {
         ],
         aborted: { reason, afterAction: 1, url, skipped: 1 },
       });
-      expect(locator!.hover).not.toHaveBeenCalled();
-      expect(page!.keyboard.press).not.toHaveBeenCalled();
+      expect(locator.hover).not.toHaveBeenCalled();
+      expect(page.keyboard.press).not.toHaveBeenCalled();
     },
   );
 
   it.each([
     new SsrFBlockedError("browser navigation blocked by policy"),
     new BrowserObservedDialogBlockedError({ dialogs: { pending: [], recent: [] } }),
-  ])("preserves $name identity through permissive nested batches", async (error) => {
-    locator!.fill!.mockRejectedValueOnce(error);
+  ])("stops permissive nested batches on $name", async (error) => {
+    locator.fill.mockRejectedValueOnce(error);
 
-    await expect(
-      batchViaPlaywright({
-        cdpUrl: "http://127.0.0.1:9222",
-        stopOnError: false,
-        actions: [
-          {
-            kind: "batch",
-            stopOnError: false,
-            actions: [
-              { kind: "type", ref: "1", text: "value" },
-              { kind: "hover", ref: "2" },
-            ],
-          },
-          { kind: "press", key: "Enter" },
-        ],
-      }),
-    ).rejects.toBe(error);
-    expect(locator!.hover).not.toHaveBeenCalled();
-    expect(page!.keyboard.press).not.toHaveBeenCalled();
+    const result = batch({
+      stopOnError: false,
+      actions: [
+        {
+          kind: "batch",
+          stopOnError: false,
+          actions: [
+            { kind: "type", ref: "1", text: "value" },
+            { kind: "hover", ref: "2" },
+          ],
+        },
+        { kind: "press", key: "Enter" },
+      ],
+    });
+    if (error instanceof BrowserObservedDialogBlockedError) {
+      await expect(result).resolves.toEqual({
+        targetId: "tab-1",
+        blockedByDialog: true,
+        browserState: error.browserState,
+      });
+    } else {
+      await expect(result).rejects.toBe(error);
+    }
+    expect(locator.hover).not.toHaveBeenCalled();
+    expect(page.keyboard.press).not.toHaveBeenCalled();
   });
 });

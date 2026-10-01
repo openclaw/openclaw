@@ -228,22 +228,18 @@ final class ControlChannel {
                 guard let self, !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
                 self.pendingStateTask = nil
                 self.stateDebouncer.recordDeferredApply(at: Date())
-                self.applyState(newState)
+                self.state = newState
             }
             return
         }
 
         self.cancelPendingStateTask()
-        self.applyState(newState)
+        self.state = newState
     }
 
     private func cancelPendingStateTask() {
         self.pendingStateTask?.cancel()
         self.pendingStateTask = nil
-    }
-
-    private func applyState(_ newState: ConnectionState) {
-        self.state = newState
     }
 
     private static func nanoseconds(for interval: TimeInterval) -> UInt64 {
@@ -789,18 +785,7 @@ final class ControlChannel {
         if let dict = value.value as? [String: OpenClawProtocol.AnyCodable] {
             return dict
         }
-        if let dict = value.value as? [String: OpenClawKit.AnyCodable],
-           let data = try? JSONEncoder().encode(dict),
-           let decoded = try? JSONDecoder().decode([String: OpenClawProtocol.AnyCodable].self, from: data)
-        {
-            return decoded
-        }
-        if let data = try? JSONEncoder().encode(value),
-           let decoded = try? JSONDecoder().decode([String: OpenClawProtocol.AnyCodable].self, from: data)
-        {
-            return decoded
-        }
-        return nil
+        return try? GatewayPayloadDecoding.decode(value)
     }
 }
 

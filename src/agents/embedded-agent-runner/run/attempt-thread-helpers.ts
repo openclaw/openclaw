@@ -1,7 +1,4 @@
 import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
-/**
- * Handles per-attempt thread prompt composition and cache TTL markers.
- */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import type { isCacheTtlEligibleProvider } from "../cache-ttl.js";

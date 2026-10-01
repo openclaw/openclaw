@@ -64,7 +64,7 @@ await withOpenClawTestState(
             binding.authorize(request);
             context.admission.assertCurrent();
             assert.ok(grant(), "Synthetic database admission expired");
-          }),
+          }, binding.attachment),
         });
       },
     };

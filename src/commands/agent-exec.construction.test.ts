@@ -119,6 +119,8 @@ describe("agent exec command composition", () => {
           await vi.advanceTimersByTimeAsync(remainingMs - 1);
           expect(settled).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1);
+          // Let the deferred construction deadline decide before awaiting startup settlement.
+          await vi.advanceTimersToNextTimerAsync();
           const managed = await processRun;
           await expect(managed.wait()).resolves.toMatchObject({ reason: "overall-timeout" });
           expect(managed.activity.resultSettled).toBe(true);

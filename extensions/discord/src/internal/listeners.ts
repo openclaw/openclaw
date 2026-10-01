@@ -1,5 +1,6 @@
 import {
   GatewayDispatchEvents,
+  type APIInteraction,
   type APIMessage,
   type APIReaction,
   type APIUnavailableGuild,
@@ -77,6 +78,7 @@ export abstract class MessageCreateListener extends BaseListener {
 
 export abstract class InteractionCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.InteractionCreate;
+  abstract override handle(data: APIInteraction, client: Client): Promise<void> | void;
 }
 
 export abstract class MessageReactionAddListener extends BaseListener {

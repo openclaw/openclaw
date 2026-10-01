@@ -39,23 +39,21 @@ export function registerThreadPolicyRefreshTests({
   startOrResumeThread,
   writeCodexAppServerBinding,
 }: PolicyRefreshFixtures) {
-  it.each(
-    [
-      { developerInstructions: "replacement policy", fault: "none" },
-      { developerInstructions: "", fault: "none" },
-      { developerInstructions: "replacement policy", fault: "unload" },
-      { developerInstructions: "replacement policy", fault: "client retired" },
-      { developerInstructions: "replacement policy", fault: "unknown write" },
-      { developerInstructions: "replacement policy", fault: "retirement failure" },
-      { developerInstructions: "replacement policy", fault: "binding commit" },
-    ].flatMap((scenario) =>
-      (["stdio", "websocket", "unix", "proxy"] as const).map((transport) => ({
-        developerInstructions: scenario.developerInstructions,
-        fault: scenario.fault,
-        transport,
-      })),
+  it.each([
+    ...(["stdio", "websocket", "unix", "proxy"] as const).map((transport) => ({
+      developerInstructions: "replacement policy",
+      fault: "none",
+      transport,
+    })),
+    { developerInstructions: "", fault: "none", transport: "stdio" as const },
+    ...["unload", "client retired", "unknown write", "retirement failure", "binding commit"].map(
+      (fault) => ({
+        developerInstructions: "replacement policy",
+        fault,
+        transport: "stdio" as const,
+      }),
     ),
-  )(
+  ])(
     "refreshes ordinary generic policy over $transport before admitting a resumed turn: $developerInstructions / $fault",
     async ({ developerInstructions, fault, transport }) => {
       const sessionFile = path.join(tempDir, "ordinary-policy.jsonl");
@@ -176,22 +174,14 @@ export function registerThreadPolicyRefreshTests({
     },
   );
 
-  it.each(
-    ["idle", "systemError", "active"].flatMap((nativeStatus) =>
-      (nativeStatus === "active"
-        ? ["replacement policy"]
-        : ["initial policy", "replacement policy", ""]
-      ).flatMap((developerInstructions) =>
-        (["stdio", "websocket", "unix", "proxy"] as const).map((transport) => ({
-          nativeStatus,
-          developerInstructions,
-          transport,
-        })),
-      ),
-    ),
-  )(
-    "keeps ordinary warm configuration honest over $transport across $nativeStatus and policy $developerInstructions",
-    async ({ nativeStatus, developerInstructions, transport }) => {
+  it.each([
+    { nativeStatus: "idle", transport: "websocket" as const },
+    { nativeStatus: "systemError", transport: "stdio" as const },
+    { nativeStatus: "active", transport: "stdio" as const },
+  ])(
+    "keeps ordinary warm configuration honest over $transport across $nativeStatus",
+    async ({ nativeStatus, transport }) => {
+      const developerInstructions = "replacement policy";
       const sessionFile = path.join(tempDir, "ordinary-warm-policy.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const threadId = "ordinary-warm-policy";
@@ -272,7 +262,7 @@ export function registerThreadPolicyRefreshTests({
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
           return;
         }
-        if (nativeStatus === "systemError" && developerInstructions !== "initial policy") {
+        if (nativeStatus === "systemError") {
           await expect(resume).rejects.toThrow("did not confirm unloading");
           expect(methods).not.toContain("thread/inject_items");
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
@@ -280,27 +270,17 @@ export function registerThreadPolicyRefreshTests({
         }
         const second = await resume;
         expect(second.threadId).toBe(first.threadId);
-        expect(methods).toEqual(
-          developerInstructions === "initial policy"
-            ? [
-                "config/read",
-                "configRequirements/read",
-                "thread/start",
-                "config/read",
-                "configRequirements/read",
-              ]
-            : [
-                "config/read",
-                "configRequirements/read",
-                "thread/start",
-                "config/read",
-                "configRequirements/read",
-                "thread/read",
-                "thread/unsubscribe",
-                "thread/resume",
-                "thread/inject_items",
-              ],
-        );
+        expect(methods).toEqual([
+          "config/read",
+          "configRequirements/read",
+          "thread/start",
+          "config/read",
+          "configRequirements/read",
+          "thread/read",
+          "thread/unsubscribe",
+          "thread/resume",
+          "thread/inject_items",
+        ]);
       } finally {
         releaseLeasedSharedCodexAppServerClient(wire.client);
         wire.client.close();

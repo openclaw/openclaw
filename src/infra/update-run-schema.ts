@@ -260,7 +260,7 @@ export const UpdateRunRecordSchema = z.object({
     version: text.optional(),
     sha: text.optional(),
     installationMethod: z
-      .enum(["git-checkout", "npm-global", "pnpm-global", "bun-global", "managed-service"])
+      .enum(["git-checkout", "npm-global", "pnpm-global", "bun-global", "managed-service", "ocm"])
       .nullable()
       .optional(),
   }),

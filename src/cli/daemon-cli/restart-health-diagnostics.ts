@@ -1,4 +1,4 @@
-import { formatPortDiagnostics } from "../../infra/ports.js";
+import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import type {
   GatewayPortHealthSnapshot,
   GatewayRestartSnapshot,
@@ -18,7 +18,7 @@ function formatGatewayStillStarting(snapshot: GatewayRestartSnapshot): string {
   return `Gateway service is still starting after ${Math.round((snapshot.elapsedMs ?? 0) / 1000)}s. Last observed startup phase: ${snapshot.startupPhase ?? "unknown"}. Run openclaw gateway status --deep.`;
 }
 
-function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
+export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
   const lines: string[] = [];
   if (snapshot.portUsage.status === "busy") {
     lines.push(...formatPortDiagnostics(snapshot.portUsage));
@@ -47,28 +47,25 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   if (snapshot.waitOutcome === "generation-changed") {
     lines.push("Gateway process generation changed before readiness could be confirmed.");
   }
-  if (snapshot.versionMismatch) {
-    const actual = snapshot.versionMismatch.actual ?? "unavailable";
-    lines.push(
-      `Gateway version mismatch: expected ${snapshot.versionMismatch.expected}, running gateway reported ${actual}.`,
-    );
-  }
-  if (snapshot.buildIdMismatch) {
-    const actual = snapshot.buildIdMismatch.actual ?? "unavailable";
-    lines.push(
-      `Gateway build mismatch: expected ${snapshot.buildIdMismatch.expected}, running gateway reported ${actual}.`,
-    );
-  }
-  if (snapshot.activatedPluginErrors?.length) {
-    lines.push("Activated plugin load errors:");
-    for (const plugin of snapshot.activatedPluginErrors) {
-      lines.push(`- ${plugin.id}: ${plugin.error}`);
+  for (const [kind, mismatch] of [
+    ["version", snapshot.versionMismatch],
+    ["build", snapshot.buildIdMismatch],
+  ] as const) {
+    if (mismatch) {
+      lines.push(
+        `Gateway ${kind} mismatch: expected ${mismatch.expected}, running gateway reported ${mismatch.actual ?? "unavailable"}.`,
+      );
     }
   }
-  if (snapshot.channelProbeErrors?.length) {
-    lines.push("Channel health probe errors:");
-    for (const channel of snapshot.channelProbeErrors) {
-      lines.push(`- ${channel.id}: ${channel.error}`);
+  for (const [heading, errors] of [
+    ["Activated plugin load errors:", snapshot.activatedPluginErrors],
+    ["Channel health probe errors:", snapshot.channelProbeErrors],
+  ] as const) {
+    if (errors?.length) {
+      lines.push(heading);
+      for (const { id, error } of errors) {
+        lines.push(`- ${id}: ${error}`);
+      }
     }
   }
   const runtimeSummary = [
@@ -82,7 +79,7 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   if (runtimeSummary) {
     lines.push(`Service runtime: ${runtimeSummary}`);
   }
-  lines.push(...renderPortUsageDiagnostics(snapshot));
+  lines.push(...renderGatewayPortHealthDiagnostics(snapshot));
   return lines;
 }
 
@@ -119,8 +116,4 @@ export function formatGatewayRestartFailure(params: {
     statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
     failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
   };
-}
-
-export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
-  return renderPortUsageDiagnostics(snapshot);
 }

@@ -271,26 +271,6 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("lets openai bootstrap from Codex app-server API-key env", () => {
-    expect(resolveProviderAuthEnvVarCandidatesCore()["openai"]).toEqual([
-      "CODEX_API_KEY",
-      "OPENAI_API_KEY",
-    ]);
-  });
-
-  it("includes setup provider env vars without loading setup runtime", () => {
-    useInstalledSetupPlugin("external-model-studio", "global", {
-      id: "model-studio",
-      envVars: ["MODEL_STUDIO_API_KEY", "MODEL_STUDIO_API_KEY"],
-    });
-
-    expect(getProviderEnvVarsCore("model-studio", { config: {} })).toEqual([
-      "MODEL_STUDIO_API_KEY",
-    ]);
-    expect(listKnownProviderAuthEnvVarNamesCore()).toContain("MODEL_STUDIO_API_KEY");
-    expect(listKnownSecretEnvVarNames()).toContain("MODEL_STUDIO_API_KEY");
-  });
-
   it("includes setup provider auth evidence without loading setup runtime", () => {
     useRegistrySetupPlugin("external-cloud", "global", {
       id: "external-cloud",

@@ -2,6 +2,7 @@ import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { withDistArtifactOwnership } from "../../scripts/lib/dist-artifact-ownership.mts";
 import { writePackageDistInventoryForPublish } from "../../scripts/lib/package-dist-inventory.ts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { completePendingPackageLifecycle } from "../../src/infra/package-lifecycle.js";
@@ -141,6 +142,11 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
   const home = tempDirs.make("update-channel-lifecycle-home-");
   execFileSync("git", ["clone", "--quiet", root, preflight]);
   for (const checkout of [preflight, root]) {
+    await withDistArtifactOwnership(checkout, async () => {
+      expect(
+        execFileSync("git", ["status", "--porcelain"], { cwd: checkout, encoding: "utf8" }),
+      ).toBe("");
+    });
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).not.toEqual([]);
     execSync(manifest.scripts.build, { cwd: checkout });
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).toEqual([]);

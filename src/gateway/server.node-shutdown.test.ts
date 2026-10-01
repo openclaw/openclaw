@@ -18,6 +18,7 @@ import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../infra/node-commands.js"
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { markGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { respondToNodeShutdown } from "./node-shutdown.test-support.js";
@@ -72,22 +73,38 @@ test.for(["direct", "restart"] as const)(
         kernel = await createKernel(...args);
         return kernel;
       });
-    const previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
     let started: Awaited<ReturnType<typeof startServer>>;
     try {
-      delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-      started = await startServer("secret");
+      started = await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: undefined }, () =>
+        startServer("secret"),
+      );
     } catch (error) {
       factory.mockRestore();
       throw error;
-    } finally {
-      if (previousMinimalGateway === undefined) {
-        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-      } else {
-        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
-      }
     }
     const { port, server } = started;
+    const connectNode = (overrides: Partial<Parameters<typeof connectGatewayClient>[0]> = {}) =>
+      connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: "secret",
+        role: "node",
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        platform: "linux",
+        deviceFamily: "Linux",
+        scopes: [],
+        deviceIdentity: pairedNode.identity,
+        ...overrides,
+      });
+    const connectOperator = (scopes: string[]) =>
+      connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: "secret",
+        role: "operator",
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        scopes,
+      });
     let node: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let operator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let controller: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
@@ -126,18 +143,9 @@ test.for(["direct", "restart"] as const)(
             return result;
           });
           kernel.registerGatewayLifetimeSidecars({ stop: stopDependencies });
-          node = await connectGatewayClient({
-            url: `ws://127.0.0.1:${port}`,
-            token: "secret",
-            role: "node",
-            clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          node = await connectNode({
             clientDisplayName: "shutdown worker node",
-            mode: GATEWAY_CLIENT_MODES.NODE,
-            platform: "linux",
-            deviceFamily: "Linux",
-            scopes: [],
             commands: ["camera.list"],
-            deviceIdentity: pairedNode.identity,
             onEvent: (event) => {
               const respondingNode = node;
               if (event.event !== "node.invoke.request" || !event.payload || !respondingNode) {
@@ -243,20 +251,13 @@ test.for(["direct", "restart"] as const)(
             },
           });
           const placements = createWorkerSessionPlacementStore();
-          seedActivePlacement(placements, { environmentId, ownerEpoch: attached.ownerEpoch });
+          await seedActivePlacement(placements, { environmentId, ownerEpoch: attached.ownerEpoch });
           expect(placements.get(REQUEST.sessionId)).toMatchObject({
             state: "active",
             turnClaim: null,
           });
 
-          operator = await connectGatewayClient({
-            url: `ws://127.0.0.1:${port}`,
-            token: "secret",
-            role: "operator",
-            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-            mode: GATEWAY_CLIENT_MODES.BACKEND,
-            scopes: ["operator.admin", "operator.read", "operator.write"],
-          });
+          operator = await connectOperator(["operator.admin", "operator.read", "operator.write"]);
           ordinaryRequest = operator
             .request(
               "node.invoke",
@@ -284,14 +285,7 @@ test.for(["direct", "restart"] as const)(
             }
             suspensionId = suspension.suspensionId;
             markGatewayRestartDraining();
-            controller = await connectGatewayClient({
-              url: `ws://127.0.0.1:${port}`,
-              token: "secret",
-              role: "operator",
-              clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-              mode: GATEWAY_CLIENT_MODES.BACKEND,
-              scopes: ["operator.admin"],
-            });
+            controller = await connectOperator(["operator.admin"]);
             await expect(
               controller.request("gateway.suspend.status", {
                 suspensionId,
@@ -308,16 +302,9 @@ test.for(["direct", "restart"] as const)(
             await expect(controller.request("sessions.list", {})).rejects.toThrow(
               "unavailable during gateway restart",
             );
-            await expect(
-              connectGatewayClient({
-                url: `ws://127.0.0.1:${port}`,
-                token: "secret",
-                role: "node",
-                clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-                mode: GATEWAY_CLIENT_MODES.NODE,
-                deviceIdentity: pairedNode.identity,
-              }),
-            ).rejects.toThrow("connect unavailable during gateway restart");
+            await expect(connectNode()).rejects.toThrow(
+              "connect unavailable during gateway restart",
+            );
           }
           closing = server.close({ reason: "gateway stopping" });
           void closing.then(closeSettled, closeSettled);
@@ -329,17 +316,7 @@ test.for(["direct", "restart"] as const)(
               phase: "exiting",
             });
           }
-          const reconnect = connectGatewayClient({
-            url: `ws://127.0.0.1:${port}`,
-            token: "secret",
-            role: "node",
-            clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-            mode: GATEWAY_CLIENT_MODES.NODE,
-            platform: "linux",
-            deviceFamily: "Linux",
-            deviceIdentity: pairedNode.identity,
-            timeoutMs: 5_000,
-          });
+          const reconnect = connectNode({ timeoutMs: 5_000 });
           if (mode === "restart") {
             await expect(reconnect).rejects.toMatchObject({
               name: "GatewayClientRequestError",

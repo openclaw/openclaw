@@ -95,7 +95,7 @@ describe("canvas.document.view", () => {
     context.getMcpAppSandboxPort = () => undefined;
     vi.mocked(context.ensureSandboxHostPort!).mockReturnValue(sandbox.promise);
     const pending = invoke();
-    expect(readDocument).toHaveBeenCalledWith("cv_widget", { maxBytes: 2 * 1024 * 1024 });
+    expect(readDocument).toHaveBeenCalledWith("cv_widget", { maxBytes: 10 * 1024 * 1024 });
     expect(context.ensureSandboxHostPort).toHaveBeenCalledOnce();
     sandbox.resolve(18790);
     document.resolve({ html: "<p>Widget</p>", cspSandbox: "scripts" });
@@ -125,9 +125,12 @@ describe("canvas.document.view", () => {
 
   it("refuses non-widget documents and oversized widget bytes", async () => {
     const { invoke } = createHarness();
+    const html = "é".repeat(5 * 1024 * 1024);
+    readDocument.mockResolvedValueOnce({ html, cspSandbox: "scripts" });
+    expect((await invoke()).mock.calls[0]?.[1]?.html).toBe(html);
     for (const document of [
       { html: "<p>Non-widget artifact</p>" },
-      { html: "x".repeat(2 * 1024 * 1024 + 1), cspSandbox: "scripts" },
+      { html: html + "é", cspSandbox: "scripts" },
     ]) {
       readDocument.mockResolvedValueOnce(document);
       expect((await invoke()).mock.calls[0]?.[0]).toBe(false);

@@ -1,4 +1,4 @@
-import { readItemString } from "./event-projector-values.js";
+import { readStringField as readItemString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThreadItem } from "./protocol.js";
 
 export type CodexNativeToolAuditStatus = ReturnType<typeof itemStatus> | "cancelled" | "unknown";
@@ -13,6 +13,18 @@ type CodexItemPresentation = {
   toolName?: string;
   projectedTool?: true;
 };
+
+type CodexItemStatus = "completed" | "failed" | "running" | "blocked";
+
+const itemStatuses = new Map<string, CodexItemStatus>([
+  ["completed", "completed"],
+  ["failed", "failed"],
+  ["error", "failed"],
+  ["declined", "blocked"],
+  ["inProgress", "running"],
+  ["in_progress", "running"],
+  ["running", "running"],
+]);
 
 const itemPresentations = new Map<string, CodexItemPresentation>([
   ["dynamicToolCall", { kind: "tool", title: "Tool" }],
@@ -47,54 +59,23 @@ export function itemTitle(item: CodexThreadItem): string {
   return itemPresentations.get(item.type)?.title ?? item.type;
 }
 
-export function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
-  const status = readItemString(item, "status");
-  if (status === "failed" || status === "error") {
-    return "failed";
-  }
-  if (status === "declined") {
-    return "blocked";
-  }
-  if (status === "inProgress" || status === "in_progress" || status === "running") {
-    return "running";
-  }
-  return "completed";
+export function itemStatus(item: CodexThreadItem): CodexItemStatus {
+  return itemStatuses.get(readItemString(item, "status") ?? "") ?? "completed";
 }
 
 export function unknownItemStatus(item: CodexThreadItem): string | undefined {
   const status = readItemString(item, "status");
-  switch (status) {
-    case undefined:
-    case "completed":
-    case "failed":
-    case "error":
-    case "declined":
-    case "inProgress":
-    case "in_progress":
-    case "running":
-      return undefined;
-    default:
-      return status;
-  }
+  return status === undefined || itemStatuses.has(status) ? undefined : status;
 }
 
 export function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAuditStatus {
   if (item.type === "imageView" || item.type === "sleep") {
     return "completed";
   }
-  const status = readItemString(item, "status");
-  if (status === "completed") {
-    return "completed";
-  }
-  if (status === "failed" || status === "error") {
-    return "failed";
-  }
-  if (status === "declined") {
-    return "blocked";
-  }
+  const status = itemStatuses.get(readItemString(item, "status") ?? "");
   // A completed notification with a missing, active, or new status does not
   // prove success. Preserve that ambiguity at the durable audit boundary.
-  return "unknown";
+  return status === undefined || status === "running" ? "unknown" : status;
 }
 
 export function auditNativeToolUnfinishedStatus(

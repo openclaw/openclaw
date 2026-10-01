@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  isSqliteLockError,
   isSqliteNativeOpenFailure,
   markSqliteNativeOpenFailure,
 } from "../infra/sqlite-error-diagnostics.js";
@@ -91,6 +92,7 @@ export function encodeOpenClawStateWorkerError(
       canonical ||=
         stateDatabasePath !== undefined ||
         nativeOpen ||
+        isSqliteLockError(current) ||
         current instanceof OpenClawQuarantineReadCleanupError ||
         (identity.type !== "error" && identity.type !== "aggregate");
       const code = "code" in current ? current.code : undefined;
@@ -234,6 +236,7 @@ function decodeErrorGraph(
       canonical ||=
         node.stateDatabasePath !== undefined ||
         node.nativeOpen === true ||
+        isSqliteLockError(node) ||
         (node.type === "aggregate" && node.name === DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME) ||
         (node.type !== "error" && node.type !== "aggregate");
       for (const edge of [...(node.cause ? [node.cause] : []), ...(node.errors ?? [])]) {
@@ -258,18 +261,14 @@ function decodeErrorGraph(
       if (node.stateDatabasePath !== undefined) {
         markOpenClawStateDatabaseFailure(error, node.stateDatabasePath);
       }
-      for (const key of ["code", "errcode", "errno"] as const) {
-        if (node[key] !== undefined) {
-          Object.defineProperty(error, key, {
-            value: node[key],
-            configurable: true,
-            writable: true,
-          });
-        }
-      }
-      if (node.cause) {
-        Object.defineProperty(error, "cause", {
-          value: decodeValue(node.cause),
+      for (const [key, propertyValue] of Object.entries({
+        ...(node.code !== undefined ? { code: node.code } : {}),
+        ...(node.errcode !== undefined ? { errcode: node.errcode } : {}),
+        ...(node.errno !== undefined ? { errno: node.errno } : {}),
+        ...(node.cause ? { cause: decodeValue(node.cause) } : {}),
+      })) {
+        Object.defineProperty(error, key, {
+          value: propertyValue,
           configurable: true,
           writable: true,
         });

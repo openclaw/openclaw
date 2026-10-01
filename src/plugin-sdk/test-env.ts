@@ -20,8 +20,10 @@ export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js
 export { createMockServerResponse } from "../test-utils/mock-http-response.js";
 export { acquireTestPortBlock } from "../test-utils/port-claims.js";
 export { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+export { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 export { withTempDir } from "../test-utils/temp-dir.js";
+export { createStagedInputOwnershipFixture } from "../media/staged-inputs.test-support.js";
 export { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 export { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 export { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";

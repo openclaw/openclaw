@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "../../app/context.ts";
 import type { BoardFace } from "../board/settings.ts";
 import { catalogSessionSearch, parseCatalogSessionKey } from "./catalog-key.ts";
@@ -30,15 +31,10 @@ type SessionNavigationContext<TRouteId extends string> = Pick<
   "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"
 >;
 
-type ContextSessionNavigationTargetParams<TRouteId extends string> = {
-  context: SessionNavigationContext<TRouteId>;
+type SessionNavigationTargetOptions = {
   face: BoardFace;
   sessionKey: string;
-  agentId?: string;
-  fallbackAgentId?: never;
   basePath?: string;
-  row?: never;
-  mainKey?: never;
   shortIdLength?: number;
   exactKey?: boolean;
   preferenceDerivedFace?: boolean;
@@ -47,21 +43,21 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   navigationKey?: string;
 };
 
-type ExplicitSessionNavigationTargetParams = {
+type ContextSessionNavigationTargetParams<TRouteId extends string> =
+  SessionNavigationTargetOptions & {
+    context: SessionNavigationContext<TRouteId>;
+    agentId?: string;
+    fallbackAgentId?: never;
+    row?: never;
+    mainKey?: never;
+  };
+
+type ExplicitSessionNavigationTargetParams = SessionNavigationTargetOptions & {
   context?: never;
-  face: BoardFace;
-  sessionKey: string;
   fallbackAgentId: string;
-  basePath?: string;
   row?: Pick<GatewaySessionRow, "displayName" | "key">;
   mainKey?: string | null;
-  shortIdLength?: number;
-  exactKey?: boolean;
   agentId?: never;
-  preferenceDerivedFace?: boolean;
-  focusComposer?: boolean;
-  dashboardExpanded?: boolean;
-  navigationKey?: string;
 };
 
 type SessionNavigationTarget = {
@@ -106,6 +102,29 @@ export function resolveSessionPreferredFaceForKey<TRouteId extends string>(
   agentId?: string | null,
 ): BoardFace {
   return resolveSessionPreferredFace(findUiSessionRow(context, sessionKey, agentId));
+}
+
+export function openPreferredApplicationSession(
+  context: ApplicationContext,
+  sessionKey: string,
+  agentId?: string,
+): void {
+  const face = resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
+  const target = sessionNavigationTarget({
+    context,
+    face,
+    sessionKey,
+    agentId,
+    preferenceDerivedFace: true,
+    exactKey: true,
+  });
+  selectApplicationSession({
+    selection: context.agentSelection,
+    gateway: context.gateway,
+    sessionKey,
+    agentId,
+  });
+  context.navigate(face, target.options);
 }
 
 export function resolveSessionNavigationAgentId<TRouteId extends string>(

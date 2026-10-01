@@ -33,6 +33,7 @@ type ProfileAuthorityStore = {
   identityRevision: object;
   profiles: Map<string, object>;
   profileIdentities: Map<string, object>;
+  modelAccountLinks: Map<string, object>;
   channelIdentities: Map<string, object>;
   pending: Map<string, Set<Promise<void>>>;
   uncertain: Set<string>;
@@ -58,6 +59,7 @@ function authorityStore(identity: DatabasePathIdentity): ProfileAuthorityStore {
       identityRevision: {},
       profiles: new Map(),
       profileIdentities: new Map(),
+      modelAccountLinks: new Map(),
       channelIdentities: new Map(),
       pending: new Map(),
       uncertain: new Set(),
@@ -97,49 +99,72 @@ export function publishUserProfileAuthorityChange(db: DatabaseSync, ...profileId
         .where("profile_id", "in", profileIds),
     );
   }
-  observeAuthorityLifecycle();
-  const store = changes.authorityHandles.get(db);
-  if (!store || profileIds.length === 0) {
-    return;
-  }
-  const commit = () => {
-    store.revision = {};
-    for (const profileId of profileIds) {
-      store.profiles.set(profileId, {});
-    }
-  };
-  if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
-    commit();
-  }
+  publishAuthorityStoreChange(db, "profiles", profileIds);
 }
 
 /** Only changed merge pointers invalidate account selection; roles and login grants do not. */
 export function publishUserProfileIdentityChange(db: DatabaseSync, ...profileIds: string[]): void {
+  publishAuthorityStoreChange(db, "profileIdentities", profileIds);
+}
+
+/** Default-link changes do not revoke explicit selections or saved session account pins. */
+export function publishUserProfileModelAccountLinksChange(
+  db: DatabaseSync,
+  ...profileIds: string[]
+): void {
+  publishAuthorityStoreChange(db, "modelAccountLinks", profileIds);
+}
+
+/** A retained catalog assertion consumes only the canonical writer’s committed facts. */
+export function captureUserProfileModelAccountLinksAuthority(
+  admission: OpenClawStateDatabaseReadAdmission,
+  profileId: string,
+): () => boolean {
   observeAuthorityLifecycle();
-  const store = changes.authorityHandles.get(db);
-  if (!store || profileIds.length === 0) {
-    return;
-  }
-  const commit = () => {
-    store.identityRevision = {};
-    for (const profileId of profileIds) {
-      store.profileIdentities.set(profileId, {});
+  admission.assertCurrent();
+  const store = authorityStore(admission.identity);
+  const links = store.modelAccountLinks.get(profileId);
+  const identity = store.profileIdentities.get(profileId);
+  const key = mutationKey("identity", profileId);
+  return () => {
+    try {
+      admission.assertCurrent();
+      return (
+        changes.authorityStores.get(admission.identity.key) === store &&
+        store.modelAccountLinks.get(profileId) === links &&
+        store.profileIdentities.get(profileId) === identity &&
+        !store.pending.get(key)?.size &&
+        !store.uncertain.has(key)
+      );
+    } catch {
+      return false;
     }
   };
-  if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
-    commit();
-  }
 }
 
 export function publishUserChannelIdentityAuthorityChange(db: DatabaseSync, subject: string): void {
+  publishAuthorityStoreChange(db, "channelIdentities", [subject]);
+}
+
+function publishAuthorityStoreChange(
+  db: DatabaseSync,
+  kind: "profiles" | "profileIdentities" | "channelIdentities" | "modelAccountLinks",
+  ids: string[],
+): void {
   observeAuthorityLifecycle();
   const store = changes.authorityHandles.get(db);
-  if (!store) {
+  if (!store || ids.length === 0) {
     return;
   }
   const commit = () => {
-    store.revision = {};
-    store.channelIdentities.set(subject, {});
+    if (kind === "profileIdentities") {
+      store.identityRevision = {};
+    } else if (kind !== "modelAccountLinks") {
+      store.revision = {};
+    }
+    for (const id of ids) {
+      store[kind].set(id, {});
+    }
   };
   if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
     commit();

@@ -166,7 +166,7 @@ describe("structured input compiler", () => {
         mode: {
           type: "string",
           oneOf: [
-            { const: "fast", title: "Fast" },
+            { const: "fast", title: " Fast " },
             { const: "safe", title: "Safe" },
           ],
           _meta: { codex: { isSecret: false } },
@@ -193,6 +193,10 @@ describe("structured input compiler", () => {
     expect(plan.fields).toHaveLength(2);
     expect(plan.fields[0]?.question).toMatchObject({ id: "mode", isOther: true, isSecret: true });
     expect(plan.fields[1]?.question).toMatchObject({ id: "password", isSecret: false });
+    expect(decodeForm(result, { mode: [" Fast "], password: ["public"] })).toEqual({
+      mode: "fast",
+      password: "public",
+    });
     expect(decodeForm(result, { mode: ["Custom"], password: ["public"] })).toEqual({
       mode__other: "Custom",
       password: "public",

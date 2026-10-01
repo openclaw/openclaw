@@ -171,7 +171,7 @@ export async function respondToDiscordVoiceTranscript(
     replyText = control.speakText ?? "";
   } else {
     const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
-    const turn = await runDiscordVoiceAgentTurn({
+    const text = await runDiscordVoiceAgentTurn({
       entry,
       accountId: params.accountId,
       userId,
@@ -180,13 +180,13 @@ export async function respondToDiscordVoiceTranscript(
       runtime: params.runtime,
       context: ingress,
     });
-    if (!turn) {
+    if (text === null) {
       logVoiceVerbose(
         `segment unauthorized before agent turn: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
       return;
     }
-    replyText = turn.text;
+    replyText = text;
   }
 
   if (!conversationCurrent()) {

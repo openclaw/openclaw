@@ -7,6 +7,7 @@
 import type { Server } from "node:http";
 import { isIPv6, type AddressInfo } from "node:net";
 import express from "express";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
@@ -208,14 +209,9 @@ export function stopBrowserBridgeServer(server: Server): Promise<void> {
   if (current) {
     return current;
   }
-  let resolveStop!: () => void;
-  let rejectStop!: (reason: unknown) => void;
-  const stopping = new Promise<void>((resolve, reject) => {
-    resolveStop = resolve;
-    rejectStop = reject;
-  });
+  const { promise: stopping, resolve, reject } = createDeferred<void>();
   bridgeStopPromises.set(server, stopping);
-  void stopBrowserBridgeServerOnce(server).then(resolveStop, rejectStop);
+  void stopBrowserBridgeServerOnce(server).then(resolve, reject);
   void stopping
     .finally(() => {
       if (bridgeStopPromises.get(server) === stopping) {

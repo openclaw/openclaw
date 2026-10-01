@@ -40,14 +40,6 @@ function normalizeConfiguredAgentIds(
   return new Set(normalizeUniqueStringEntries((configuredAgentIds ?? []).map(normalizeAgentId)));
 }
 
-function filterConfiguredAllowedIds(params: {
-  allowedIds: readonly string[];
-  configuredAgentIds?: readonly string[];
-}): string[] {
-  const configuredIds = normalizeConfiguredAgentIds(params.configuredAgentIds);
-  return params.allowedIds.filter((id) => configuredIds.has(id));
-}
-
 /** Resolve the normalized agent IDs a requester may target with sessions_spawn. */
 export function resolveSubagentAllowedTargetIds(params: {
   requesterAgentId: string;
@@ -72,12 +64,12 @@ export function resolveSubagentAllowedTargetIds(params: {
       allowedIds: sortUniqueStrings(configuredIds),
     };
   }
+  const configuredIds = normalizeConfiguredAgentIds(params.configuredAgentIds);
   return {
     allowAny: false,
-    allowedIds: filterConfiguredAllowedIds({
-      allowedIds: policy.allowedIds,
-      configuredAgentIds: params.configuredAgentIds,
-    }).toSorted((a, b) => a.localeCompare(b)),
+    allowedIds: policy.allowedIds
+      .filter((id) => configuredIds.has(id))
+      .toSorted((a, b) => a.localeCompare(b)),
   };
 }
 

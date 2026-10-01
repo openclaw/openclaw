@@ -1,8 +1,3 @@
-/**
- * Pure cooldown and unusable-window helpers for auth profile usage state.
- * Mutation and persistence live in usage.ts; this module owns reusable state
- * predicates used by rotation and failure handling.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
@@ -212,7 +207,7 @@ export function getSoonestCooldownExpiry(
       continue;
     }
     const until = resolveProfileUnusableUntil(stats, options?.forModel);
-    if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) {
+    if (until === null) {
       continue;
     }
     const matchingModelScopedCooldown =
@@ -239,24 +234,7 @@ export function getSoonestCooldownExpiry(
   return Math.min(soonest, latestMatchingModelCooldown);
 }
 
-/**
- * Clear expired cooldowns from all profiles in the store.
- *
- * When `cooldownUntil` or `disabledUntil` has passed, the corresponding fields
- * are removed. Most error counters reset so the profile gets a fresh start
- * (circuit-breaker half-open -> closed). Rate-limit counters instead persist
- * across failed half-open probes so missing provider reset times use capped
- * exponential backoff; a successful request or manual clear resets them.
- *
- * `cooldownUntil` and `disabledUntil` are handled independently: if a profile
- * has both and only one has expired, only that field is cleared.
- *
- * Mutates the in-memory store; disk persistence happens lazily on the next
- * store write (e.g. `markAuthProfileSuccess` / `markAuthProfileFailure`), which
- * matches the existing save pattern throughout the auth-profiles module.
- *
- * @returns `true` if any profile was modified.
- */
+/** Clear each expired window in memory; the next store write persists it. */
 export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): boolean {
   const usageStats = store.usageStats;
   if (!usageStats) {
@@ -264,6 +242,8 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
   }
 
   const ts = now ?? Date.now();
+  const expired = (until: number | undefined) =>
+    typeof until === "number" && Number.isFinite(until) && until > 0 && ts >= until;
   let mutated = false;
 
   for (const [profileId, stats] of Object.entries(usageStats)) {
@@ -272,30 +252,14 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
     }
 
     let profileMutated = false;
-    const cooldownExpired =
-      typeof stats.cooldownUntil === "number" &&
-      Number.isFinite(stats.cooldownUntil) &&
-      stats.cooldownUntil > 0 &&
-      ts >= stats.cooldownUntil;
-    const blockedExpired =
-      typeof stats.blockedUntil === "number" &&
-      Number.isFinite(stats.blockedUntil) &&
-      stats.blockedUntil > 0 &&
-      ts >= stats.blockedUntil;
-    const disabledExpired =
-      typeof stats.disabledUntil === "number" &&
-      Number.isFinite(stats.disabledUntil) &&
-      stats.disabledUntil > 0 &&
-      ts >= stats.disabledUntil;
-
-    if (cooldownExpired) {
+    if (expired(stats.cooldownUntil)) {
       stats.cooldownUntil = undefined;
       stats.cooldownReason = undefined;
       stats.cooldownClassification = undefined;
       stats.cooldownModel = undefined;
       profileMutated = true;
     }
-    if (blockedExpired) {
+    if (expired(stats.blockedUntil)) {
       stats.blockedUntil = undefined;
       stats.blockedReason = undefined;
       stats.blockedSource = undefined;
@@ -303,7 +267,7 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
       stats.blockedScope = undefined;
       profileMutated = true;
     }
-    if (disabledExpired) {
+    if (expired(stats.disabledUntil)) {
       stats.disabledUntil = undefined;
       stats.disabledReason = undefined;
       profileMutated = true;

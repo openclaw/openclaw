@@ -38,7 +38,7 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import { runSynchronousWork } from "../shared/synchronous-work.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -75,7 +75,6 @@ import {
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
-import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import {
   buildSessionListRowMetadataContext,
   resolveTranscriptUsageFallbacks,
@@ -96,6 +95,7 @@ export function readSessionRowInputs(params: {
   key: string;
   entry?: InternalSessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
+  preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
@@ -198,9 +198,10 @@ export function readSessionRowInputs(params: {
 
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
-  const repositoryWorkspace = entry?.repositoryWorkspaceId
-    ? getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId)
-    : undefined;
+  if (entry?.repositoryWorkspaceId && params.preparedRepositoryWorkspace === undefined) {
+    throw new Error("Repository workspace facts must be prepared before presenting the session");
+  }
+  const repositoryWorkspace = params.preparedRepositoryWorkspace;
 
   return {
     inputs: {
@@ -216,7 +217,9 @@ export function readSessionRowInputs(params: {
       ),
       permissionModePending: isSessionPermissionChangePending(entry?.sessionId),
       repository:
-        repositoryWorkspace?.agentId === agentId && repositoryWorkspace.sessionKey === key
+        repositoryWorkspace?.workspaceId === entry?.repositoryWorkspaceId &&
+        repositoryWorkspace?.agentId === agentId &&
+        repositoryWorkspace.sessionKey === key
           ? {
               url: repositoryWorkspace.url,
               ...(repositoryWorkspace.requestedRef
@@ -305,19 +308,15 @@ export function resolveGatewaySessionActiveModel(params: {
   cfg: OpenClawConfig;
   active?: boolean;
   activeModel?: { provider: string; model: string } | null;
-  agentId?: string;
+  agentId: string;
   storeAgentId?: string;
   sessionId?: string;
   sessionKey: string;
   projectedAgentRuns: ProjectedAgentRunIndex;
-  selectedModel?: { provider: string; model: string };
-  modelSource?: GatewaySessionModelSource;
+  selectedModel: { provider: string; model: string };
   entry?: InternalSessionEntry;
-  storePath?: string;
+  storePath: string;
 }): { provider: string; model: string } | undefined {
-  if (!params.agentId) {
-    return undefined;
-  }
   const liveModel = resolveProjectedAgentRunModel({
     agentId: params.agentId,
     sessionId: params.sessionId,
@@ -326,22 +325,10 @@ export function resolveGatewaySessionActiveModel(params: {
   if (params.active ?? (liveModel !== undefined || params.entry?.status === "running")) {
     return liveModel ?? undefined;
   }
-  if (!params.entry?.fallbackNotice || params.storePath === undefined) {
+  if (!params.entry?.fallbackNotice) {
     return undefined;
   }
-  const selectedModel =
-    params.selectedModel ??
-    (params.modelSource
-      ? resolveSessionSelectedModelRef({
-          cfg: params.cfg,
-          source: params.modelSource,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-        })
-      : undefined);
-  if (!selectedModel) {
-    return undefined;
-  }
+  const { selectedModel } = params;
 
   const fallbackEntry =
     params.activeModel === undefined
@@ -435,10 +422,9 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   const storedOrigin = deliveryFields.origin;
   const avatar = normalizeOptionalString(storedOrigin?.avatar);
   const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
-  const pinnedAt =
-    entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
-      ? entry.pinnedAt
-      : undefined;
+  // Snooze shares the pin root-session rule.
+  const pinnable = isPinnableSessionEntry(key, entry);
+  const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
 
   // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
@@ -504,6 +490,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     archiveReason: entry?.archiveReason,
     pinned: pinnedAt !== undefined,
     pinnedAt,
+    snoozedUntil: pinnable ? entry?.snoozedUntil : undefined,
+    snoozedAt: pinnable ? entry?.snoozedAt : undefined,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,
@@ -553,7 +541,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
-    lastRunError: entry?.lastRunError,
+    lastRunError: undefined,
     providerReview: projectSessionProviderReview(entry, key),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,

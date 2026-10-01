@@ -89,6 +89,7 @@ it.each(["replaced", "made private"])(
         });
         persistSubagentRunsToDiskOrThrow(
           new Map([child, collector].map((entry) => [entry.runId, entry])),
+          [child.runId, collector.runId],
         );
         clearSubagentRunsReadCacheForTest();
         const context = requestContext(cfg);
@@ -186,6 +187,7 @@ it("lists off-page controller links and deleted-collector totals while a sibling
       }
       persistSubagentRunsToDiskOrThrow(
         new Map([child, collector].map((entry) => [entry.runId, entry])),
+        [child.runId, collector.runId],
       );
       const key = { pluginId: "session-list-proof", namespace: "mixed-progress", key: "written" };
       const context = requestContext(cfg);

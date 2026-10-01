@@ -11,12 +11,9 @@ export function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unk
   const trimmed = stdout.trim();
   const start = trimmed.indexOf("{");
   const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    // SAFETY: callers only read string/object fields defensively from tailscale's JSON object output.
-    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
-  }
-  // SAFETY: same defensive field reads as above; a non-object payload fails those reads, not this cast.
-  return JSON.parse(trimmed) as Record<string, unknown>;
+  const json = start >= 0 && end > start ? trimmed.slice(start, end + 1) : trimmed;
+  // SAFETY: callers only read string/object fields defensively from Tailscale's output.
+  return JSON.parse(json) as Record<string, unknown>;
 }
 
 export function isTransientTailscaleStatusError(error: unknown): boolean {

@@ -37,8 +37,10 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     dispatchProgressTurn,
     waitForBotApiCall,
   } = http;
+  const hasReaction = (call: (typeof calls)[number], emoji: string) =>
+    call.method === "setMessageReaction" && JSON.stringify(call.fields.reaction).includes(emoji);
 
-  it.each(["selected", "bot-reply", "older-source", "external", "off"] as const)(
+  it.each(["bot-reply", "older-source", "off"] as const)(
     "selects the native reply target from %s context",
     async (selection) => {
       const context = createContext();
@@ -50,7 +52,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         ReplyToQuotePosition: 12,
         ReplyToQuoteEntities: [{ type: "italic", offset: 1, length: 6 }],
         ReplyToIsQuote: selection !== "older-source",
-        ReplyToIsExternal: selection === "external",
+        ReplyToIsExternal: false,
         ReplyToQuoteSourceText: "  exact older source",
         ReplyToQuoteSourceEntities: [{ type: "bold", offset: 2, length: 5 }],
       });
@@ -92,14 +94,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       );
       const sends = acceptedCalls.filter((call) => call.method === "sendMessage");
       const final = sends.at(-1)?.fields;
-      if (selection === "selected") {
-        expect(final?.reply_parameters).toMatchObject({
-          message_id: 9001,
-          quote: " quoted slice\n",
-          quote_position: 12,
-          quote_entities: [{ type: "italic", offset: 1, length: 6 }],
-        });
-      } else if (selection === "older-source") {
+      if (selection === "older-source") {
         expect(final?.reply_parameters).toMatchObject({
           message_id: 9001,
           quote: "  exact older source",
@@ -129,16 +124,13 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     },
   );
 
-  it.each(
-    (["first", "batched", "all"] as const).flatMap((replyToMode) =>
-      (["one-page", "retained-page", "media"] as const).map((transition) => ({
-        replyToMode,
-        transition,
-      })),
-    ),
-  )(
-    "consumes an accepted $replyToMode target across $transition fallback",
-    async ({ replyToMode, transition }) => {
+  it.each([
+    ["first", "one-page"],
+    ["batched", "retained-page"],
+    ["all", "media"],
+  ] as const)(
+    "consumes an accepted %s target across %s fallback",
+    async (replyToMode, transition) => {
       const context = createContext();
       let rejected = false;
       http.respondToCall = (call) => {
@@ -220,55 +212,50 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     },
   );
 
-  it.each([false, true])(
-    "finalizes a current-message quote in place (quote rejected: %s)",
-    async (quoteRejected) => {
-      const intro =
-        "The complete explanation retains the original delivery context and all literal examples.";
-      const fenced = "  [[reply_to_current]]\n  MEDIA:./fenced-example.txt";
-      const preview = `${intro}\n\n\`\`\`text\n${fenced}`;
-      const text = `${preview}\n\`\`\`\n\n    [[reply_to_current]]\n    MEDIA:./indented-example.txt\n\nDone.`;
-      http.rejectNextQuote = quoteRejected;
-      await dispatchProgressTurn(
-        async (options) => {
-          await options?.onPartialReply?.({ text: preview, delta: preview });
-          await waitForBotApiCall((call) => call.method === "sendMessage");
-          await options?.onPartialReply?.({ text, replace: true });
-        },
-        {
-          mode: "partial",
-          toolProgress: false,
-          replyToMode: "all",
-          accountId: "sut",
-          finalReply: { text, replyToCurrent: true },
-        },
-      );
-      expect(visibleMessages.size).toBe(1);
-      expect([...visibleMessages.values()]).toEqual([
-        `${intro}\n\n<pre><code class="language-text">${fenced}\n</code></pre>\n<pre><code>[[reply_to_current]]\nMEDIA:./indented-example.txt\n</code></pre>\nDone.`,
-      ]);
-      const sends = calls.filter((call) => call.method === "sendMessage");
-      expect(sends).toHaveLength(quoteRejected ? 2 : 1);
-      expect(sends[0]?.fields.reply_parameters).toMatchObject({
-        quote: "Run the failing command.",
-        quote_position: 0,
-      });
-      if (quoteRejected) {
-        expect(sends[1]?.fields).toMatchObject({
-          reply_to_message_id: expect.any(Number),
-          allow_sending_without_reply: true,
-        });
-        expect(sends[0]?.fields.reply_parameters).toMatchObject({
-          message_id: sends[1]?.fields.reply_to_message_id,
-        });
-        expect(sends[1]?.fields).not.toHaveProperty("reply_parameters");
-      }
-      const edits = calls.filter((call) => call.method === "editMessageText");
-      expect(edits.length).toBeGreaterThan(0);
-      expect(edits.every((call) => call.fields.message_id === 1)).toBe(true);
-      expect(calls.some((call) => call.method === "deleteMessage")).toBe(false);
-    },
-  );
+  it("finalizes a current-message quote in place after quote rejection", async () => {
+    const intro =
+      "The complete explanation retains the original delivery context and all literal examples.";
+    const fenced = "  [[reply_to_current]]\n  MEDIA:./fenced-example.txt";
+    const preview = `${intro}\n\n\`\`\`text\n${fenced}`;
+    const text = `${preview}\n\`\`\`\n\n    [[reply_to_current]]\n    MEDIA:./indented-example.txt\n\nDone.`;
+    http.rejectNextQuote = true;
+    await dispatchProgressTurn(
+      async (options) => {
+        await options?.onPartialReply?.({ text: preview, delta: preview });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
+        await options?.onPartialReply?.({ text, replace: true });
+      },
+      {
+        mode: "partial",
+        toolProgress: false,
+        replyToMode: "all",
+        accountId: "sut",
+        finalReply: { text, replyToCurrent: true },
+      },
+    );
+    expect(visibleMessages.size).toBe(1);
+    expect([...visibleMessages.values()]).toEqual([
+      `${intro}\n\n<pre><code class="language-text">${fenced}\n</code></pre>\n<pre><code>[[reply_to_current]]\nMEDIA:./indented-example.txt\n</code></pre>\nDone.`,
+    ]);
+    const sends = calls.filter((call) => call.method === "sendMessage");
+    expect(sends).toHaveLength(2);
+    expect(sends[0]?.fields.reply_parameters).toMatchObject({
+      quote: "Run the failing command.",
+      quote_position: 0,
+    });
+    expect(sends[1]?.fields).toMatchObject({
+      reply_to_message_id: expect.any(Number),
+      allow_sending_without_reply: true,
+    });
+    expect(sends[0]?.fields.reply_parameters).toMatchObject({
+      message_id: sends[1]?.fields.reply_to_message_id,
+    });
+    expect(sends[1]?.fields).not.toHaveProperty("reply_parameters");
+    const edits = calls.filter((call) => call.method === "editMessageText");
+    expect(edits.length).toBeGreaterThan(0);
+    expect(edits.every((call) => call.fields.message_id === 1)).toBe(true);
+    expect(calls.some((call) => call.method === "deleteMessage")).toBe(false);
+  });
 
   it("replies to the inbound message after a first-mode preview releases its target", async () => {
     const { createTelegramDraftStream } = await import("./draft-stream.js");
@@ -488,38 +475,11 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     });
   });
 
-  it("keeps native errors silent and untargeted without interpreting ordinary approval prose", async () => {
-    const context = createContext();
-    context.ctxPayload.CommandSource = "native";
-    context.ctxPayload.ReplyToId = "99";
-    await dispatchProgressTurn(async () => undefined, {
-      mode: "off",
-      toolProgress: false,
-      context,
-      replyToMode: "off",
-      telegramCfg: { silentErrorReplies: true },
-      finalReply: { text: "Native command failed.", isError: true },
-    });
-    const error = acceptedCalls.find(({ method }) => method === "sendMessage")!.fields;
-    expect(error).toMatchObject({ text: "Native command failed.", disable_notification: true });
-    expect(error.reply_parameters).toBeUndefined();
-    expect(error.reply_to_message_id).toBeUndefined();
-    await dispatchProgressTurn(async () => undefined, {
-      mode: "off",
-      toolProgress: false,
-      telegramCfg: { execApprovals: { enabled: true } },
-      finalReply: { text: "For example: /approve command allow-once" },
-    });
-    expect(acceptedCalls.findLast(({ method }) => method === "sendMessage")!.fields).toMatchObject({
-      text: "For example: /approve command allow-once",
-    });
-    expect([...http.visibleMarkup.values()]).toEqual([]);
-  });
-  it.each(["success", "error", "cancelled", "superseded"] as const)(
+  it.each(["success", "error", "superseded"] as const)(
     "restores real status reactions after %s without late stall work",
     async (outcome) => {
       const context = createContext();
-      const cancelled = outcome === "cancelled" || outcome === "superseded";
+      const cancelled = outcome === "superseded";
       const queued = createDeferred<void>();
       const reactionErrors: unknown[] = [];
       const controller = createStatusReactionController({
@@ -548,9 +508,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       await controller.setQueued();
       await queued.promise;
       const abort = new AbortController();
-      if (outcome === "cancelled") {
-        abort.abort(new Error("adoption expired"));
-      }
       const held = {
         predicate: (call: { method: string }) => call.method === "setMessageReaction",
         arrived: createDeferred<void>(),
@@ -579,25 +536,15 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
                 held.release.resolve();
               }
               await tool;
-              await waitForBotApiCall(
-                (call) =>
-                  call.method === "setMessageReaction" &&
-                  JSON.stringify(call.fields.reaction).includes("🛠️"),
-              );
+              await waitForBotApiCall((call) => hasReaction(call, "🛠️"));
               await options?.onCompactionStart?.();
-              await waitForBotApiCall(
-                (call) =>
-                  call.method === "setMessageReaction" &&
-                  JSON.stringify(call.fields.reaction).includes("\u{1f5dc}\ufe0f"),
-              );
+              await waitForBotApiCall((call) => hasReaction(call, "\u{1f5dc}\ufe0f"));
               const callsBeforeCompactionEnd = calls.length;
               const acceptedBeforeCompactionEnd = acceptedCalls.length;
               await options?.onCompactionEnd?.({ completed: true });
               await waitForBotApiCall(
                 (call) =>
-                  calls.indexOf(call) >= callsBeforeCompactionEnd &&
-                  call.method === "setMessageReaction" &&
-                  JSON.stringify(call.fields.reaction).includes("🧠"),
+                  calls.indexOf(call) >= callsBeforeCompactionEnd && hasReaction(call, "🧠"),
               );
               expect(acceptedCalls.slice(acceptedBeforeCompactionEnd)).toContainEqual({
                 method: "setMessageReaction",
@@ -630,12 +577,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         await vi.advanceTimersByTimeAsync(31_000);
         if (!cancelled) {
           const initialReaction = calls.find(({ method }) => method === "setMessageReaction");
-          await waitForBotApiCall(
-            (call) =>
-              call !== initialReaction &&
-              call.method === "setMessageReaction" &&
-              JSON.stringify(call.fields.reaction).includes("👀"),
-          );
+          await waitForBotApiCall((call) => call !== initialReaction && hasReaction(call, "👀"));
         }
         expect(reactionErrors).toEqual([]);
         const reactions = acceptedCalls

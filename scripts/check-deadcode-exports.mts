@@ -84,7 +84,7 @@ export function parseKnipCompactUnusedExports(output: string) {
 }
 
 /** Rejects every unused export reported by Knip. */
-export function checkUnusedExports(output: string) {
+function checkUnusedExports(output: string) {
   const entries = parseKnipCompactUnusedExports(output);
   return {
     ok: entries.length === 0,

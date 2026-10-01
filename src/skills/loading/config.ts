@@ -16,6 +16,7 @@ import {
   isConfigPathTruthyWithDefaults,
   prepareBinaryAvailability,
 } from "../../shared/config-eval.js";
+import { isSessionSkillEnabled } from "../discovery/agent-filter.js";
 import type { SkillEligibilityContext, SkillEntry, SkillsInstallPreferences } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillSource } from "./source.js";
@@ -150,7 +151,12 @@ export function shouldIncludeSkill(params: {
 
 export async function prepareSkillBinaryProbe(
   entries: SkillEntry[],
-  opts?: { config?: OpenClawConfig; eligibility?: SkillEligibilityContext },
+  opts?: {
+    config?: OpenClawConfig;
+    eligibility?: SkillEligibilityContext;
+    skillFilter?: string[];
+    skillOverrides?: Readonly<Record<string, boolean>>;
+  },
   assertCurrent?: () => void,
   runtime?: WorkspaceSkillSources["runtime"],
 ) {
@@ -166,6 +172,16 @@ export async function prepareSkillBinaryProbe(
     return true;
   };
   for (const entry of entries) {
+    if (
+      !isSessionSkillEnabled(
+        entry.skill.name,
+        opts?.skillFilter,
+        opts?.skillOverrides,
+        resolveSkillKey(entry.skill, entry),
+      )
+    ) {
+      continue;
+    }
     const requires = entry.metadata?.requires;
     if (!requires?.bins?.length && !requires?.anyBins?.length) {
       continue;

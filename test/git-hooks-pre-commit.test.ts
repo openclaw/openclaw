@@ -234,31 +234,6 @@ case "$*" in *--stdin-filepath=*) sed 's/FORMAT_ME/FORMATTED/' ;; esac
     const staged = splitNonEmptyLines(run(dir, "git", ["diff", "--cached", "--name-only"]));
     expect(staged).toEqual([".agents/skills/discord-clawd/SKILL.md", ".gitignore"]);
   });
-
-  it("does not invoke pnpm when FAST_COMMIT is set", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-fast-");
-    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-
-    const fakeBinDir = installPreCommitFixture(dir);
-    writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
-    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
-
-    writeExecutable(
-      fakeBinDir,
-      "pnpm",
-      "#!/usr/bin/env bash\necho 'pnpm should not run when FAST_COMMIT is enabled' >&2\nexit 99\n",
-    );
-
-    writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
-    run(dir, "git", ["add", "--", "tracked.txt"]);
-
-    run(dir, "bash", ["git-hooks/pre-commit"], {
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-      FAST_COMMIT: "1",
-    });
-
-    expect(run(dir, "git", ["diff", "--cached", "--name-only"])).toBe("tracked.txt");
-  });
 });
 
 describe("staged content guard", () => {

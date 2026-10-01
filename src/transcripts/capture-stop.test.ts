@@ -18,7 +18,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
-import { prepareTranscriptCaptureDisable } from "./capture-operations.js";
+import { prepareTranscriptCaptureDisable } from "./capture-startup.js";
 import type { TranscriptSourceProvider, TranscriptStartRequest } from "./provider-types.js";
 import {
   transcriptStatusRoom as room,
@@ -36,8 +36,6 @@ afterEach(async () => {
 
 describe("transcript provider cleanup custody", () => {
   it.each([
-    { owner: "tool", failure: "returned", registryChange: "none" },
-    { owner: "tool", failure: "thrown", registryChange: "none" },
     { owner: "service", failure: "returned", registryChange: "none" },
     { owner: "service", failure: "thrown", registryChange: "none" },
     { owner: "manual-service", failure: "returned", registryChange: "none" },

@@ -95,6 +95,14 @@ const MAX_SCANNABLE_FILE_BYTES = 1024 * 1024;
 const MAX_SCANNABLE_TOTAL_BYTES_PER_PACKAGE = 64 * 1024 * 1024;
 const PACKAGE_SCAN_CONCURRENCY = 4;
 const CANONICAL_NPM_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
+const PLUGIN_TARBALL_INSPECTION_LIMITS = {
+  maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
+  maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
+  maxEntryBytes: MAX_PACKED_FILE_BYTES,
+  maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+  maxPathBytes: 4 * 1024 * 1024,
+  maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+};
 
 const RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
@@ -274,6 +282,22 @@ for (const [key, count] of [
   CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
 }
 
+const RELEASE_2026_9_6_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+// Post-9.6 test-only drift: the Codex auth-refresh harness spawns its checked-in
+// child stub over real pipes, iMessage adds a real child for Contacts
+// diagnostics (#156334), the Feishu proxy test sets HTTPS_PROXY beside a mocked
+// request, and Signal keeps one stale-socket probe after #159648.
+for (const [key, count] of [
+  ["@openclaw/codex:dangerous-exec:src/app-server/auth-refresh-authority.integration.test.ts", 1],
+  ["@openclaw/feishu:env-harvesting:src/client.test.ts", 1],
+  ["@openclaw/imessage:dangerous-exec:src/client.test.ts", 4],
+  ["@openclaw/signal:dangerous-exec:src/socket-path.test.ts", 1],
+] as const) {
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
+}
+
 const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   layout: CURRENT_REVIEWED_RELEASE_LAYOUT,
   optionalPackedFindingCounts: CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
@@ -379,7 +403,14 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
       requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
-  ["release/2026.9.6", CURRENT_SECURITY_INVENTORY_POLICY],
+  [
+    "release/2026.9.6",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_6_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+    },
+  ],
+  ["release/2026.9.7", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {
@@ -430,7 +461,7 @@ function compareCodeUnits(left: string, right: string): number {
 }
 
 function sortStrings(values: readonly string[]): string[] {
-  return [...values].toSorted(compareCodeUnits);
+  return values.toSorted(compareCodeUnits);
 }
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
@@ -635,17 +666,16 @@ function parseExpectedPackages(value: unknown): PublishablePluginPackage[] {
     throw new Error("Expected plugin package inventory is invalid.");
   }
   const packages = value.map((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isRecord(entry)) {
       throw new Error(`Expected plugin package entry ${index} is invalid.`);
     }
-    const candidate = entry as Record<string, unknown>;
-    const extensionId = candidate.extensionId;
-    const packageDir = candidate.packageDir;
+    const extensionId = entry.extensionId;
+    const packageDir = entry.packageDir;
     const packageName = assertCanonicalNpmPackageName(
-      candidate.packageName,
+      entry.packageName,
       `Expected plugin package entry ${index}`,
     );
-    const packageVersion = candidate.packageVersion;
+    const packageVersion = entry.packageVersion;
     if (
       typeof extensionId !== "string" ||
       !/^[a-z0-9][a-z0-9._-]*$/u.test(extensionId) ||
@@ -764,14 +794,7 @@ function readPluginSecurityArtifact(
   });
   let inspection: ReturnType<typeof inspectPackageTarballBytes>;
   try {
-    inspection = inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-    });
+    inspection = inspectPackageTarballBytes(tarballBytes, PLUGIN_TARBALL_INSPECTION_LIMITS);
   } catch {
     throw new Error("Plugin security artifact tarball structure is invalid.");
   }
@@ -927,20 +950,6 @@ export function loadPluginNpmSecurityArtifacts(params: {
   };
 }
 
-export function listPluginNpmSecurityArtifacts(params: {
-  artifactRoot: string;
-  candidateSha: string;
-  expectedPackages: unknown;
-  limits?: PluginNpmSecurityArtifactLimits;
-  toolingSha: string;
-}): PluginNpmSecurityArtifact[] {
-  const result = loadPluginNpmSecurityArtifacts(params);
-  if (result.ingestionErrors.length > 0) {
-    throw new Error(result.ingestionErrors.join("\n"));
-  }
-  return result.artifacts;
-}
-
 export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
   directlyScannedFileCount: number;
   directlyScannedFindings: SkillScanFinding[];
@@ -965,14 +974,10 @@ export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
       label: "Plugin security tarball",
       maxBytes: MAX_PLUGIN_TARBALL_BYTES,
     });
-    const inspection = inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-    }) as {
+    const inspection = inspectPackageTarballBytes(
+      tarballBytes,
+      PLUGIN_TARBALL_INSPECTION_LIMITS,
+    ) as {
       inventory: Array<{ path: string; sizeBytes: number; type: string }>;
       packageManifest: Record<string, unknown>;
       tarballSha256: string;
@@ -991,12 +996,7 @@ export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
       packedFiles,
     );
     inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+      ...PLUGIN_TARBALL_INSPECTION_LIMITS,
       onFile: ({ content, path }: { content: Uint8Array; path: string }) => {
         if (!path.startsWith("package/")) {
           throw new Error("Plugin tarball file escaped package/.");

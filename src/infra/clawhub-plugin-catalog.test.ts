@@ -128,6 +128,41 @@ describe("ClawHub plugin catalog client", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+  it("retains category priority identities from curated page metadata", async () => {
+    const category = {
+      slug: "models",
+      label: "Models",
+      description: "Models",
+      icon: "bot",
+      order: 1,
+      pinnedPackages: ["@vendor/model"],
+    };
+    const fetchImpl = vi.fn(async () => jsonResponse({ items: [], categories: [category] }));
+    expect(
+      await fetchClawHubPluginCatalog({ intent: "all", category: "models", fetchImpl }),
+    ).toEqual({ items: [], categories: [category] });
+  });
+
+  it("rejects ambiguous registry category priorities", async () => {
+    await expect(
+      fetchClawHubPluginCategories({
+        fetchImpl: async () =>
+          jsonResponse({
+            categories: [
+              {
+                slug: "models",
+                label: "Models",
+                description: "Models",
+                icon: "bot",
+                order: 1,
+                pinnedPackages: ["@vendor/model", "@vendor/model"],
+              },
+            ],
+          }),
+      }),
+    ).rejects.toThrow("duplicate or invalid pinned package");
+  });
+
   it("browses the combined plugin endpoint with an opaque cursor", async () => {
     let requestedUrl = "";
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
@@ -229,7 +264,7 @@ describe("ClawHub plugin catalog client", () => {
     });
   });
 
-  it("requests official plugins first and download order for ordinary browse", async () => {
+  it("requests the curated category order instead of an official-first download order", async () => {
     let requestedUrl = "";
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       requestedUrl = requestUrl(input);
@@ -247,7 +282,7 @@ describe("ClawHub plugin catalog client", () => {
     const url = new URL(requestedUrl);
     expect(Object.fromEntries(url.searchParams)).toEqual({
       category: "models",
-      officialFirst: "true",
+      curated: "true",
       sort: "downloads",
       limit: "8",
     });
@@ -401,7 +436,15 @@ describe("ClawHub plugin catalog client", () => {
     },
   );
 
-  it("reads complete exact-version plugin detail in one request", async () => {
+  it.each([
+    { ui: ["widget", "page", "widget"], expected: ["page", "widget"] },
+    { ui: undefined, expected: undefined },
+    { ui: [], expected: [] },
+    { ui: "page", expected: undefined },
+    { ui: null, expected: undefined },
+    { ui: ["unknown"], expected: undefined },
+    { ui: ["page", 1], expected: undefined },
+  ])("reads complete exact-version detail with UI metadata $ui", async ({ ui, expected }) => {
     const requestedUrls: string[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(requestUrl(input));
@@ -446,6 +489,7 @@ describe("ClawHub plugin catalog client", () => {
             contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
             providers: ["memory-model"],
             channels: ["memory-chat"],
+            uiCapabilities: ui,
             bundledSkills: [
               {
                 name: "Recall",
@@ -541,6 +585,7 @@ describe("ClawHub plugin catalog client", () => {
         summary: "Exact release passed ClawHub security review.",
       },
     });
+    expect(detail.uiCapabilities).toEqual(expected);
     const joined = joinClawHubPluginDetail({
       remote: detail,
       local: { plugins: [], diagnostics: [], mutationAllowed: true },
@@ -550,6 +595,7 @@ describe("ClawHub plugin catalog client", () => {
       providers: ["memory-model"],
       channels: ["memory-chat"],
     });
+    expect(joined.detail.uiCapabilities).toEqual(expected);
     expect(Value.Check(PluginDiscoveryDetailSchema, joined.detail)).toBe(true);
   });
 

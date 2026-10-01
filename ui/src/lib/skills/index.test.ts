@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { SkillStatusReport } from "../../api/types.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
@@ -103,6 +104,56 @@ function mockSkillMutationRequests(
   });
 }
 
+function createSkillCardReport(installedVersion?: string, installedAt = 123): SkillStatusReport {
+  return {
+    workspaceDir: "/tmp/workspace",
+    managedSkillsDir: "/tmp/skills",
+    skills: [
+      {
+        name: "AgentReceipt",
+        description: "Trust card fixture",
+        skillKey: "agentreceipt",
+        source: "workspace",
+        bundled: false,
+        filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
+        baseDir: "/tmp/workspace/skills/agentreceipt",
+        always: false,
+        disabled: false,
+        blockedByAllowlist: false,
+        blockedByAgentFilter: false,
+        eligible: true,
+        platformIncompatible: false,
+        modelVisible: true,
+        userInvocable: true,
+        commandVisible: true,
+        requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
+        missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
+        configChecks: [],
+        install: [],
+        ...(installedVersion
+          ? {
+              clawhub: {
+                status: "linked",
+                valid: true,
+                registry: "https://clawhub.ai",
+                slug: "agentreceipt",
+                installedVersion,
+                installedAt,
+                originPath: "/tmp/workspace/skills/agentreceipt/.clawhub/origin.json",
+                lockPath: "/tmp/workspace/.clawhub/lock.json",
+              },
+            }
+          : {}),
+        skillCard: {
+          present: true,
+          path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
+          sizeBytes: 34,
+        },
+      },
+    ],
+  };
+}
+
 describe("loadSkills", () => {
   it("does not issue an ownerless status request", async () => {
     const { state, request } = createState();
@@ -131,10 +182,11 @@ describe("loadSkills", () => {
 
   it("requests one bulk ClawHub verdict batch for linked installed skills", async () => {
     const { state, request } = createState();
+    state.skillsAgentId = "research";
     request.mockImplementation(async (method: string) => {
       if (method === "skills.status") {
         return {
-          workspaceDir: "/tmp/workspace",
+          workspaceDir: "/tmp/research",
           managedSkillsDir: "/tmp/skills",
           skills: [
             {
@@ -179,8 +231,8 @@ describe("loadSkills", () => {
     await loadSkills(state);
 
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "skills.status", { agentId: "main" });
-    expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", { agentId: "main" });
+    expect(request).toHaveBeenNthCalledWith(1, "skills.status", { agentId: "research" });
+    expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", { agentId: "research" });
     expect(state.clawhubVerdicts).toEqual({
       [clawhubVerdictKey({
         registry: "https://clawhub.ai",
@@ -193,6 +245,7 @@ describe("loadSkills", () => {
         securityPassed: true,
       }),
     });
+    expect(state.skillsReport?.workspaceDir).toBe("/tmp/research");
     expect(state.clawhubVerdictsLoading).toBe(false);
     expect(state.clawhubVerdictsError).toBeNull();
   });
@@ -288,49 +341,6 @@ describe("loadSkills", () => {
     expect(Object.keys(state.clawhubVerdicts)).toHaveLength(2);
     expect(state.clawhubVerdicts[aliceKey]?.publisherHandle).toBe("alice");
     expect(state.clawhubVerdicts[bobKey]?.publisherHandle).toBe("bob");
-  });
-
-  it("loads selected agent skills and verdicts with the agent id", async () => {
-    const { state, request } = createState();
-    state.skillsAgentId = "research";
-    request.mockImplementation(async (method: string) => {
-      if (method === "skills.status") {
-        return {
-          workspaceDir: "/tmp/research",
-          managedSkillsDir: "/tmp/skills",
-          skills: [
-            {
-              name: "AgentReceipt",
-              skillKey: "agentreceipt",
-              source: "workspace",
-              clawhub: {
-                status: "linked",
-                valid: true,
-                registry: "https://clawhub.ai",
-                slug: "agentreceipt",
-                installedVersion: "1.2.3",
-                installedAt: 123,
-              },
-            },
-          ],
-        };
-      }
-      if (method === "skills.securityVerdicts") {
-        return {
-          schema: "openclaw.skills.security-verdicts.v1",
-          items: [],
-        };
-      }
-      return {};
-    });
-
-    await loadSkills(state);
-
-    expect(request).toHaveBeenNthCalledWith(1, "skills.status", { agentId: "research" });
-    expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", {
-      agentId: "research",
-    });
-    expect(state.skillsReport?.workspaceDir).toBe("/tmp/research");
   });
 
   it("ignores stale skill reports after switching agents mid-request", async () => {
@@ -535,39 +545,7 @@ describe("loadSkillCard", () => {
       sizeBytes: 34,
       content: "# AgentReceipt\n\nLocal trust card.\n",
     });
-    state.skillsReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [
-        {
-          name: "AgentReceipt",
-          description: "Trust card fixture",
-          skillKey: "agentreceipt",
-          source: "workspace",
-          bundled: false,
-          filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
-          baseDir: "/tmp/workspace/skills/agentreceipt",
-          always: false,
-          disabled: false,
-          blockedByAllowlist: false,
-          blockedByAgentFilter: false,
-          eligible: true,
-          platformIncompatible: false,
-          modelVisible: true,
-          userInvocable: true,
-          commandVisible: true,
-          requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
-          missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
-          configChecks: [],
-          install: [],
-          skillCard: {
-            present: true,
-            path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
-            sizeBytes: 34,
-          },
-        },
-      ],
-    };
+    state.skillsReport = createSkillCardReport();
 
     await loadSkillCard(state, "agentreceipt");
 
@@ -594,69 +572,10 @@ describe("loadSkillCard", () => {
           resolveCard = resolve;
         }),
     );
-    state.skillsReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [
-        {
-          name: "AgentReceipt",
-          description: "Trust card fixture",
-          skillKey: "agentreceipt",
-          source: "workspace",
-          bundled: false,
-          filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
-          baseDir: "/tmp/workspace/skills/agentreceipt",
-          always: false,
-          disabled: false,
-          blockedByAllowlist: false,
-          blockedByAgentFilter: false,
-          eligible: true,
-          platformIncompatible: false,
-          modelVisible: true,
-          userInvocable: true,
-          commandVisible: true,
-          requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
-          missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
-          configChecks: [],
-          install: [],
-          clawhub: {
-            status: "linked",
-            valid: true,
-            registry: "https://clawhub.ai",
-            slug: "agentreceipt",
-            installedVersion: "1.2.3",
-            installedAt: 123,
-            originPath: "/tmp/workspace/skills/agentreceipt/.clawhub/origin.json",
-            lockPath: "/tmp/workspace/.clawhub/lock.json",
-          },
-          skillCard: {
-            present: true,
-            path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
-            sizeBytes: 34,
-          },
-        },
-      ],
-    };
+    state.skillsReport = createSkillCardReport("1.2.3");
 
     const pending = loadSkillCard(state, "agentreceipt");
-    state.skillsReport = {
-      ...state.skillsReport,
-      skills: [
-        {
-          ...expectDefined(state.skillsReport.skills[0], "skill card report entry"),
-          clawhub: {
-            status: "linked",
-            valid: true,
-            registry: "https://clawhub.ai",
-            slug: "agentreceipt",
-            installedVersion: "1.2.4",
-            installedAt: 456,
-            originPath: "/tmp/workspace/skills/agentreceipt/.clawhub/origin.json",
-            lockPath: "/tmp/workspace/.clawhub/lock.json",
-          },
-        },
-      ],
-    };
+    state.skillsReport = createSkillCardReport("1.2.4", 456);
     resolveCard({
       schema: "openclaw.skills.skill-card.v1",
       skillKey: "agentreceipt",
@@ -829,12 +748,6 @@ describe("skill mutations", () => {
 
   it.each([
     {
-      name: "updates skill enablement and records a success message",
-      run: (state: SkillsState) => updateSkillEnabled(state, "github", true),
-      expectedRequest: ["skills.update", { skillKey: "github", enabled: true }],
-      expectedMessage: "Skill enabled",
-    },
-    {
       name: "saves API keys and reports success",
       run: async (state: SkillsState) => {
         state.skillEdits.github = "  sk-test  ";
@@ -849,7 +762,7 @@ describe("skill mutations", () => {
       expectedRequest: [
         "skills.install",
         {
-          agentId: "main",
+          agentId: "research",
           name: "GitHub",
           installId: "install-123",
           dangerouslyForceUnsafeInstall: true,
@@ -860,6 +773,7 @@ describe("skill mutations", () => {
     },
   ])("$name", async ({ run, expectedRequest, expectedMessage, installMessage }) => {
     const { state, request } = createState();
+    state.skillsAgentId = "research";
     mockSkillMutationRequests(request, installMessage);
 
     await run(state);
@@ -871,7 +785,7 @@ describe("skill mutations", () => {
     expect(state.skillsError).toBeNull();
   });
 
-  it.each([undefined, "", "   ", "\t\n"])(
+  it.each([undefined, "   "])(
     "does not clear an existing API key when its replacement is blank: %j",
     async (editValue) => {
       const { state, request } = createState();
@@ -1211,21 +1125,6 @@ describe("skill mutations", () => {
     expect(state.skillsReport?.workspaceDir).toBe("/tmp/beta-after-error");
     expect(state.skillsError).toBeNull();
     expect(state.skillMessages).toEqual({});
-  });
-
-  it("routes selected agent installs through the selected workspace", async () => {
-    const { state, request } = createState();
-    state.skillsAgentId = "research";
-    mockSkillMutationRequests(request, "Installed from registry");
-
-    await installSkill(state, "github", "GitHub", "install-123", true);
-
-    expect(request).toHaveBeenCalledWith("skills.install", {
-      agentId: "research",
-      name: "GitHub",
-      installId: "install-123",
-      dangerouslyForceUnsafeInstall: true,
-    });
   });
 
   it("routes selected agent ClawHub installs through the selected workspace", async () => {

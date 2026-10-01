@@ -82,7 +82,7 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
       if (schedulingChanged) {
         await ensureLoaded(state, { forceReload: true });
         for (const interrupted of interruptedRuns) {
-          emitInterruptedCronRun(state, interrupted);
+          await emitInterruptedCronRun(state, interrupted);
         }
       }
     }
@@ -135,7 +135,7 @@ export async function waitForRunSettlement(
           if (changed) {
             await ensureLoaded(state, { forceReload: true });
             for (const interrupted of interruptedRuns) {
-              emitInterruptedCronRun(state, interrupted);
+              await emitInterruptedCronRun(state, interrupted);
             }
             if (state.schedulerStarted) {
               armTimer(state);
@@ -229,7 +229,7 @@ export async function start(state: CronServiceState): Promise<void> {
       }
       // Publish committed interruptions before a replacement can start catch-up.
       for (const interrupted of interruptedRuns) {
-        emitInterruptedCronRun(state, interrupted);
+        await emitInterruptedCronRun(state, interrupted);
       }
     }
     if (state.stopped || state.lifecycleGeneration !== generation) {
@@ -243,10 +243,28 @@ export async function start(state: CronServiceState): Promise<void> {
   if (state.stopped || state.lifecycleGeneration !== generation) {
     return;
   }
-  await runMissedJobs(state, {
-    skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
-    deferAgentWork: true,
-  });
+  try {
+    await runMissedJobs(state, {
+      skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
+      deferAgentWork: true,
+    });
+  } catch (err) {
+    // Catch-up releases its timer fence even when a terminal write fails.
+    // Keep future jobs live without hiding that failure from the caller.
+    if (!state.stopped && state.lifecycleGeneration === generation) {
+      state.schedulerStarted = true;
+      try {
+        armTimer(state);
+        resumeForeignReceiptMonitor(state);
+      } catch (armError) {
+        state.deps.log.warn(
+          { err: String(armError) },
+          "cron: failed to arm scheduling after startup catch-up failed",
+        );
+      }
+    }
+    throw err;
+  }
 
   await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true });

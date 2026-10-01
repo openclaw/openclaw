@@ -83,16 +83,15 @@ function addSlackResponseMetadata(details: string[], value: unknown) {
   }
   addStringListDetail(details, "scopes", value.scopes);
   addStringListDetail(details, "accepted", value.acceptedScopes);
-  const messages = value.messages;
-  if (Array.isArray(messages)) {
-    for (const message of messages) {
-      addStringDetail(details, "slack message", message);
-    }
-  }
-  const warnings = value.warnings;
-  if (Array.isArray(warnings)) {
-    for (const warning of warnings) {
-      addStringDetail(details, "slack warning", warning);
+  for (const [key, label] of [
+    ["messages", "slack message"],
+    ["warnings", "slack warning"],
+  ] as const) {
+    const entries = value[key];
+    if (Array.isArray(entries)) {
+      for (const entry of entries) {
+        addStringDetail(details, label, entry);
+      }
     }
   }
 }

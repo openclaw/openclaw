@@ -1,4 +1,3 @@
-// Zalouser plugin owns raw zca-js message admission and replay draining.
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressError,

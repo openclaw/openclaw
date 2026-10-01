@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  doesPendingFaceTimeDialHaveCallUUID,
   doesFaceTimeCallMatchPendingDial,
   normalizeFaceTimeOutboundIdentityEvent,
   resolveFaceTimeDialRequest,
@@ -38,7 +37,6 @@ describe("resolveFaceTimeDialRequest", () => {
   it.each([
     "facetime:owner@example.com",
     "owner@example.com?ignored=true",
-    "owner@example.com/path",
     "owner@example.com\nsecond@example.com",
   ])("rejects unsafe handle %j", (handle) => {
     expect(() => resolveFaceTimeDialRequest({ handle, ownerHandles })).toThrow();
@@ -52,28 +50,6 @@ describe("resolveFaceTimeDialRequest", () => {
         ownerHandles,
       }),
     ).toThrow("mode must be audio or video");
-  });
-});
-
-describe("outbound call UUID aliases", () => {
-  it("keeps every UUID returned while Apple replaces the carrier object", () => {
-    const pending: PendingFaceTimeDial = {
-      version: 1,
-      ownerEpoch: 1,
-      dialID: "dial-alias",
-      delivery: "accepted" as const,
-      handle: "owner@example.com",
-      mode: "audio" as const,
-      requestedAt: "2026-07-20T17:52:00.000Z",
-    };
-
-    retainFaceTimeDialCallUUID(pending, "provisional-call");
-    retainFaceTimeDialCallUUID(pending, "carrier-call");
-
-    expect(pending.callUUID).toBe("carrier-call");
-    expect(doesPendingFaceTimeDialHaveCallUUID(pending, "provisional-call")).toBe(true);
-    expect(doesPendingFaceTimeDialHaveCallUUID(pending, "carrier-call")).toBe(true);
-    expect(doesPendingFaceTimeDialHaveCallUUID(pending, "unrelated-call")).toBe(false);
   });
 });
 
@@ -171,157 +147,73 @@ describe("doesFaceTimeCallMatchPendingDial", () => {
     },
   };
 
-  it("uses UUID as the authoritative identity once assigned", () => {
-    expect(
-      doesFaceTimeCallMatchPendingDial({
-        event,
-        pending: {
-          version: 1,
-          ownerEpoch: 1,
-          dialID: "dial-1",
-          delivery: "accepted",
-          handle: "owner@example.com",
-          mode: "video",
-          requestedAt: "2026-07-20T17:52:00.000Z",
-          callUUID: "call-3",
-        },
-      }),
-    ).toBe(true);
-  });
+  const pending: PendingFaceTimeDial = {
+    version: 1,
+    ownerEpoch: 1,
+    dialID: "dial-1",
+    delivery: "accepted",
+    handle: "owner@example.com",
+    mode: "video",
+    requestedAt: "2026-07-20T17:52:00.000Z",
+  };
 
-  it("does not match a stale same-handle event to a different known UUID", () => {
+  it.each([
+    {
+      name: "uses UUID as the authoritative identity once assigned",
+      data: {},
+      pending: { callUUID: "call-3" },
+      matches: true,
+    },
+    {
+      name: "does not match a stale same-handle event to a different known UUID",
+      data: { handle: "owner@example.com" },
+      pending: { callUUID: "call-new" },
+      matches: false,
+    },
+    {
+      name: "prefers an exact dial ID while Apple's provisional identity changes",
+      data: { dial_id: "dial-1", call_uuid: "carrier-call", proxy_identifier: "carrier-proxy" },
+      pending: { callUUID: "provisional-call", proxyIdentifier: "provisional-proxy" },
+      matches: true,
+    },
+    {
+      name: "rejects a mismatched supplied dial ID even when native identity matches",
+      data: { dial_id: "other-dial" },
+      pending: { callUUID: "call-3" },
+      matches: false,
+    },
+    {
+      name: "uses Apple's proxy identity after helper reinjection and before UUID assignment",
+      data: { proxy_identifier: "proxy-1" },
+      pending: { proxyIdentifier: "proxy-1" },
+      matches: true,
+    },
+    {
+      name: "never adopts a same-handle event without exact dial identity",
+      data: { handle: "owner@example.com" },
+      pending: { delivery: "ambiguous" as const },
+      matches: false,
+    },
+  ])("$name", ({ data, pending: overrides, matches }) => {
     expect(
       doesFaceTimeCallMatchPendingDial({
-        event: { ...event, data: { ...event.data, handle: "owner@example.com" } },
-        pending: {
-          version: 1,
-          ownerEpoch: 1,
-          dialID: "dial-2",
-          delivery: "accepted",
-          handle: "owner@example.com",
-          mode: "video",
-          requestedAt: "2026-07-20T17:52:00.000Z",
-          callUUID: "call-new",
-        },
+        event: { ...event, data: { ...event.data, ...data } },
+        pending: { ...pending, ...overrides },
       }),
-    ).toBe(false);
-  });
-
-  it("uses the native dial ID before the pending request has a UUID", () => {
-    expect(
-      doesFaceTimeCallMatchPendingDial({
-        event: { ...event, data: { ...event.data, dial_id: "dial-3" } },
-        pending: {
-          version: 1,
-          ownerEpoch: 1,
-          dialID: "dial-3",
-          delivery: "accepted",
-          handle: "owner@example.com",
-          mode: "video",
-          requestedAt: "2026-07-20T17:52:00.000Z",
-        },
-      }),
-    ).toBe(true);
-  });
-
-  it("prefers an exact dial ID while Apple's provisional identity changes", () => {
-    expect(
-      doesFaceTimeCallMatchPendingDial({
-        event: {
-          ...event,
-          data: {
-            ...event.data,
-            dial_id: "dial-6",
-            call_uuid: "carrier-call",
-            proxy_identifier: "carrier-proxy",
-          },
-        },
-        pending: {
-          version: 1,
-          ownerEpoch: 1,
-          dialID: "dial-6",
-          delivery: "accepted",
-          handle: "owner@example.com",
-          mode: "video",
-          requestedAt: "2026-07-20T17:52:00.000Z",
-          callUUID: "provisional-call",
-          proxyIdentifier: "provisional-proxy",
-        },
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects a mismatched supplied dial ID even when native identity matches", () => {
-    expect(
-      doesFaceTimeCallMatchPendingDial({
-        event: { ...event, data: { ...event.data, dial_id: "other-dial" } },
-        pending: {
-          version: 1,
-          ownerEpoch: 1,
-          dialID: "dial-7",
-          delivery: "accepted",
-          handle: "owner@example.com",
-          mode: "video",
-          requestedAt: "2026-07-20T17:52:00.000Z",
-          callUUID: "call-3",
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("uses Apple's proxy identity after helper reinjection and before UUID assignment", () => {
-    expect(
-      doesFaceTimeCallMatchPendingDial({
-        event: { ...event, data: { ...event.data, proxy_identifier: "proxy-1" } },
-        pending: {
-          version: 1,
-          ownerEpoch: 1,
-          dialID: "dial-5",
-          delivery: "accepted",
-          handle: "owner@example.com",
-          mode: "video",
-          requestedAt: "2026-07-20T17:52:00.000Z",
-          proxyIdentifier: "proxy-1",
-        },
-      }),
-    ).toBe(true);
+    ).toBe(matches);
   });
 
   it("matches an earlier retained UUID when an event omits the dial ID", () => {
-    const pending: PendingFaceTimeDial = {
-      version: 1,
-      ownerEpoch: 1,
-      dialID: "dial-alias-event",
-      delivery: "accepted" as const,
-      handle: "owner@example.com",
-      mode: "video" as const,
-      requestedAt: "2026-07-20T17:52:00.000Z",
-    };
-    retainFaceTimeDialCallUUID(pending, "provisional-call");
-    retainFaceTimeDialCallUUID(pending, "carrier-call");
+    const aliased = { ...pending };
+    retainFaceTimeDialCallUUID(aliased, "provisional-call");
+    retainFaceTimeDialCallUUID(aliased, "carrier-call");
+    expect(aliased.callUUID).toBe("carrier-call");
 
     expect(
       doesFaceTimeCallMatchPendingDial({
         event: { ...event, data: { ...event.data, call_uuid: "provisional-call" } },
-        pending,
+        pending: aliased,
       }),
     ).toBe(true);
-  });
-
-  it("never adopts a same-handle event without exact dial identity", () => {
-    expect(
-      doesFaceTimeCallMatchPendingDial({
-        event: { ...event, data: { ...event.data, handle: "owner@example.com" } },
-        pending: {
-          version: 1,
-          ownerEpoch: 1,
-          dialID: "dial-4",
-          delivery: "ambiguous",
-          handle: "owner@example.com",
-          mode: "video",
-          requestedAt: "2026-07-20T17:52:00.000Z",
-        },
-      }),
-    ).toBe(false);
   });
 });

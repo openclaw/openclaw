@@ -11,7 +11,7 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticTraceContext,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactOtelAttributes } from "./service-attributes.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import {
@@ -64,18 +64,15 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
         : typeof durationMs === "number" && durationMs >= 0
           ? endTimeMs - durationMs
           : undefined;
-    const parentContext =
-      "parentContext" in options ? (options.parentContext ?? undefined) : undefined;
-    const span = tracer.startSpan(
+    return tracer.startSpan(
       name,
       {
         attributes: redactOtelAttributes(attributes),
         ...(options.kind !== undefined ? { kind: options.kind } : {}),
         ...(startTime !== undefined ? { startTime } : {}),
       },
-      parentContext,
+      options.parentContext ?? undefined,
     );
-    return span;
   };
   const trustedTraceContext = (evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) =>
     metadata.trusted ? normalizeTraceContext(evt.trace) : undefined;
@@ -325,20 +322,14 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     const spanContext = span.spanContext();
     const retainedKeys: Array<{ spanId: string; owner?: TrustedSpanAliasOwner }> = [{ spanId }];
-    const retainedAliasKeys: string[] = [];
     for (const [aliasKey, alias] of activeTrustedSpanAliases) {
       if (alias.span === span) {
         retainedKeys.push({ spanId: alias.spanId, owner: alias.owner });
-        retainedAliasKeys.push(aliasKey);
+        activeTrustedSpanAliases.delete(aliasKey);
       }
     }
     if (activeTrustedSpans.get(spanId) === span) {
       activeTrustedSpans.delete(spanId);
-    }
-    for (const aliasKey of retainedAliasKeys) {
-      if (activeTrustedSpanAliases.get(aliasKey)?.span === span) {
-        activeTrustedSpanAliases.delete(aliasKey);
-      }
     }
     span.end(endTimeMs);
     for (const retainedKey of retainedKeys) {

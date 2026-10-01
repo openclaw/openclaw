@@ -155,7 +155,7 @@ describe("warm startup credential binding", () => {
       try {
         expect(runtime.warmBoot).toBe(warm);
         expect(startRead).toHaveBeenCalledTimes(warm ? 1 : 0);
-        expect(runtime.context.agents.state.agentsListCached).toBe(warm);
+        expect(runtime.context.agents.state.agentsList).toBeNull();
         expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope) !== null).toBe(warm);
       } finally {
         runtime.stop();

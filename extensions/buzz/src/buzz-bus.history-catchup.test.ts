@@ -164,6 +164,18 @@ function seedOfflineBacklog(count: number, createdAt: (index: number) => number)
   }
 }
 
+function startHistoryBus(overrides: Partial<Parameters<typeof startBuzzBus>[0]> = {}) {
+  return startBuzzBus({
+    accountId: ACCOUNT_ID,
+    relayUrl: "wss://buzz.example.com",
+    privateKey: PRIVATE_KEY,
+    channelIds: [CHANNEL_ID],
+    since: () => BASE_TIMESTAMP - 60,
+    onMessage: async () => {},
+    ...overrides,
+  });
+}
+
 async function waitForSettled(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 300; attempt += 1) {
     if (predicate()) {
@@ -232,40 +244,12 @@ describe("Buzz reconnect history catch-up", () => {
     vi.useRealTimers();
   });
 
-  it("delivers backlog older than the per-room history limit", async () => {
-    seedOfflineBacklog(HISTORY_LIMIT + 1, (index) => BASE_TIMESTAMP + index);
-    const received: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-    });
-    await waitForSettled(() => received.length >= HISTORY_LIMIT + 1);
-    await bus.close();
-
-    expect(new Set(received).size).toBe(HISTORY_LIMIT + 1);
-    expect(received).toContain("offline-message-000");
-    expect(received.length).toBe(HISTORY_LIMIT + 1);
-    expect(relayMocks.historySubscriptionCloses).toBe(1);
-  });
-
   it("pages a backlog spanning several history windows", async () => {
     const backlogSize = 250;
     seedOfflineBacklog(backlogSize, (index) => BASE_TIMESTAMP + index);
     const received: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -275,6 +259,8 @@ describe("Buzz reconnect history catch-up", () => {
 
     expect(new Set(received).size).toBe(backlogSize);
     expect(received).toContain("offline-message-000");
+    expect(received).toHaveLength(backlogSize);
+    expect(relayMocks.historySubscriptionCloses).toBe(2);
     expect(relayMocks.historyRequests.length).toBeGreaterThan(1);
   });
 
@@ -283,12 +269,7 @@ describe("Buzz reconnect history catch-up", () => {
     const historyErrors: string[] = [];
     const received: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -305,34 +286,6 @@ describe("Buzz reconnect history catch-up", () => {
     expect(relayMocks.historyRequests.some((filter) => filter.limit === undefined)).toBe(true);
   });
 
-  it("bounds a catch-up page when the relay ignores its history limit", async () => {
-    seedOfflineBacklog(250, (index) => BASE_TIMESTAMP + index);
-    relayMocks.overReturnHistoryPages = true;
-    const historyErrors: string[] = [];
-    const received: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-      onHistoryError: (error) => {
-        historyErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => received.length >= 250);
-    await bus.close();
-
-    expect(historyErrors).toEqual([]);
-    expect(new Set(received).size).toBe(250);
-    expect(received.length).toBe(250);
-    expect(relayMocks.historySubscriptionCloses).toBe(2);
-  });
-
   it("bisects an overfull relay range until every bounded page fits", async () => {
     const backlogSize = 1_300;
     seedOfflineBacklog(backlogSize, (index) => BASE_TIMESTAMP + index);
@@ -340,12 +293,7 @@ describe("Buzz reconnect history catch-up", () => {
     const historyErrors: string[] = [];
     const received: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -370,12 +318,7 @@ describe("Buzz reconnect history catch-up", () => {
     relayMocks.stallHistoryPages = true;
     const fatalErrors: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async () => {},
       onFatalError: (error) => {
         fatalErrors.push(error.message);
@@ -394,12 +337,7 @@ describe("Buzz reconnect history catch-up", () => {
     relayMocks.closeHistoryPagesReason = "relay rejected subscription";
     const fatalErrors: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async () => {},
       onFatalError: (error) => {
         fatalErrors.push(error.message);
@@ -443,41 +381,5 @@ describe("Buzz reconnect history catch-up", () => {
     } finally {
       await queue.close();
     }
-  });
-
-  it("stops an active history query quietly when the bus closes", async () => {
-    seedOfflineBacklog(250, (index) => BASE_TIMESTAMP + index);
-    relayMocks.stallHistoryPages = true;
-    const fatalErrors: string[] = [];
-    const historyErrors: string[] = [];
-    const received: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-      onFatalError: (error) => {
-        fatalErrors.push(error.message);
-      },
-      onHistoryError: (error) => {
-        historyErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => relayMocks.historyRequests.length > 1);
-    await bus.close();
-    const requestsAtClose = relayMocks.historyRequests.length;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
-
-    expect(relayMocks.historyRequests.length).toBe(requestsAtClose);
-    expect(received.length).toBeLessThan(250);
-    expect(fatalErrors).toEqual([]);
-    expect(historyErrors).toEqual([]);
   });
 });

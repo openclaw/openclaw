@@ -102,27 +102,6 @@ vi.mock("../commands/export-trajectory.js", () => {
   return { exportTrajectoryCommand: vi.fn(async () => {}) };
 });
 
-vi.mock("../commands/tasks.js", () => {
-  loaded.mark("tasks-command");
-  return {
-    tasksAuditCommand: vi.fn(async () => {}),
-    tasksCancelCommand: vi.fn(async () => {}),
-    tasksListCommand: vi.fn(async () => {}),
-    tasksMaintenanceCommand: vi.fn(async () => {}),
-    tasksNotifyCommand: vi.fn(async () => {}),
-    tasksShowCommand: vi.fn(async () => {}),
-  };
-});
-
-vi.mock("../commands/flows.js", () => {
-  loaded.mark("flows-command");
-  return {
-    flowsCancelCommand: vi.fn(async () => {}),
-    flowsListCommand: vi.fn(async () => {}),
-    flowsShowCommand: vi.fn(async () => {}),
-  };
-});
-
 vi.mock("../commands/configure.commands.js", () => {
   loaded.mark("configure-command");
   return { configureCommandFromSectionsArg: vi.fn(async () => {}) };
@@ -277,8 +256,6 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("sessions-command");
     expect(loaded.modules).not.toContain("sessions-cleanup-command");
     expect(loaded.modules).not.toContain("export-trajectory-command");
-    expect(loaded.modules).not.toContain("tasks-command");
-    expect(loaded.modules).not.toContain("flows-command");
   });
 
   it("keeps configure help out of configure action/wizard modules", async () => {

@@ -137,6 +137,7 @@ describe("theme visitors and resident presence", () => {
     vi.useFakeTimers();
     const element = createPet(42, "offline");
     await element.updateComplete;
+    vi.advanceTimersToNextFrame();
     await element.updateComplete;
     expect(spritePresent(element)).toBe(true);
     element.residentEnabled = false;

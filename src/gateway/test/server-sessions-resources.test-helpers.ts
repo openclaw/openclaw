@@ -199,7 +199,7 @@ export function installGatewaySessionsTestResources(
       runQaGatewayFixture(
         () => run(state),
         disposeSessionReadContexts,
-        // The suite projection also reads this state, but its store lives outside state.root.
+        // Nested fixtures can leave suite projection work pending outside state.root.
         () => releaseGatewaySessionStoreFixture(requireSharedSessionStoreDir()),
       ),
     );

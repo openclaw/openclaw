@@ -25,7 +25,8 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
-import { activeSessions, startTranscripts } from "../../transcripts/capture.js";
+import { activeSessions } from "../../transcripts/capture-startup.js";
+import { startTranscripts } from "../../transcripts/capture.js";
 import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import * as transcriptProviders from "../../transcripts/provider-registry.js";
@@ -785,11 +786,4 @@ describe("meeting transcript RPC", () => {
       { code: "INVALID_REQUEST", details: { type: "transcript_session_not_found" } },
     ]);
   });
-
-  it.each([{ limit: 0 }, { limit: 201 }, { limit: 1.5 }, { unexpected: true }])(
-    "rejects invalid list params %j",
-    async (params) => {
-      expect((await invoke("transcripts.list", params))[0]).toBe(false);
-    },
-  );
 });

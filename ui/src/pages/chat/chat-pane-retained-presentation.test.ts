@@ -32,10 +32,8 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
-import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
 import {
   isSidebarSlotVisible,
   openSlot,
@@ -112,7 +110,6 @@ describe("chat pane retained presentation lifecycle", () => {
       patchSettings({ sidebarSessionLayouts: { [state.sessionKey]: layout } });
       const presentation = pane as TestChatPane & {
         compact: boolean;
-        selectedSessionRailMode: (sessionKey: string) => "expanded" | "hidden";
       };
       presentation.compact = compact;
       pane.connectedClient = null;
@@ -125,9 +122,6 @@ describe("chat pane retained presentation lifecycle", () => {
       );
       expect(state.sidebarLayout.open).toBe(!compact);
       expect(isSidebarSlotVisible(state.sidebarLayout, "companion")).toBe(!compact);
-      expect(presentation.selectedSessionRailMode(state.sessionKey)).toBe(
-        compact ? "hidden" : "expanded",
-      );
       expect(isSidebarSlotVisible(state.sidebarLayout, "conversation")).toBe(true);
       expect(loadSettings().sidebarSessionLayouts?.[state.sessionKey]).toMatchObject(layout);
       expect(isSidebarSlotVisible(openSlot(state.sidebarLayout, "workspace"), "workspace")).toBe(
@@ -463,32 +457,6 @@ describe("chat pane retained presentation lifecycle", () => {
     }
   });
 
-  it.each(["connection", "pane"] as const)(
-    "retires task transcript work without deleting saved selection at the %s boundary",
-    (boundary) => {
-      const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
-      const selected = openSlot(state.sidebarLayout, "tasks");
-      selected.columns
-        .flatMap((column) => column.panels)
-        .find((panel) => panel.slot === "tasks")!.taskId = "task-retired";
-      state.updateSidebarLayout(selected);
-      createBackgroundTasksProps(state, { presented: false });
-      readTaskTranscript(state, { taskId: "task-retired" });
-      expect(state.taskDetailState).toBeDefined();
-      if (boundary === "connection") {
-        pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "stopped" });
-      } else {
-        pane.disconnectedCallback();
-      }
-      expect(
-        state.sidebarLayout.columns
-          .flatMap((column) => column.panels)
-          .find((panel) => panel.slot === "tasks")?.taskId,
-      ).toBe("task-retired");
-      expect(state.taskDetailState).toBeUndefined();
-    },
-  );
-
   it("retires foreground-only state when a retained pane is hidden", () => {
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
@@ -499,18 +467,7 @@ describe("chat pane retained presentation lifecycle", () => {
     state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
     state.realtimeTalkActive = true;
     state.sidebarContent = { kind: "markdown", content: "Review selection" };
-    const selected = openSlot(state.sidebarLayout, "tasks");
-    selected.columns
-      .flatMap((column) => column.panels)
-      .find((panel) => panel.slot === "tasks")!.taskId = "task-live";
-    state.updateSidebarLayout(selected);
-    createBackgroundTasksProps(state, { presented: false });
     state.imageLightbox = { release, src: "blob:test", title: "preview" };
-    const detailHost = state as unknown as TaskDetailHost;
-    readTaskTranscript(detailHost, {
-      taskId: "task-live",
-    });
-    expect(detailHost.taskDetailState).toBeDefined();
     pane.presentationId = "p1:visible";
     const announcement = document.createElement("span");
     announcement.className = "chat-transcript-announcement";
@@ -521,13 +478,6 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(stop).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(state.sidebarContent).toBeNull();
-    expect(
-      state.sidebarLayout.columns
-        .flatMap((column) => column.panels)
-        .find((panel) => panel.slot === "tasks")?.taskId,
-    ).toBe("task-live");
-    // Retirement must stop the selected task's timer/fetch loop.
-    expect(detailHost.taskDetailState).toBeUndefined();
     expect(announcement.getAttribute("aria-live")).toBe("off");
   });
 

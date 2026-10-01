@@ -2,11 +2,17 @@ import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
-import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import {
   isSqliteNativeOpenFailure,
   withSqliteNativeOpen,
 } from "../infra/sqlite-error-diagnostics.js";
+import {
+  SqliteCoordinatorError,
+  OpenClawStateExternalOwnershipError,
+  OpenClawStateOwnershipError,
+  OpenClawStateOwnershipMetadataError,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { receiveSqliteWorkerReply } from "../infra/sqlite-worker-broker-reply.js";
 import type { Job } from "../infra/sqlite-worker-broker.types.js";
@@ -14,7 +20,6 @@ import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
@@ -28,11 +33,6 @@ import {
   OpenClawStateLeaseError,
   toOpenClawStateLeaseVerificationError,
 } from "./openclaw-state-lease-error.js";
-import {
-  OpenClawStateExternalOwnershipError,
-  OpenClawStateOwnershipError,
-  OpenClawStateOwnershipMetadataError,
-} from "./openclaw-state-ownership.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
@@ -97,6 +97,18 @@ describe("shared-state worker error transport", () => {
       expect(hydrateOpenClawStateWorkerError(decoded)).toBe(decoded);
     },
   );
+
+  it.each([
+    { code: "ERR_SQLITE_ERROR", errcode: 5 },
+    { code: "ERR_SQLITE_ERROR", errcode: 6 },
+    { code: "ERR_SQLITE_ERROR", errcode: 517 },
+    { code: "ERR_SQLITE_ERROR", errcode: 262 },
+    { code: "SQLITE_BUSY" },
+    { code: "SQLITE_LOCKED" },
+  ])("preserves native SQLite contention without an enclosing domain error (%j)", (fields) => {
+    const original = Object.assign(new Error("native lock contention"), fields);
+    expect(roundTrip(original)).toMatchObject(fields);
+  });
 
   it.each(
     [RangeError, SyntaxError, TypeError, SkillUploadRequestError].flatMap((ErrorType) =>
@@ -218,8 +230,11 @@ describe("shared-state worker error transport", () => {
     expect(findStartupMaintenanceRequiredError(hydrated)).toBeInstanceOf(SqliteSchemaVersionError);
   });
 
-  it("keeps outcome-unknown explicit instead of hydrating a maintenance payload", () => {
-    const payload = encodeOpenClawStateWorkerError(new SqliteSchemaVersionError("newer schema"));
+  it.each([
+    new SqliteSchemaVersionError("newer schema"),
+    Object.assign(new Error("native lock contention"), { code: "ERR_SQLITE_ERROR", errcode: 5 }),
+  ])("keeps outcome-unknown explicit instead of hydrating %s", (original) => {
+    const payload = encodeOpenClawStateWorkerError(original);
     assert(payload);
     const job: Job = {
       request: {
@@ -229,7 +244,6 @@ describe("shared-state worker error transport", () => {
         input: new Uint8Array(),
         stateContext: {
           environment: { OPENCLAW_STATE_DIR: "/fixture" },
-          coordinatorRuntime: { directory: "/fixture/coordinator", keepAlive: false },
         },
       },
       bytes: 0,
@@ -337,7 +351,7 @@ describe("shared-state worker error transport", () => {
   });
 
   it("encodes and hydrates ordinary error graphs only with an explicit opt-in", () => {
-    const cause = Object.assign(new Error("native failure"), { code: "SQLITE_BUSY" });
+    const cause = Object.assign(new Error("native failure"), { code: "SQLITE_IOERR" });
     const original = new AggregateError([cause], "load and cleanup", { cause });
     cause.cause = original;
     expect(encodeOpenClawStateWorkerError(original)).toBeUndefined();
@@ -346,7 +360,7 @@ describe("shared-state worker error transport", () => {
     const retained = remoteError(structuredClone(payload));
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
     const decoded = hydrateOpenClawStateWorkerError(retained, { includeOrdinary: true });
-    expect(decoded.cause).toMatchObject({ message: "native failure", code: "SQLITE_BUSY" });
+    expect(decoded.cause).toMatchObject({ message: "native failure", code: "SQLITE_IOERR" });
     assert(decoded instanceof AggregateError && decoded.cause instanceof Error);
     expect(decoded.errors[0]).toBe(decoded.cause);
     expect(decoded.cause.cause).toBe(decoded);
@@ -571,15 +585,15 @@ describe("shared-state worker error transport", () => {
 
   it.each([
     new SqliteCoordinatorError("admission refused", new Error("native cause")),
-    ...(["gateway-lifecycle", "state-lifecycle", "state-handles"] as const).map(
-      (family) => new StateDatabaseCoordinatorContentionError(family),
-    ),
-  ])("preserves coordinator classification for %s", (original) => {
+    new GatewayStateOwnerContentionError("/fixture/state.sqlite"),
+  ])("preserves lifecycle error classification for %s", (original) => {
     const decoded = roundTrip(original);
-    expect(decoded).toBeInstanceOf(SqliteCoordinatorError);
-    if (original instanceof StateDatabaseCoordinatorContentionError) {
-      expect(decoded).toMatchObject({ family: original.family });
+    expect(decoded).toMatchObject({ name: original.name, message: original.message });
+    if (original instanceof GatewayStateOwnerContentionError) {
+      expect(decoded).toBeInstanceOf(GatewayStateOwnerContentionError);
+      expect(decoded).toMatchObject({ databasePath: original.databasePath });
     } else {
+      expect(decoded).toBeInstanceOf(SqliteCoordinatorError);
       expect(decoded.cause).toBeInstanceOf(Error);
       expect(decoded.cause).toMatchObject({ message: "native cause" });
     }
@@ -606,7 +620,7 @@ describe("shared-state worker error transport", () => {
       { ...validNode, errcode: -1 },
       { ...validNode, errcode: 0.5 },
       { ...validNode, errcode: 2 ** 31 },
-      { type: "coordinator-contention", name: "Error", message: "invalid", family: "other" },
+      { type: "state-owner-contention", name: "Error", message: "invalid", databasePath: 1 },
       {
         type: "state-lease",
         leaseCode: "OPENCLAW_STATE_LEASE_LOST",

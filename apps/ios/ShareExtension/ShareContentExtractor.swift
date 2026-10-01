@@ -111,15 +111,7 @@ enum ShareContentExtractor {
     private static func loadURLValue(from provider: NSItemProvider, typeIdentifier: String) async -> URL? {
         await withCheckedContinuation { continuation in
             provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-                if let url = item as? URL {
-                    continuation.resume(returning: url)
-                } else if let value = item as? String, let url = URL(string: value) {
-                    continuation.resume(returning: url)
-                } else if let value = item as? NSString, let url = URL(string: value as String) {
-                    continuation.resume(returning: url)
-                } else {
-                    continuation.resume(returning: nil)
-                }
+                continuation.resume(returning: (item as? URL) ?? (item as? String).flatMap(URL.init(string:)))
             }
         }
     }
@@ -127,15 +119,7 @@ enum ShareContentExtractor {
     private static func loadTextValue(from provider: NSItemProvider, typeIdentifier: String) async -> String? {
         await withCheckedContinuation { continuation in
             provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-                if let text = item as? String {
-                    continuation.resume(returning: text)
-                } else if let text = item as? NSString {
-                    continuation.resume(returning: text as String)
-                } else if let text = item as? NSAttributedString {
-                    continuation.resume(returning: text.string)
-                } else {
-                    continuation.resume(returning: nil)
-                }
+                continuation.resume(returning: (item as? String) ?? (item as? NSAttributedString)?.string)
             }
         }
     }

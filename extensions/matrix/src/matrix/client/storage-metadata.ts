@@ -30,26 +30,21 @@ export function normalizeMatrixStorageMetadata(value: unknown): MatrixStorageMet
     return null;
   }
   const metadata: MatrixStorageMetadata = {};
-  if (typeof value.homeserver === "string" && value.homeserver.trim()) {
-    metadata.homeserver = value.homeserver.trim();
-  }
-  if (typeof value.userId === "string" && value.userId.trim()) {
-    metadata.userId = value.userId.trim();
-  }
-  if (typeof value.accountId === "string" && value.accountId.trim()) {
-    metadata.accountId = value.accountId.trim();
-  }
-  if (typeof value.accessTokenHash === "string" && value.accessTokenHash.trim()) {
-    metadata.accessTokenHash = value.accessTokenHash.trim();
-  }
-  if (typeof value.deviceId === "string" && value.deviceId.trim()) {
-    metadata.deviceId = value.deviceId.trim();
+  for (const field of [
+    "homeserver",
+    "userId",
+    "accountId",
+    "accessTokenHash",
+    "deviceId",
+    "createdAt",
+  ] as const) {
+    const entry = value[field];
+    if (typeof entry === "string" && entry.trim()) {
+      metadata[field] = entry.trim();
+    }
   }
   if (value.currentTokenStateClaimed === true) {
     metadata.currentTokenStateClaimed = true;
-  }
-  if (typeof value.createdAt === "string" && value.createdAt.trim()) {
-    metadata.createdAt = value.createdAt.trim();
   }
   return Object.keys(metadata).length > 0 ? metadata : null;
 }

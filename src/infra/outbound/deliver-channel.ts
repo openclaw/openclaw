@@ -516,16 +516,15 @@ function normalizeChannelMessageSendResult(
   channel: string,
   result: ChannelMessageSendResult,
 ): OutboundDeliveryResult {
-  const source = result as ChannelMessageSendResult & Partial<OutboundDeliveryResult>;
   return {
-    ...source,
+    ...result,
     channel,
     messageId:
-      source.messageId ??
-      source.receipt.primaryPlatformMessageId ??
-      source.receipt.platformMessageIds[0] ??
+      result.messageId ??
+      result.receipt.primaryPlatformMessageId ??
+      result.receipt.platformMessageIds[0] ??
       "",
-    receipt: source.receipt,
+    receipt: result.receipt,
   };
 }
 

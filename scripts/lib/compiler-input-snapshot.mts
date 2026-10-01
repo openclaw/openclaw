@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { CompilerOptions } from "typescript/unstable/sync";
 import {
   ARTIFACT_CACHE_VERSION,
   portableRelativePath,
@@ -202,13 +203,14 @@ export class CompilerInputSnapshot {
   private sealedInputs?: ReadonlyMap<string, CapturedInput>;
   private readonly configs = new Map<
     string,
-    { files: string[]; roots: string[]; options: Record<string, unknown> }
+    { files: string[]; roots: string[]; options: CompilerOptions }
   >();
   private topology?: TopologyEntry[];
   private readonly namespaceDigests = new Map<string | undefined, string>();
   private generatorInputs?: string[];
   private readonly policy: CompilerInputPolicy;
   private tools?: string;
+  private toolPaths?: string;
   readonly rootDir: string;
   constructor(rootDir: string, policy: CompilerInputPolicy) {
     this.rootDir = rootDir;
@@ -283,6 +285,9 @@ export class CompilerInputSnapshot {
 
   hash = (file: string) => this.read(file).hash;
 
+  /** Supply the compiler with the same captured bytes that sealing will verify. */
+  readText = (file: string) => this.read(file).bytes.toString("utf8");
+
   private config(file: string) {
     let result = this.configs.get(file);
     if (!result) {
@@ -290,7 +295,8 @@ export class CompilerInputSnapshot {
         const parsed = readNativeTypeScriptConfig({
           cwd: this.rootDir,
           configFileName: this.inputPath(file),
-          readFile: (name) => this.read(name).bytes.toString("utf8"),
+          readFile: this.readText,
+          assertInput: this.policy.assertInput,
         });
         result = {
           files: parsed.configFiles,
@@ -505,13 +511,46 @@ export class CompilerInputSnapshot {
     return this.tools;
   }
 
-  signature(config: string, args: string[], inputs: string[], outputRoot?: string) {
+  private toolchainPaths() {
+    this.toolPaths ??= digest(
+      JSON.stringify(
+        this.toolInputs().map((file) => {
+          const absolute = this.inputPath(file);
+          return [
+            portableRelativePath(this.rootDir, absolute),
+            portableRelativePath(this.rootDir, this.inputPath(fs.realpathSync.native(absolute))),
+          ];
+        }),
+      ),
+    );
+    return this.toolPaths;
+  }
+
+  signature(
+    config: string,
+    args: string[],
+    inputs: string[],
+    outputRoot?: string,
+    resolutionFingerprint?: string,
+  ) {
     const parsed = this.config(config);
+    const namespace = this.namespace(outputRoot);
     return digest(
       JSON.stringify(
         [
           ARTIFACT_CACHE_VERSION,
-          this.namespace(outputRoot),
+          resolutionFingerprint === undefined
+            ? namespace
+            : [
+                "compiler-lookups",
+                resolutionFingerprint,
+                this.toolchainPaths(),
+                (this.topology ?? [])
+                  .filter(
+                    ({ id, name }) => path.isAbsolute(id) && name === `${id}:ancestor-install`,
+                  )
+                  .map(({ name }) => name),
+              ],
           outputRoot,
           this.toolchain(),
           config,
@@ -540,11 +579,13 @@ export class CompilerInputSnapshot {
     args: string[],
     required: string[],
     outputRoot?: string,
+    resolutionFingerprint?: string,
   ) {
     try {
       return (
         record?.inputs !== undefined &&
-        record.signature === this.signature(config, args, record.inputs, outputRoot) &&
+        record.signature ===
+          this.signature(config, args, record.inputs, outputRoot, resolutionFingerprint) &&
         required.every((file) => Object.hasOwn(record.outputs, file)) &&
         (!outputRoot ||
           listCacheFiles(

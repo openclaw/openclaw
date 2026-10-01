@@ -9,10 +9,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
-import {
-  emitSessionIdentityMutation,
-  emitSessionLifecycleEvent,
-} from "../sessions/session-lifecycle-events.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -122,18 +119,22 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     expect(projection.materializedCount).toBe(before);
     const reads: string[] = [];
     const readDatabases = history.withSessionHistoryWorkerDatabases;
-    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
-      readDatabases(targets, (owners) =>
-        consume(
-          owners.map((owner) => ({
-            ...owner,
-            readRowFacts(input) {
-              reads.push(...input.sessionKeys);
-              return owner.readRowFacts(input);
-            },
-          })),
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+      (targets, consume, lane) =>
+        readDatabases(
+          targets,
+          (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  return owner.readRowFacts(input);
+                },
+              })),
+            ),
+          lane,
         ),
-      ),
     );
     sessionChanges.emit({ all: true, scope: "catalog" });
     await projection.ensureMaterialized();
@@ -142,24 +143,28 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     const captured = createDeferredCore();
     const resume = createDeferredCore();
     let pause = true;
-    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
-      readDatabases(targets, (owners) =>
-        consume(
-          owners.map((owner) => ({
-            ...owner,
-            async readRowFacts(input) {
-              reads.push(...input.sessionKeys);
-              const result = await owner.readRowFacts(input);
-              if (pause) {
-                pause = false;
-                captured.resolve();
-                await resume.promise;
-              }
-              return result;
-            },
-          })),
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+      (targets, consume, lane) =>
+        readDatabases(
+          targets,
+          (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                async readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  const result = await owner.readRowFacts(input);
+                  if (pause) {
+                    pause = false;
+                    captured.resolve();
+                    await resume.promise;
+                  }
+                  return result;
+                },
+              })),
+            ),
+          lane,
         ),
-      ),
     );
     sessionChanges.emit({ all: true, scope: "catalog", factsInvalidated: true });
     const refreshing = projection.ensureMaterialized();
@@ -216,12 +221,6 @@ it("does not carry a pending transcript refresh into a replacement session", asy
       updatedAt: 2,
       displayName: "Replacement",
       parentSessionKey: "agent:main:parent",
-    });
-    emitSessionIdentityMutation({
-      kind: "reset",
-      agentId: target.agentId,
-      previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
-      current: { sessionId: "replacement", sessionKeys: [target.sessionKey] },
     });
     await projection.ensureMaterialized();
     expect(projection.snapshot(query).row?.sessionId).toBe("replacement");
@@ -309,12 +308,6 @@ it("eventually fills legacy titles and previews without waiting during startup o
         });
       });
       replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
-      emitSessionIdentityMutation({
-        kind: "reset",
-        agentId: "main",
-        previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
-        current: { sessionId: "replacement", sessionKeys: [target.sessionKey] },
-      });
       expect(
         repairedProjection.snapshot(
           { agentId: "main", key: target.sessionKey },

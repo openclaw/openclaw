@@ -1,11 +1,5 @@
-// Migrate Hermes plugin module implements items behavior.
 import type { MigrationItem } from "openclaw/plugin-sdk/migration";
-import {
-  createMigrationItem,
-  markMigrationItemConflict,
-  markMigrationItemError,
-  markMigrationItemSkipped,
-} from "openclaw/plugin-sdk/migration";
+import { createMigrationItem } from "openclaw/plugin-sdk/migration";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const HERMES_REASON_ALREADY_CONFIGURED = "already configured";
@@ -134,16 +128,4 @@ export function readHermesSecretDetails(item: MigrationItem):
     ...(sourceCredentialId ? { sourceCredentialId } : {}),
     ...(secretField ? { secretField } : {}),
   };
-}
-
-export function hermesItemConflict(item: MigrationItem, reason: string): MigrationItem {
-  return markMigrationItemConflict(item, reason);
-}
-
-export function hermesItemError(item: MigrationItem, reason: string): MigrationItem {
-  return markMigrationItemError(item, reason);
-}
-
-export function hermesItemSkipped(item: MigrationItem, reason: string): MigrationItem {
-  return markMigrationItemSkipped(item, reason);
 }

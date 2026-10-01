@@ -251,6 +251,17 @@ export function verifyStableMainCloseout(params) {
     (asset) => !isCloseoutEvidenceAsset(asset.name, params.tag),
   );
   const existingManifest = params.existingManifest;
+  if (
+    existingManifest &&
+    ["stableSoakWaiver", "laneWaiver"].some((key) => Object.hasOwn(existingManifest, key))
+  ) {
+    return {
+      errors: [
+        "Historical waiver-bearing closeout receipt replay is unsupported. Preserve the recorded manifest and checksum; a fresh validation run cannot replace their published binding.",
+      ],
+      manifest: null,
+    };
+  }
   let verifiedLinuxSelector = false;
   if (requiresLinuxUpdaterObservation(params)) {
     const observation = params.linuxUpdaterObservation;
@@ -484,14 +495,6 @@ export function verifyStableMainCloseout(params) {
     fullReleaseValidationRunId: params.fullReleaseValidationRunId,
     fullReleaseValidationRunAttempt,
     releasePublishRunId: params.releasePublishRunId,
-    // Operator waivers that authorized this stable travel into the closeout
-    // record; a replay keeps the recorded field set byte-identical.
-    ...(existingManifest
-      ? copyOwnFields(existingManifest, "stableSoakWaiver", "laneWaiver")
-      : {
-          ...(params.stableSoakWaiver ? { stableSoakWaiver: params.stableSoakWaiver } : {}),
-          ...(params.laneWaiver ? { laneWaiver: params.laneWaiver } : {}),
-        }),
     ...(existingManifest
       ? copyOwnFields(existingManifest, "releasePublishRecovery")
       : params.allowFailedPublishRecovery

@@ -11,11 +11,8 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { findChatSendPayload, makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
-import {
-  enqueueChatMessage,
-  enqueuePendingRunMessage,
-  removeQueuedMessageWithoutReleasing,
-} from "./chat-queue.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { enqueueChatMessage, enqueuePendingRunMessage } from "./chat-queue.ts";
 import {
   resumeStoredChatOutboxes,
   retryQueuedChatMessage,
@@ -721,7 +718,7 @@ it.each(["connection", "conversation", "discard"] as const)(
       } else if (change === "conversation") {
         host.sessionKey = "agent:main:another-conversation";
       } else {
-        removeQueuedMessageWithoutReleasing(host, host.chatQueue[0]!.id);
+        chatOutboxOwner(host).remove(host, host.chatQueue[0]!.id);
       }
     } finally {
       history.resolve({ messages: [], sessionId: "old-session" });
@@ -768,7 +765,7 @@ it.each([false, true])(
       host.chatMessage = "Keep this second message";
       sending.push(handleSendChat(host));
       await vi.waitFor(() => expect(host.chatQueue).toHaveLength(2));
-      removeQueuedMessageWithoutReleasing(host, firstId);
+      chatOutboxOwner(host).remove(host, firstId);
       expect(host.chatQueue).toEqual([
         expect.objectContaining({ text: "Keep this second message", sendAttempts: 0 }),
       ]);

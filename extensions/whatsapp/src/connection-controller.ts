@@ -54,7 +54,6 @@ type TimerHandle = ReturnType<typeof setInterval>;
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
 
 export type ManagedWhatsAppListener = ActiveWebListener & {
-  close?: () => Promise<void>;
   onClose?: Promise<WebListenerCloseReason>;
   signalClose?: (reason?: WebListenerCloseReason) => void;
 };
@@ -531,9 +530,7 @@ export class WhatsAppConnectionController {
   }
 
   getSelfIdentity(): WhatsAppSelfIdentity | null {
-    const user = this.socketRef.current?.user as
-      | { id?: string | null; lid?: string | null }
-      | undefined;
+    const user = this.socketRef.current?.user;
     if (!user) {
       return null;
     }

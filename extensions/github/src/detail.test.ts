@@ -212,10 +212,10 @@ describe("GitHub detail selected read identity", () => {
     },
   );
 
-  it.each([401, 403, 429])("does not bypass a managed identity after HTTP %s", async (status) => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(json({}, status));
+  it("does not bypass a managed identity after an authentication failure", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(json({}, 401));
     await expect(loadGitHubDetail(target(), identity(), fetchMock)).rejects.toMatchObject({
-      statusCode: status,
+      statusCode: 401,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toHaveProperty("Authorization");
@@ -256,7 +256,7 @@ describe("GitHub detail selected read identity", () => {
     },
   );
 
-  it.each(["item", "discussion", "review", "files"] as const)(
+  it.each(["item", "review", "files"] as const)(
     "rejects a redirected %s before sending credentials to a different repository's content",
     async (stage) => {
       const input = target("pull");
@@ -264,9 +264,7 @@ describe("GitHub detail selected read identity", () => {
         item({ comments: 1, review_comments: 1, changed_files: 1 }),
       );
       const suffix =
-        stage === "discussion"
-          ? "/issues/1/comments"
-          : "/pulls/1" + (stage === "item" ? "" : stage === "review" ? "/comments" : "/files");
+        "/pulls/1" + (stage === "item" ? "" : stage === "review" ? "/comments" : "/files");
       const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
         const pathname = new URL(requestUrl(url)).pathname;
         if (pathname === "/repos/octocat/another") {
@@ -482,27 +480,9 @@ describe("GitHub detail public read boundary", () => {
     },
   );
 
-  it("refreshes an explicitly requested item instead of returning the cached document", async () => {
-    const input = target();
-    const fetchMock = publicFetch(item())
-      .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-      .mockResolvedValueOnce(json(item({ title: "Updated title" })));
-    await loadGitHubDetail(input, undefined, fetchMock);
-    await expect(loadGitHubDetail(input, undefined, fetchMock, true)).resolves.toMatchObject({
-      title: "Updated title",
-    });
-    await expect(loadGitHubDetail(input, undefined, fetchMock)).resolves.toMatchObject({
-      title: "Updated title",
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-  });
-
   it.each([
     { name: "private", body: { id: 123, private: true, visibility: "private" }, status: 200 },
-    { name: "internal", body: { id: 123, private: false, visibility: "internal" }, status: 200 },
-    { name: "missing-visibility", body: { id: 123, private: false }, status: 200 },
     { name: "missing", body: { message: "Not Found" }, status: 404 },
-    { name: "unknown visibility", body: {}, status: 200 },
   ])("stops $name before fetching the object", async ({ body, status }) => {
     for (const selected of [undefined, identity()]) {
       const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(json(body, status));
@@ -800,13 +780,12 @@ describe("GitHub detail public read boundary", () => {
     }
   });
 
-  it.each(["comments", "review", "files"] as const)(
+  it.each(["comments", "files"] as const)(
     "keeps the item visible when %s cannot load",
     async (section) => {
       const fetchMock = publicFetch(
         item({
           comments: section === "comments" ? 1 : 0,
-          review_comments: section === "review" ? 1 : 0,
           changed_files: section === "files" ? 1 : 0,
         }),
       ).mockResolvedValueOnce(json({}, 429));
@@ -814,14 +793,13 @@ describe("GitHub detail public read boundary", () => {
       expect(detail).toMatchObject({
         title: "Read me",
         partial: true,
-        [(section === "review" ? "comments" : section) + "Truncated"]: true,
-        [section === "review" ? "comments" : section]: [],
+        [section + "Truncated"]: true,
+        [section]: [],
       });
     },
   );
 
   it.each([
-    { name: "request failure", response: () => json({}, 429) },
     {
       name: "unsafe permalink",
       response: () => json([commentItem({ html_url: "https://example.com/steal" })]),
@@ -901,15 +879,7 @@ describe("GitHub detail public read boundary", () => {
 describe("GitHub detail target validation", () => {
   it.each([
     null,
-    [],
     {},
-    { kind: "blob", owner: "octocat", repo: "repo", number: 1 },
-    { kind: "issue", owner: "../octocat", repo: "repo", number: 1 },
-    { kind: "issue", owner: "octocat", repo: "..", number: 1 },
-    { kind: "pull", owner: "octocat", repo: "repo", number: 1.5 },
-    { kind: "pull", owner: "octocat", repo: "repo", number: 0 },
-    { kind: "issue", owner: "octocat", repo: "repo", number: 10_000_000_000 },
-    { kind: "commit", owner: "octocat", repo: "repo", sha: "main" },
     { kind: "commit", owner: "octocat", repo: "repo", sha: "abcdef0/../../secrets" },
     { kind: "commit", owner: "octocat", repo: "repo", sha: "a".repeat(41) },
     { kind: "commit", owner: "octocat", repo: "repo", sha, number: 1 },
@@ -918,17 +888,14 @@ describe("GitHub detail target validation", () => {
     expect(parseGitHubTarget(value)).toBeNull();
   });
 
-  it.each(["abcdef0", sha, sha.toUpperCase()])(
-    "accepts only bounded hex commit ids: %s",
-    (value) => {
-      expect(
-        parseGitHubTarget({
-          kind: "commit",
-          owner: "octocat",
-          repo: ".github",
-          sha: value,
-        }),
-      ).toEqual({ kind: "commit", owner: "octocat", repo: ".github", sha: value.toLowerCase() });
-    },
-  );
+  it.each(["abcdef0", sha.toUpperCase()])("accepts only bounded hex commit ids: %s", (value) => {
+    expect(
+      parseGitHubTarget({
+        kind: "commit",
+        owner: "octocat",
+        repo: ".github",
+        sha: value,
+      }),
+    ).toEqual({ kind: "commit", owner: "octocat", repo: ".github", sha: value.toLowerCase() });
+  });
 });

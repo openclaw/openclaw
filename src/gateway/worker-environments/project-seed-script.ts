@@ -33,7 +33,6 @@ export function createProjectSeedScript(input: ProjectSeedScriptInput): string {
   return `set -eu
 node <<'PROJECT_SEED_SCRIPT'
 const fs = require("node:fs");
-const fsp = fs.promises;
 const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");

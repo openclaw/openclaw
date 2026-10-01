@@ -164,6 +164,11 @@ describe("openclaw acp abort causes", () => {
                 },
               },
             },
+            tools: {
+              codeMode: { enabled: false },
+              // This provider fixture emits a direct call, not a Tool Search lookup.
+              toolSearch: false,
+            },
             models: {
               mode: "replace",
               providers: {

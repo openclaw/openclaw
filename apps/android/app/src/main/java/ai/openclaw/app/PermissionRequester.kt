@@ -120,6 +120,7 @@ class PermissionRequester internal constructor(
   suspend fun requestIfMissing(
     permissions: List<String>,
     timeoutMs: Long = 20_000,
+    showSettingsOnDenial: Boolean = true,
   ): Map<String, Boolean> =
     mutex.withLock {
       val missing =
@@ -151,7 +152,7 @@ class PermissionRequester internal constructor(
           result[perm] == true || nowGranted
         }
 
-      showSettingsForPermanentDenials(merged, timeoutMs)
+      if (showSettingsOnDenial && result.isNotEmpty()) showSettingsForPermanentDenials(merged, timeoutMs)
       merged
     }
 
@@ -169,7 +170,9 @@ class PermissionRequester internal constructor(
         .mapIndexed { index, permission ->
           permission to (grantResults.getOrNull(index) == PackageManager.PERMISSION_GRANTED)
         }.toMap()
-    request.deferred.complete(request.permissions.associateWith { permission -> grants[permission] == true })
+    request.deferred.complete(
+      if (permissions.isEmpty()) emptyMap() else request.permissions.associateWith { permission -> grants[permission] == true },
+    )
     return true
   }
 
@@ -230,10 +233,8 @@ class PermissionRequester internal constructor(
             }
         val launched =
           withContext(Dispatchers.Main) {
-            if (activeActivityHost.value != active) return@withContext false
-            val host = active.host
-            if (host.activity.isFinishing || host.activity.isDestroyed) return@withContext false
-            host.permissionRequestLauncher(permissions.toTypedArray(), requestCode)
+            if (!isCurrentActiveHost(active)) return@withContext false
+            active.host.permissionRequestLauncher(permissions.toTypedArray(), requestCode)
             true
           }
         if (launched) return@withTimeout
@@ -305,7 +306,7 @@ class PermissionRequester internal constructor(
     showPermissionDialog(active, RationaleResult.HostLost) { activity, finish ->
       AlertDialog
         .Builder(activity)
-        .setTitle(nativeString("Permission required"))
+        .setTitle(nativeString("Allow access?"))
         .setMessage(buildRationaleMessage(permissions))
         .setPositiveButton(nativeString("Continue")) { _, _ -> finish(RationaleResult.Proceed) }
         .setNegativeButton(nativeString("Not now")) { _, _ -> finish(RationaleResult.Decline) }
@@ -320,8 +321,9 @@ class PermissionRequester internal constructor(
     showPermissionDialog(active, SettingsResult.HostLost) { activity, finish ->
       AlertDialog
         .Builder(activity)
-        .setTitle(nativeString("Enable permission in Settings"))
-        .setMessage(buildSettingsMessage(permissions))
+        .setTitle(
+          if (permissions.any(::isSmsPermission)) nativeString("SMS permission not granted") else nativeString("Enable permission in Settings"),
+        ).setMessage(buildSettingsMessage(permissions))
         .setPositiveButton(nativeString("Open Settings")) { _, _ ->
           if (!isCurrentActiveHost(active)) {
             finish(SettingsResult.HostLost)
@@ -388,25 +390,35 @@ class PermissionRequester internal constructor(
     }
 
   private fun buildRationaleMessage(permissions: List<String>): String {
-    val labels = permissions.map { permissionLabel(it) }
+    val labels = permissions.map { permissionLabel(it) }.distinct()
     return nativeString(
-      "OpenClaw needs \${labels.joinToString(\", \")} permissions to continue.",
+      "OpenClaw uses \${labels.joinToString(\", \")} permissions for features that need this access.",
       labels.joinToString(", "),
     )
   }
 
   private fun buildSettingsMessage(permissions: List<String>): String {
-    val labels = permissions.map { permissionLabel(it) }
+    val labels = permissions.map { permissionLabel(it) }.distinct()
+    if (permissions.any(::isSmsPermission)) {
+      return nativeString(
+        "Not granted: \${labels.joinToString(\", \")}. If you denied access, review it in Android Settings. A missing or disabled SMS option may mean an installer or device-policy restriction. Check your installation source or contact your device administrator; OpenClaw cannot override these restrictions.",
+        labels.joinToString(", "),
+      )
+    }
     return nativeString(
-      "Please enable \${labels.joinToString(\", \")} in Android Settings to continue.",
+      "You can enable \${labels.joinToString(\", \")} in Android Settings.",
       labels.joinToString(", "),
     )
   }
+
+  private fun isSmsPermission(permission: String): Boolean = permission == Manifest.permission.READ_SMS || permission == Manifest.permission.SEND_SMS
 
   private fun permissionLabel(permission: String): String =
     when (permission) {
       Manifest.permission.CAMERA -> nativeString("Camera")
       Manifest.permission.RECORD_AUDIO -> nativeString("Microphone")
+      Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION -> nativeString("Location")
+      Manifest.permission.POST_NOTIFICATIONS -> nativeString("Notifications")
       Manifest.permission.SEND_SMS -> nativeString("Send SMS")
       Manifest.permission.READ_SMS -> nativeString("Read SMS")
       Manifest.permission.READ_CONTACTS -> nativeString("Read Contacts")

@@ -17,6 +17,16 @@ import type { LegacyMemorySidecarSource } from "./doctor-memory-sidecar-import.j
 
 const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 
+async function existingLegacySidecarPaths(basePath: string): Promise<string[]> {
+  const paths = await Promise.all(
+    LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
+      const filePath = `${basePath}${suffix}`;
+      return (await legacyStateFileExists(filePath)) ? filePath : null;
+    }),
+  );
+  return paths.filter((filePath) => filePath !== null);
+}
+
 function formatLegacyVectorRows(count: number | undefined): string {
   return count === undefined ? "legacy vector rows" : `${count} vector row(s)`;
 }
@@ -235,14 +245,7 @@ async function archiveLegacyMemorySidecar(params: {
   changes: string[];
   warnings: string[];
 }): Promise<void> {
-  const existingSources = (
-    await Promise.all(
-      LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
-        const filePath = `${params.source.legacyPath}${suffix}`;
-        return (await legacyStateFileExists(filePath)) ? filePath : null;
-      }),
-    )
-  ).filter((filePath): filePath is string => filePath !== null);
+  const existingSources = await existingLegacySidecarPaths(params.source.legacyPath);
   if (existingSources.length === 0) {
     return;
   }
@@ -311,14 +314,7 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
   ) {
     return;
   }
-  const existingTargets = (
-    await Promise.all(
-      LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
-        const targetPath = `${retryPath}${suffix}`;
-        return (await legacyStateFileExists(targetPath)) ? targetPath : null;
-      }),
-    )
-  ).filter((targetPath): targetPath is string => targetPath !== null);
+  const existingTargets = await existingLegacySidecarPaths(retryPath);
   const targetBasePath =
     existingTargets.length === 0
       ? retryPath
@@ -334,16 +330,12 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
   if (await legacyStateFileExists(targetBasePath)) {
     return;
   }
-  const existingSources = (
-    await Promise.all(
-      LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
-        const sourcePath = `${params.source.legacyPath}${suffix}`;
-        return (await legacyStateFileExists(sourcePath))
-          ? { sourcePath, targetPath: `${targetBasePath}${suffix}` }
-          : null;
-      }),
-    )
-  ).filter((entry): entry is { sourcePath: string; targetPath: string } => entry !== null);
+  const existingSources = (await existingLegacySidecarPaths(params.source.legacyPath)).map(
+    (sourcePath) => ({
+      sourcePath,
+      targetPath: `${targetBasePath}${sourcePath.slice(params.source.legacyPath.length)}`,
+    }),
+  );
   if (existingSources.length === 0) {
     return;
   }
@@ -518,18 +510,6 @@ async function migrateLegacyMemorySidecarSource(params: {
   }
 }
 
-function groupLegacyMemorySidecarSourcesByPath(
-  sources: LegacyMemorySidecarSource[],
-): LegacyMemorySidecarSource[][] {
-  const groups = new Map<string, LegacyMemorySidecarSource[]>();
-  for (const source of sources) {
-    const group = groups.get(source.legacyPath) ?? [];
-    group.push(source);
-    groups.set(source.legacyPath, group);
-  }
-  return [...groups.values()];
-}
-
 export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
@@ -552,14 +532,17 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   async migrateLegacyState(params) {
     const changes: string[] = [];
     const warnings: string[] = [];
-    const groups = groupLegacyMemorySidecarSourcesByPath(
-      await collectLegacyMemorySidecarSources({
-        config: params.config,
-        env: params.env,
-        stateDir: params.stateDir,
-      }),
-    );
-    for (const sources of groups) {
+    const groups = new Map<string, LegacyMemorySidecarSource[]>();
+    for (const source of await collectLegacyMemorySidecarSources({
+      config: params.config,
+      env: params.env,
+      stateDir: params.stateDir,
+    })) {
+      const group = groups.get(source.legacyPath) ?? [];
+      group.push(source);
+      groups.set(source.legacyPath, group);
+    }
+    for (const sources of groups.values()) {
       let archiveReady = true;
       for (const source of sources) {
         try {
@@ -620,7 +603,16 @@ async function collectRetiredQmdWorkspaceHomes(stateDir: string): Promise<string
     descend: (entry) => entry.depth === 1 && entry.name === normalizeAgentId(entry.name),
     include: (entry) => entry.depth === 2 && entry.kind === "directory" && entry.name === "qmd",
   });
-  return entries.map((entry) => entry.path).toSorted((left, right) => left.localeCompare(right));
+  const homes: string[] = [];
+  for (const entry of entries) {
+    // OpenClaw and standalone QMD wrote the same layout without an ownership
+    // marker. Only an empty directory is safe to retire; unreadable homes stay.
+    const children = await fs.readdir(entry.path).catch(() => undefined);
+    if (children?.length === 0) {
+      homes.push(entry.path);
+    }
+  }
+  return homes.toSorted((left, right) => left.localeCompare(right));
 }
 
 export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
@@ -634,8 +626,7 @@ export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
     }
     return {
       preview: homes.map(
-        (home) =>
-          `- Retired Memory Core QMD workspace: ${home} -> remove derived index, config, cache, and session-export artifacts`,
+        (home) => `- Empty retired Memory Core QMD workspace: ${home} -> remove empty directory`,
       ),
     };
   },
@@ -644,8 +635,9 @@ export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
     const warnings: string[] = [];
     for (const home of await collectRetiredQmdWorkspaceHomes(params.stateDir)) {
       try {
-        await fs.rm(home, { recursive: true, force: true });
-        changes.push(`Removed retired Memory Core QMD workspace: ${home}`);
+        // Do not remove files added after detection by a standalone QMD process.
+        await fs.rmdir(home);
+        changes.push(`Removed empty retired Memory Core QMD workspace: ${home}`);
       } catch (err) {
         warnings.push(
           `Skipped retired Memory Core QMD workspace cleanup. Run openclaw doctor --fix to retry. ${home}: ${String(err)}`,

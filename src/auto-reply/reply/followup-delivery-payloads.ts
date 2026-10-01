@@ -7,7 +7,7 @@ import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { applyReplyTagsToPayload } from "./reply-payloads-base.js";
-import { filterMessagingToolReplyPayload } from "./reply-payloads.js";
+import { filterMessagingToolReplyPayload } from "./reply-payloads-dedupe.js";
 import {
   createReplyDeliveryContext,
   createReplyToModeFilterForChannel,

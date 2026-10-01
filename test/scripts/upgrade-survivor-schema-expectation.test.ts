@@ -258,6 +258,60 @@ describe("published survivor schema outcome", () => {
     );
   });
 
+  it("admits only the required native fixture agent and verifies its database", () => {
+    const lane = schemaFixture("2026.9.4");
+    const artifactRoot = dirname(lane.snapshotFile);
+    const configFile = join(artifactRoot, "openclaw.json");
+    const eligibility = join(artifactRoot, "native-assignment-eligibility.json");
+    const setAgents = (ids: string[]) =>
+      writeFileSync(
+        configFile,
+        JSON.stringify({ agents: { entries: Object.fromEntries(ids.map((id) => [id, {}])) } }),
+      );
+    const expectRosterRejected = () => {
+      const result = lane.prepare();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("seeded agent roster changed");
+    };
+    setAgents(["main", "native-proof", "ops"]);
+    expectRosterRejected();
+    writeFileSync(eligibility, JSON.stringify({ status: "not-applicable" }));
+    expectRosterRejected();
+    writeFileSync(eligibility, JSON.stringify({ status: "required" }));
+    const nativeDatabase = join(lane.stateDir, "agents/native-proof/agent/openclaw-agent.sqlite");
+    writeSchema(nativeDatabase, 18);
+    const prepared = lane.prepare();
+    expect(prepared.status, prepared.stderr).toBe(0);
+    expect(
+      JSON.parse(readFileSync(lane.snapshotFile, "utf8")).agents.map(
+        (agent: { agentId: string }) => agent.agentId,
+      ),
+    ).toEqual(["main", "native-proof", "ops"]);
+    writeSchema(lane.stateDatabase, 16);
+    const oldSchema = lane.check();
+    expect(oldSchema.status).toBe(1);
+    expect(oldSchema.stderr).toContain(
+      "required agent database lacks candidate schema: native-proof",
+    );
+    writeSchema(nativeDatabase, 19);
+    expect(lane.check().status).toBe(0);
+    rmSync(nativeDatabase);
+    const missing = lane.check();
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain(
+      "required agent database missing before candidate probes: native-proof",
+    );
+    for (const ids of [
+      ["main", "ops"],
+      ["native-proof", "ops"],
+      ["main", "native-proof"],
+      ["main", "native-proof", "ops", "unexpected"],
+    ]) {
+      setAgents(ids);
+      expectRosterRejected();
+    }
+  });
+
   it.each(["main", "ops"])("requires the legacy %s store before candidate probes", (agentId) => {
     const lane = legacyAgentFixture(agentId);
     writeSchema(lane.stateDatabase, 16);

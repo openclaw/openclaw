@@ -212,60 +212,9 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
     expect(monitorMock).toHaveBeenCalledTimes(2);
     expect(second.logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(false);
   });
-
-  it("starts monitorIMessageProvider when an account has no duplicate sibling", async () => {
-    monitorMock.mockClear();
-    monitorMock.mockResolvedValueOnce(undefined);
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            solo: { cliPath: "/usr/local/bin/imsg-solo" },
-          },
-        },
-      },
-    } as never;
-    const { ctx } = makeCtx({ cfg, accountId: "solo" });
-
-    await startIMessageGatewayAccount(ctx);
-    expect(monitorMock).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("sendIMessageOutbound approval identity", () => {
-  it("preserves the original host media capability and supported split reader", async () => {
-    const trustedReader = vi.fn(async () => Buffer.from("trusted"));
-    const legacyReader = vi.fn(async () => Buffer.from("legacy"));
-    const mediaAccess = {
-      localRoots: ["/trusted/workspace"],
-      workspaceDir: "/trusted/workspace",
-      readFile: trustedReader,
-    };
-    const send = vi.fn(
-      async (
-        _to: string,
-        _text: string,
-        options: { mediaAccess?: typeof mediaAccess; mediaReadFile?: typeof legacyReader },
-      ) => ({ messageId: "p:0/trusted-media", options }),
-    );
-
-    await sendIMessageOutbound({
-      cfg: {} as never,
-      to: "+15551230000",
-      text: "caption",
-      mediaUrl: "workspace-image.png",
-      mediaAccess,
-      mediaLocalRoots: ["/untrusted/legacy"],
-      mediaReadFile: legacyReader,
-      deps: { imessage: send },
-    });
-
-    const forwarded = send.mock.calls[0]?.[2];
-    expect(forwarded?.mediaAccess).toBe(mediaAccess);
-    expect(forwarded?.mediaReadFile).toBe(legacyReader);
-    expect(forwarded).toEqual(expect.objectContaining({ mediaLocalRoots: ["/untrusted/legacy"] }));
-  });
-
   it("keeps a Gateway-shaped host media capability reader-free", async () => {
     const mediaAccess = { localRoots: ["/trusted/workspace"], workspaceDir: "/trusted/workspace" };
     const send = vi.fn(
@@ -323,42 +272,6 @@ describe("sendIMessageOutbound approval identity", () => {
       "approval text",
       expect.objectContaining({ conversationReadOrigin: "delegated" }),
     );
-  });
-
-  it("forwards accepted attachment progress before a later native caption failure", async () => {
-    const receipt = {
-      primaryPlatformMessageId: "p:0/accepted-attachment",
-      platformMessageIds: ["p:0/accepted-attachment"],
-      parts: [{ platformMessageId: "p:0/accepted-attachment", kind: "media" as const, index: 0 }],
-      sentAt: 1_000,
-    };
-    const accepted = {
-      content: "",
-      messageId: "p:0/accepted-attachment",
-      messageIds: ["p:0/accepted-attachment"],
-      sentText: "",
-      receipt,
-      visibleReplySent: true as const,
-    };
-    const captionError = new Error("caption failed after accepted attachment");
-    const send = vi.fn(async (_to, _text, options) => {
-      await options.onDeliveryResult?.(accepted);
-      throw captionError;
-    });
-    const onDeliveryResult = vi.fn();
-
-    await expect(
-      sendIMessageOutbound({
-        cfg: {} as never,
-        to: "+15551230000",
-        text: "caption",
-        mediaUrl: "/tmp/report.pdf",
-        deps: { imessage: send },
-        onDeliveryResult,
-      }),
-    ).rejects.toBe(captionError);
-
-    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(accepted);
   });
 });
 

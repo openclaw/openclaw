@@ -31,6 +31,7 @@ async function loadModelProvidersRouteData(
   const gatewaySnapshot = gateway.snapshot;
   const selection = context.settingsAgentSelection;
   const selectionIntentRevision = selection.intentRevision;
+  const owner = { gateway, gatewaySnapshot, selectionIntentRevision, connect, provider };
   let agentId = selection.state.selectedId;
   const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;
@@ -47,44 +48,26 @@ async function loadModelProvidersRouteData(
       selection.state.selectedId === agentId
     );
   };
-  if (!client || !isCurrent()) {
-    return {
-      gateway,
-      gatewaySnapshot,
-      data: EMPTY_MODEL_PROVIDERS_DATA,
-      client: null,
-      agentId,
-      selectionIntentRevision,
-      connect,
-      provider,
-    };
-  }
-  if (!agentId) {
-    await context.agents.ensureList();
-    // The selection owner validates pending cold-link intent against the roster.
-    agentId = selection.state.selectedId;
-  }
-  if (!agentId || !isCurrent()) {
-    return {
-      gateway,
-      gatewaySnapshot,
-      data: EMPTY_MODEL_PROVIDERS_DATA,
-      client: null,
-      agentId,
-      selectionIntentRevision,
-      connect,
-      provider,
-    };
+  if (client && isCurrent()) {
+    if (!agentId) {
+      await context.agents.ensureList();
+      // The selection owner validates pending cold-link intent against the roster.
+      agentId = selection.state.selectedId;
+    }
+    if (agentId && isCurrent()) {
+      return {
+        ...owner,
+        data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
+        client,
+        agentId,
+      };
+    }
   }
   return {
-    gateway,
-    gatewaySnapshot,
-    connect,
-    provider,
-    data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
-    client,
+    ...owner,
+    data: EMPTY_MODEL_PROVIDERS_DATA,
+    client: null,
     agentId,
-    selectionIntentRevision,
   };
 }
 

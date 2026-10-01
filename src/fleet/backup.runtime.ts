@@ -12,7 +12,6 @@ import {
   ArchiveSecurityError,
   extractArchive,
 } from "../infra/archive.js";
-import { createBackupVolatileStatCache } from "../infra/backup-volatile-stat-cache.js";
 import {
   getPublishFileExclusiveFailureDetails,
   publishFileNoClobber,
@@ -273,6 +272,9 @@ export async function backupFleetCell(params: {
         return false;
       }
       if (isFile) {
+        // Tar filters its cached Stats before scheduling hardlinks. Restore
+        // requires each accepted path to carry independent file bytes.
+        stat.nlink = 1;
         totalBytes += stat.size;
         fileCount += 1;
         if (totalBytes > maxBytes) {
@@ -288,7 +290,6 @@ export async function backupFleetCell(params: {
           gzip: true,
           portable: true,
           preservePaths: true,
-          statCache: createBackupVolatileStatCache(() => false),
           filter,
           onWriteEntry: (entry) => {
             entry.path = remapArchivePath(entry.path, manifestPath, dataTarget, authTarget);

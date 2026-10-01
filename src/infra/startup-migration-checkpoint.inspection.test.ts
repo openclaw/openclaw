@@ -1,20 +1,16 @@
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as schemaHelpers from "../state/openclaw-state-db-schema-helpers.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
 import {
-  acquireStartupMigrationLease,
+  acquireStartupMigrationLeaseWithWait,
   STARTUP_MIGRATION_LEASE_TTL_MS,
-  inspectStartupMigrationCheckpointWithLease,
-  readMigrationCheckpointStatus,
-  readStartupMigrationVersion,
-  recordSuccessfulStateMigrations,
-  recordSuccessfulStartupMigrations,
+  type StartupMigrationLease,
 } from "./startup-migration-checkpoint.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
@@ -37,58 +33,19 @@ beforeEach(() => {
     path.join(handoffRoot, "managed-update-handoffs.sqlite"),
   );
 });
-const identity = {
-  effectiveConfigFingerprint: "config",
-  pluginDoctorConfigFingerprint: "doctor",
-  pluginMigrationFingerprint: "plugins",
-};
 function parameters() {
-  return {
-    env,
-    buildIdentity: "synthetic-build",
-    version: "2026.9.5",
-    identity,
-    stateMigrations: true,
-    startupMigrations: true,
-    forceLease: false,
-    sleep: async () => {},
-  };
+  return { env, timeoutMs: 0, sleep: async () => {} };
 }
-function integrityScans(prepare: MockInstance<DatabaseSync["prepare"]>) {
-  return prepare.mock.calls.filter(([sql]) => sql === "PRAGMA integrity_check;").length;
+async function initializeLeaseDatabase() {
+  const lease = await acquireStartupMigrationLeaseWithWait(parameters());
+  lease.release();
 }
 
-describe("startup checkpoint inspection and lease", () => {
-  it("reduces the complete startup checkpoint sequence from six scans to five", async () => {
-    readStartupMigrationVersion(env);
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const inspected = await inspectStartupMigrationCheckpointWithLease(parameters());
-    expect(inspected.status).toBe("stale");
-    expect(inspected.lease).toBeDefined();
-    try {
-      expect(integrityScans(prepare)).toBe(1);
-      expect(readMigrationCheckpointStatus(parameters())).toBe("stale");
-      expect(integrityScans(prepare)).toBe(2);
-      recordSuccessfulStateMigrations({ ...parameters(), lease: inspected.lease });
-      expect(integrityScans(prepare)).toBe(3);
-      recordSuccessfulStartupMigrations({ ...parameters(), lease: inspected.lease });
-      expect(integrityScans(prepare)).toBe(4);
-    } finally {
-      inspected.lease?.release();
-    }
-    expect(integrityScans(prepare)).toBe(5);
-    expect(prepare.mock.calls.filter(([sql]) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
-      5,
-    );
-    expect(readMigrationCheckpointStatus(parameters())).toBe("startup-current");
-    const next = acquireStartupMigrationLease({ env, owner: "after-release" });
-    next.release();
-  });
-
+describe("startup lease integrity and admission", () => {
   it.each([false, true])(
     "allows WAL writers during verification and discards invalidated proof (corrupt=%s)",
     async (corrupt) => {
-      readStartupMigrationVersion(env);
+      await initializeLeaseDatabase();
       const competing = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
       competing.exec(`
         PRAGMA busy_timeout = 0; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = OFF;
@@ -117,9 +74,12 @@ describe("startup checkpoint inspection and lease", () => {
           });
           return assertIntegrity(db, label, check);
         });
-      let lease: Awaited<ReturnType<typeof inspectStartupMigrationCheckpointWithLease>>["lease"];
+      let lease: StartupMigrationLease | undefined;
       try {
-        const operation = inspectStartupMigrationCheckpointWithLease(parameters());
+        const operation = acquireStartupMigrationLeaseWithWait({
+          ...parameters(),
+          timeoutMs: 1000,
+        });
         if (corrupt) {
           await expect(operation).rejects.toThrow("foreign_key_check failed");
           expect(
@@ -128,9 +88,11 @@ describe("startup checkpoint inspection and lease", () => {
               .all(),
           ).toEqual([]);
         } else {
-          lease = (await operation).lease;
+          lease = await operation;
           expect(lease).toBeDefined();
-          expect(() => acquireStartupMigrationLease({ env })).toThrow("already running");
+          await expect(acquireStartupMigrationLeaseWithWait(parameters())).rejects.toThrow(
+            "already running",
+          );
         }
         expect(committed).toBe(true);
         expect(checker).toHaveBeenCalledTimes(corrupt ? 2 : 3);
@@ -148,7 +110,7 @@ describe("startup checkpoint inspection and lease", () => {
   it.each([false, true])(
     "waits for an active WAL writer within the existing budget (exhausted=%s)",
     async (exhausted) => {
-      readStartupMigrationVersion(env);
+      await initializeLeaseDatabase();
       const peer = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
       peer.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 0;");
       const assertIntegrity = sqliteIntegrity.assertSqliteIntegrity;
@@ -170,9 +132,9 @@ describe("startup checkpoint inspection and lease", () => {
         clock += 1;
         peer.exec("COMMIT");
       });
-      let lease: Awaited<ReturnType<typeof inspectStartupMigrationCheckpointWithLease>>["lease"];
+      let lease: StartupMigrationLease | undefined;
       try {
-        const operation = inspectStartupMigrationCheckpointWithLease({
+        const operation = acquireStartupMigrationLeaseWithWait({
           ...parameters(),
           sleep,
           monotonicNow: () => clock,
@@ -185,11 +147,13 @@ describe("startup checkpoint inspection and lease", () => {
             peer.prepare("SELECT owner FROM state_leases WHERE scope = 'startup-migrations'").all(),
           ).toEqual([]);
         } else {
-          lease = (await operation).lease;
+          lease = await operation;
           expect(lease).toBeDefined();
           expect(sleep).toHaveBeenCalledTimes(1);
           expect(checker).toHaveBeenCalledTimes(2);
-          expect(() => acquireStartupMigrationLease({ env })).toThrow("already running");
+          await expect(acquireStartupMigrationLeaseWithWait(parameters())).rejects.toThrow(
+            "already running",
+          );
         }
       } finally {
         checker.mockRestore();
@@ -205,7 +169,7 @@ describe("startup checkpoint inspection and lease", () => {
   it.each([false, true])(
     "starts lease lifetime after slow verification (snapshot invalidated=%s)",
     async (invalidateSnapshot) => {
-      readStartupMigrationVersion(env);
+      await initializeLeaseDatabase();
       const pathname = resolveOpenClawStateSqlitePath(env);
       const peer = new DatabaseSync(pathname);
       peer.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 0;");
@@ -226,11 +190,13 @@ describe("startup checkpoint inspection and lease", () => {
           }
           return result;
         });
-      let lease: Awaited<ReturnType<typeof inspectStartupMigrationCheckpointWithLease>>["lease"];
+      let lease: StartupMigrationLease | undefined;
       try {
-        lease = (
-          await inspectStartupMigrationCheckpointWithLease({ ...parameters(), now: () => nowMs })
-        ).lease;
+        lease = await acquireStartupMigrationLeaseWithWait({
+          ...parameters(),
+          timeoutMs: 1000,
+          now: () => nowMs,
+        });
         expect(lease).toBeDefined();
         const row = peer
           .prepare("SELECT expires_at FROM state_leases WHERE owner = ?")
@@ -245,25 +211,10 @@ describe("startup checkpoint inspection and lease", () => {
     },
   );
 
-  it("bootstraps fresh canonical state and releases its initial claim", async () => {
-    expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
-    const inspected = await inspectStartupMigrationCheckpointWithLease(parameters());
-    try {
-      expect(inspected.status).toBe("stale");
-      expect(inspected.lease).toBeDefined();
-      recordSuccessfulStartupMigrations({ ...parameters(), lease: inspected.lease });
-      expect(readMigrationCheckpointStatus(parameters())).toBe("startup-current");
-    } finally {
-      inspected.lease?.release();
-    }
-    const next = acquireStartupMigrationLease({ env });
-    next.release();
-  });
-
   it.each([false, true])(
     "rechecks schema repair and rolls back damage (snapshot invalidated=%s)",
     async (invalidateSnapshot) => {
-      readStartupMigrationVersion(env);
+      await initializeLeaseDatabase();
       const pathname = resolveOpenClawStateSqlitePath(env);
       const fixture = new DatabaseSync(pathname);
       try {
@@ -308,9 +259,9 @@ describe("startup checkpoint inspection and lease", () => {
           return changed;
         });
       try {
-        await expect(inspectStartupMigrationCheckpointWithLease(parameters())).rejects.toThrow(
-          "integrity_check failed",
-        );
+        await expect(
+          acquireStartupMigrationLeaseWithWait({ ...parameters(), timeoutMs: 1000 }),
+        ).rejects.toThrow("integrity_check failed");
       } finally {
         repair.mockRestore();
         checker.mockRestore();
@@ -334,8 +285,8 @@ describe("startup checkpoint inspection and lease", () => {
     },
   );
 
-  it("rolls back a conditional claim when the combined operation cannot commit", async () => {
-    readStartupMigrationVersion(env);
+  it("rolls back a lease claim when its verified transaction cannot commit", async () => {
+    await initializeLeaseDatabase();
     const assertIntegrity = sqliteIntegrity.assertSqliteIntegrity;
     const spy = vi
       .spyOn(sqliteIntegrity, "assertSqliteIntegrity")
@@ -351,124 +302,20 @@ describe("startup checkpoint inspection and lease", () => {
         return verified;
       });
     try {
-      await expect(inspectStartupMigrationCheckpointWithLease(parameters())).rejects.toThrow(
+      await expect(acquireStartupMigrationLeaseWithWait(parameters())).rejects.toThrow(
         "synthetic inspection commit failure",
       );
     } finally {
       spy.mockRestore();
     }
-    const next = acquireStartupMigrationLease({ env, owner: "after-rollback" });
+    const next = await acquireStartupMigrationLeaseWithWait({
+      ...parameters(),
+      owner: "after-rollback",
+    });
     next.release();
   });
 
-  it.each([
-    {
-      marker: "startup",
-      stateMigrations: true,
-      startupMigrations: true,
-      forceLease: false,
-      status: "startup-current",
-      claimed: false,
-    },
-    {
-      marker: "state",
-      stateMigrations: true,
-      startupMigrations: false,
-      forceLease: false,
-      status: "state-current",
-      claimed: false,
-    },
-    {
-      marker: "state",
-      stateMigrations: true,
-      startupMigrations: true,
-      forceLease: false,
-      status: "state-current",
-      claimed: true,
-    },
-    {
-      marker: "startup",
-      stateMigrations: true,
-      startupMigrations: true,
-      forceLease: true,
-      status: "startup-current",
-      claimed: true,
-    },
-  ])(
-    "preserves $marker checkpoint scope (startup=$startupMigrations, forced=$forceLease)",
-    async (scenario) => {
-      const params = { ...parameters(), ...scenario };
-      if (scenario.marker === "startup") {
-        recordSuccessfulStartupMigrations(params);
-      } else {
-        recordSuccessfulStateMigrations(params);
-      }
-      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const inspected = await inspectStartupMigrationCheckpointWithLease(params);
-      try {
-        expect(inspected.status).toBe(scenario.status);
-        expect(Boolean(inspected.lease)).toBe(scenario.claimed);
-        expect(integrityScans(prepare)).toBe(1);
-      } finally {
-        inspected.lease?.release();
-      }
-      const next = acquireStartupMigrationLease({ env });
-      next.release();
-    },
-  );
-
-  it("does not create state when no checkpoint or lease is requested", async () => {
-    const inspected = await inspectStartupMigrationCheckpointWithLease({
-      ...parameters(),
-      stateMigrations: false,
-      startupMigrations: false,
-    });
-    expect(inspected).toEqual({ status: "stale" });
-    expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
-  });
-
-  it("keeps migrations required without build provenance", async () => {
-    recordSuccessfulStartupMigrations(parameters());
-    const inspected = await inspectStartupMigrationCheckpointWithLease({
-      ...parameters(),
-      buildIdentity: null,
-    });
-    try {
-      expect(inspected.status).toBe("stale");
-      expect(inspected.lease).toBeDefined();
-    } finally {
-      inspected.lease?.release();
-    }
-  });
-
-  it("still acquires and refreshes after a competing startup completes while waiting", async () => {
-    const holder = acquireStartupMigrationLease({ env });
-    let waits = 0;
-    try {
-      const inspected = await inspectStartupMigrationCheckpointWithLease({
-        ...parameters(),
-        owner: "waiting-startup",
-        sleep: async () => {
-          waits++;
-          recordSuccessfulStartupMigrations({ ...parameters(), lease: holder });
-          holder.release();
-        },
-      });
-      try {
-        expect(waits).toBe(1);
-        expect(inspected.status).toBe("startup-current");
-        expect(inspected.lease?.owner).toBe("waiting-startup");
-        expect(readMigrationCheckpointStatus(parameters())).toBe("startup-current");
-        expect(() => acquireStartupMigrationLease({ env })).toThrow("already running");
-      } finally {
-        inspected.lease?.release();
-      }
-    } finally {
-      holder.release();
-    }
-  });
-
-  it("refuses corruption before checkpoint bootstrap or lease writes", async () => {
+  it("refuses corruption before schema bootstrap or lease writes", async () => {
     const pathname = resolveOpenClawStateSqlitePath(env);
     mkdirSync(path.dirname(pathname), { recursive: true });
     const corrupt = new DatabaseSync(pathname);
@@ -482,7 +329,7 @@ describe("startup checkpoint inspection and lease", () => {
     } finally {
       corrupt.close();
     }
-    await expect(inspectStartupMigrationCheckpointWithLease(parameters())).rejects.toThrow(
+    await expect(acquireStartupMigrationLeaseWithWait(parameters())).rejects.toThrow(
       "foreign_key_check failed",
     );
     const verify = new DatabaseSync(pathname, { readOnly: true });

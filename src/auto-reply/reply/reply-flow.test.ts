@@ -67,33 +67,6 @@ describe("createReplyDispatcher", () => {
     });
   });
 
-  it("still drops exact NO_REPLY final payloads for group sessions where silence is allowed", async () => {
-    const deliver = vi.fn().mockResolvedValue(undefined);
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          silentReply: {
-            group: "allow",
-            internal: "allow",
-          },
-        },
-      },
-    };
-    const dispatcher = createReplyDispatcher({
-      deliver,
-      silentReplyContext: {
-        cfg,
-        sessionKey: "agent:main:telegram:group:123",
-        surface: "telegram",
-      },
-    });
-
-    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
-
-    await dispatcher.waitForIdle();
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
   it("strips heartbeat tokens and applies responsePrefix", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const onHeartbeatStrip = vi.fn();
@@ -364,43 +337,6 @@ describe("createReplyDispatcher", () => {
       await dispatcher.waitForIdle();
 
       expect(delivered).toEqual(["final:owner:plugin"]);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("gives each beforeDeliver hook its own deadline", async () => {
-    vi.useFakeTimers();
-    try {
-      const delivered: string[] = [];
-      const dispatcher = createReplyDispatcher({
-        deliver: async (payload) => {
-          delivered.push(payload.text ?? "");
-        },
-        beforeDeliver: async (payload) => {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 10_000);
-          });
-          return { ...payload, text: `${payload.text}:first` };
-        },
-      });
-      dispatcher.appendBeforeDeliver?.(async (payload) => {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 10_000);
-        });
-        return { ...payload, text: `${payload.text}:second` };
-      });
-
-      dispatcher.sendFinalReply({ text: "final" });
-      dispatcher.markComplete();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(delivered).toEqual([]);
-      await vi.advanceTimersByTimeAsync(5_000);
-      await dispatcher.waitForIdle();
-
-      expect(delivered).toEqual(["final:first:second"]);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

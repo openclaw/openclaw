@@ -69,6 +69,8 @@ function resolveTerminalUploadRoot(options?: TerminalUploadRootOptions): string 
 export type TerminalUploadFile = {
   name: string;
   contentBase64: string;
+  /** Host-only client policy, carried unchanged through the terminal staging adapter. */
+  assertCommitAllowed?: () => void;
 };
 
 export type TerminalUploadResult = ProtocolTerminalUploadResult;
@@ -308,15 +310,13 @@ async function scanUploads(
             await assertHeld();
             try {
               await rmdir(directory);
-              state.deadlines.delete(directory);
-              continue;
             } catch (error) {
-              if (hasErrnoCode(error, "ENOENT")) {
-                state.deadlines.delete(directory);
-                continue;
+              if (!hasErrnoCode(error, "ENOENT")) {
+                throw error;
               }
-              throw error;
             }
+            state.deadlines.delete(directory);
+            continue;
           }
           bytes += usage.bytes;
         }
@@ -396,10 +396,11 @@ export async function stageTerminalUpload(
   file: TerminalUploadFile,
   options?: TerminalUploadRootOptions & { tempRoot?: string; cleanupAfterMs?: number },
 ): Promise<TerminalUploadResult> {
-  const { name, contentBase64 } = file;
+  const { name, contentBase64, assertCommitAllowed } = file;
   const size = validateTerminalUpload(contentBase64);
   const admitted = uploadQueue.enqueue(
     async () => {
+      assertCommitAllowed?.();
       const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot(options);
       if ((options?.platform ?? process.platform) === "win32" && !options?.tempRoot) {
         // The user profile supplies the restrictive DACL, including for the root lock.
@@ -416,6 +417,7 @@ export async function stageTerminalUpload(
           throw stagingLimitError();
         }
         await assertHeld();
+        assertCommitAllowed?.();
         const directory = await mkdtemp(path.join(root, TERMINAL_UPLOAD_PREFIX));
         const targetPath = path.join(directory, sanitizeTerminalUploadName(name));
         let identity: { dev: bigint; ino: bigint } | undefined;
@@ -423,6 +425,7 @@ export async function stageTerminalUpload(
           const { dev, ino } = await lstat(directory, { bigint: true });
           identity = { dev, ino };
           await assertHeld();
+          assertCommitAllowed?.();
           await writeFile(targetPath, Buffer.from(contentBase64, "base64"), {
             flag: "wx",
             mode: 0o600,

@@ -97,7 +97,7 @@ extension OpenClawChatViewModel {
         guard let runIDs else { return }
         var seen = Set<String>()
         let normalized = runIDs.compactMap { runID -> String? in
-            guard let runID = Self.normalizedRunID(runID),
+            guard let runID = ChatPayloadDecoding.trimmedNonEmptyString(runID),
                   seen.insert(runID).inserted
             else {
                 return nil
@@ -120,11 +120,7 @@ extension OpenClawChatViewModel {
     }
 
     func syncActiveSessionRunIDsFromCurrentSession() {
-        guard let session = self.currentSessionEntry() else {
-            self.updateActiveSessionRunIDs([])
-            return
-        }
-        self.updateActiveSessionRunIDs(session.activeRunIds ?? [])
+        self.updateActiveSessionRunIDs(self.currentSessionEntry()?.activeRunIds ?? [])
     }
 
     func ownsLiveTelemetryRun(_ runID: String) -> Bool {
@@ -136,7 +132,7 @@ extension OpenClawChatViewModel {
     func applyLiveRunUsage(runID: String, sequence: Int, outputTokens: Int) -> Bool {
         guard sequence > 0, outputTokens > 0, self.ownsLiveTelemetryRun(runID) else { return false }
         var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
-        guard sequence > state.sequence, !state.terminal else { return false }
+        guard sequence > state.sequence else { return false }
         state.sequence = sequence
         state.outputTokens = max(outputTokens, state.outputTokens ?? 0)
         self.liveRunStateByRunID[runID] = state
@@ -147,14 +143,14 @@ extension OpenClawChatViewModel {
     func acceptLiveRunSequence(runID: String, sequence: Int) -> Bool {
         guard sequence > 0, self.ownsLiveTelemetryRun(runID) else { return false }
         var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
-        guard sequence > state.sequence, !state.terminal else { return false }
+        guard sequence > state.sequence else { return false }
         state.sequence = sequence
         self.liveRunStateByRunID[runID] = state
         return true
     }
 
     func retireTerminalRun(_ runID: String?) {
-        guard let runID = Self.normalizedRunID(runID) else { return }
+        guard let runID = ChatPayloadDecoding.trimmedNonEmptyString(runID) else { return }
         // Advertised-only runs must fence earlier history even after a later
         // session snapshot releases their terminal tombstone.
         self.invalidateRunSnapshots()
@@ -225,16 +221,8 @@ extension OpenClawChatViewModel {
         sessionRoutingContract: String?) -> ModelPatchTarget
     {
         let presentationKey = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let listedKey = canonicalSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let candidate = if let listedKey, !listedKey.isEmpty {
-            listedKey
-        } else {
-            presentationKey
-        }
-        let normalizedAgentID = agentID?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let routeAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let candidate = ChatPayloadDecoding.trimmedNonEmptyString(canonicalSessionKey) ?? presentationKey
+        let routeAgentID = Self.normalizedAgentId(agentID)
         let normalizedCandidate = candidate.lowercased()
         let targetKey: String
         let targetAgentID: String?
@@ -298,19 +286,19 @@ extension OpenClawChatViewModel {
         guard let session,
               let result = self.lastSuccessfulSettingsPatchResultsByTarget[target]
         else { return nil }
-        let sessionModel = Self.normalizedModelIdentityComponent(session.model ?? self.sessionDefaults?.model)
-        let sessionProvider = Self.normalizedProvider(session.modelProvider ?? self.sessionDefaults?.modelProvider)
-        let resultModel = Self.normalizedModelIdentityComponent(result.model)
-        let resultProvider = Self.normalizedProvider(result.modelProvider)
+        let sessionModel = ChatPayloadDecoding.trimmedNonEmptyString(session.model ?? self.sessionDefaults?.model)
+        let sessionProvider = ChatPayloadDecoding
+            .trimmedNonEmptyString(session.modelProvider ?? self.sessionDefaults?.modelProvider)
+        let resultModel = ChatPayloadDecoding.trimmedNonEmptyString(result.model)
+        let resultProvider = ChatPayloadDecoding.trimmedNonEmptyString(result.modelProvider)
         guard resultModel == nil || resultModel == sessionModel else { return nil }
         guard resultProvider == nil || resultProvider == sessionProvider else { return nil }
         return result
     }
 
-    func sessionIndexForModelState(sessionKey: String) -> Int? {
-        if let exact = self.sessions.firstIndex(where: { $0.key == sessionKey }) {
-            return exact
-        }
+    func sessionIndexForModelState(sessionKey: String, exactMatchOnly: Bool = false) -> Int? {
+        let exact = self.sessions.firstIndex(where: { $0.key == sessionKey })
+        guard exact == nil, !exactMatchOnly else { return exact }
         return self.sessions.firstIndex(where: {
             self.matchesCurrentSessionKey(incoming: $0.key, current: sessionKey)
         })
@@ -323,13 +311,15 @@ extension OpenClawChatViewModel {
         syncSelection: Bool)
     {
         let existingIndex = self.sessionIndexForModelState(sessionKey: sessionKey)
-        var updated = existingIndex.map { self.sessions[$0] } ?? OpenClawChatSessionEntry.placeholder(key: sessionKey)
+        var updated = existingIndex.map { self.sessions[$0] }
+            ?? self.sidebarData?.row(key: sessionKey, agentID: self.currentSessionSnapshot().deliveryAgentID)
+            ?? OpenClawChatSessionEntry.placeholder(key: sessionKey)
         // Thinking metadata follows model identity; stale options must not survive a model change.
         let preservesThinkingMetadata =
-            Self.normalizedModelIdentityComponent(updated.model) ==
-            Self.normalizedModelIdentityComponent(modelID) &&
-            Self.normalizedModelIdentityComponent(updated.modelProvider) ==
-            Self.normalizedModelIdentityComponent(modelProvider)
+            ChatPayloadDecoding.trimmedNonEmptyString(updated.model) ==
+            ChatPayloadDecoding.trimmedNonEmptyString(modelID) &&
+            ChatPayloadDecoding.trimmedNonEmptyString(updated.modelProvider) ==
+            ChatPayloadDecoding.trimmedNonEmptyString(modelProvider)
         updated.modelProvider = modelProvider
         updated.model = modelID
         if !preservesThinkingMetadata {
@@ -349,22 +339,9 @@ extension OpenClawChatViewModel {
         }
     }
 
-    static func normalizedProvider(_ provider: String?) -> String? {
-        self.normalizedModelIdentityComponent(provider)
-    }
-
-    static func normalizedModelIdentityComponent(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else { return nil }
-        return trimmed
-    }
-
     static func providerQualifiedModelSelectionID(modelID: String, provider: String) -> String {
         let providerPrefix = "\(provider)/"
-        if modelID.hasPrefix(providerPrefix) {
-            return modelID
-        }
-        return "\(provider)/\(modelID)"
+        return modelID.hasPrefix(providerPrefix) ? modelID : "\(providerPrefix)\(modelID)"
     }
 
     public var sessionChoices: [OpenClawChatSessionEntry] {
@@ -377,13 +354,8 @@ extension OpenClawChatViewModel {
         var included = Set<String>()
 
         // Always show the resolved main session first, even if it hasn't been updated recently.
-        if let main = sorted.first(where: { $0.key == mainSessionKey }) {
-            result.append(main)
-            included.insert(main.key)
-        } else {
-            result.append(OpenClawChatSessionEntry.placeholder(key: mainSessionKey))
-            included.insert(mainSessionKey)
-        }
+        result.append(sorted.first(where: { $0.key == mainSessionKey }) ?? .placeholder(key: mainSessionKey))
+        included.insert(mainSessionKey)
 
         for entry in sorted {
             guard !included.contains(entry.key) else { continue }
@@ -396,24 +368,17 @@ extension OpenClawChatViewModel {
         }
 
         if !included.contains(sessionKey) {
-            if let current = sorted.first(where: { $0.key == self.sessionKey }) {
-                result.append(current)
-            } else {
-                result.append(OpenClawChatSessionEntry.placeholder(key: sessionKey))
-            }
+            result.append(sorted.first(where: { $0.key == self.sessionKey }) ?? .placeholder(key: sessionKey))
         }
 
         return result
     }
 
     func matchesCurrentSessionKey(incoming: String, current: String) -> Bool {
-        Self.matchesCurrentSessionKey(
+        self.matchesCurrentSessionKey(
             incoming: incoming,
             agentId: self.sessions.first(where: { $0.key == incoming })?.agentId,
-            current: current,
-            mainSessionKey: resolvedMainSessionKey,
-            activeAgentId: self.explicitSessionAgentID ?? activeAgentId,
-            sessionRoutingContract: self.agentCatalog?.sessionRoutingContract ?? self.sessionRoutingContract)
+            current: current)
     }
 
     func matchesCurrentSessionKey(incoming: String, agentId: String?, current: String) -> Bool {
@@ -443,7 +408,7 @@ extension OpenClawChatViewModel {
             current, agentID: activeAgentId, scope: routing?.scope, mainKey: routing?.mainKey)
             .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if incomingNormalized == currentNormalized {
-            if Self.agentIDFromSessionKey(currentNormalized) == nil {
+            if OpenClawChatSessionKey.agentID(from: currentNormalized) == nil {
                 // `global` is always agent-ambiguous. Ordinary exact keys can
                 // arrive before bootstrap publishes the active agent; accept
                 // them until there is ownership metadata to compare.
@@ -485,8 +450,7 @@ extension OpenClawChatViewModel {
     }
 
     private static func normalizedAgentId(_ agentId: String?) -> String? {
-        let normalized = agentId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
+        ChatPayloadDecoding.trimmedNonEmptyString(agentId)?.lowercased()
     }
 
     private static func matchesAliasAgent(
@@ -496,9 +460,9 @@ extension OpenClawChatViewModel {
         activeAgentId: String?,
         allowIncomingOwnerWhenCurrentUnknown: Bool = false) -> Bool
     {
-        let currentAgentID = self.agentIDFromSessionKey(currentKey) ?? self.normalizedAgentId(activeAgentId)
+        let currentAgentID = OpenClawChatSessionKey.agentID(from: currentKey) ?? self.normalizedAgentId(activeAgentId)
         let payloadAgentID = self.normalizedAgentId(agentId)
-        let keyAgentID = self.agentIDFromSessionKey(incomingKey)
+        let keyAgentID = OpenClawChatSessionKey.agentID(from: incomingKey)
         if let payloadAgentID, let keyAgentID, payloadAgentID != keyAgentID {
             return false
         }
@@ -508,13 +472,6 @@ extension OpenClawChatViewModel {
         }
         guard let incomingAgentID else { return true }
         return incomingAgentID == currentAgentID
-    }
-
-    private static func agentIDFromSessionKey(_ sessionKey: String) -> String? {
-        let parts = sessionKey.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-        guard parts.count >= 3, parts[0] == "agent" else { return nil }
-        let agentID = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
-        return agentID.isEmpty ? nil : agentID
     }
 
     private static func matchesSelectedAgentWrapper(incoming: String, current: String) -> Bool {

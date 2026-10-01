@@ -12,6 +12,7 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
+import { recordProgressCardToolOutcome } from "./progress-card-tool-outcome.js";
 
 const ProgressCardToolSchema = Type.Object(
   {
@@ -25,6 +26,7 @@ type ProgressCardToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
   callGateway?: InProcessGatewayCaller;
+  onPlanSaved?: (unfinished: boolean) => void;
 };
 
 export function createProgressCardTool(options: ProgressCardToolOptions = {}): AnyAgentTool {
@@ -59,6 +61,9 @@ export function createProgressCardTool(options: ProgressCardToolOptions = {}): A
         ...(input.markdown ? { markdown: input.markdown } : {}),
         ...(input.steps ? { plan: input.steps } : {}),
       });
+      options.onPlanSaved?.(
+        result.card?.steps?.some((step) => step.status !== "completed") === true,
+      );
       const completed =
         result.card?.steps?.filter((step) => step.status === "completed").length ?? 0;
       const total = result.card?.steps?.length ?? 0;
@@ -67,20 +72,23 @@ export function createProgressCardTool(options: ProgressCardToolOptions = {}): A
         steps: total > 0 ? { completed, total } : null,
       };
       const json = jsonResult(payload);
-      return {
-        ...json,
-        content: [
-          {
-            type: "text",
-            text: !result.card
-              ? "Progress card cleared"
-              : total > 0
-                ? `Progress card updated (rev ${result.card.revision}, ${completed}/${total} done)`
-                : `Progress card updated (rev ${result.card.revision})`,
-          },
-          ...json.content,
-        ],
-      };
+      return recordProgressCardToolOutcome(
+        {
+          ...json,
+          content: [
+            {
+              type: "text",
+              text: !result.card
+                ? "Progress card cleared"
+                : total > 0
+                  ? `Progress card updated (rev ${result.card.revision}, ${completed}/${total} done)`
+                  : `Progress card updated (rev ${result.card.revision})`,
+            },
+            ...json.content,
+          ],
+        },
+        result.card,
+      );
     },
   };
 }

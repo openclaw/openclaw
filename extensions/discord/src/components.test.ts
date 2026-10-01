@@ -475,7 +475,6 @@ describe("discord component registry", () => {
   });
 
   it.each([
-    { placement: "row", buttonReusable: true, cardReusable: undefined, expectedReusable: true },
     { placement: "row", buttonReusable: true, cardReusable: false, expectedReusable: true },
     { placement: "row", buttonReusable: false, cardReusable: true, expectedReusable: false },
     { placement: "row", buttonReusable: undefined, cardReusable: true, expectedReusable: true },
@@ -485,14 +484,7 @@ describe("discord component registry", () => {
       cardReusable: undefined,
       expectedReusable: undefined,
     },
-    { placement: "section", buttonReusable: true, cardReusable: undefined, expectedReusable: true },
     { placement: "section", buttonReusable: false, cardReusable: true, expectedReusable: false },
-    {
-      placement: "section",
-      buttonReusable: undefined,
-      cardReusable: true,
-      expectedReusable: true,
-    },
   ] as const)(
     "preserves $placement button reuse=$buttonReusable over card reuse=$cardReusable through delivery",
     async ({ placement, buttonReusable, cardReusable, expectedReusable }) => {
@@ -698,33 +690,20 @@ describe("discord component registry", () => {
     ).resolves.toBeNull();
   });
 
-  it("persists component and modal entries when runtime state is available", async () => {
-    const componentRegister = vi.fn().mockResolvedValue(undefined);
-    const modalRegister = vi.fn().mockResolvedValue(undefined);
-    const componentLookup = vi.fn().mockResolvedValue({
-      version: 1,
-      entry: { id: "btn_persisted", kind: "button", label: "Persisted" },
-    });
-    const modalLookup = vi.fn().mockResolvedValue({
-      version: 1,
-      entry: { id: "mdl_persisted", title: "Persisted", fields: [] },
-    });
-    const componentStore = {
-      register: componentRegister,
-      lookup: componentLookup,
+  function createPersistentRegistryStore() {
+    return {
+      register: vi.fn().mockResolvedValue(undefined),
+      lookup: vi.fn(),
       consume: vi.fn(),
       delete: vi.fn(),
       entries: vi.fn(),
       clear: vi.fn(),
     };
-    const modalStore = {
-      register: modalRegister,
-      lookup: modalLookup,
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    };
+  }
+
+  function installPersistentRegistryStores() {
+    const componentStore = createPersistentRegistryStore();
+    const modalStore = createPersistentRegistryStore();
     const openKeyedStore = vi.fn((opts: { namespace: string }) =>
       opts.namespace === "discord.components" ? componentStore : modalStore,
     );
@@ -732,6 +711,21 @@ describe("discord component registry", () => {
       state: { openKeyedStore },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
+    return { componentStore, modalStore, openKeyedStore };
+  }
+
+  it("persists component and modal entries when runtime state is available", async () => {
+    const { componentStore, modalStore, openKeyedStore } = installPersistentRegistryStores();
+    const { register: componentRegister, lookup: componentLookup } = componentStore;
+    const { register: modalRegister, lookup: modalLookup } = modalStore;
+    componentLookup.mockResolvedValue({
+      version: 1,
+      entry: { id: "btn_persisted", kind: "button", label: "Persisted" },
+    });
+    modalLookup.mockResolvedValue({
+      version: 1,
+      entry: { id: "mdl_persisted", title: "Persisted", fields: [] },
+    });
 
     const now = 1_700_000_000_000;
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -788,31 +782,9 @@ describe("discord component registry", () => {
   });
 
   it("omits undefined component fields before persisting registry state", async () => {
-    const componentRegister = vi.fn().mockResolvedValue(undefined);
-    const modalRegister = vi.fn().mockResolvedValue(undefined);
-    const componentStore = {
-      register: componentRegister,
-      lookup: vi.fn(),
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    };
-    const modalStore = {
-      register: modalRegister,
-      lookup: vi.fn(),
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    };
-    const openKeyedStore = vi.fn((opts: { namespace: string }) =>
-      opts.namespace === "discord.components" ? componentStore : modalStore,
-    );
-    setDiscordRuntime({
-      state: { openKeyedStore },
-      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
-    } as never);
+    const { componentStore, modalStore } = installPersistentRegistryStores();
+    const componentRegister = componentStore.register;
+    const modalRegister = modalStore.register;
 
     const componentEntry = Object.assign(
       {

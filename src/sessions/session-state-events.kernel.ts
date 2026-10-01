@@ -28,17 +28,8 @@ import {
   type SessionUpstreamLink,
 } from "./session-upstream-links.kernel.js";
 
-export type SessionStateEventInput = {
-  sessionKey: string;
-  sessionId?: string;
-  agentId: string;
-  kind: SessionStateEventKind;
-  actorType: SessionStateActorType;
-  actorId?: string;
-  runId?: string;
+export type SessionStateEventInput = Omit<SessionStateEventRecord, "sequence" | "occurredAt"> & {
   dedupeKey?: string;
-  summary: string;
-  payload?: Record<string, unknown>;
   occurredAt?: number;
   watcherSessionKeys?: readonly string[];
   watcherStorePaths?: Readonly<Record<string, string>>;
@@ -230,29 +221,25 @@ export function upsertSeedCursor(params: {
   provenance?: SessionWatchCursorProvenance;
 }): void {
   ensureWatcherStoreColumn(params.db);
+  const cursor = {
+    watcher_store_path: params.watcherStorePath ?? null,
+    last_seen_sequence: params.sequence,
+    notified_sequence: params.sequence,
+    material_sequence: params.sequence,
+    provenance: params.provenance ?? SESSION_WATCH_PROVENANCE_EXPLICIT,
+    updated_at: params.now,
+  };
   executeSqliteQuerySync(
     params.db,
     getSessionStateKysely(params.db)
       .insertInto("session_watch_cursors")
       .values({
         watcher_session_key: params.watcherSessionKey,
-        watcher_store_path: params.watcherStorePath ?? null,
         target_session_key: params.targetSessionKey,
-        last_seen_sequence: params.sequence,
-        notified_sequence: params.sequence,
-        material_sequence: params.sequence,
-        provenance: params.provenance ?? SESSION_WATCH_PROVENANCE_EXPLICIT,
-        updated_at: params.now,
+        ...cursor,
       })
       .onConflict((conflict) =>
-        conflict.columns(["watcher_session_key", "target_session_key"]).doUpdateSet({
-          watcher_store_path: params.watcherStorePath ?? null,
-          provenance: params.provenance ?? SESSION_WATCH_PROVENANCE_EXPLICIT,
-          last_seen_sequence: params.sequence,
-          notified_sequence: params.sequence,
-          material_sequence: params.sequence,
-          updated_at: params.now,
-        }),
+        conflict.columns(["watcher_session_key", "target_session_key"]).doUpdateSet(cursor),
       ),
   );
 }

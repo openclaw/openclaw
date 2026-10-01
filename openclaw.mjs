@@ -280,7 +280,6 @@ const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
   "models",
   "plugins",
   "sessions",
-  "tasks",
 ]);
 
 const hasLauncherContainerTarget = (argv) => {

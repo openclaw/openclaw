@@ -16,24 +16,9 @@ export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>[
 
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
-function pullRequestStateLabel(state: SessionCatalogPullRequestSummary["state"]): string {
-  switch (state) {
-    case "open":
-      return t("chat.pullRequests.open");
-    case "draft":
-      return t("chat.pullRequests.draft");
-    case "merged":
-      return t("chat.pullRequests.merged");
-    case "closed":
-      return t("chat.pullRequests.closed");
-    default:
-      return state satisfies never;
-  }
-}
-
 function formatSessionPullRequestSummary(summary: SessionCatalogPullRequestSummary): string {
   const numbers = summary.numbers.map((number) => `#${number}`).join(", ");
-  return `${numbers} · ${pullRequestStateLabel(summary.state)}`;
+  return `${numbers} · ${t(`chat.pullRequests.${summary.state}`)}`;
 }
 
 function renderSessionRowBadge(

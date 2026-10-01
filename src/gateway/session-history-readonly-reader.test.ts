@@ -1,6 +1,8 @@
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { isSessionNodePayloadSelect } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  appendTranscriptMessage,
   readLatestSessionTranscriptMessageEvent,
   replaceSessionEntry,
   replaceTranscriptEvents,
@@ -22,6 +24,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { readSessionHistoryRequest } from "./session-history-worker-reader.js";
 
 async function withHistory(
   read: (fixture: {
@@ -65,6 +68,99 @@ async function withHistory(
   });
 }
 
+it("reuses artifact summaries without payload reads and invalidates after transcript writes", async () => {
+  await withHistory(async ({ target, database }) => {
+    const owner = new OpenClawAgentDatabaseReadOnlyScope();
+    const transcript = target.transcript;
+    const message = (title: string, role = "assistant") => ({
+      role,
+      content: [{ type: "file", title, data: "aGVsbG8=", mimeType: "text/plain" }],
+    });
+    const read = async (assistantOnly = false) => {
+      const result = await owner.run(target.database, () =>
+        readSessionHistoryRequest(
+          {
+            kind: "artifacts",
+            params: {
+              target: transcript,
+              query: {
+                kind: "list",
+                sessionKey: transcript.sessionKey,
+                includeDownloadData: false,
+                ...(assistantOnly ? { messageRole: "assistant" as const } : {}),
+              },
+            },
+          },
+          target,
+        ),
+      );
+      if (result.kind !== "artifacts" || result.result.kind !== "list") {
+        throw new Error("expected artifact list");
+      }
+      return result.result.artifacts;
+    };
+    const replace = async (title: string) => {
+      await replaceTranscriptEvents(transcript, [
+        { type: "session", version: 3, id: transcript.sessionId },
+        { type: "message", id: "artifact", parentId: null, message: message(title) },
+      ]);
+      await waitForSessionTranscriptProjection(transcript);
+    };
+    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
+    const payloadReads: string[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- Forward with the native statement receiver.
+    const iterate = prototype.iterate;
+    const observer = vi.spyOn(prototype, "iterate").mockImplementation(function (
+      this: StatementSync,
+      ...args
+    ) {
+      if (
+        this.sourceSQL.includes("event_json") &&
+        this.sourceSQL.includes("session_transcript_active_events")
+      ) {
+        payloadReads.push(this.sourceSQL);
+      }
+      return iterate.apply(this, args);
+    });
+    try {
+      await replace("first.txt");
+      // Cold canonical admission uses a publication scope, which cannot populate derived caches.
+      await owner.run(target.database, () =>
+        createReadonlySessionHistoryReader(target).readSessionMessageCountAsync(transcript),
+      );
+      const first = await read();
+      expect(first).toMatchObject([
+        { title: "first.txt", sizeBytes: 5, download: { mode: "bytes" } },
+      ]);
+      expect(first[0]).not.toHaveProperty("data");
+      expect(payloadReads.length).toBeGreaterThan(0);
+      payloadReads.length = 0;
+      expect(await read()).toEqual(first);
+      expect(payloadReads).toEqual([]);
+
+      await appendTranscriptMessage(transcript, {
+        eventId: "upload",
+        parentId: "artifact",
+        message: message("uploaded.txt", "user"),
+      });
+      await waitForSessionTranscriptProjection(transcript);
+      expect((await read()).map((a) => a.title)).toEqual(["first.txt", "uploaded.txt"]);
+      expect((await read(true)).map((a) => a.title)).toEqual(["first.txt"]);
+      await replace("replacement.txt");
+      expect((await read()).map((a) => a.title)).toEqual(["replacement.txt"]);
+      await replace("same-length-rewrite.txt");
+      expect((await read()).map((a) => a.title)).toEqual(["same-length-rewrite.txt"]);
+      await replaceTranscriptEvents(transcript, [
+        { type: "session", version: 3, id: transcript.sessionId },
+      ]);
+      expect(await read()).toEqual([]);
+    } finally {
+      observer.mockRestore();
+      owner.close();
+    }
+  });
+});
+
 it.each(["cold", "warm", "policy", "receipt"] as const)(
   "keeps canonical admission and history materialization on one retained snapshot (%s)",
   async (admission) => {
@@ -101,7 +197,8 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
           const statement = prepare(sql);
           if (
             selectedInTransaction === undefined &&
-            /^select \* from "session_nodes" where "session_key" = /i.test(sql)
+            isSessionNodePayloadSelect(sql) &&
+            / from "session_nodes" where "session_key" = /i.test(sql)
           ) {
             selectedInTransaction = connection.isTransaction;
             // Commit after admission but before the exact row read. The same snapshot

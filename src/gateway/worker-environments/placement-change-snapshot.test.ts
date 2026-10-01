@@ -36,7 +36,7 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
         ownerEpoch: 7,
         profileId: sessionId === "other" ? "other" : "development",
       });
-      let placement = store.startDispatch({
+      let placement = await store.startDispatch({
         sessionId,
         sessionKey: `agent:main:${sessionId}`,
         agentId: "main",
@@ -159,7 +159,11 @@ it.each(["cached", "fresh"] as const)(
       const database = openOpenClawStateDatabase();
       const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
       for (const sessionId of ["b", "a"]) {
-        store.startDispatch({ sessionId, agentId: "main", sessionKey: `agent:main:${sessionId}` });
+        await store.startDispatch({
+          sessionId,
+          agentId: "main",
+          sessionKey: `agent:main:${sessionId}`,
+        });
       }
       const failed = store.fail({ sessionId: "a", recoveryError: "synthetic failure" });
       const warn = vi.fn();
@@ -239,7 +243,7 @@ it("reports committed placement changes inside an inspection snapshot", async ()
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawStateDatabase();
     const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
-    store.startDispatch({ sessionId: "a", agentId: "main", sessionKey: "agent:main:a" });
+    await store.startDispatch({ sessionId: "a", agentId: "main", sessionKey: "agent:main:a" });
     const failed = store.fail({ sessionId: "a", recoveryError: "synthetic failure" });
     const broadcastToConnIds = vi.fn();
     const warn = vi.fn();

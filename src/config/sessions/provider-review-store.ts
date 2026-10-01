@@ -144,7 +144,7 @@ export async function compareSessionProviderReview(
                     if (!grant()) {
                       throw new Error("Provider review authority expired");
                     }
-                  }),
+                  }, binding.attachment),
                 });
               },
             },

@@ -20,6 +20,7 @@ import type {
   UserModelAccountSelection,
 } from "./model-account-authority.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import type { SessionCreatePhase } from "./session-create-diagnostics.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
@@ -93,6 +94,7 @@ export type CreateGatewaySessionResult =
   | Extract<GatewaySessionCommitResult, { ok: false }>;
 
 export type CreateGatewaySessionParams = {
+  onPhase?: (phase: SessionCreatePhase) => void;
   cfg: OpenClawConfig;
   operatorAuthority?: Promise<
     | {
@@ -121,6 +123,8 @@ export type CreateGatewaySessionParams = {
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   incognito?: boolean;
   visibility?: SessionVisibility;
+  /** Trusted creation default; existing keyed sessions retain their current visibility. */
+  defaultVisibility?: SessionVisibility;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
@@ -159,6 +163,11 @@ export type CreateGatewaySessionParams = {
   activeParentFork?: { requesterSessionKey: string; assertCurrent: () => void };
   /** Live spawn-owned selection; public model inputs remain raw. */
   preparedModelSelection?: { ref: ModelRef; assertCurrent: () => void };
+  /** Effective host-prepared spawn mode, bound to the live requester until commit. */
+  preparedPermissionSelection?: {
+    mode: NonNullable<SessionEntry["permissionMode"]>;
+    assertCurrent: () => void;
+  };
   /**
    * Controls whether a distinct child terminates its parent. Omission preserves
    * the legacy rollover; callers use `false` for a parallel child.

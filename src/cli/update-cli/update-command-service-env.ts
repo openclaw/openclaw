@@ -87,15 +87,13 @@ export function resolveServiceRefreshEnv(
     if (!rawValue) {
       continue;
     }
-    if (rawValue.startsWith("~") || path.isAbsolute(rawValue) || path.win32.isAbsolute(rawValue)) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    if (!invocationCwd) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
+    resolvedEnv[key] =
+      !invocationCwd ||
+      rawValue.startsWith("~") ||
+      path.isAbsolute(rawValue) ||
+      path.win32.isAbsolute(rawValue)
+        ? rawValue
+        : path.resolve(invocationCwd, rawValue);
   }
   return resolvedEnv;
 }

@@ -1,4 +1,5 @@
 // Update runtime observation must not load units while discovering their state.
+import * as fsSync from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecResult } from "./exec-file.js";
 
@@ -13,7 +14,11 @@ vi.mock("./systemd-exec.js", async (importOriginal) => ({
   assertSystemdAvailable: async () => {},
 }));
 vi.mock("./systemd-scope.js", () => ({ findInstalledSystemdGatewayScope: async () => null }));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+}));
 
+import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 import { readSystemdServiceRuntime } from "./systemd-runtime.js";
 
 const env = {
@@ -39,6 +44,7 @@ const properties = {
   KillMode: { type: "s", data: "control-group" },
   TasksCurrent: { type: "t", data: 8 },
   MemoryCurrent: { type: "t", data: 2048 },
+  ControlGroup: { type: "s", data: "/user.slice/openclaw-owned.service" },
 };
 
 function success(stdout: string): ExecResult {
@@ -126,6 +132,7 @@ describe("loaded-only systemd runtime", () => {
         nRestarts: 2,
         tasksCurrent: 8,
         memoryCurrent: 2048,
+        controlGroup: "/user.slice/openclaw-owned.service",
       },
     });
     expect(systemctl).not.toHaveBeenCalled();
@@ -149,6 +156,43 @@ describe("loaded-only systemd runtime", () => {
       ),
     ).toBe(true);
   });
+
+  it.each(["bus", "show"])(
+    "does not infer absent containment from empty %s metadata over a non-root cgroup",
+    async (transport) => {
+      busctl.mockImplementation(async (_env, args) =>
+        managerReply(args, { ControlGroup: { type: "s", data: "" } }),
+      );
+      systemctl.mockResolvedValue(
+        success(`Id=${unitName}\nLoadState=loaded\nActiveState=active\nMainPID=412\nControlGroup=`),
+      );
+      const read = fsSync.readFileSync;
+      const observation = vi.spyOn(fsSync, "readFileSync").mockImplementation((file, options) => {
+        if (file === `/proc/${process.pid}/cgroup` || file === "/proc/412/cgroup") {
+          return "0::/container.scope\n";
+        }
+        if (file === `/proc/${process.pid}/stat`) {
+          return `${process.pid} (caller) S 1 901\n`;
+        }
+        if (file === "/proc/412/stat") {
+          return "412 (gateway) S 1 900\n";
+        }
+        return read(file, options);
+      });
+      try {
+        const runtime = await readSystemdServiceRuntime(env, {
+          requireLoaded: transport === "bus",
+          commandInspection: { kind: "present" },
+        });
+        expect(runtime).toMatchObject({ status: "running", pid: 412 });
+        expect(
+          inspectServiceProcessMembershipSync(runtime.pid!, "linux", runtime.systemd?.controlGroup),
+        ).toBe("unknown");
+      } finally {
+        observation.mockRestore();
+      }
+    },
+  );
 
   it.each([[], [2001.5], [-1], 2001].map((uid) => ({ uid })))(
     "refuses an invalid manager UID reply $uid",

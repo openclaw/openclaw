@@ -1,4 +1,3 @@
-/** Classifies ACP tool permission requests into auto-approved and prompt-required risk buckets. */
 import { homedir } from "node:os";
 import path from "node:path";
 import { trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
@@ -31,7 +30,7 @@ const CONTROL_PLANE_TOOL_IDS = new Set([
   "session_status",
 ]);
 
-export type AcpApprovalClass =
+type AcpApprovalClass =
   | "readonly_scoped"
   | "readonly_search"
   | "mutating"

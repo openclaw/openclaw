@@ -1,51 +1,10 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ReplyExpectation } from "../reply-completion.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY = "agent:main:subagent:child";
 const SUBAGENT_ANNOUNCE_REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
-
-export const COMMAND_REPLY_EXPECTATION_CASES: ReadonlyArray<{
-  name: string;
-  opts: Partial<AgentCommandOpts>;
-  expected: ReplyExpectation;
-}> = [
-  { name: "user", opts: {}, expected: "required" },
-  {
-    name: "external-user-with-completion-label",
-    opts: { inputProvenance: { kind: "external_user", sourceTool: "subagent_announce" } },
-    expected: "required",
-  },
-  { name: "subagent-lane", opts: { lane: "subagent" }, expected: "optional" },
-  {
-    name: "child-report-without-tool-handoff",
-    opts: {
-      inputProvenance: {
-        kind: "inter_session",
-        sourceTool: "subagent_announce",
-        sourceRole: "subagent",
-      },
-    },
-    expected: "optional",
-  },
-  {
-    name: "settlement-wake",
-    opts: { inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" } },
-    expected: "optional",
-  },
-  {
-    name: "peer-result",
-    opts: { inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" } },
-    expected: "optional",
-  },
-  {
-    name: "internal-notification",
-    opts: { inputProvenance: { kind: "internal_system" } },
-    expected: "optional",
-  },
-];
 
 export function createSubagentAnnounceHandoffOptions(params: {
   sourceReplyDeliveryMode: "automatic" | "message_tool_only";
@@ -120,7 +79,7 @@ export type SubagentAnnounceDeliveryCase = {
   expectedToolsAllow?: readonly string[];
 };
 
-export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
+const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
   {
     name: "automatic source replies",
     sourceReplyDeliveryMode: "automatic" as const,
@@ -131,17 +90,11 @@ export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDelivery
     name: "message-tool-only source replies",
     sourceReplyDeliveryMode: "message_tool_only" as const,
     disableMessageTool: false,
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "message-tool-only source replies requiring an explicit target",
-    sourceReplyDeliveryMode: "message_tool_only" as const,
-    disableMessageTool: false,
     requireExplicitMessageTarget: true,
     expectedDisableTools: false,
     expectedToolsAllow: ["message"],
   },
+
   {
     name: "an explicitly disabled message tool",
     sourceReplyDeliveryMode: "message_tool_only" as const,
@@ -196,22 +149,7 @@ export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDelivery
     sandboxMode: "non-main",
     expectedDisableTools: true,
   },
-  {
-    name: "an inactive sandbox message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
-    sandboxMode: "off",
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "a runtime allowlist excluding message",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    runtimeToolsAllow: ["read", "exec"],
-    expectedDisableTools: true,
-  },
+
   {
     name: "an empty runtime allowlist",
     sourceReplyDeliveryMode: "message_tool_only",
@@ -245,44 +183,37 @@ export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDelivery
   },
 ];
 
+// Only automatic Claude CLI completion replies restore requester tools.
+function createClaudeCliSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
+  return SUBAGENT_ANNOUNCE_DELIVERY_CASES.map((testCase) => {
+    const retainsRequesterTools =
+      testCase.sourceReplyDeliveryMode === "automatic" && testCase.trustedInternalHandoff !== false;
+    return retainsRequesterTools
+      ? {
+          ...testCase,
+          expectedDisableTools: false,
+          expectedToolsAllow: testCase.runtimeToolsAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
+        }
+      : testCase;
+  });
+}
+export const SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES =
+  createClaudeCliSubagentAnnounceDeliveryCases();
+
 function createEmbeddedSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
   const cases: SubagentAnnounceDeliveryCase[] = [];
   for (const testCase of SUBAGENT_ANNOUNCE_DELIVERY_CASES) {
-    if (testCase.name === "automatic source replies") {
+    if (testCase.name === "message-tool-only source replies") {
       cases.push({
         ...testCase,
         expectedDisableTools: false,
         expectedToolsAllow: SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
       });
-    } else if (!testCase.expectedDisableTools) {
-      cases.push({
-        ...testCase,
-        expectedToolsAllow: testCase.runtimeToolsAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
-      });
-    } else {
-      cases.push(testCase);
     }
   }
-  cases.push(
-    {
-      name: "a raw model run despite message-tool-only delivery",
-      sourceReplyDeliveryMode: "message_tool_only",
-      disableMessageTool: false,
-      modelRun: true,
-      expectedDisableTools: true,
-    },
-    {
-      name: "prompt mode none despite message-tool-only delivery",
-      sourceReplyDeliveryMode: "message_tool_only",
-      disableMessageTool: false,
-      promptMode: "none",
-      expectedDisableTools: true,
-    },
-  );
   return cases;
 }
-
-export const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] =
+export const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES =
   createEmbeddedSubagentAnnounceDeliveryCases();
 
 export function createSubagentAnnounceSessionStore(

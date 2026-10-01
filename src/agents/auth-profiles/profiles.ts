@@ -1,8 +1,3 @@
-/**
- * Auth profile mutation helpers.
- * Updates profile order, last-good state, usage stats, and provider profile
- * records through locked or immediate store writes.
- */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
@@ -101,14 +96,7 @@ export async function setAuthProfileOrder(params: {
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     sharedStoreWrite: params.sharedStoreWrite,
-    // Preserve requested IDs that the agent inherits (not owns) so the local
-    // save path does not prune them from the order. Without this, a secondary
-    // agent's `models auth order set --agent` accepts an inherited profile ID
-    // (validated against the merged store) but drops it while persisting, so
-    // `order get` falls back to the inherited main order — the CLI reports a
-    // switch that never happened (issue #119233). Mirrors the adjacent
-    // promoteAuthProfileInOrder preservation contract; the clear-order path
-    // (deduped.length === 0) must not preserve anything.
+    // Keep inherited IDs in local order; pruning them silently undoes the requested switch.
     ...(deduped.length > 0 ? { saveOptions: { preserveOrderProfileIds: deduped } } : {}),
     updater: (store) => {
       if (deduped.length === 0) {
@@ -144,27 +132,19 @@ export async function promoteAuthProfileInOrder(params: {
       }
       const matchingOrderEntries = listProviderAuthStateEntries(store.order, providerKey);
       const existing = readProviderAuthState(store.order, providerKey);
-      if (!existing || existing.length === 0) {
-        if (!params.createIfMissing) {
-          return false;
-        }
-        const providerProfiles = dedupeProfileIds(
-          params.createFromOrder !== undefined
-            ? params.createFromOrder
-            : listProfilesForProvider(store, providerKey),
-        );
-        const next = dedupeProfileIds([
-          params.profileId,
-          ...providerProfiles.filter((profileId) => profileId !== params.profileId),
-        ]);
-        store.order = replaceProviderAuthState(store.order, providerKey, next);
-        return true;
+      if (!existing?.length && !params.createIfMissing) {
+        return false;
       }
       const next = dedupeProfileIds([
         params.profileId,
-        ...existing.filter((profileId) => profileId !== params.profileId),
+        ...(existing?.length
+          ? existing
+          : params.createFromOrder !== undefined
+            ? params.createFromOrder
+            : listProfilesForProvider(store, providerKey)),
       ]);
       if (
+        existing?.length &&
         next.length === existing.length &&
         next.every((profileId, idx) => profileId === existing[idx]) &&
         matchingOrderEntries.length === 1 &&

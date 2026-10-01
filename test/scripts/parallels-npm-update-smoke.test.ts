@@ -2,12 +2,9 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  posixAgentWorkspaceScript,
-  windowsAgentWorkspaceScript,
-} from "../../scripts/e2e/parallels/agent-workspace.ts";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
@@ -29,11 +26,15 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
-import { createDeferred } from "../helpers/promise.js";
-import { createTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { createDeferred, withinTest } from "../helpers/promise.js";
+import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
-const GUEST_TRANSPORTS_PATH = "scripts/e2e/parallels/guest-transports.ts";
 const UPDATE_SCRIPTS_PATH = "scripts/e2e/parallels/npm-update-scripts.ts";
 const TEST_AUTH = {
   authChoice: "openai",
@@ -43,6 +44,28 @@ const TEST_AUTH = {
   modelId: "gpt-5.4",
 };
 const tempDirs = createTempDirTracker();
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+function smokeOptions(
+  platform: Platform = "linux",
+): ConstructorParameters<typeof NpmUpdateSmoke>[0] {
+  return {
+    ...TEST_AUTH,
+    dependencyTarballs: [],
+    registryPackageTarballs: [],
+    json: false,
+    packageSpec: "openclaw@latest",
+    platforms: new Set<Platform>([platform]),
+    provider: "openai",
+    updateTarget: "local-main",
+  };
+}
 
 function pidIsAlive(pid: number): boolean {
   try {
@@ -53,30 +76,72 @@ function pidIsAlive(pid: number): boolean {
   }
 }
 
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!pidIsAlive(pid)) {
-      return;
+// The command owner joins its leader but only bounds its process-group observation.
+// Foreign descendants have no ChildProcess handle; keep extinction tied to the test signal.
+async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (pidIsAlive(pid)) {
+      await waitForProcessTick(5, undefined, { signal });
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
+  } catch (cause) {
+    throw new Error(`timeout waiting for pid ${pid} to exit`, { cause });
   }
-  throw new Error(`timeout waiting for pid ${pid} to exit`);
 }
 
-async function waitFor(predicate: () => boolean, label: string, timeoutMs = 2_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) {
-      return;
+async function runAfterFixtureReady(
+  start: () => Promise<number>,
+  readyPath: string,
+  timeoutMs: number,
+  label: string,
+  signal: AbortSignal,
+): Promise<number> {
+  // Hold only the initial deadline; the real kill-grace timers still exercise the owner.
+  const deadlineReady = createDeferred();
+  const realSetTimeout = globalThis.setTimeout;
+  let commandSettled = false;
+  const timeoutSpy = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementationOnce((callback, delay, ...args) =>
+      realSetTimeout(() => {
+        void deadlineReady.promise.then(() => {
+          if (!commandSettled) {
+            callback(...args);
+          }
+        });
+      }, delay),
+    );
+  let command: Promise<number> | undefined;
+  try {
+    try {
+      command = start();
+      expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), timeoutMs);
+    } finally {
+      timeoutSpy.mockRestore();
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
+    const hasReadyRecord = () =>
+      existsSync(readyPath) && readFileSync(readyPath, "utf8").length > 0;
+    // Receipts and command exit use different transports. The fixture commits this
+    // record before sending readiness, so a late receipt cannot turn success into failure.
+    const settled = command.then(
+      () => {
+        commandSettled = true;
+        if (!hasReadyRecord()) {
+          throw new Error(`timeout waiting for ${label}`);
+        }
+      },
+      (error: unknown) => {
+        commandSettled = true;
+        if (!hasReadyRecord()) {
+          throw error;
+        }
+      },
+    );
+    await withinTest(Promise.race([receipts.waitFor(readyPath, "ready"), settled]), signal);
+  } finally {
+    deadlineReady.resolve();
+    await command;
   }
-  throw new Error(`timeout waiting for ${label}`);
+  return command;
 }
 
 function decodePowerShellFromArgs(args: string[]): string {
@@ -361,16 +426,7 @@ describe("parallels npm update smoke", () => {
     }
 
     await withEnvAsync({ OPENAI_API_KEY: "test-key" }, async () => {
-      const smoke = new FailingNpmUpdateSmoke({
-        ...TEST_AUTH,
-        dependencyTarballs: [],
-        registryPackageTarballs: [],
-        json: false,
-        packageSpec: "openclaw@latest",
-        platforms: new Set<Platform>(["linux"]),
-        provider: "openai",
-        updateTarget: "local-main",
-      });
+      const smoke = new FailingNpmUpdateSmoke(smokeOptions());
 
       await expect(smoke.run()).rejects.toThrow("forced wrapper failure");
     });
@@ -412,25 +468,10 @@ exit 1
         PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
       },
       () => {
-        const smoke = new NpmUpdateSmoke({
-          ...TEST_AUTH,
-          dependencyTarballs: [],
-          registryPackageTarballs: [],
-          json: false,
-          packageSpec: "openclaw@latest",
-          platforms: new Set<Platform>(["linux"]),
-          provider: "openai",
-          updateTarget: "local-main",
-        });
-        const writeGuestScript = Reflect.get(smoke, "writeGuestScript") as (
-          vm: string,
-          script: string,
-          prefix: string,
-        ) => string;
+        const smoke = new NpmUpdateSmoke(smokeOptions());
 
         expect(() =>
-          writeGuestScript.call(
-            smoke,
+          smoke["writeGuestScript"](
             "Linux VM",
             "echo update",
             "openclaw-parallels-npm-update-linux",
@@ -495,16 +536,7 @@ exit 1
           PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
         },
         async () => {
-          const smoke = new NpmUpdateSmoke({
-            ...TEST_AUTH,
-            dependencyTarballs: [],
-            registryPackageTarballs: [],
-            json: false,
-            packageSpec: "openclaw@latest",
-            platforms: new Set<Platform>(["macos"]),
-            provider: "openai",
-            updateTarget: "local-main",
-          });
+          const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
           const result = smoke["guestMacos"]("echo update", 30_000, {
             append: (chunk) =>
               output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
@@ -544,17 +576,6 @@ exit 1
       );
     },
   );
-
-  it("has a one-command beta validation mode with fresh target coverage", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("--beta-validation [target]");
-    expect(script).toContain("resolveOpenClawRegistryVersion");
-    expect(script).toContain("this.options.updateTarget = version");
-    expect(script).toContain("this.options.freshTargetSpec = `openclaw@${version}`");
-    expect(script).toContain("runFreshTargetInstalls");
-    expect(script).toContain("freshTargetStatus");
-  });
 
   it.runIf(process.platform !== "win32").each([
     ["macos", macosUpdateScript],
@@ -708,24 +729,6 @@ ${script}`,
     }
   });
 
-  it("does not recreate retired workspace setup state in release smoke scripts", () => {
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.7.2-beta.2",
-      updateTarget: "2026.7.2-beta.2",
-    };
-
-    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
-      expect(script).toContain("IDENTITY.md");
-      expect(script).not.toContain("workspace-state.json");
-    }
-    expect(windowsUpdateScript(input)).toContain("IDENTITY.md");
-    expect(windowsUpdateScript(input)).not.toContain("workspace-state.json");
-
-    expect(posixAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
-    expect(windowsAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
-  });
-
   it("accepts keyed and nested npm metadata for published update targets", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -768,25 +771,6 @@ ${script}`,
     expect(script).toContain("openClawVersionFamily");
     expect(script).toContain("OPENCLAW_PARALLELS_ALLOW_HARNESS_TARGET_MISMATCH");
     expect(script).toContain("checkout the matching release branch");
-  });
-
-  it("lets callers override the Parallels host IP", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("--host-ip <ip>");
-    expect(script).toContain("hostIp?: string");
-    expect(script).toContain("options.hostIp = ensureValue");
-    expect(script).toContain('resolveHostIp(this.options.hostIp ?? "")');
-  });
-
-  it("prints actionable progress, rerun hints, and markdown summaries", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("stale=");
-    expect(script).toContain("bytes=");
-    expect(script).toContain("rerunCommand");
-    expect(script).toContain("writeSummaryMarkdown");
-    expect(script).toContain("Parallels NPM Update Smoke");
   });
 
   it("streams aggregate update logs instead of retaining them in memory", () => {
@@ -909,96 +893,27 @@ ${script}`,
     expect(code).toBe(0);
   });
 
-  it.runIf(process.platform !== "win32")("times out fresh lane process groups", async () => {
-    const root = tempDirs.make("openclaw-parallels-npm-update-");
-    const logPath = path.join(root, "fresh.log");
-    const scriptPath = path.join(root, "hung-fresh-lane.mjs");
-    const descendantPidPath = path.join(root, "descendant.pid");
-    const descendantScript = [
-      "import { writeFileSync } from 'node:fs';",
-      "process.on('SIGTERM', () => {});",
-      `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
-    writeFileSync(
-      scriptPath,
-      [
-        "import { spawn } from 'node:child_process';",
-        `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-          descendantScript,
-        )}], { stdio: "ignore" });`,
-        "process.on('SIGTERM', () => process.exit(0));",
-        "setInterval(() => {}, 1000);",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    // Hold only the initial deadline while real child startup reaches signal readiness.
-    const deadlineReady = createDeferred();
-    const realSetTimeout = globalThis.setTimeout;
-    let commandSettled = false;
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementationOnce((callback, delay, ...args) =>
-        realSetTimeout(() => {
-          void deadlineReady.promise.then(() => {
-            if (!commandSettled) {
-              callback(...args);
-            }
-          });
-        }, delay),
-      );
-    let command: Promise<number> | undefined;
-    let code: number | undefined;
-    try {
-      try {
-        command = spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
-          timeoutKillGraceMs: 25,
-          timeoutLabel: "fresh lane test",
-          timeoutMs: 250,
-        });
-        void command.then(
-          () => {
-            commandSettled = true;
-          },
-          () => {
-            commandSettled = true;
-          },
-        );
-        expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 250);
-      } finally {
-        timeoutSpy.mockRestore();
-      }
-      await waitFor(() => existsSync(descendantPidPath), "fresh lane descendant readiness");
-    } finally {
-      deadlineReady.resolve();
-      if (command) {
-        code = await command;
-      }
-    }
-
-    expect(code).toBe(124);
-    expect(readFileSync(logPath, "utf8")).toContain("fresh lane test timed out after 250ms");
-    expect(existsSync(descendantPidPath)).toBe(true);
-    const descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
-    await waitForDead(descendantPid, 2000);
-  });
-
   it.runIf(process.platform !== "win32")(
-    "lets fresh lane descendants exit during timeout kill grace",
-    async () => {
-      const root = tempDirs.make("openclaw-parallels-npm-update-");
+    "times out fresh lane process groups",
+    async ({ signal, onTestFinished }) => {
+      let command: Promise<number> | undefined = undefined;
+      // onTestFinished joins the aborted body before releasing files still used by cleanup.
+      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
+        onTestFinished(async () => {
+          await command?.catch(() => {});
+          removeDirs();
+        });
+      });
+      const root = fixtureDirs.make("openclaw-parallels-npm-update-");
       const logPath = path.join(root, "fresh.log");
-      const scriptPath = path.join(root, "graceful-fresh-lane.mjs");
-      const readyPath = path.join(root, "ready");
-      const donePath = path.join(root, "done");
+      const scriptPath = path.join(root, "hung-fresh-lane.mjs");
+      const descendantPidPath = path.join(root, "descendant.pid");
       const descendantScript = [
         "import { writeFileSync } from 'node:fs';",
-        `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
-        "process.on('SIGTERM', () => {",
-        `  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
-        "});",
+        fixtureReceiptClientSource(receipts.endpoint),
+        "process.on('SIGTERM', () => {});",
+        `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        `sendReceipt(${JSON.stringify(descendantPidPath)}, "ready");`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
       writeFileSync(
@@ -1015,47 +930,98 @@ ${script}`,
         "utf8",
       );
 
-      const command = spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
-        timeoutKillGraceMs: 500,
-        timeoutLabel: "fresh lane grace test",
-        timeoutMs: 500,
-      });
+      command = runAfterFixtureReady(
+        () =>
+          spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
+            timeoutKillGraceMs: 25,
+            timeoutLabel: "fresh lane test",
+            timeoutMs: 250,
+          }),
+        descendantPidPath,
+        250,
+        "fresh lane descendant readiness",
+        signal,
+      );
+      const code = await command;
 
-      await waitFor(() => existsSync(readyPath), "fresh lane descendant readiness");
-      await expect(command).resolves.toBe(124);
+      expect(code).toBe(124);
+      expect(readFileSync(logPath, "utf8")).toContain("fresh lane test timed out after 250ms");
+      expect(existsSync(descendantPidPath)).toBe(true);
+      const descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+      try {
+        await waitForDead(descendantPid, signal);
+      } finally {
+        if (pidIsAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "lets fresh lane descendants exit during timeout kill grace",
+    async ({ signal, onTestFinished }) => {
+      let command: Promise<number> | undefined = undefined;
+      // onTestFinished joins the aborted body before releasing files still used by cleanup.
+      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
+        onTestFinished(async () => {
+          await command?.catch(() => {});
+          removeDirs();
+        });
+      });
+      const root = fixtureDirs.make("openclaw-parallels-npm-update-");
+      const logPath = path.join(root, "fresh.log");
+      const scriptPath = path.join(root, "graceful-fresh-lane.mjs");
+      const readyPath = path.join(root, "ready");
+      const donePath = path.join(root, "done");
+      const descendantScript = [
+        "import { writeFileSync } from 'node:fs';",
+        fixtureReceiptClientSource(receipts.endpoint),
+        "process.on('SIGTERM', () => {",
+        `  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
+        "});",
+        `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      writeFileSync(
+        scriptPath,
+        [
+          "import { spawn } from 'node:child_process';",
+          `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      command = runAfterFixtureReady(
+        () =>
+          spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
+            timeoutKillGraceMs: 500,
+            timeoutLabel: "fresh lane grace test",
+            timeoutMs: 500,
+          }),
+        readyPath,
+        500,
+        "fresh lane descendant readiness",
+        signal,
+      );
+      const code = await command;
+      expect(code).toBe(124);
       expect(readFileSync(donePath, "utf8")).toBe("done");
     },
   );
 
   it("clears update stream timers when spawning the guest command fails", async () => {
     vi.useFakeTimers();
-    const smoke = withEnv(
-      { OPENAI_API_KEY: "test-key" },
-      () =>
-        new NpmUpdateSmoke({
-          ...TEST_AUTH,
-          dependencyTarballs: [],
-          registryPackageTarballs: [],
-          json: false,
-          packageSpec: "openclaw@latest",
-          platforms: new Set<Platform>(["linux"]),
-          provider: "openai",
-          updateTarget: "local-main",
-        }),
-    );
-    const runStreamingToJobLog = Reflect.get(smoke, "runStreamingToJobLog") as (
-      command: string,
-      args: string[],
-      timeoutMs: number,
-      ctx: {
-        append(chunk: string | Uint8Array): void;
-        logPath: string;
-        signal: AbortSignal;
-      },
-    ) => Promise<number>;
+    const smoke = withEnv({ OPENAI_API_KEY: "test-key" }, () => new NpmUpdateSmoke(smokeOptions()));
 
     await expect(
-      runStreamingToJobLog.call(smoke, "openclaw-definitely-missing-command", [], 60 * 60 * 1000, {
+      smoke["runStreamingToJobLog"]("openclaw-definitely-missing-command", [], 60 * 60 * 1000, {
         append: () => undefined,
         logPath: "",
         signal: new AbortController().signal,
@@ -1066,41 +1032,31 @@ ${script}`,
 
   it.runIf(process.platform !== "win32")(
     "lets update stream descendants exit during timeout kill grace",
-    async () => {
-      const root = tempDirs.make("openclaw-parallels-npm-update-");
+    async ({ signal, onTestFinished }) => {
+      let command: Promise<number> | undefined = undefined;
+      // onTestFinished joins the aborted body before releasing files still used by cleanup.
+      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
+        onTestFinished(async () => {
+          await command?.catch(() => {});
+          removeDirs();
+        });
+      });
+      const root = fixtureDirs.make("openclaw-parallels-npm-update-");
       const scriptPath = path.join(root, "stream-update-grace.mjs");
       const readyPath = path.join(root, "stream-ready");
       const donePath = path.join(root, "stream-done");
       const smoke = withEnv(
         { OPENAI_API_KEY: "test-key" },
-        () =>
-          new NpmUpdateSmoke({
-            ...TEST_AUTH,
-            dependencyTarballs: [],
-            registryPackageTarballs: [],
-            json: false,
-            packageSpec: "openclaw@latest",
-            platforms: new Set<Platform>(["linux"]),
-            provider: "openai",
-            updateTarget: "local-main",
-          }),
+        () => new NpmUpdateSmoke(smokeOptions()),
       );
-      const runStreamingToJobLog = Reflect.get(smoke, "runStreamingToJobLog") as (
-        command: string,
-        args: string[],
-        timeoutMs: number,
-        ctx: {
-          append(chunk: string | Uint8Array): void;
-          logPath: string;
-          signal: AbortSignal;
-        },
-      ) => Promise<number>;
       const descendantScript = [
         "import { writeFileSync } from 'node:fs';",
-        `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        fixtureReceiptClientSource(receipts.endpoint),
         "process.on('SIGTERM', () => {",
         `  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
         "});",
+        `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
       writeFileSync(
@@ -1117,28 +1073,23 @@ ${script}`,
         "utf8",
       );
 
-      const command = runStreamingToJobLog.call(smoke, process.execPath, [scriptPath], 500, {
-        append: () => undefined,
-        logPath: path.join(root, "update.log"),
-        signal: new AbortController().signal,
-      });
-
-      await waitFor(() => existsSync(readyPath), "update stream descendant readiness");
-      await expect(command).resolves.toBe(124);
+      command = runAfterFixtureReady(
+        () =>
+          smoke["runStreamingToJobLog"](process.execPath, [scriptPath], 500, {
+            append: () => undefined,
+            logPath: path.join(root, "update.log"),
+            signal: new AbortController().signal,
+          }),
+        readyPath,
+        500,
+        "update stream descendant readiness",
+        signal,
+      );
+      const code = await command;
+      expect(code).toBe(124);
       expect(readFileSync(donePath, "utf8")).toBe("done");
     },
   );
-
-  it("runs Windows updates through a detached done-file runner", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-    const transports = readFileSync(GUEST_TRANSPORTS_PATH, "utf8");
-
-    expect(script).toContain("runWindowsBackgroundPowerShell");
-    expect(transports).toContain("runWindowsBackgroundPowerShell");
-    expect(transports).toContain("__OPENCLAW_BACKGROUND_EXIT__");
-    expect(transports).toContain("__OPENCLAW_BACKGROUND_DONE__");
-    expect(transports).toContain("${options.label} timed out");
-  });
 
   it("cleans timed-out Windows background work", async () => {
     const decodedCommands: string[] = [];
@@ -1377,14 +1328,6 @@ ${script}`,
     );
   });
 
-  it("keeps macOS sudo fallback update scripts readable by the desktop user", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain('"/usr/sbin/chown"');
-    expect(script).toContain("macosUpdateExec.ownerUser");
-    expect(script).toContain("ownerUser: fallbackUser");
-  });
-
   it("selects macOS desktop users with homes on spaced mounted volumes", () => {
     const root = tempDirs.make("openclaw-parallels-npm-update-");
     const prlctlPath = path.join(root, "prlctl");
@@ -1413,22 +1356,9 @@ exit 7
         PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
       },
       () => {
-        const smoke = new NpmUpdateSmoke({
-          ...TEST_AUTH,
-          dependencyTarballs: [],
-          registryPackageTarballs: [],
-          json: false,
-          packageSpec: "openclaw@latest",
-          platforms: new Set<Platform>(["macos"]),
-          provider: "openai",
-          updateTarget: "local-main",
-        });
-        const resolveMacosDesktopUser = Reflect.get(
-          smoke,
-          "resolveMacosDesktopUser",
-        ) as () => string;
+        const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
 
-        expect(resolveMacosDesktopUser.call(smoke)).toBe("clawuser");
+        expect(smoke["resolveMacosDesktopUser"]()).toBe("clawuser");
       },
     );
   });
@@ -1456,21 +1386,9 @@ exit 7
         PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
       },
       () => {
-        const smoke = new NpmUpdateSmoke({
-          ...TEST_AUTH,
-          dependencyTarballs: [],
-          registryPackageTarballs: [],
-          json: false,
-          packageSpec: "openclaw@latest",
-          platforms: new Set<Platform>(["macos"]),
-          provider: "openai",
-          updateTarget: "local-main",
-        });
-        const resolveMacosDesktopHome = Reflect.get(smoke, "resolveMacosDesktopHome") as (
-          user: string,
-        ) => string;
+        const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
 
-        expect(resolveMacosDesktopHome.call(smoke, "clawuser")).toBe(
+        expect(smoke["resolveMacosDesktopHome"]("clawuser")).toBe(
           "/Volumes/Macintosh HD/Users/clawuser",
         );
       },

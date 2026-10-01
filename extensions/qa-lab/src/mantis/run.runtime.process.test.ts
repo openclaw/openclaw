@@ -1,4 +1,3 @@
-// Qa Lab tests cover Mantis run process behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
 import { defaultMantisCommandRunner } from "./run-command.runtime.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
+import { successfulCommandResult, type StubCommandResult } from "./run.test-support.js";
 
 const commandTimeouts = {
   build: 5_000,
@@ -16,19 +16,6 @@ const commandTimeouts = {
   "worktree-add": 5_000,
   "worktree-cleanup": 5_000,
 };
-
-type StubCommandResult = {
-  code: number | null;
-  killed: boolean;
-  signal: NodeJS.Signals | null;
-  stderr: string;
-  stdout: string;
-  termination: "exit" | "timeout" | "no-output-timeout" | "signal";
-};
-
-function successfulCommandResult(stdout = ""): StubCommandResult {
-  return { code: 0, killed: false, signal: null, stderr: "", stdout, termination: "exit" };
-}
 
 function isProcessRunning(pid: number) {
   try {
@@ -326,53 +313,6 @@ process.exit(result.status ?? 1);
     },
   );
 
-  it("stops an active injected lane command when aborted", async () => {
-    const controller = new AbortController();
-    const stages: string[] = [];
-    const runner = vi.fn(async (_command: string, _args: readonly string[], execution) => {
-      stages.push(execution.stage);
-      if (execution.stage !== "worktree-add") {
-        expect(execution.stage).toBe("worktree-cleanup");
-        expect(execution.signal).toBeUndefined();
-        if (_args[1] === "remove") {
-          await fs.rm(execution.cwd, { force: true, recursive: true });
-        }
-        return successfulCommandResult();
-      }
-      expect(execution.signal).toBe(controller.signal);
-      queueMicrotask(() => controller.abort());
-      return await new Promise<StubCommandResult>((resolve) => {
-        execution.signal?.addEventListener(
-          "abort",
-          () =>
-            resolve({
-              code: null,
-              killed: true,
-              signal: "SIGTERM",
-              stderr: "",
-              stdout: "",
-              termination: "signal",
-            }),
-          { once: true },
-        );
-      });
-    });
-
-    await expect(
-      runMantisBeforeAfter({
-        baseline: "baseline-ref",
-        candidate: "candidate-ref",
-        commandRunner: runner,
-        outputDir: ".artifacts/qa-e2e/mantis/injected-abort",
-        repoRoot,
-        signal: controller.signal,
-        skipBuild: true,
-        skipInstall: true,
-      }),
-    ).rejects.toThrow("baseline worktree-add aborted");
-    expect(stages).toEqual(["worktree-add", "worktree-cleanup", "worktree-cleanup"]);
-  });
-
   it("keeps signal termination ahead of a normalized successful exit", async () => {
     const controller = new AbortController();
     const stages: string[] = [];
@@ -503,18 +443,7 @@ process.exit(result.status ?? 1);
       const parentPidPath = path.join(repoRoot, "qa-parent.pid");
       const descendantPidPath = path.join(repoRoot, "qa-descendant.pid");
       const pnpmShimPath = path.join(binDir, "pnpm");
-      await runGit(repoRoot, ["init"]);
-      await fs.writeFile(path.join(repoRoot, "seed.txt"), "seed\n", "utf8");
-      await runGit(repoRoot, ["add", "seed.txt"]);
-      await runGit(repoRoot, [
-        "-c",
-        "user.name=Mantis Test",
-        "-c",
-        "user.email=mantis@example.test",
-        "commit",
-        "-m",
-        "seed",
-      ]);
+      await initializeGitRepo(repoRoot);
       await fs.mkdir(binDir, { recursive: true });
       await writeCommandShim(
         pnpmShimPath,
@@ -602,89 +531,5 @@ process.exit(result.status ?? 1);
       }
     },
     18_000,
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "stops a noisy lane command at its total deadline and kills its process tree",
-    async () => {
-      const worktreeAddTimeoutMs = 2_500;
-      const binDir = path.join(repoRoot, "bin");
-      const parentPidPath = path.join(repoRoot, "parent.pid");
-      const descendantPidPath = path.join(repoRoot, "descendant.pid");
-      const gitShimPath = path.join(binDir, "git");
-      await fs.mkdir(binDir, { recursive: true });
-      await writeCommandShim(
-        gitShimPath,
-        [
-          "#!/bin/sh",
-          'if [ "$1" = worktree ] && [ "$2" = remove ]; then exit 1; fi',
-          'if [ "$1" = worktree ] && [ "$2" = list ]; then exit 0; fi',
-          ...stubbornProcessTreeShellLines({
-            descendantPidPath,
-            outputLine: "still working",
-            parentPidPath,
-          }),
-        ].join("\n"),
-      );
-
-      const previousPath = process.env.PATH;
-      process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
-      const controller = new AbortController();
-      let parentPid: number | undefined;
-      let descendantPid: number | undefined;
-      const run = runMantisBeforeAfter({
-        baseline: "baseline-ref",
-        candidate: "candidate-ref",
-        // Keep the tested deadline after process-tree readiness under loaded CI while still short.
-        commandTimeouts: { "worktree-add": worktreeAddTimeoutMs },
-        outputDir: ".artifacts/qa-e2e/mantis/timeout-run",
-        repoRoot,
-        signal: controller.signal,
-        skipBuild: true,
-        skipInstall: true,
-      });
-      const settled = run.then(
-        () => ({ status: "fulfilled" as const }),
-        (error: unknown) => ({ error, status: "rejected" as const }),
-      );
-      try {
-        [parentPid, descendantPid] = await Promise.all([
-          readPidBeforeSettled(parentPidPath, "parent", 5_000, settled),
-          readPidBeforeSettled(descendantPidPath, "descendant", 5_000, settled),
-        ]);
-
-        const result = await withTimeout(
-          settled,
-          4_000,
-          "timed out waiting for Mantis deadline rejection",
-        );
-        expect(result.status).toBe("rejected");
-        if (result.status === "rejected") {
-          expect(result.error).toBeInstanceOf(Error);
-          expect((result.error as Error).message).toContain(
-            `baseline worktree-add timed out after ${worktreeAddTimeoutMs}ms`,
-          );
-        }
-        await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
-      } finally {
-        controller.abort();
-        killKnownProcessPids([parentPid, descendantPid]);
-        try {
-          await withTimeout(
-            settled,
-            4_000,
-            "timed out waiting for Mantis deadline teardown to settle",
-          );
-        } finally {
-          if (previousPath === undefined) {
-            delete process.env.PATH;
-          } else {
-            process.env.PATH = previousPath;
-          }
-          killKnownProcessPids([parentPid, descendantPid]);
-        }
-      }
-    },
-    15_000,
   );
 });

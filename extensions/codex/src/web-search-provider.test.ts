@@ -187,6 +187,15 @@ function createConfig(): OpenClawConfig {
   };
 }
 
+function createSearchTool(provider: ReturnType<typeof createCodexWebSearchProvider>) {
+  const config = createConfig();
+  return provider.createTool({
+    config,
+    searchConfig: config.tools?.web?.search,
+    agentDir: "/tmp/openclaw-agent",
+  });
+}
+
 beforeAll(async () => {
   // Execution cases share this lazy runtime. Import it once so the first case
   // does not absorb module initialization that every later case reuses.
@@ -226,12 +235,7 @@ describe("codex web search provider", () => {
       }),
       clientFactory: async () => client,
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
     await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
       "Bounded Codex turns require stdio transport so native tools can be isolated.",
@@ -262,12 +266,7 @@ describe("codex web search provider", () => {
         return client;
       },
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
     const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
 
@@ -353,12 +352,7 @@ describe("codex web search provider", () => {
     const provider = createCodexWebSearchProvider({
       clientFactory: async () => client,
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
     const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
 
@@ -408,12 +402,7 @@ describe("codex web search provider", () => {
     const provider = createCodexWebSearchProvider({
       clientFactory: async () => client,
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
     await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
       "Codex app-server has no model supporting text input.",
@@ -426,12 +415,7 @@ describe("codex web search provider", () => {
     const provider = createCodexWebSearchProvider({
       clientFactory: async () => client,
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
     await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
       "Codex hosted search completed without invoking web search.",

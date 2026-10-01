@@ -81,8 +81,6 @@ export function createAgentViewTestProps(
       agentFileConflict: null,
     },
     agentFilesListError: null,
-    agentIdentityLoading: false,
-    agentIdentityError: null,
     agentIdentityById: {},
     identityDraft: { name: null, emoji: null, avatar: null },
     identityAvatarLoader: {

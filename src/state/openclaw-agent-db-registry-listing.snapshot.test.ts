@@ -2,10 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
 
@@ -19,7 +15,6 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
     mocks.capture(options);
     return {
       admission: { assertCurrent: mocks.assertCurrent },
-      coordinatorRuntime: { directory: "/fixture/captured-coordinator", keepAlive: false },
     };
   },
 }));
@@ -170,23 +165,14 @@ it("propagates an unsettled worker failure without producing an unavailable fact
   );
 });
 
-it("uses captured async scope and coordinator location when demand runs elsewhere", async () => {
+it("uses captured async scope when demand runs elsewhere", async () => {
   const scope = new AsyncLocalStorage<string>();
   const prepared = scope.run("captured", () =>
     prepareOpenClawAgentDatabaseRegistrySnapshotRead(options),
   );
   mocks.read.mockImplementationOnce(async () => {
     expect(scope.getStore()).toBe("captured");
-    expect(captureStateDatabaseCoordinatorRuntime()).toEqual({
-      directory: "/fixture/captured-coordinator",
-      keepAlive: false,
-    });
     return { status: "available", entries };
   });
-  await scope.run("replacement", () =>
-    withStateDatabaseCoordinatorRuntimeDirectory(
-      { directory: "/fixture/replacement-coordinator", keepAlive: true },
-      () => prepared.read(),
-    ),
-  );
+  await scope.run("replacement", () => prepared.read());
 });

@@ -292,13 +292,12 @@ This handshake does not persist incoming messages, stop third-party channel
 transports, or control the hosting platform. The host must fence its ingress
 before preparation and remains responsible for wake, snapshot/freeze, and
 stop. `activeCount` is the aggregate tracked-work count, while `blockers`
-contains the non-zero category counts and bounded task details. This is not a
-general process-quiescence barrier. The process registry's `background-exec` entry
-is aggregate only. Durable background exec tasks also use `background-exec`
-and retain their bounded `task` metadata; other task kinds remain `task`.
-A process can contribute to both counts. This classification does not change
-`activeCount` or readiness, and adds no command text, output, operating system
-process IDs, or session or scope identifiers. Channel health, maintenance,
+contains non-zero native category counts and bounded summary messages. Categories
+include `background-exec`, `cron-run`, `agent-run`, `acp-run`, and
+`media-generation`, alongside request, queue, reply, session, and terminal work.
+Categories can overlap, so the count is not a number of unique jobs. This is not
+a general process-quiescence barrier. Blockers contain no command text, output,
+operating system process IDs, or session or scope identifiers. Channel health, maintenance,
 cache refresh, established
 plugin WebSocket sessions, and unregistered plugin-owned background work can
 remain active.
@@ -347,6 +346,5 @@ plugins loaded by OpenClaw.
 - [Agent loop](/concepts/agent-loop)
 - [Agent runtimes](/concepts/agent-runtimes)
 - [Sessions](/concepts/session)
-- [Background tasks](/automation/tasks)
 - [ACP agents](/tools/acp-agents)
 - [Plugin SDK overview](/plugins/sdk-overview)

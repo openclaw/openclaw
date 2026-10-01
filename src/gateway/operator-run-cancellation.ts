@@ -101,6 +101,7 @@ function createGatewayOperatorRunCancellation(params: {
       runId,
       sessionKey: queued.sessionKey,
       stopReason: "rpc",
+      diagnosticReason: "authority-revoked",
     });
   };
   const cancel = async () => {
@@ -134,6 +135,7 @@ function createGatewayOperatorRunCancellation(params: {
       runId,
       sessionKey,
       stopReason: "rpc",
+      diagnosticReason: "authority-revoked",
       onAbortCommitted: () => deferAbortedPartialPersistence(snapshot, context),
     });
     if (!aborted) {

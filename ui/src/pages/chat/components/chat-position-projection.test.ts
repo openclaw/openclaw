@@ -167,10 +167,12 @@ describe("chat position projection", () => {
   });
 
   it("refreshes navigation visibility when retained message content changes", () => {
-    const response = message("response", "assistant", "Visible answer", 2, "edited-run");
+    const question = message("question", "user", "Inspect the answer", 1);
+    const response = (content: string) =>
+      message("response", "assistant", content, 2, "edited-run");
     const props = threadProps("rail-edited", "agent:main:main", [
-      message("question", "user", "Inspect the answer", 1),
-      response,
+      question,
+      response("Visible answer"),
     ]);
     const transcript = createTestTranscript();
     try {
@@ -180,11 +182,10 @@ describe("chat position projection", () => {
             (marker) => marker.anchorId,
           );
         expect(anchors()).toEqual(["question", "response"]);
-        response.content = "<thinking>Private planning</thinking>";
-        props.messages = [...props.messages];
+        // History owners publish edited messages as replacements, keeping the retained question.
+        props.messages = [question, response("<thinking>Private planning</thinking>")];
         expect(anchors()).toEqual(["question"]);
-        response.content = "The visible answer is ready";
-        props.messages = [...props.messages];
+        props.messages = [question, response("The visible answer is ready")];
         expect(anchors()).toEqual(["question", "response"]);
         return html``;
       });

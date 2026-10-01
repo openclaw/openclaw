@@ -42,20 +42,16 @@ async function scoreStorageRoot(rootDir: string, metadata: MatrixStorageMetadata
   if (metadata.currentTokenStateClaimed === true) {
     score += 8;
   }
-  if (fs.existsSync(path.join(rootDir, "crypto"))) {
-    score += 8;
-  }
-  if (fs.existsSync(path.join(rootDir, THREAD_BINDINGS_FILENAME))) {
-    score += 4;
-  }
-  if (fs.existsSync(path.join(rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME))) {
-    score += 3;
-  }
-  if (fs.existsSync(path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME))) {
-    score += 2;
-  }
-  if (fs.existsSync(path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME))) {
-    score += 2;
+  for (const [filename, weight] of [
+    ["crypto", 8],
+    [THREAD_BINDINGS_FILENAME, 4],
+    [MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME, 3],
+    [MATRIX_RECOVERY_KEY_FILENAME, 2],
+    [MATRIX_IDB_SNAPSHOT_FILENAME, 2],
+  ] as const) {
+    if (fs.existsSync(path.join(rootDir, filename))) {
+      score += weight;
+    }
   }
   score += await scoreMatrixCryptoStateInStore(rootDir);
   return score;
@@ -99,8 +95,7 @@ function isCompatibleStorageRoot(params: {
   homeserver: string;
   userId: string;
   accountKey: string;
-  deviceId?: string | null;
-  requireExplicitDeviceMatch?: boolean;
+  deviceId: string;
 }): boolean {
   const { metadata } = params;
   if (metadata.homeserver && metadata.homeserver !== params.homeserver) {
@@ -115,22 +110,8 @@ function isCompatibleStorageRoot(params: {
   ) {
     return false;
   }
-  if (
-    params.deviceId &&
-    metadata.deviceId &&
-    metadata.deviceId.trim() &&
-    metadata.deviceId.trim() !== params.deviceId.trim()
-  ) {
-    return false;
-  }
-  if (
-    params.requireExplicitDeviceMatch &&
-    params.deviceId &&
-    (!metadata.deviceId || metadata.deviceId.trim() !== params.deviceId.trim())
-  ) {
-    return false;
-  }
-  return true;
+  // Sibling reuse requires the same confirmed device across token rotations.
+  return metadata.deviceId?.trim() === params.deviceId.trim();
 }
 
 async function resolvePreferredMatrixStorageRoot(params: {
@@ -211,9 +192,6 @@ async function resolvePreferredMatrixStorageRoot(params: {
         userId: params.userId,
         accountKey: params.accountKey,
         deviceId,
-        // Once auth resolves a concrete device, only sibling roots that explicitly
-        // declare that same device are safe to reuse across token rotations.
-        requireExplicitDeviceMatch: true,
       })
     ) {
       continue;
@@ -238,12 +216,7 @@ async function resolvePreferredMatrixStorageRoot(params: {
         candidate.score === best.score &&
         candidate.mtimeMs > best.mtimeMs)
     ) {
-      best = {
-        rootDir: candidate.rootDir,
-        tokenHash: candidate.tokenHash,
-        score: candidate.score,
-        mtimeMs: candidate.mtimeMs,
-      };
+      best = candidate;
     }
   }
 

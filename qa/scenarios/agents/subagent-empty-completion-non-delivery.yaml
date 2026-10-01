@@ -22,20 +22,21 @@ scenario:
   successCriteria:
     - The child completes successfully after one real write tool side effect.
     - The requester receives one visible parent acknowledgement.
-    - The lifecycle owner records delivery as not applicable.
+    - The lifecycle owner records delivery as intentionally not required.
     - The requester receives no terminal message before or after Gateway restart.
   docsRefs:
     - docs/tools/subagents.md
     - docs/help/testing.md
     - docs/channels/qa-channel.md
   codeRefs:
+    - extensions/qa-lab/src/execution-identity-storage-inspection.ts
     - src/agents/agent-run-terminal-reply.ts
     - src/agents/subagents/registry/subagent-registry-lifecycle-completion.ts
   execution:
     kind: flow
     providerMode: mock-openai
     retryCount: 0
-    summary: Exercise successful empty terminal output through mock provider, ephemeral Gateway, SQLite task state, and QA channel capture.
+    summary: Exercise successful empty terminal output through mock provider, ephemeral Gateway, native subagent state, and QA channel capture.
     config:
       requiredProviderMode: mock-openai
       metadataSentinel: QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK
@@ -56,13 +57,13 @@ flow:
           args:
             - ref: env
             - 120000
-        - set: readEmptyTask
+        - set: readEmptyRun
           value:
             lambda:
               params:
-                - taskId
+                - runId
               async: true
-              expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks?.find((task) => task.title === 'qa-terminal-empty' && (!taskId || task.taskId === taskId))"
+              expr: "(await readNativeQaSubagentRuns(env)).find((run) => run.label === 'qa-terminal-empty' && (!runId || run.runId === runId))"
         - set: startIndex
           value:
             expr: "state.getSnapshot().messages.length"
@@ -83,17 +84,17 @@ flow:
             senderName: QA Empty Reply Operator
             text: "Subagent terminal reply QA check: empty. Spawn one native worker, reply to the requester after spawning, then finish without waiting. Do not use ACP."
         - call: waitForCondition
-          saveAs: emptyTask
+          saveAs: emptyRun
           args:
             - lambda:
                 async: true
-                expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const task = await readEmptyTask(); return task?.status === 'completed' ? task : undefined; })().catch(() => undefined)"
+                expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const run = await readEmptyRun(); return run?.execution.status === 'terminal' ? run : undefined; })().catch(() => undefined)"
             - 60000
             - 250
         - assert:
-            expr: "emptyTask.terminalOutcome === 'succeeded' && emptyTask.deliveryStatus === 'not_applicable'"
+            expr: "emptyRun.execution.outcome?.status === 'ok' && emptyRun.delivery?.status === 'not_required' && emptyRun.delivery.disposition === 'intentional_non_delivery'"
             message:
-              expr: "`empty completion did not close at its lifecycle owner: ${JSON.stringify(emptyTask)}`"
+              expr: "`empty completion did not close at its lifecycle owner: ${JSON.stringify(emptyRun)}`"
         - call: waitForCondition
           saveAs: requesterAcknowledgements
           args:
@@ -150,11 +151,11 @@ flow:
             - ref: env
             - 180000
         - call: waitForCondition
-          saveAs: restoredTask
+          saveAs: restoredRun
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const task = await readEmptyTask(emptyTask.taskId); return task?.status === 'completed' && task.terminalOutcome === 'succeeded' && task.deliveryStatus === 'not_applicable' ? task : undefined; })().catch(() => undefined)"
+                expr: "(async () => { const run = await readEmptyRun(emptyRun.runId); return run?.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'not_required' && run.delivery.disposition === 'intentional_non_delivery' ? run : undefined; })().catch(() => undefined)"
             - 60000
             - 250
         - set: postRestartOutbound
@@ -167,11 +168,11 @@ flow:
           value:
             expr: "postRestartRequests.filter((request) => String(request.raw ?? '').includes('[Internal task completion event]') || request.plannedToolArgs?.message === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
         - assert:
-            expr: "restoredTask?.taskId === emptyTask.taskId && restoredTask?.status === 'completed' && restoredTask?.terminalOutcome === 'succeeded' && restoredTask?.deliveryStatus === 'not_applicable'"
+            expr: "restoredRun?.runId === emptyRun.runId && restoredRun?.execution.status === 'terminal' && restoredRun.execution.outcome?.status === 'ok' && restoredRun.delivery?.status === 'not_required' && restoredRun.delivery.disposition === 'intentional_non_delivery'"
             message:
-              expr: "`empty completion lost its terminal state after restart: ${JSON.stringify({ expectedTaskId: emptyTask.taskId, taskId: restoredTask?.taskId, status: restoredTask?.status, terminalOutcome: restoredTask?.terminalOutcome, deliveryStatus: restoredTask?.deliveryStatus })}`"
+              expr: "`empty completion lost its terminal state after restart: ${JSON.stringify({ expectedRunId: emptyRun.runId, runId: restoredRun?.runId, status: restoredRun?.execution.status, terminalOutcome: restoredRun?.execution.outcome?.status, deliveryStatus: restoredRun?.delivery?.status })}`"
         - assert:
             expr: "postRestartCompletionRequests.length === 0 && postRestartOutbound.every((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED' && !String(message.text ?? '').includes(config.metadataSentinel) && String(message.text ?? '').trim() !== 'NO_REPLY')"
             message:
               expr: "`Gateway restart retried or exposed empty completion: requests=${JSON.stringify(postRestartRequests)} outbound=${JSON.stringify(postRestartOutbound)}`"
-      detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterAcknowledgements.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutboundHistory.map((message) => String(message.text ?? '')), postRestartProviderRequestCount: postRestartRequests.length, postRestartCompletionRequestCount: postRestartCompletionRequests.length, providerMode: env.providerMode, pass: true }, null, 2)"
+      detailsExpr: "JSON.stringify({ runId: emptyRun.runId, execution: emptyRun.execution, delivery: emptyRun.delivery, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterAcknowledgements.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutboundHistory.map((message) => String(message.text ?? '')), postRestartProviderRequestCount: postRestartRequests.length, postRestartCompletionRequestCount: postRestartCompletionRequests.length, providerMode: env.providerMode, pass: true }, null, 2)"

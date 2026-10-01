@@ -95,6 +95,7 @@ describe("probeGatewayStatus", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
     expect(probeGatewayMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:19191",
+      configuredRemote: false,
       auth: {
         token: "temp-token",
         password: undefined,

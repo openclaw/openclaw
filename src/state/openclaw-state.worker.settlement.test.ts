@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, readFileSync, unlinkSync } from "node:fs";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -46,17 +46,79 @@ it("rechecks a foreign commit before the next worker operation", async () => {
 });
 
 it("retires an existing-only idle actor without opening its missing database", async () => {
+  const databasePath = openOpenClawStateDatabase().path;
+  await closeOpenClawStateDatabaseAsync();
   const context = captureOpenClawStateWorkerContext();
   const backend = runWithSqliteWorkerStateContext(context, () =>
-    openExistingSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+    openExistingSqliteWorkerBackend(undefined, {
+      databasePath,
+      existingIdentity: context.admission.identity.key,
+    }),
   );
+  unlinkSync(databasePath);
   try {
-    expect(backend.execute({ type: "database.inspectIdle", input: undefined })).toBe("retire");
+    expect(
+      runWithSqliteWorkerStateContext(context, () =>
+        backend.execute({ type: "database.inspectIdle", input: undefined }),
+      ),
+    ).toBe("retire");
     expect(existsSync(context.admission.databasePath)).toBe(false);
   } finally {
     await backend.close();
   }
 });
+
+it.each(["removed", "replaced"] as const)(
+  "refuses a lazy actor's %s original locator even while a hardlink survives",
+  async (kind) => {
+    const databasePath = openOpenClawStateDatabase().path;
+    await closeOpenClawStateDatabaseAsync();
+    const alias = state.statePath("retained.sqlite");
+    linkSync(databasePath, alias);
+    const original = readFileSync(alias);
+    const context = captureOpenClawStateWorkerContext();
+    const backend = runWithSqliteWorkerStateContext(context, () =>
+      openExistingSqliteWorkerBackend(undefined, {
+        databasePath,
+        existingIdentity: context.admission.identity.key,
+      }),
+    );
+    unlinkSync(databasePath);
+    if (kind === "replaced") {
+      copyFileSync(alias, databasePath);
+    }
+    try {
+      for (const command of [
+        {
+          type: "stateLease.verify",
+          input: { identity: { scope: "fixture", key: "lease", owner: "owner" } },
+        },
+        {
+          type: "stateLease.acquire",
+          input: {
+            identity: { scope: "fixture", key: "lease", owner: "owner" },
+            leaseMs: 300_000,
+            operationLabel: "fixture",
+            schemaPolicy: "existing",
+          },
+        },
+        { type: "deviceIdentity.load", input: { identityKey: "fixture" } },
+      ] as const) {
+        expect(() =>
+          runWithSqliteWorkerStateContext(context, () => backend.execute(command)),
+        ).toThrow(kind === "removed" ? /ENOENT/ : /identity changed/);
+        expect(readFileSync(alias)).toEqual(original);
+        if (kind === "removed") {
+          expect(existsSync(databasePath)).toBe(false);
+        } else {
+          expect(readFileSync(databasePath)).toEqual(original);
+        }
+      }
+    } finally {
+      await backend.close();
+    }
+  },
+);
 
 it("does not checkpoint a retained existing-schema actor during idle inspection", async () => {
   const databasePath = openOpenClawStateDatabase().path;

@@ -288,14 +288,11 @@ export async function readClaudeDesktopCustomGroups(
     return cached.assignments;
   }
   const levelDbValues = new Map<string, LevelDbValue>();
-  const logRecords: ParsedGroups = { groups: new Map(), assignments: new Map() };
+  const parsed: ParsedGroups = { groups: new Map(), assignments: new Map() };
   let remainingBytes = MAX_LEVELDB_TOTAL_BYTES;
   let complete = true;
   for (const file of files
-    .filter(
-      (candidate): candidate is { filePath: string; mtimeMs: number; size: number } =>
-        candidate !== undefined,
-    )
+    .filter((candidate) => candidate !== undefined)
     .toSorted(
       (left, right) => right.mtimeMs - left.mtimeMs || right.filePath.localeCompare(left.filePath),
     )
@@ -310,7 +307,7 @@ export async function readClaudeDesktopCustomGroups(
       continue;
     }
     if (!file.filePath.endsWith(".ldb")) {
-      scanGroupRecords(raw, logRecords);
+      scanGroupRecords(raw, parsed);
       continue;
     }
     try {
@@ -325,10 +322,6 @@ export async function readClaudeDesktopCustomGroups(
   // The write-ahead log holds writes that have not been flushed into an SSTable yet, so
   // it seeds the result first and wins on conflict. It is scanned raw rather than replayed,
   // so its own internal ordering stays best-effort; SSTables then fill in the rest.
-  const parsed: ParsedGroups = {
-    groups: new Map(logRecords.groups),
-    assignments: new Map(logRecords.assignments),
-  };
   for (const { value } of levelDbValues.values()) {
     scanGroupRecords(value, parsed);
   }

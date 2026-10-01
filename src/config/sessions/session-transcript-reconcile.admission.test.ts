@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sqlite from "../../infra/node-sqlite.js";
-import * as integrity from "../../infra/sqlite-integrity-worker.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -79,7 +79,10 @@ it("waits for a cold projection without superseding its native integrity admissi
       const prepare = database.prepare.bind(database);
       database.prepare = (sql) => {
         const statement = prepare(sql);
-        if (sql === "PRAGMA integrity_check;") {
+        if (
+          sql === "PRAGMA integrity_check;" ||
+          sql === "PRAGMA integrity_check('sqlite_schema');"
+        ) {
           const all = statement.all.bind(statement);
           statement.all = () => {
             parentChecks += 1;
@@ -92,12 +95,16 @@ it("waits for a cold projection without superseding its native integrity admissi
     return database;
   });
   const entered = createDeferred();
-  const check = integrity.assertSqliteIntegrityInWorker;
-  vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation((...args) => {
-    const result = check(...args);
-    entered.resolve();
-    return result;
-  });
+  const createAdmission = admission.createSqliteWorkerOperationAdmission;
+  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+    (admit, attachment) =>
+      createAdmission((request, grant) => {
+        if (request.stage === "open") {
+          entered.resolve();
+        }
+        admit(request, grant);
+      }, attachment),
+  );
   startSessionTranscriptIndexReconcile(options);
   await entered.promise;
   await waitForSessionTranscriptProjection(scope);

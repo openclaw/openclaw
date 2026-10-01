@@ -20,10 +20,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 
-export function flushSessionManagerTranscript(sessionManager: AttemptSessionManager): void {
-  sessionManager.flushPendingPersistence();
-}
-
 export function removeTrailingMidTurnPrecheckAssistantError(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
   sessionManager: AttemptSessionManager;

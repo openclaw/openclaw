@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, expect, it, vi } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import {
   ciCheckoutFixture,
   expectCiCheckoutCleanup,
@@ -47,6 +47,7 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
     "/scripts/lib/pnpm-lockfile-documents.mjs",
     "/scripts/ios-screenshot-evidence.mjs",
     "/scripts/lib/direct-run.mjs",
+    "/scripts/ci-static-step.sh",
     ...(linux
       ? [
           "/scripts/lib/release-upgrade-baseline.mjs",
@@ -57,7 +58,7 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
           "/scripts/changed-lanes.mts",
           "/scripts/lib/merge-head-diff-base.mjs",
         ]
-      : ["/scripts/lib/swift-toolchain.sh"]),
+      : ["/scripts/lib/swift-toolchain.sh", "/scripts/lib/ci-ios-smoke-plan.mjs"]),
   ];
 }
 
@@ -137,10 +138,44 @@ it.concurrent.each([
           path.join(root, "checkout.sh"),
           setupFailure ? "printf 'unexpected workflow invocation\\n' >&2\nexit 99\n" : accelerated,
         );
-        if (process.platform === "win32") {
+        if (process.platform === "win32" || scenario === "git-exit-124") {
           return censusPreload(
             root,
-            "",
+            scenario === "git-exit-124"
+              ? String.raw`
+if (process.argv[2] === "supervise") {
+  const launch = cp.spawn;
+  cp.spawn = (...args) => {
+    const child = launch(...args);
+    if (args[1]?.[1] === "sentinel") {
+      child.kill = () => true;
+      child.once("close", (code, signal) => {
+        fs.writeFileSync(path.join(root, "lease-actor-close.json"), JSON.stringify({ code, signal }));
+      });
+    }
+    return child;
+  };
+}
+if (process.argv[2] === "sentinel") {
+  const read = fs.readFileSync;
+  fs.readFileSync = (filename, ...args) => {
+    try {
+      return read(filename, ...args);
+    } catch (error) {
+      if (filename === path.join(root, "lease") && ["ENOENT", "EPERM"].includes(error.code)) {
+        fs.writeFileSync(path.join(root, "lease-read-denied.json"), JSON.stringify("EPERM"));
+        error.code = "EPERM";
+      }
+      throw error;
+    }
+  };
+  // Loaded macOS hosts can drop FSEvents directory notifications entirely.
+  const watch = fs.watch;
+  fs.watch = (target, ...args) => (target === root ? { close() {} } : watch(target, ...args));
+}
+syncFixtureBuiltinExports();
+`
+              : "",
             ["timeouts-exhausted", "recovery", "early-leader-exit", "harness-timeout"].includes(
               scenario,
             ),
@@ -190,6 +225,15 @@ it.concurrent.each([
         }
         if (scenario === "git-exit-124") {
           expect(report.output).toBe("");
+          expect(JSON.parse(readFileSync(path.join(root, "lease-read-denied.json"), "utf8"))).toBe(
+            "EPERM",
+          );
+          expect(
+            JSON.parse(readFileSync(path.join(root, "lease-actor-close.json"), "utf8")),
+          ).toEqual({
+            code: 0,
+            signal: null,
+          });
         }
         const readyAttempts =
           scenario === "pre-existing-lock" ? [] : Array.from({ length: attempts }, (_, i) => i + 1);
@@ -351,6 +395,7 @@ it.concurrent.each([
     const evidenceScripts = {
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
+      "scripts/ci-static-step.sh": "workflow static-step script\n",
     };
     const nodeSetupScripts = {
       "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(
@@ -360,6 +405,15 @@ it.concurrent.each([
     };
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
+    };
+    const preflightScripts = {
+      "scripts/ci-build-manifest.mjs": readFileSync("scripts/ci-build-manifest.mjs", "utf8"),
+    };
+    const simulatorScripts = {
+      "scripts/lib/ci-ios-smoke-plan.mjs": readFileSync(
+        "scripts/lib/ci-ios-smoke-plan.mjs",
+        "utf8",
+      ),
     };
     const releasePolicy = Object.fromEntries(
       [
@@ -432,6 +486,8 @@ it.concurrent.each([
           ...evidenceScripts,
           ...nodeSetupScripts,
           ...platformScripts,
+          ...preflightScripts,
+          ...simulatorScripts,
           ...releasePolicy,
           ...candidateFiles,
         })) {
@@ -612,6 +668,21 @@ it.concurrent.each([
         for (const [name, contents] of Object.entries(platformScripts)) {
           expect(existsSync(path.join(harness, name)), name).toBe(kind === "platform");
           if (kind === "platform") {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
+        }
+        for (const [name, contents] of Object.entries(preflightScripts)) {
+          expect(existsSync(path.join(harness, name)), name).toBe(preflight);
+          if (preflight) {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
+        }
+        for (const [name, contents] of Object.entries(simulatorScripts)) {
+          const ownsSimulator = preflight || kind === "platform";
+          expect(existsSync(path.join(harness, name)), name).toBe(ownsSimulator);
+          if (ownsSimulator) {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+            writeFileSync(path.join(workspace, name), "throw new Error('candidate planner');\n");
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
           }
         }
@@ -886,7 +957,8 @@ process.exitCode = 1;
         expect(readFileSync(path.join(evidence.root, "report.json"), "utf8")).toBe("null");
       }
     } finally {
-      await Promise.all(evidence.pids.map((pid) => waitForDead(pid, 4_000)));
+      // Completion already joined the outer group; the fixture joined its detached owners.
+      expect(evidence.pids.every((pid) => !isProcessAlive(pid))).toBe(true);
       rmSync(evidence.root, { recursive: true, force: true });
     }
   },
@@ -1380,12 +1452,10 @@ owner.main()
   ]);
 });
 
-it.each(
-  ["raises", "malformed traceback"].flatMap((fault) =>
-    [false, true].map((cyclic) => ({ fault, cyclic })),
-  ),
-)("keeps terminal exit 125 with $fault metadata (cyclic=$cyclic)", ({ fault, cyclic }) => {
-  const { diagnostic } = runOwnerDiagnostic(`
+it.each(["raises", "malformed traceback"])(
+  "keeps terminal exit 125 with %s metadata and cyclic context",
+  (fault) => {
+    const { diagnostic } = runOwnerDiagnostic(`
 class BrokenMetadata(Exception):
     def __getattribute__(self, name):
         if name == "errno" and ${JSON.stringify(fault)} == "raises":
@@ -1394,12 +1464,12 @@ class BrokenMetadata(Exception):
             return self
         return super().__getattribute__(name)
 error = BrokenMetadata(secret)
-if ${cyclic ? "True" : "False"}:
-    error.__context__ = error
+error.__context__ = error
 raise error
 `);
-  expect(diagnostic).toBe("unavailable");
-});
+    expect(diagnostic).toBe("unavailable");
+  },
+);
 
 it.each([...(process.platform === "win32" ? ["setup"] : []), "launch", "timeout-drain"])(
   "distinguishes terminal diagnostic failure sites: %s",

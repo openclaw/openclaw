@@ -48,6 +48,7 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state
 import * as sqliteWorker from "./sqlite-readonly-worker.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "./sqlite-worker-contract.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
+import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 
 const PROVIDER = "auth-runtime-fixture";
 const PROFILE_ID = `${PROVIDER}:default`;
@@ -251,9 +252,21 @@ describe("model resolution auth row snapshots", () => {
           try {
             const resolve = modelResolver(state);
             expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
+            const beforePublication = await readUpdateDatabaseGenerationsIsolated([databasePath], {
+              env: state.env,
+            });
             fs.writeSync(sharedMemory, committedHeader, 0, committedHeader.length, 0);
             expect(walStamp()).toEqual(writtenWal);
+            const afterPublication = await readUpdateDatabaseGenerationsIsolated([databasePath], {
+              env: state.env,
+            });
+            expect(afterPublication[databasePath]).not.toBe(beforePublication[databasePath]);
+            expect(afterPublication[databasePath]).toMatch(/^[a-f0-9]{64}$/u);
             expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
+            fs.writeSync(sharedMemory, previousHeader, 0, 48, 0);
+            await expect(
+              readUpdateDatabaseGenerationsIsolated([databasePath], { env: state.env }),
+            ).rejects.toThrow(/WAL commit header is unavailable or changing/);
           } finally {
             fs.writeSync(sharedMemory, committedHeader, 0, committedHeader.length, 0);
           }

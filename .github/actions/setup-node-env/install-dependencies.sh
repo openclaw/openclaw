@@ -21,10 +21,13 @@ install_args=(
   --config.enable-pre-post-scripts=true
   --config.side-effects-cache=true
 )
-if [ "$DEPENDENCY_CACHE" = "true" ]; then
-  # Both trees live below the workspace. Prefer real hard links so the
-  # single cache archive can preserve store/package identity; pnpm
-  # safely falls back to copies for files it cannot hard-link.
+if [ "$DEPENDENCY_CACHE" = "true" ] || {
+  [ "${RUNNER_OS:-}" = "Linux" ] &&
+    [ "${PNPM_CONFIG_STORE_DIR:-}" = "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store" ]
+}; then
+  # This store belongs to one job, so imports cannot change a sibling install's
+  # inodes. Avoid copying the restored store on Linux filesystems without clones;
+  # exact archives also preserve these links. Pnpm falls back to copies as needed.
   export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=hardlink
 fi
 if [ -n "$LOCKFILE_FLAG" ]; then

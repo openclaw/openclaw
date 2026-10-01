@@ -25,6 +25,7 @@ export async function resolveAgentRuntimePrompt(params: {
   channel?: string;
   accountId?: string | null;
   chatType?: ChatType;
+  requesterProfileId?: string;
 }) {
   const runtimeChannel = normalizeMessageChannel(params.channel);
   const channelPromptContext = {
@@ -45,7 +46,7 @@ export async function resolveAgentRuntimePrompt(params: {
     agentId: params.agentId,
   });
   const machineName = await getMachineDisplayName();
-  await prepareActiveNodeContext();
+  await prepareActiveNodeContext(params.requesterProfileId);
   const preparedGitCoauthorPrompt = Object.hasOwn(params, "preparedGitCoauthorPrompt")
     ? params.preparedGitCoauthorPrompt
     : await resolveSessionGitCoauthorPrompt({
@@ -63,6 +64,7 @@ export async function resolveAgentRuntimePrompt(params: {
       ? { preparedRepoRoot: params.preparedRepoRoot }
       : {}),
     preparedGitCoauthorPrompt,
+    requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,

@@ -143,18 +143,14 @@ function catalogRowRef(
   };
 }
 
-function renderSessionRunSpinner(showTitle = true) {
-  return html`<span
-    class="session-run-spinner"
-    role="img"
-    aria-label=${t("sessionsView.activeRun")}
-    title=${showTitle ? t("sessionsView.activeRun") : nothing}
-  ></span>`;
-}
-
 function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
   if (hasActiveRun) {
-    return renderSessionRunSpinner();
+    return html`<span
+      class="session-run-spinner"
+      role="img"
+      aria-label=${t("sessionsView.activeRun")}
+      title=${t("sessionsView.activeRun")}
+    ></span>`;
   }
   return hasUnread
     ? html`<span
@@ -366,18 +362,6 @@ function renderCatalogHostGroup(
       : params.projectGrouping === "person"
         ? groupCatalogSessionsByPerson(host.sessions)
         : null;
-  const renderRows = (sessions: readonly SessionCatalogSession[], projectChild = false) =>
-    repeat(
-      sessions,
-      (session) =>
-        buildCatalogSessionKey({
-          catalogId: catalog.id,
-          hostId: host.hostId,
-          threadId: session.threadId,
-        }),
-      (session) =>
-        renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params, projectChild),
-    );
   const renderVisibleRows = (
     sessions: readonly SessionCatalogSession[],
     sectionId: string,
@@ -386,9 +370,16 @@ function renderCatalogHostGroup(
     const expanded =
       (params.visibleSessionLimits.get(sectionId) ?? CATALOG_SESSION_GROUP_LIMIT) >
       CATALOG_SESSION_GROUP_LIMIT;
-    return renderRows(
+    return repeat(
       expanded ? sessions : sessions.slice(0, CATALOG_SESSION_GROUP_LIMIT),
-      projectChild,
+      (session) =>
+        buildCatalogSessionKey({
+          catalogId: catalog.id,
+          hostId: host.hostId,
+          threadId: session.threadId,
+        }),
+      (session) =>
+        renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params, projectChild),
     );
   };
   const renderPagination = (sessions: readonly SessionCatalogSession[], sectionId: string) => {
@@ -445,7 +436,7 @@ function renderCatalogHostGroup(
       <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
         ${
           projectGroups
-            ? html`${repeat(
+            ? repeat(
                 projectGroups.groups,
                 (group) => group.key,
                 (group) => {
@@ -492,10 +483,10 @@ function renderCatalogHostGroup(
                     </div>
                   `;
                 },
-              )}
-              ${renderVisibleRows(flatSessions, flatSectionId)}`
-            : renderVisibleRows(flatSessions, flatSectionId)
+              )
+            : nothing
         }
+        ${renderVisibleRows(flatSessions, flatSectionId)}
       </div>
       ${renderPagination(flatSessions, flatSectionId)}
     </section>
@@ -540,6 +531,7 @@ function renderCatalogSessionRow(
     canOpenTerminal: session.canOpenTerminal === true,
     canDelete: session.canArchive && catalog.capabilities.archive,
     name: session.name ?? session.threadId,
+    displayName: session.name,
     meta,
   };
   const menuOpen = params.isMenuOpen(catalogKey);

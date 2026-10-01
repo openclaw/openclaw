@@ -87,25 +87,22 @@ describe("execution owner binding settlement", () => {
     }
   });
 
-  it.each(["wrapper", "source"] as const)(
-    "rejects admission when the %s closes during binding persistence",
-    async (closedOwner) => {
-      const source = prepareSource(`binding-close-${closedOwner}`);
-      const entered = createDeferred();
-      const durable = createDeferred();
-      const owner = withPostAdmissionExecutionOwnerBinding(source, async () => {
-        entered.resolve();
-        await durable.promise;
-      });
-      try {
-        const pending = owner.admit("gateway");
-        await entered.promise;
-        (closedOwner === "wrapper" ? owner : source).close();
-        durable.resolve();
-        await expect(pending).rejects.toThrow("authority is no longer active");
-      } finally {
-        source.close();
-      }
-    },
-  );
+  it("rejects admission when the owner closes during binding persistence", async () => {
+    const source = prepareSource("binding-close");
+    const entered = createDeferred();
+    const durable = createDeferred();
+    const owner = withPostAdmissionExecutionOwnerBinding(source, async () => {
+      entered.resolve();
+      await durable.promise;
+    });
+    try {
+      const pending = owner.admit("gateway");
+      await entered.promise;
+      owner.close();
+      durable.resolve();
+      await expect(pending).rejects.toThrow("authority is no longer active");
+    } finally {
+      source.close();
+    }
+  });
 });

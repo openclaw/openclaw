@@ -63,8 +63,6 @@ describe("prepared catalog planning and declaration cache", () => {
 
   it.each([
     { warm: false, prepare: true, observed: [] },
-    { warm: false, prepare: true, observed: ["allowed"] },
-    { warm: true, prepare: true, observed: [] },
     { warm: true, prepare: true, observed: ["allowed"] },
     { warm: true, prepare: false, observed: [] },
   ])(

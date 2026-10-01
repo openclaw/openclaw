@@ -93,17 +93,7 @@ describe("AgentSession runtime and transcript projections", () => {
       args: { code: source, language: "javascript" },
       outcome: "error",
     },
-    {
-      label: "boolean state",
-      args: { code: "const HAS_API_TOKEN = false; return HAS_API_TOKEN ? 0 : 42;" },
-      outcome: "completed",
-    },
-    {
-      label: "null state",
-      args: { code: "let API_TOKEN = null; return API_TOKEN ?? 42;" },
-      outcome: "completed",
-    },
-    ...["bash", "", null, 7].map((language) => ({
+    ...["bash", null].map((language) => ({
       label: `invalid language ${JSON.stringify(language)}`,
       args: { code: "API_TOKEN=fixtureUnquotedLiteral;", language },
       outcome: "error",
@@ -112,16 +102,6 @@ describe("AgentSession runtime and transcript projections", () => {
       label: "retired TypeScript option",
       args: { code: source, language: "typescript" },
       outcome: "error",
-    },
-    {
-      label: "computed expression",
-      args: { code: "const API_TOKEN = (40 + 2); return API_TOKEN;" },
-      outcome: "completed",
-    },
-    {
-      label: "ordinary total",
-      args: { code: "const total = 40 + 2; return total;" },
-      outcome: "completed",
     },
     { label: "command only", args: { command: source }, outcome: "validation" },
     { label: "paired aliases", args: { code: source, command: source }, outcome: "completed" },

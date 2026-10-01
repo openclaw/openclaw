@@ -1,8 +1,11 @@
-// Resolves and packages install sources for plugin installs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNullableObjectRecord,
+  asRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   gt as gtSemver,
@@ -14,6 +17,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
+import { resolveNpmCommand } from "./npm-command.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import {
   isExactSemverVersion,
@@ -95,11 +99,14 @@ export async function loadNpmPackageVersions({
   signal?: AbortSignal;
   killProcessTree?: boolean;
 }): Promise<string[] | null> {
-  const versions = await runCommandWithTimeout(["npm", "view", packageName, "versions", "--json"], {
-    ...commandOptions,
-    timeoutMs: Math.max(timeoutMs ?? 0, 60_000),
-    env: createNpmMetadataEnv(),
-  });
+  const versions = await runCommandWithTimeout(
+    resolveNpmCommand(["view", packageName, "versions", "--json"]),
+    {
+      ...commandOptions,
+      timeoutMs: Math.max(timeoutMs ?? 0, 60_000),
+      env: createNpmMetadataEnv(),
+    },
+  );
   if (versions.code !== 0) {
     return null;
   }
@@ -124,7 +131,7 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
   if (!Array.isArray(value)) {
     return value;
   }
-  const entries = value.filter((entry) => isRecord(entry) && !Array.isArray(entry));
+  const entries = value.filter(isRecord);
   if (entries.length === 1 && parseRegistryNpmSpec(spec)?.selectorKind === "tag") {
     // npm resolves literal tags before ranges; npm 12 wraps that single result.
     // Rechecking a semver-like tag against its spelling would reject a valid tag target.
@@ -152,27 +159,25 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
   return entries.at(-1);
 }
 
-function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResolution | null {
+export function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResolution | null {
   // npm output varies by version, selector, and field projection. Multi-version
   // arrays follow publication order; selection above handles ranges and literal tags.
   const entry = selectNpmViewMetadataEntry(value, spec);
-  if (!isRecord(entry) || Array.isArray(entry)) {
+  if (!isRecord(entry)) {
     return null;
   }
-  const rec = entry;
-  const name = normalizeOptionalString(rec.name);
-  const version = normalizeOptionalString(rec.version);
+  const name = normalizeOptionalString(entry.name);
+  const version = normalizeOptionalString(entry.version);
   const resolvedSpec = name && version ? `${name}@${version}` : undefined;
-  const dist =
-    rec.dist && typeof rec.dist === "object" ? (rec.dist as Record<string, unknown>) : {};
+  const dist = asRecord(entry.dist);
   return {
     name,
     version,
     resolvedSpec,
     integrity:
-      normalizeOptionalString(rec["dist.integrity"]) ?? normalizeOptionalString(dist.integrity),
-    shasum: normalizeOptionalString(rec["dist.shasum"]) ?? normalizeOptionalString(dist.shasum),
-    ...(isRecord(rec.openclaw) ? { packageOpenClaw: rec.openclaw } : {}),
+      normalizeOptionalString(entry["dist.integrity"]) ?? normalizeOptionalString(dist.integrity),
+    shasum: normalizeOptionalString(entry["dist.shasum"]) ?? normalizeOptionalString(dist.shasum),
+    ...(isRecord(entry.openclaw) ? { packageOpenClaw: entry.openclaw } : {}),
   };
 }
 
@@ -195,8 +200,7 @@ export async function resolveNpmSpecMetadata(params: {
     }
 > {
   const res = await runCommandWithTimeout(
-    [
-      "npm",
+    resolveNpmCommand([
       "view",
       params.spec,
       "name",
@@ -205,7 +209,7 @@ export async function resolveNpmSpecMetadata(params: {
       "dist.shasum",
       "openclaw",
       "--json",
-    ],
+    ]),
     {
       timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
       signal: params.signal,
@@ -302,10 +306,10 @@ function parseResolvedSpecFromId(id: string): string | undefined {
 function normalizeNpmPackEntry(
   entry: unknown,
 ): { filename?: string; metadata: NpmSpecResolution } | null {
-  if (!entry || typeof entry !== "object") {
+  const rec = asNullableObjectRecord(entry);
+  if (!rec) {
     return null;
   }
-  const rec = entry as Record<string, unknown>;
   const name = normalizeOptionalString(rec.name);
   const version = normalizeOptionalString(rec.version);
   const id = normalizeOptionalString(rec.id);
@@ -395,15 +399,14 @@ export async function packNpmSpecToArchive(params: {
     }
 > {
   const res = await runCommandWithTimeout(
-    [
-      "npm",
+    resolveNpmCommand([
       "pack",
       params.spec,
       "--ignore-scripts",
       "--json",
       "--dry-run=false",
       `--pack-destination=${params.cwd}`,
-    ],
+    ]),
     {
       timeoutMs: resolveInstallWorkTimeoutMs(
         params.workTimeoutMs,
@@ -474,7 +477,7 @@ export async function resolveNpmPackArchiveMetadata(params: {
   const archiveMetadataTimeoutMs =
     archiveStat && archiveStat.size > 100 * 1024 * 1024 ? 300_000 : 60_000;
   const res = await runCommandWithTimeout(
-    ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"],
+    resolveNpmCommand(["pack", archivePath, "--ignore-scripts", "--dry-run", "--json"]),
     {
       timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
       signal: params.signal,

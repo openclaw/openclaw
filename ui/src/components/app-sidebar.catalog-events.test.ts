@@ -41,7 +41,10 @@ async function mountTab(
 
 describe("AppSidebar catalog event refresh", () => {
   beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
   it("keeps four stable tabs idle for five minutes and refreshes each once per catalog event", async () => {
     const tabs = [];
@@ -101,6 +104,7 @@ describe("AppSidebar catalog event refresh", () => {
   );
 
   it("paces a trailing event after a slow catalog request without overlapping reads", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const pending = deferred<ReturnType<typeof catalogPage>>();
     const request = createGatewayRequestMock()
       .mockResolvedValueOnce(catalogPage([]))
@@ -207,6 +211,7 @@ describe("AppSidebar catalog event refresh", () => {
   it.each(["hide", "remove"])(
     "retires a pending catalog retry when the sidebar must %s",
     async (action) => {
+      vi.spyOn(Math, "random").mockReturnValue(0);
       let visibility: DocumentVisibilityState = "visible";
       const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
       const request = createGatewayRequestMock()

@@ -1,8 +1,5 @@
-/**
- * Reports prompt pressure and owns explicit mid-turn recovery routing.
- */
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
-import type { AssembleResult } from "../../../context-engine/types.js";
+import type { AssembleResult, ContextEngine } from "../../../context-engine/types.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -14,9 +11,7 @@ import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
-import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
-import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
@@ -142,7 +137,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   appendOnlyRuntimeContext?: boolean;
   attempt: AttemptPromptPreflightParams &
     Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
-  activeContextEngine?: Pick<AttemptContextEngine, "info">;
+  activeContextEngine?: Pick<ContextEngine, "info">;
   compactionReplayEnabled: boolean;
   contextEngineAssemblySucceeded: boolean;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
@@ -160,8 +155,6 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
 }): Promise<AttemptPromptPreflightState> {
   const { attempt } = input;
-  let contextBudgetStatus = input.state.contextBudgetStatus;
-  const { skipPromptSubmission } = input.state;
   const boundaryOptions = {
     appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
     ...(input.timezone ? { timezone: input.timezone } : {}),
@@ -175,113 +168,98 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
           boundaryOptions,
         )
       : undefined;
-  let preemptiveCompaction: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt> | null = null;
-  if (!skipPromptSubmission) {
-    try {
-      preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
-        messages: input.hookMessagesForCurrentPrompt,
-        unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck,
-        systemPrompt: input.systemPrompt,
-        prompt: input.promptForPrecheck,
-        contextTokenBudget: input.contextTokenBudget,
-        reserveTokens: input.reserveTokens,
-        toolResultMaxChars: input.toolResultMaxChars,
-        ...(typeof input.toolSchemaTokens === "number"
-          ? { toolSchemaTokens: input.toolSchemaTokens }
-          : {}),
-        replay: {
-          model: attempt.model,
-          sessionId: attempt.sessionId,
-          authProfileId: resolveAttemptStreamAuthProfileId(attempt),
-          enabled: input.compactionReplayEnabled,
-        },
-      });
-    } catch (error) {
-      if (!(error instanceof CompactionReplayRefreshRequiredError)) {
-        throw error;
-      }
-      return {
-        ...input.state,
-        promptError: error,
-        promptErrorSource: "precheck",
-        skipPromptSubmission: true,
-      };
-    }
+  if (input.state.skipPromptSubmission) {
+    return { ...input.state };
   }
-  const shouldSkipPrecheck =
-    skipPromptSubmission ||
-    (input.contextEngineAssemblySucceeded &&
-      input.activeContextEngine?.info.ownsCompaction &&
-      input.contextEnginePromptAuthority !== "preassembly_may_overflow" &&
-      !preemptiveCompaction?.compactionReplay);
-
-  if (shouldSkipPrecheck && !skipPromptSubmission) {
-    log.info(
-      `[context-overflow-precheck] skipped: context engine "${input.activeContextEngine!.info.id}" owns compaction`,
-    );
-  }
-
-  if (shouldSkipPrecheck) {
-    preemptiveCompaction = null;
-  }
-  if (preemptiveCompaction) {
-    contextBudgetStatus = buildPrePromptContextBudgetStatus({
-      result: preemptiveCompaction,
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-      messageCount: input.sessionMessageCount,
+  let preemptiveCompaction: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>;
+  try {
+    preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
+      messages: input.hookMessagesForCurrentPrompt,
+      unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck,
+      systemPrompt: input.systemPrompt,
+      prompt: input.promptForPrecheck,
       contextTokenBudget: input.contextTokenBudget,
       reserveTokens: input.reserveTokens,
-      ...(attempt.sessionId ? { sessionId: attempt.sessionId } : {}),
-      ...(input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
-      input.unwindowedContextEngineMessagesForPrecheck
-        ? { unwindowedMessageCount: input.unwindowedContextEngineMessagesForPrecheck.length }
+      toolResultMaxChars: input.toolResultMaxChars,
+      ...(typeof input.toolSchemaTokens === "number"
+        ? { toolSchemaTokens: input.toolSchemaTokens }
         : {}),
+      replay: {
+        model: attempt.model,
+        sessionId: attempt.sessionId,
+        authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
+        enabled: input.compactionReplayEnabled,
+      },
     });
-    log.debug(
-      formatPrePromptPrecheckLog({
-        result: preemptiveCompaction,
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-        messageCount: input.sessionMessageCount,
-        contextTokenBudget: input.contextTokenBudget,
-        reserveTokens: input.reserveTokens,
-        ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-        ...(attempt.sessionId ? { sessionId: attempt.sessionId } : {}),
-        ...(input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
-        input.unwindowedContextEngineMessagesForPrecheck
-          ? { unwindowedMessageCount: input.unwindowedContextEngineMessagesForPrecheck.length }
-          : {}),
-        ...(attempt.sessionFile ? { sessionFile: attempt.sessionFile } : {}),
-      }),
+  } catch (error) {
+    if (!(error instanceof CompactionReplayRefreshRequiredError)) {
+      throw error;
+    }
+    return {
+      ...input.state,
+      promptError: error,
+      promptErrorSource: "precheck",
+      skipPromptSubmission: true,
+    };
+  }
+  if (
+    input.contextEngineAssemblySucceeded &&
+    input.activeContextEngine?.info.ownsCompaction &&
+    input.contextEnginePromptAuthority !== "preassembly_may_overflow" &&
+    !preemptiveCompaction.compactionReplay
+  ) {
+    log.info(
+      `[context-overflow-precheck] skipped: context engine "${input.activeContextEngine.info.id}" owns compaction`,
     );
-    const checkpointPressure = preemptiveCompaction.compactionReplay;
-    if (checkpointPressure && checkpointPressure.route !== "fits") {
-      // Only the actual canonical window can require recovery; the raw-history
-      // maximum above remains diagnostic even when it exceeds this window.
-      return {
-        ...input.state,
-        contextBudgetStatus,
-        preflightRecovery: {
-          route: checkpointPressure.route,
-          ...buildPreflightRecoveryBudgetSnapshot(checkpointPressure),
-        },
-        promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
-        promptErrorSource: "precheck",
-        skipPromptSubmission: true,
-      };
-    }
-    if (preemptiveCompaction.route !== "fits") {
-      // This pressure estimate is diagnostic only; it never compacts or discards history.
-      // Real compaction runs through explicit preflight or provider-overflow recovery.
-      log.info(
-        `[context-pressure-diagnostic] admitted provider attempt for ` +
-          `${attempt.provider}/${attempt.modelId} route=${preemptiveCompaction.route} ` +
-          `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
-          `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve}`,
-      );
-    }
+    return { ...input.state };
   }
 
+  const precheckSummary = {
+    result: preemptiveCompaction,
+    provider: attempt.provider,
+    modelId: attempt.modelId,
+    messageCount: input.sessionMessageCount,
+    contextTokenBudget: input.contextTokenBudget,
+    reserveTokens: input.reserveTokens,
+    ...(attempt.sessionId ? { sessionId: attempt.sessionId } : {}),
+    ...(input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
+    input.unwindowedContextEngineMessagesForPrecheck
+      ? { unwindowedMessageCount: input.unwindowedContextEngineMessagesForPrecheck.length }
+      : {}),
+  };
+  const contextBudgetStatus = buildPrePromptContextBudgetStatus(precheckSummary);
+  log.debug(
+    formatPrePromptPrecheckLog({
+      ...precheckSummary,
+      ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
+      ...(attempt.sessionFile ? { sessionFile: attempt.sessionFile } : {}),
+    }),
+  );
+  const checkpointPressure = preemptiveCompaction.compactionReplay;
+  if (checkpointPressure && checkpointPressure.route !== "fits") {
+    // Only the actual canonical window can require recovery; the raw-history
+    // maximum above remains diagnostic even when it exceeds this window.
+    return {
+      ...input.state,
+      contextBudgetStatus,
+      preflightRecovery: {
+        route: checkpointPressure.route,
+        ...buildPreflightRecoveryBudgetSnapshot(checkpointPressure),
+      },
+      promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
+      promptErrorSource: "precheck",
+      skipPromptSubmission: true,
+    };
+  }
+  if (preemptiveCompaction.route !== "fits") {
+    // This pressure estimate is diagnostic only; it never compacts or discards history.
+    // Real compaction runs through explicit preflight or provider-overflow recovery.
+    log.info(
+      `[context-pressure-diagnostic] admitted provider attempt for ` +
+        `${attempt.provider}/${attempt.modelId} route=${preemptiveCompaction.route} ` +
+        `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
+        `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve}`,
+    );
+  }
   return { ...input.state, contextBudgetStatus };
 }

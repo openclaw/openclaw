@@ -441,7 +441,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("does not blind-retry when sticky IPv4 fallback is disallowed for explicit proxy paths", async () => {
-    const { makeProxyFetch } = await import("./proxy.js");
+    const { makeProxyFetch } = await import("openclaw/plugin-sdk/fetch-runtime");
     const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
     ProxyAgentCtor.mockClear();
     primeStickyFallbackRetry("EHOSTUNREACH", 1);
@@ -513,7 +513,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("fails closed when explicit proxy dispatcher initialization fails", async () => {
-    const { makeProxyFetch } = await import("./proxy.js");
+    const { makeProxyFetch } = await import("openclaw/plugin-sdk/fetch-runtime");
     const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
     ProxyAgentCtor.mockClear();
     ProxyAgentCtor.mockImplementationOnce(function ThrowingProxyAgent() {

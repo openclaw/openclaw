@@ -8,20 +8,24 @@ import {
   normalizeDeviceMetadataForAuth,
 } from "./device-auth.js";
 
+const device = {
+  deviceId: "dev-1",
+  clientId: "openclaw-macos",
+  clientMode: "ui",
+  role: "operator",
+  scopes: ["operator.admin", "operator.read"],
+  signedAtMs: 1_700_000_000_000,
+  nonce: "nonce-abc",
+};
+
 describe("device-auth payload vectors", () => {
   it.each([
     {
       name: "builds canonical v2 payloads",
       build: () =>
         buildDeviceAuthPayload({
-          deviceId: "dev-1",
-          clientId: "openclaw-macos",
-          clientMode: "ui",
-          role: "operator",
-          scopes: ["operator.admin", "operator.read"],
-          signedAtMs: 1_700_000_000_000,
+          ...device,
           token: null,
-          nonce: "nonce-abc",
         }),
       expected:
         "v2|dev-1|openclaw-macos|ui|operator|operator.admin,operator.read|1700000000000||nonce-abc",
@@ -30,14 +34,8 @@ describe("device-auth payload vectors", () => {
       name: "builds canonical v3 payloads",
       build: () =>
         buildDeviceAuthPayloadV3({
-          deviceId: "dev-1",
-          clientId: "openclaw-macos",
-          clientMode: "ui",
-          role: "operator",
-          scopes: ["operator.admin", "operator.read"],
-          signedAtMs: 1_700_000_000_000,
+          ...device,
           token: "tok-123",
-          nonce: "nonce-abc",
           platform: "  IOS  ",
           deviceFamily: "  iPhone  ",
         }),
@@ -62,11 +60,7 @@ describe("device-auth payload vectors", () => {
     expect(build()).toBe(expected);
   });
 
-  it.each([
-    { input: "  İOS  ", expected: "İos" },
-    { input: "  MAC  ", expected: "mac" },
-    { input: undefined, expected: "" },
-  ])("normalizes metadata %j", ({ input, expected }) => {
-    expect(normalizeDeviceMetadataForAuth(input)).toBe(expected);
+  it("preserves non-ASCII metadata while normalizing ASCII case", () => {
+    expect(normalizeDeviceMetadataForAuth("  İOS  ")).toBe("İos");
   });
 });

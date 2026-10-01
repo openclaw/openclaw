@@ -1,8 +1,3 @@
-/**
- * agents_list built-in tool.
- *
- * Lists configured or allowed agent ids plus model/runtime metadata for subagent spawn decisions.
- */
 import { Type, type Static } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -70,14 +65,10 @@ export function createAgentsListTool(opts?: {
     outputSchema: AgentsListOutputSchema,
     execute: async () => {
       const cfg = getRuntimeConfig();
-      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const { alias } = resolveMainSessionAlias(cfg);
       const requesterInternalKey =
         typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
-          ? resolveInternalSessionKey({
-              key: opts.agentSessionKey,
-              alias,
-              mainKey,
-            })
+          ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias })
           : alias;
       const requesterAgentId = resolveSessionAgentIds({
         config: cfg,

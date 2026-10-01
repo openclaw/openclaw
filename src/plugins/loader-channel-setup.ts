@@ -1,4 +1,3 @@
-// Builds channel setup metadata from plugin light surfaces.
 import { mergeChannelPluginSection } from "../channels/plugins/merge-plugin-section.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
@@ -34,6 +33,21 @@ type BundledRuntimeChannelRegistration = {
   loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
 };
+
+function mergeLoadedChannelSecrets(
+  loaded: unknown,
+  secrets: ChannelPlugin["secrets"],
+): ChannelPlugin | undefined {
+  if (!loaded || typeof loaded !== "object") {
+    return undefined;
+  }
+  const plugin = loaded as ChannelPlugin;
+  const mergedSecrets = mergeChannelPluginSection(plugin.secrets, secrets);
+  return {
+    ...plugin,
+    ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
+  };
+}
 
 export function resolveBundledRuntimeChannelRegistration(
   moduleExport: unknown,
@@ -84,18 +98,11 @@ export function loadBundledRuntimeChannelPlugin(params: {
     return {};
   }
   try {
-    const loadedPlugin = params.registration.loadChannelPlugin();
-    const loadedSecrets = params.registration.loadChannelSecrets?.();
-    if (!loadedPlugin || typeof loadedPlugin !== "object") {
-      return {};
-    }
-    const mergedSecrets = mergeChannelPluginSection(loadedPlugin.secrets, loadedSecrets);
-    return {
-      plugin: {
-        ...loadedPlugin,
-        ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
-      },
-    };
+    const plugin = mergeLoadedChannelSecrets(
+      params.registration.loadChannelPlugin(),
+      params.registration.loadChannelSecrets?.(),
+    );
+    return plugin ? { plugin } : {};
   } catch (err) {
     return { loadError: err };
   }
@@ -113,6 +120,7 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
     return {};
   }
   const setupEntryRecord = resolved as {
+    plugin?: unknown;
     kind?: unknown;
     loadSetupPlugin?: unknown;
     loadSetupSecrets?: unknown;
@@ -124,21 +132,15 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
     typeof setupEntryRecord.loadSetupPlugin === "function"
   ) {
     try {
-      const loadedPlugin = setupEntryRecord.loadSetupPlugin();
-      const loadedSecrets =
+      const plugin = mergeLoadedChannelSecrets(
+        setupEntryRecord.loadSetupPlugin(),
         typeof setupEntryRecord.loadSetupSecrets === "function"
           ? (setupEntryRecord.loadSetupSecrets() as ChannelPlugin["secrets"] | undefined)
-          : undefined;
-      if (loadedPlugin && typeof loadedPlugin === "object") {
-        const mergedSecrets = mergeChannelPluginSection(
-          (loadedPlugin as ChannelPlugin).secrets,
-          loadedSecrets,
-        );
+          : undefined,
+      );
+      if (plugin) {
         return {
-          plugin: {
-            ...(loadedPlugin as ChannelPlugin),
-            ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
-          },
+          plugin,
           usesBundledSetupContract: true,
           ...(typeof setupEntryRecord.setChannelRuntime === "function"
             ? {
@@ -160,18 +162,14 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
       return { loadError: err };
     }
   }
-  const setup = resolved as {
-    plugin?: unknown;
-    setChannelRuntime?: unknown;
-  };
-  if (!setup.plugin || typeof setup.plugin !== "object") {
+  if (!setupEntryRecord.plugin || typeof setupEntryRecord.plugin !== "object") {
     return {};
   }
   return {
-    plugin: setup.plugin as ChannelPlugin,
-    ...(typeof setup.setChannelRuntime === "function"
+    plugin: setupEntryRecord.plugin as ChannelPlugin,
+    ...(typeof setupEntryRecord.setChannelRuntime === "function"
       ? {
-          setChannelRuntime: setup.setChannelRuntime as (runtime: PluginRuntime) => void,
+          setChannelRuntime: setupEntryRecord.setChannelRuntime as (runtime: PluginRuntime) => void,
         }
       : {}),
   };

@@ -1,15 +1,16 @@
 // Doctor-only runtime policy repair for migrated cron Codex model refs.
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import {
   inheritLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "../../../config/legacy.default-agent-owner.js";
+import { ensureRecord } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import {
   isBlockedLegacyCodexModelRef,
-  normalizeRuntimeString,
   type LegacyCodexModelIdentity,
 } from "../shared/codex-route-model-ref.js";
 import type { ModelRefRepair } from "../shared/retired-model-ref-repair.js";
@@ -19,16 +20,6 @@ import {
 } from "./store-migration.js";
 
 type MutableRecord = Record<string, unknown>;
-
-function ensureRecord(container: MutableRecord, key: string): MutableRecord {
-  const existing = asOptionalRecord(container[key]);
-  if (existing) {
-    return existing;
-  }
-  const created: MutableRecord = {};
-  container[key] = created;
-  return created;
-}
 
 function resolvePolicyOwner(params: {
   cfg: OpenClawConfig;
@@ -142,7 +133,7 @@ export function repairCronCodexRuntimePolicies(params: {
     const models = ensureRecord(owner.owner, "models");
     const modelEntry = ensureRecord(models, target.modelRef);
     const priorRuntime = asOptionalRecord(modelEntry.agentRuntime);
-    const priorRuntimeId = normalizeRuntimeString(priorRuntime?.id);
+    const priorRuntimeId = normalizeOptionalAgentRuntimeId(priorRuntime?.id);
     // "auto" carries no conflicting intent: on the legacy codex provider it
     // selected the codex harness, so replace it like an unset runtime.
     if (priorRuntimeId && priorRuntimeId !== "codex" && priorRuntimeId !== "auto") {

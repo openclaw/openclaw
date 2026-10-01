@@ -190,10 +190,7 @@ internal class AndroidChatDictationRecognizer(
     retireRecognizer()
   }
 
-  override fun destroy() {
-    generation += 1
-    retireRecognizer()
-  }
+  override fun destroy() = cancel()
 
   private fun emit(
     operation: Long,
@@ -244,7 +241,7 @@ internal class ChatDictationController(
       try {
         requestPermission()
       } catch (error: CancellationException) {
-        cancel()
+        cancel(operation)
         throw error
       }
     if (!permitted) {
@@ -272,7 +269,7 @@ internal class ChatDictationController(
     return try {
       pending.await()
     } catch (error: CancellationException) {
-      cancel()
+      cancel(operation)
       throw error
     }
   }
@@ -306,9 +303,12 @@ internal class ChatDictationController(
     }
   }
 
-  fun cancel() {
+  fun cancel() = cancel(null)
+
+  private fun cancel(operation: Long?) {
     val pending =
       synchronized(lock) {
+        if (operation != null && operation != generation) return
         generation += 1
         val active = completion
         completion = null

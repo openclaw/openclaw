@@ -23,6 +23,7 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
+import { collectFeishuWebhookNotes } from "./webhook-route.js";
 
 const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
@@ -306,31 +307,22 @@ function resolveSessionTranscriptCandidates(params: {
   storePath: string;
   entry: FeishuSessionEntry;
 }): string[] {
-  const candidates = new Set<string>();
+  const candidate = params.entry.sessionFile;
+  if (typeof candidate !== "string" || !candidate.trim()) {
+    return [];
+  }
   const sessionsDir = path.dirname(params.storePath);
   const agentSessionsDir = resolveFeishuAgentSessionsDir(params.agentId);
-  const addSafeCandidate = (candidate: string): boolean => {
-    const resolved = path.isAbsolute(candidate)
-      ? path.resolve(candidate)
-      : path.resolve(sessionsDir, candidate);
-    const isStoreCandidate = isPathStrictlyInside(sessionsDir, resolved);
-    const isAgentSessionCandidate = isPathStrictlyInside(agentSessionsDir, resolved);
-    if (
-      resolved === sessionsDir ||
-      resolved === agentSessionsDir ||
-      (!isStoreCandidate && !isAgentSessionCandidate)
-    ) {
-      return false;
-    }
-    candidates.add(resolved);
-    return true;
-  };
-
-  if (typeof params.entry.sessionFile === "string" && params.entry.sessionFile.trim()) {
-    addSafeCandidate(params.entry.sessionFile.trim());
-  }
-
-  return [...candidates].toSorted();
+  const trimmed = candidate.trim();
+  const resolved = path.isAbsolute(trimmed)
+    ? path.resolve(trimmed)
+    : path.resolve(sessionsDir, trimmed);
+  return resolved !== sessionsDir &&
+    resolved !== agentSessionsDir &&
+    (isPathStrictlyInside(sessionsDir, resolved) ||
+      isPathStrictlyInside(agentSessionsDir, resolved))
+    ? [resolved]
+    : [];
 }
 
 function isSessionHeader(value: unknown): boolean {
@@ -338,10 +330,7 @@ function isSessionHeader(value: unknown): boolean {
 }
 
 function isBlankUserMessage(value: unknown): boolean {
-  if (!isRecord(value) || value.type !== "message" || !isRecord(value.message)) {
-    return false;
-  }
-  if (value.message.role !== "user") {
+  if (!isUserMessage(value)) {
     return false;
   }
   const content = value.message.content;
@@ -351,7 +340,7 @@ function isBlankUserMessage(value: unknown): boolean {
   return Array.isArray(content) && content.length === 0;
 }
 
-function isUserMessage(value: unknown): boolean {
+function isUserMessage(value: unknown): value is { message: Record<string, unknown> } {
   return (
     isRecord(value) &&
     value.type === "message" &&
@@ -394,8 +383,7 @@ function inspectTranscriptEntries(params: {
   const firstEntry = params.entries[0];
   if (
     !isSessionHeader(firstEntry) &&
-    (!params.allowMissingSessionHeader ||
-      (!isUserMessage(firstEntry) && !isBlankUserMessage(firstEntry)))
+    (!params.allowMissingSessionHeader || !isUserMessage(firstEntry))
   ) {
     return {
       kind: "invalid-session-transcript",
@@ -563,26 +551,21 @@ function sessionEntryId(storePath: string, key: string): string {
 function collectRepairSessionEntries(
   inspection: FeishuDoctorInspection,
 ): FeishuDoctorSessionEntry[] {
-  const entriesById = new Map<string, FeishuDoctorSessionEntry>();
-  for (const entry of inspection.sessionEntries) {
-    entriesById.set(sessionEntryId(entry.storePath, entry.key), entry);
-  }
+  const entriesById = new Map(
+    inspection.sessionEntries.map((entry) => [sessionEntryId(entry.storePath, entry.key), entry]),
+  );
 
   const repairEntries: FeishuDoctorSessionEntry[] = [];
-  const seen = new Set<string>();
   for (const finding of inspection.findings) {
     if (finding.kind === "corrupt-state-json") {
       continue;
     }
 
     const id = sessionEntryId(finding.storePath, finding.sessionKey);
-    if (seen.has(id)) {
-      continue;
-    }
     const entry = entriesById.get(id);
     if (entry) {
       repairEntries.push(entry);
-      seen.add(id);
+      entriesById.delete(id);
     }
   }
 
@@ -886,28 +869,22 @@ function formatRepairChange(report: FeishuDoctorRepairReport): string {
   ].join("\n");
 }
 
-function hasConfiguredFeishuChannel(cfg: OpenClawConfig): boolean {
-  return Boolean(cfg.channels?.feishu);
-}
-
 async function runFeishuDoctorSequence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
 }): Promise<ChannelDoctorSequenceResult> {
-  if (!hasConfiguredFeishuChannel(params.cfg)) {
-    return { changeNotes: [], warningNotes: [] };
-  }
-
-  const inspection = inspectFeishuDoctorState({ cfg: params.cfg, env: params.env });
-  if (inspection.findings.length === 0) {
-    return { changeNotes: [], warningNotes: [] };
+  const notes = collectFeishuWebhookNotes(params);
+  const inspection = params.cfg.channels?.feishu ? inspectFeishuDoctorState(params) : undefined;
+  if (!inspection || inspection.findings.length === 0) {
+    return { changeNotes: [], ...notes };
   }
 
   if (!params.shouldRepair) {
     return {
       changeNotes: [],
-      warningNotes: [formatPreviewWarning(inspection)],
+      ...notes,
+      warningNotes: [...notes.warningNotes, formatPreviewWarning(inspection)],
     };
   }
 
@@ -918,14 +895,14 @@ async function runFeishuDoctorSequence(params: {
   });
   return {
     changeNotes: [formatRepairChange(report)],
-    warningNotes: report.warnings,
+    ...notes,
+    warningNotes: [...notes.warningNotes, ...report.warnings],
   };
 }
 
 export const feishuDoctor: ChannelDoctorAdapter = {
   legacyConfigRules,
   normalizeCompatibilityConfig,
-  runConfigSequence: async ({ cfg, env, shouldRepair }) =>
-    await runFeishuDoctorSequence({ cfg, env, shouldRepair }),
+  runConfigSequence: runFeishuDoctorSequence,
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

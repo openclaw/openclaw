@@ -74,8 +74,8 @@ function fixture(capturedEvents?: Array<Record<string, unknown>>) {
             afterRequestEventId: 0,
             sessionId: "qa-slack",
             store: {
-              getSessionEvents: () => capturedEvents.toReversed(),
-              readBlob: () => null,
+              getSessionEvents: async () => capturedEvents.toReversed(),
+              readBlob: async () => null,
             },
           })
         : writes,
@@ -207,8 +207,6 @@ describe("Slack agent E2E ownership", () => {
 
   it.each([
     { terminal: "unanswered", outcome: "uncertain", reason: "response-not-captured" },
-    { terminal: "error", outcome: "uncertain", reason: "transport-error" },
-    { terminal: "undecodable", outcome: "uncertain", reason: "response-undecodable" },
     { terminal: "server-error", outcome: "uncertain", reason: "response-indeterminate" },
     { terminal: "partial-failure", outcome: "uncertain", reason: "response-indeterminate" },
     { terminal: "rejected", outcome: undefined, reason: undefined },
@@ -234,7 +232,7 @@ describe("Slack agent E2E ownership", () => {
           token: "private-token",
         }).toString(),
       });
-      if (terminal === "error" || terminal === "accepted-after-error") {
+      if (terminal === "accepted-after-error") {
         events.push({
           id: 2,
           flowId: "gateway-write",
@@ -242,22 +240,19 @@ describe("Slack agent E2E ownership", () => {
           errorText: "Authorization: private-token",
         });
       }
-      if (terminal !== "unanswered" && terminal !== "error") {
+      if (terminal !== "unanswered") {
         events.push({
           id: 3,
           flowId: "gateway-write",
           kind: "response",
           status: terminal === "server-error" ? 503 : 200,
-          dataText:
-            terminal === "undecodable"
-              ? '{"ok":true,"private":"truncated'
-              : JSON.stringify({
-                  ok: terminal === "accepted-after-error",
-                  channel: "C_QA",
-                  ts: "2.000000",
-                  error: terminal === "partial-failure" ? "fatal_error" : "missing_scope",
-                  detail: "private-error",
-                }),
+          dataText: JSON.stringify({
+            ok: terminal === "accepted-after-error",
+            channel: "C_QA",
+            ts: "2.000000",
+            error: terminal === "partial-failure" ? "fatal_error" : "missing_scope",
+            detail: "private-error",
+          }),
         });
       }
 

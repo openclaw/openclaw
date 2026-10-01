@@ -17,27 +17,35 @@ import {
 
 setupRunAttemptTestHooks();
 
+async function startAttempt(
+  requestImpl?: Parameters<typeof createStartedThreadHarness>[0],
+  options?: Parameters<typeof runCodexAppServerAttempt>[1],
+) {
+  vi.useFakeTimers({
+    toFake: ["Date", "setTimeout", "clearTimeout"],
+    shouldAdvanceTime: false,
+  });
+  const turnAccepted = createDeferred<void>();
+  const params = createTestParams();
+  params.onExecutionPhase = ({ phase }) => {
+    if (phase === "turn_accepted") {
+      turnAccepted.resolve();
+    }
+  };
+  const harness = createStartedThreadHarness(requestImpl);
+  const run = runCodexAppServerAttempt(params, options);
+  await Promise.race([
+    turnAccepted.promise,
+    run.then(() => {
+      throw new Error("Codex attempt ended before turn acceptance");
+    }),
+  ]);
+  return { harness, run };
+}
+
 describe("runCodexAppServerAttempt", () => {
   it("bounds restored plan state after compaction", async () => {
-    vi.useFakeTimers({
-      toFake: ["Date", "setTimeout", "clearTimeout"],
-      shouldAdvanceTime: false,
-    });
-    const turnAccepted = createDeferred<void>();
-    const params = createTestParams();
-    params.onExecutionPhase = ({ phase }) => {
-      if (phase === "turn_accepted") {
-        turnAccepted.resolve();
-      }
-    };
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params);
-    await Promise.race([
-      turnAccepted.promise,
-      run.then(() => {
-        throw new Error("Codex attempt ended before turn acceptance");
-      }),
-    ]);
+    const { harness, run } = await startAttempt();
     await harness.notify({
       method: "turn/plan/updated",
       params: {
@@ -78,30 +86,12 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("continues the turn when restoring plan state after compaction fails", async () => {
-    vi.useFakeTimers({
-      toFake: ["Date", "setTimeout", "clearTimeout"],
-      shouldAdvanceTime: false,
-    });
-    const turnAccepted = createDeferred<void>();
-    const params = createTestParams();
-    params.onExecutionPhase = ({ phase }) => {
-      if (phase === "turn_accepted") {
-        turnAccepted.resolve();
-      }
-    };
-    const harness = createStartedThreadHarness(async (method) => {
+    const { harness, run } = await startAttempt(async (method) => {
       if (method === "thread/inject_items") {
         throw new Error("injected test failure");
       }
       return undefined;
     });
-    const run = runCodexAppServerAttempt(params);
-    await Promise.race([
-      turnAccepted.promise,
-      run.then(() => {
-        throw new Error("Codex attempt ended before turn acceptance");
-      }),
-    ]);
     await harness.notify({
       method: "turn/plan/updated",
       params: {
@@ -127,19 +117,7 @@ describe("runCodexAppServerAttempt", () => {
 
 describe("runCodexAppServerAttempt native lifecycle", () => {
   it("releases completion and native hook relay state after marker plus interrupted completion", async () => {
-    vi.useFakeTimers({
-      toFake: ["Date", "setTimeout", "clearTimeout"],
-      shouldAdvanceTime: false,
-    });
-    const turnAccepted = createDeferred<void>();
-    const harness = createStartedThreadHarness();
-    const params = createTestParams();
-    params.onExecutionPhase = ({ phase }) => {
-      if (phase === "turn_accepted") {
-        turnAccepted.resolve();
-      }
-    };
-    const run = runCodexAppServerAttempt(params, {
+    const { harness, run } = await startAttempt(undefined, {
       nativeHookRelay: { enabled: true },
     });
     let resolved = false;
@@ -147,12 +125,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       resolved = true;
     });
 
-    await Promise.race([
-      turnAccepted.promise,
-      run.then(() => {
-        throw new Error("Codex attempt ended before turn acceptance");
-      }),
-    ]);
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     await harness.notify(

@@ -1,5 +1,5 @@
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { loadDiscordThreadBindingsManagerModule } from "./channel.loaders.js";
 import {
   setThreadBindingIdleTimeoutBySessionKey,

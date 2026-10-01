@@ -1,6 +1,6 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveRootPathSync } from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
@@ -80,16 +80,10 @@ export function assertWorkspaceSkillSupportPathSetIsFileOnly(paths: readonly str
 }
 
 export async function readWorkspaceSkillFile(filePath: string): Promise<string | null> {
-  if (!(await pathExists(filePath))) {
-    return null;
-  }
-  const skillRoot = await root(path.dirname(filePath));
-  const read = await skillRoot.read(path.basename(filePath), {
-    hardlinks: "reject",
-    maxBytes: 1024 * 1024,
-    symlinks: "reject",
-  });
-  return read.buffer.toString("utf8");
+  return readPreparedWorkspaceFile(
+    { rootDir: path.dirname(filePath), relativePath: path.basename(filePath) },
+    1024 * 1024,
+  );
 }
 
 export async function readWorkspaceSupportFile(params: {
@@ -413,25 +407,13 @@ export function assertInsideSkillsRoot(
   if (resolvedTarget !== resolvedRoot && !isPathInside(resolvedRoot, resolvedTarget)) {
     throw new Error(`${label} must stay inside the Skill Workshop directory.`);
   }
-  const rootRealPath = tryRealpathSync(resolvedRoot) ?? resolvedRoot;
-  let lexicalCursor = resolvedRoot;
-  let realCursor = rootRealPath;
-  for (const segment of path
-    .relative(resolvedRoot, resolvedTarget)
-    .split(path.sep)
-    .filter(Boolean)) {
-    lexicalCursor = path.join(lexicalCursor, segment);
-    realCursor = tryRealpathSync(lexicalCursor) ?? path.join(realCursor, segment);
-  }
-  if (realCursor !== rootRealPath && !isPathInside(rootRealPath, path.resolve(realCursor))) {
-    throw new Error(`${label} must stay inside the Skill Workshop directory.`);
-  }
-}
-
-function tryRealpathSync(filePath: string): string | null {
   try {
-    return fsSync.realpathSync(filePath);
-  } catch {
-    return null;
+    resolveRootPathSync({
+      rootPath: resolvedRoot,
+      absolutePath: resolvedTarget,
+      boundaryLabel: "Skill Workshop directory",
+    });
+  } catch (cause) {
+    throw new Error(`${label} must stay inside the Skill Workshop directory.`, { cause });
   }
 }

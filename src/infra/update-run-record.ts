@@ -39,12 +39,11 @@ export function updateStepDiagnostics(
     }
     return tail
       .split(/\r?\n/u)
-      .filter((line) => {
-        if (/^\[openclaw\] (?:The CLI command failed\.$|Debug: |Try: |Help: )/u.test(line)) {
-          return false;
-        }
-        return !messages.has(line.replace(/^\[openclaw\] Reason: /u, "").trim());
-      })
+      .filter(
+        (line) =>
+          !/^\[openclaw\] (?:The CLI command failed\.$|Debug: |Try: |Help: )/u.test(line) &&
+          !messages.has(line.replace(/^\[openclaw\] Reason: /u, "").trim()),
+      )
       .join("\n");
   });
   return { tails: filtered, reasonDetails };
@@ -176,7 +175,10 @@ export function isUnacknowledgedPackageOwnerRefusal(record: UpdateRunRecord): bo
     record.steps.every(
       (step) =>
         step.step === "requested" ||
-        (step.step === "driver:adopted" && step.status === "completed") ||
+        (step.status === "completed" &&
+          (step.step === "driver:adopted" ||
+            step.step === "original-state-capture" ||
+            /^warning:original-state-capture:[1-9]\d*$/u.test(step.step))) ||
         (step.step === "installation-inspection" && step.status === "skipped"),
     ) &&
     ((record.status === "skipped" &&

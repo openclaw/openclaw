@@ -18,7 +18,7 @@ extension OpenClawChatViewModel {
 
     func handleAgentActivityItem(_ evt: OpenClawAgentEventPayload) {
         guard evt.data["kind"]?.value as? String != "preamble",
-              let activity = try? ChatPayloadDecoding.decode(
+              let activity = try? GatewayPayloadDecoding.decode(
                   AnyCodable(evt.data), as: OpenClawAgentActivityItem.self),
               activity.suppressChannelProgress != true
         else { return }
@@ -30,6 +30,7 @@ extension OpenClawChatViewModel {
             startedAt: evt.ts.map(Double.init),
             isError: nil,
             diffStat: nil)
+        pending.runID = evt.runId
         pending.activity = activity
         pending.isComplete = activity.phase == "end"
         self.turnToolCallsById[toolCallId] = pending

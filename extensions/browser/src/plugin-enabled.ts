@@ -3,9 +3,6 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
-/**
- * Browser plugin enablement resolver for bundled-plugin defaults.
- */
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
 
 /** Retains the policy owner's refusal reason alongside browser enablement. */

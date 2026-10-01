@@ -63,25 +63,56 @@ it("keeps only recognized archive reasons on archived rows", () => {
   ).toMatchObject({ archivedBy: { type: "human", id: "operator-1" } });
 });
 
+it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1])(
+  "drops malformed snooze wake time %j and its orphan timestamp",
+  (snoozedUntil) => {
+    const entry = normalizePersistedSessionEntryShape({
+      sessionId: "snoozed-session",
+      updatedAt: 42,
+      snoozedUntil,
+      snoozedAt: 41,
+    });
+    expect(entry).toBeDefined();
+    expect(entry).not.toHaveProperty("snoozedUntil");
+    expect(entry).not.toHaveProperty("snoozedAt");
+  },
+);
+
+it("drops snooze metadata from archived entries so a restore cannot resurface a hidden session", () => {
+  const entry = normalizePersistedSessionEntryShape({
+    sessionId: "capped-session",
+    updatedAt: 42,
+    archivedAt: 43,
+    archiveReason: "active-session-cap",
+    snoozedUntil: Number.MAX_SAFE_INTEGER,
+    snoozedAt: 41,
+  });
+  expect(entry).toMatchObject({ archivedAt: 43, archiveReason: "active-session-cap" });
+  expect(entry).not.toHaveProperty("snoozedUntil");
+  expect(entry).not.toHaveProperty("snoozedAt");
+});
+
+it("retains valid snooze metadata without turning it into a work-admission barrier", () => {
+  const entry = normalizePersistedSessionEntryShape({
+    sessionId: "snoozed-session",
+    updatedAt: 42,
+    snoozedUntil: 100,
+    snoozedAt: 41,
+  });
+  expect(entry).toMatchObject({ snoozedUntil: 100, snoozedAt: 41 });
+  expect(resolveSessionWorkStartError("agent:main:snoozed", entry)).toBeUndefined();
+});
+
 it("preserves shipped pending key-as-session-id rows without a transcript id", () => {
-  expect(
-    normalizePersistedSessionEntryShape(
-      {
-        sessionId: "agent:child:main",
-        updatedAt: 42,
-      },
-      { sessionKey: "agent:child:main" },
-    ),
-  ).toMatchObject({ initializationPending: true, updatedAt: 42 });
-  expect(
-    normalizePersistedSessionEntryShape(
-      {
-        sessionId: "agent:child:main",
-        updatedAt: 42,
-      },
-      { sessionKey: "agent:child:main" },
-    ),
-  ).not.toHaveProperty("sessionId");
+  const entry = normalizePersistedSessionEntryShape(
+    {
+      sessionId: "agent:child:main",
+      updatedAt: 42,
+    },
+    { sessionKey: "agent:child:main" },
+  );
+  expect(entry).toMatchObject({ initializationPending: true, updatedAt: 42 });
+  expect(entry).not.toHaveProperty("sessionId");
 });
 
 it("rejects locked key-as-session-id rows instead of treating them as pending", () => {

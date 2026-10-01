@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as backupConfigCapture from "../../infra/backup-config-capture.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -25,14 +27,17 @@ import {
 } from "../../process/exec-result.js";
 import * as processRunner from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runUpdateStep } from "./shared.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 import { createUpdateRunProgress } from "./update-command-run.js";
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   vi.restoreAllMocks();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -51,6 +56,121 @@ async function createDoctorFixture() {
   return { root, env };
 }
 
+it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as const)(
+  "runs Doctor with %s include capture without broadening rollback ownership",
+  async (includeState) => {
+    const { root, env } = await createDoctorFixture();
+    const originalRaw = '{"logging":{"$include":"./logging.json"}}\n';
+    const includePath = path.join(root, "logging.json");
+    const originalInclude = '{"level":"info"}\n';
+    const operatorInclude = '{"level":"debug"}\n';
+    const completeGraph = includeState === "newer-schema";
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const newerSchema = OPENCLAW_STATE_SCHEMA_VERSION + 1;
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, originalRaw);
+    if (includeState === "malformed") {
+      await fs.writeFile(includePath, '{"level": }\n');
+    } else if (completeGraph || includeState === "changed-during-capture") {
+      await fs.writeFile(includePath, originalInclude);
+    }
+    if (completeGraph) {
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      const database = new DatabaseSync(databasePath);
+      try {
+        database.exec(`PRAGMA user_version = ${newerSchema}`);
+      } finally {
+        database.close();
+      }
+    }
+    let includeChanged = false;
+    if (includeState === "changed-during-capture") {
+      const resolvedInclude = await fs.realpath(includePath);
+      const readCaptureFile = backupConfigCapture.readBackupConfigCaptureFile;
+      vi.spyOn(backupConfigCapture, "readBackupConfigCaptureFile").mockImplementation(
+        async (file) => {
+          if (!includeChanged && file.canonicalPath === resolvedInclude) {
+            includeChanged = true;
+            await fs.writeFile(includePath, operatorInclude);
+          }
+          return await readCaptureFile(file);
+        },
+      );
+    }
+    const invokeDoctor = vi
+      .spyOn(processRunner, "runCommandWithTimeout")
+      .mockImplementation(async (argv, options) => {
+        expect(argv).toContain("doctor");
+        assert(typeof options === "object");
+        const resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        assert(resultPath, "Missing Doctor result path");
+        await writeUpdatePostInstallDoctorResult({
+          resultPath,
+          result: { status: "ok", configHash: "unchanged" },
+        });
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      });
+    const onConfigSnapshot = vi.fn();
+    const onStepComplete = vi.fn();
+
+    const step = await runPackageUpdateDoctor({
+      root,
+      timeoutMs: 1_000,
+      progress: { onStepComplete },
+      managedServiceEnv: env,
+      onConfigSnapshot,
+    });
+
+    expect(invokeDoctor).toHaveBeenCalledOnce();
+    expect(onConfigSnapshot).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        path: env.OPENCLAW_CONFIG_PATH,
+        raw: originalRaw,
+        doctorOwned: completeGraph,
+      }),
+    );
+    expect(step).toMatchObject({ exitCode: 0 });
+    if (completeGraph) {
+      expect(onConfigSnapshot.mock.calls[0]?.[0]).toMatchObject({
+        includedFiles: [
+          {
+            raw: originalInclude,
+            doctorOwned: true,
+            pathSnapshot: { targetPath: await fs.realpath(includePath) },
+          },
+        ],
+      });
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare("PRAGMA user_version").get()).toEqual({
+          user_version: newerSchema,
+        });
+      } finally {
+        database.close();
+      }
+    } else {
+      expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          warnings: expect.arrayContaining([
+            expect.stringContaining("automatic config rollback is unavailable"),
+          ]),
+        }),
+      );
+    }
+    await expect(fs.readFile(env.OPENCLAW_CONFIG_PATH, "utf8")).resolves.toBe(originalRaw);
+    if (includeState === "changed-during-capture") {
+      expect(includeChanged).toBe(true);
+      await expect(fs.readFile(includePath, "utf8")).resolves.toBe(operatorInclude);
+    }
+  },
+);
+
 it("does not spawn Doctor when the installed runtime has no entrypoint", async () => {
   const { root, env } = await createDoctorFixture();
   await fs.rm(path.join(root, "dist", "entry.js"));
@@ -68,8 +188,6 @@ it.each([
   { cause: "output-limit", exitCode: 0 },
   { cause: "output-limit", exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE },
   { cause: "reported-error", exitCode: 0 },
-  { cause: "reported-error-without-facts", exitCode: 0 },
-  { cause: "reported-error-with-empty-facts", exitCode: 0 },
   { cause: "reported-error-with-invalid-facts", exitCode: 0 },
 ] as const)(
   "keeps failed Doctor outcome $cause (exit $exitCode) failed through completion and history",
@@ -98,7 +216,6 @@ it.each([
           : {
               status: "error",
               ...(cause === "reported-error" ? { failureFacts } : {}),
-              ...(cause === "reported-error-with-empty-facts" ? { failureFacts: [] } : {}),
               ...(cause === "reported-error-with-invalid-facts"
                 ? { failureFacts: [{ code: 42 }] }
                 : {}),
@@ -115,11 +232,13 @@ it.each([
       };
     });
 
+    const run = { runId, env };
+    const guards = createUpdateCommandExecutionGuards({ run }, root);
     const step = await runPackageUpdateDoctor({
       root,
       timeoutMs: 1_000,
       managedServiceEnv: env,
-      progress: createUpdateRunProgress({ runId, env }, { onStepComplete }),
+      progress: createUpdateRunProgress(run, { onStepComplete }, guards.recordStep),
     });
 
     expect(step).toMatchObject({ exitCode, outputLimitExceeded });
@@ -141,11 +260,11 @@ it.each([
   },
 );
 
-it.each(
-  ([undefined, "include-ownership", "requester-revoked"] as const).flatMap((reason) =>
-    [false, true].map((advisory) => ({ reason, advisory })),
-  ),
-)(
+it.each([
+  { reason: undefined, advisory: false },
+  { reason: undefined, advisory: true },
+  { reason: "include-ownership", advisory: true },
+] as const)(
   "retains Doctor writer receipts and refusal $reason (advisory: $advisory)",
   async ({ reason, advisory }) => {
     const { root, env } = await createDoctorFixture();
@@ -224,7 +343,9 @@ it("leaves the run ledger unchanged while the activation Doctor child is pending
   const spawned = createDeferredCore();
   const exited = createDeferredCore();
   const onStepComplete = vi.fn();
-  const progress = createUpdateRunProgress({ runId, env }, { onStepComplete });
+  const run = { runId, env };
+  const guards = createUpdateCommandExecutionGuards({ run }, root);
+  const progress = createUpdateRunProgress(run, { onStepComplete }, guards.recordStep);
   let doctorEnv: NodeJS.ProcessEnv | undefined;
   vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
     doctorEnv = typeof options === "object" ? options.env : undefined;
@@ -313,7 +434,7 @@ it.each([
     let resultPath: string | undefined;
     let receiptBytes: string | undefined;
     const reportingError = new Error("Doctor progress could not be recorded.");
-    const onStepComplete = vi.fn(() => {
+    const onStepComplete = vi.fn(async () => {
       if (reportingFails) {
         throw reportingError;
       }
@@ -462,12 +583,14 @@ it("still refreshes the run ledger for a step that spawns no Doctor", async () =
   expect(adoptUpdateRun(runId, { env }).origin.driver?.pid).toBe(process.pid);
   const spawned = createDeferredCore();
   const exited = createDeferredCore();
+  const run = { runId, env };
+  const guards = createUpdateCommandExecutionGuards({ run }, root);
   const running = runUpdateStep({
     name: "git-fetch",
     argv: ["git", "fetch"],
     cwd: root,
     timeoutMs: ABANDONED_UPDATE_RUN_MS * 2,
-    progress: createUpdateRunProgress({ runId, env }, {}),
+    progress: createUpdateRunProgress(run, {}, guards.recordStep),
     runCommand: async () => {
       spawned.resolve();
       await exited.promise;

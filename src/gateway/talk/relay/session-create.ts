@@ -9,6 +9,7 @@ import {
   type RealtimeVoiceCloseReason,
 } from "../../../talk/provider-types.js";
 import { createRealtimeVoiceSessionHarness } from "../../../talk/realtime-session-harness.js";
+import { resolveRealtimeVoiceInterruptResponseOnInputAudio } from "../../../talk/realtime-session-policy.js";
 import type { TalkEventInput } from "../../../talk/talk-session-controller.js";
 import {
   VOICE_TRANSCRIPT_QUEUE_POLICY,
@@ -22,7 +23,6 @@ import { bindTalkRealtimeRelayAgentConsult } from "./agent-consult.js";
 import {
   buildAlreadyDeliveredToolResult,
   scheduleForcedAgentConsult,
-  submitForcedConsultProviderResult,
   submitRealtimeAgentConsultWorkingResponse,
 } from "./forced-consults.js";
 import {
@@ -39,7 +39,7 @@ import {
   resetTalkRealtimeRelayContinuity,
   prepareTalkRealtimeRelayAgentControl,
 } from "./operations.js";
-import { suppressedToolResultOptions } from "./provider-results.js";
+import { submitFinalProviderToolResult, suppressedToolResultOptions } from "./provider-results.js";
 import {
   RELAY_SESSION_TTL_MS,
   RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
@@ -223,7 +223,11 @@ export function createTalkRealtimeRelaySession(
     instructions: params.instructions,
     language: params.language,
     autoRespondToAudio: params.forceAgentConsultOnFinalTranscript !== true,
-    interruptResponseOnInputAudio: params.forceAgentConsultOnFinalTranscript !== true,
+    // Forced consults suppress automatic audio turns, but barge-in stays provider-owned:
+    // consult replies are long, so interruption matters more here, not less.
+    interruptResponseOnInputAudio: resolveRealtimeVoiceInterruptResponseOnInputAudio(
+      params.providerConfig.interruptResponseOnInputAudio,
+    ),
     tools: params.tools,
     ...(runControl.handleDelegationInput
       ? {
@@ -275,8 +279,7 @@ export function createTalkRealtimeRelaySession(
       },
       clearAudio: clearPlayback,
       sendMark: (markName) => {
-        const relay = getActiveRelay();
-        if (!relay) {
+        if (!getActiveRelay()) {
           return;
         }
         const outputTurnId = outputOwnership.resolve(false);
@@ -347,12 +350,11 @@ export function createTalkRealtimeRelaySession(
       if (event.type === "tool.call.cancelled" && event.itemId) {
         const relayCallId = cancelTalkRealtimeRelayProviderToolCall(relay, event.itemId);
         if (relayCallId) {
-          const cancelledEvent = {
+          broadcastToOwner(params.context, params.connId, {
             relaySessionId,
-            type: "toolCallCancelled" as const,
+            type: "toolCallCancelled",
             callId: relayCallId,
-          };
-          broadcastToOwner(params.context, params.connId, cancelledEvent);
+          });
         }
         return;
       }
@@ -366,8 +368,7 @@ export function createTalkRealtimeRelaySession(
       }
     },
     onResponseDone: (outcome) => {
-      const relay = getActiveRelay();
-      if (!relay) {
+      if (!getActiveRelay()) {
         return;
       }
       const responseId = outcome.responseId ?? outputOwnership.responseId;
@@ -496,12 +497,12 @@ export function createTalkRealtimeRelaySession(
                   "OpenClaw cancelled this consult before completion. Do not restart it.",
                 )
               : buildAlreadyDeliveredToolResult();
-            return submitForcedConsultProviderResult(
-              relay,
-              providerCallId,
+            return submitFinalProviderToolResult({
+              session: relay,
+              callId: providerCallId,
               result,
-              suppressedToolResultOptions(relay),
-            );
+              options: suppressedToolResultOptions(relay),
+            });
           }
           if (relay.forcedTerminalProviderResults.has(forcedConsult.handle.id)) {
             return relay.pendingFinalToolResults.get(forcedConsult.handle.id);

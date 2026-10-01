@@ -35,7 +35,6 @@ const hoisted = vi.hoisted(() => ({
   resolveToolSearchCatalogTool: vi.fn(),
   toToolDefinitions: vi.fn(),
   wrapToolDefinition: vi.fn(),
-  notifyToolActivity: vi.fn(),
 }));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
@@ -71,9 +70,6 @@ vi.mock("./attempt-client-tools.js", () => ({
 }));
 vi.mock("./message-tool-terminal.js", () => ({
   installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
-}));
-vi.mock("./tool-activity-heartbeat.js", () => ({
-  notifyToolActivity: hoisted.notifyToolActivity,
 }));
 
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";

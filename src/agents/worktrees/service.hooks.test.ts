@@ -1,11 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { waitForPidFile } from "../../../test/helpers/process-wait.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import * as commandRunner from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -15,6 +21,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
@@ -28,6 +35,15 @@ describe("ManagedWorktreeService repository code isolation", () => {
   let repo: string;
   let sentinel: string;
   let service: ManagedWorktreeService;
+  let receipts: FixtureReceiptChannel;
+
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+
+  afterAll(async () => {
+    await receipts.close();
+  });
 
   beforeEach(async () => {
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-hooks-")));
@@ -52,39 +68,9 @@ describe("ManagedWorktreeService repository code isolation", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("never executes repository hooks when creating a worktree with setup enabled", async () => {
-    const created = await service.create({ repoRoot: repo, name: "default", baseRef: "HEAD" });
-
-    await expect(fs.stat(created.path)).resolves.toBeDefined();
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("never executes repository hooks when creating a worktree with setup disabled", async () => {
-    await service.create({
-      repoRoot: repo,
-      name: "without-setup",
-      baseRef: "HEAD",
-      runSetupScript: false,
-    });
-
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("never executes repository hooks when snapshotting and removing a worktree", async () => {
-    const created = await service.create({ repoRoot: repo, name: "remove", baseRef: "HEAD" });
-    await fs.rm(sentinel, { force: true });
-
-    await expect(service.remove({ id: created.id, reason: "test" })).resolves.toMatchObject({
-      removed: true,
-      snapshotRef: expect.any(String),
-    });
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("never executes repository hooks when restoring a removed worktree", async () => {
+  it("never executes repository hooks through creation, removal and restore", async () => {
     const created = await service.create({ repoRoot: repo, name: "restore", baseRef: "HEAD" });
     await service.remove({ id: created.id, reason: "test" });
-    await fs.rm(sentinel, { force: true });
 
     await expect(service.restore({ id: created.id })).resolves.toMatchObject({ id: created.id });
     await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
@@ -107,39 +93,56 @@ describe("ManagedWorktreeService repository code isolation", () => {
     await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("still executes the explicitly enabled worktree setup script", async () => {
-    const setup = path.join(repo, ".openclaw");
-    await fs.mkdir(setup);
-    await fs.writeFile(
-      path.join(setup, "worktree-setup.sh"),
-      "#!/bin/sh\nprintf setup > setup-ran.txt\n",
-      { mode: 0o755 },
-    );
+  it.each([true, false])(
+    "executes the repository setup script only when enabled (%s)",
+    async (runSetupScript) => {
+      const setup = path.join(repo, ".openclaw");
+      await fs.mkdir(setup);
+      await fs.writeFile(
+        path.join(setup, "worktree-setup.sh"),
+        "#!/bin/sh\nprintf setup > setup-ran.txt\n",
+        { mode: 0o755 },
+      );
 
-    const progress: string[] = [];
-    const created = await service.create({
-      repoRoot: repo,
-      name: "setup",
-      baseRef: "HEAD",
-      onProgress: (phase) => progress.push(phase),
-    });
+      const progress: string[] = [];
+      const created = await service.create({
+        repoRoot: repo,
+        name: "setup",
+        baseRef: "HEAD",
+        runSetupScript,
+        onProgress: (phase) => progress.push(phase),
+      });
 
-    await expect(fs.readFile(path.join(created.path, "setup-ran.txt"), "utf8")).resolves.toBe(
-      "setup",
-    );
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(progress).toEqual(["checkout", "setup"]);
-  });
+      const setupOutput = path.join(created.path, "setup-ran.txt");
+      if (runSetupScript) {
+        await expect(fs.readFile(setupOutput, "utf8")).resolves.toBe("setup");
+      } else {
+        await expect(fs.access(setupOutput)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(progress).toEqual(runSetupScript ? ["checkout", "setup"] : ["checkout"]);
+    },
+  );
 
-  it("stops setup and removes the unbound worktree when creation is aborted", async () => {
+  it("stops setup and removes the unbound worktree when creation is aborted", async ({
+    signal,
+  }) => {
     const setup = path.join(repo, ".openclaw");
     const pidFile = path.join(setup, "setup-pid");
-    const release = path.join(setup, "release");
     await fs.mkdir(setup);
     await fs.writeFile(
       path.join(setup, "worktree-setup.sh"),
-      '#!/bin/sh\nprintf "%s" "$$" > "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/setup-pid"\nwhile [ ! -f "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/release" ]; do sleep 0.05; done\n',
+      `#!/bin/sh\nexec '${process.execPath.replaceAll("'", "'\\''")}' "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/setup.mjs"\n`,
       { mode: 0o755 },
+    );
+    await fs.writeFile(
+      path.join(setup, "setup.mjs"),
+      `import { writeFileSync } from 'node:fs';
+      ${fixtureReceiptClientSource(receipts.endpoint)}
+      writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      sendReceipt(${JSON.stringify(pidFile)}, 'ready');
+      setInterval(() => {}, 1000);
+      `,
     );
     const controller = new AbortController();
     const creation = service.create({
@@ -153,15 +156,30 @@ describe("ManagedWorktreeService repository code isolation", () => {
       (error: unknown) => error,
     );
     try {
-      const pid = await waitForPidFile(pidFile, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+      const hasPid = () => existsSync(pidFile) && readFileSync(pidFile, "utf8").length > 0;
+      await withinTest(
+        Promise.race([
+          receipts.waitFor(pidFile, "ready"),
+          // A child can exit before its side-channel receipt reaches the test.
+          creation.then(
+            () => {
+              if (!hasPid()) {
+                throw new Error(`Child exited before writing ${pidFile}`);
+              }
+            },
+            (error: unknown) => {
+              if (!hasPid()) {
+                throw new Error(`Child failed before writing ${pidFile}`, { cause: error });
+              }
+            },
+          ),
+        ]),
+        signal,
+      );
+      const pid = Number.parseInt(await fs.readFile(pidFile, "utf8"), 10);
+      expect(Number.isInteger(pid) && pid > 0).toBe(true);
       controller.abort(new Error("setup cancelled"));
-      expect(
-        await withTimeout(
-          outcome,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          "worktree cancellation",
-        ),
-      ).toBeInstanceOf(Error);
+      expect(await withinTest(outcome, signal)).toBeInstanceOf(Error);
       expect(() => process.kill(pid, 0)).toThrow();
       expect(await service.list()).toEqual([]);
       const worktrees = await execFileAsync("git", ["-C", repo, "worktree", "list", "--porcelain"]);
@@ -175,7 +193,10 @@ describe("ManagedWorktreeService repository code isolation", () => {
       ]);
       expect(branches.stdout.trim()).toBe("");
     } finally {
-      await fs.writeFile(release, "release setup if the regression failed\n");
+      controller.abort(new Error("release setup if the regression failed"));
+      if (existsSync(pidFile)) {
+        killPidIfAlive(Number.parseInt(readFileSync(pidFile, "utf8"), 10));
+      }
       await outcome;
     }
   });
@@ -290,7 +311,12 @@ describe("ManagedWorktreeService repository code isolation", () => {
           });
         });
       const creation = callerContext.run("setup-caller", () =>
-        service.create({ repoRoot: repo, name: `handoff-${mode}`, baseRef: "HEAD", withSource }),
+        service.create({
+          repoRoot: repo,
+          name: `handoff-${mode}`,
+          baseRef: "HEAD",
+          withSource,
+        }),
       );
       const outcome = creation.then(
         (value) => {
@@ -302,26 +328,25 @@ describe("ManagedWorktreeService repository code isolation", () => {
           return { error };
         },
       );
+      const waitForSetupSignal = (ready: Promise<void>, label: string) =>
+        withTimeout(
+          Promise.race([
+            ready,
+            creation.then(() => {
+              throw new Error(`Worktree creation completed before ${label}`);
+            }),
+          ]),
+          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          label,
+        );
       try {
-        await withTimeout(
-          dispatched.promise,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          "setup dispatch",
-        );
-        await withTimeout(
-          released.promise,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          "setup source release",
-        );
+        await waitForSetupSignal(dispatched.promise, "setup dispatch");
+        await waitForSetupSignal(released.promise, "setup source release");
         expect(creationSettled).toBe(false);
         expect(events).not.toContain("completion");
         expect(events).not.toContain("checkout-cleanup");
         if (mode === "unwind") {
-          await withTimeout(
-            aborted.promise,
-            SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-            "setup cancellation",
-          );
+          await waitForSetupSignal(aborted.promise, "setup cancellation");
           expect(acceptedSignal?.reason).toBe(unwindFailure);
           expect(creationSettled).toBe(false);
           expect(events).not.toContain("checkout-cleanup");

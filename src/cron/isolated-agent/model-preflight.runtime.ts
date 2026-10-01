@@ -71,13 +71,6 @@ function normalizeProbeApi(providerConfig: ModelProviderConfig): PreflightApi | 
   return api === "ollama" || api === "openai-completions" ? api : undefined;
 }
 
-function buildProbeUrl(api: PreflightApi, baseUrl: string): string {
-  if (api === "ollama") {
-    return `${baseUrl}/api/tags`;
-  }
-  return `${baseUrl}/models`;
-}
-
 function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
   try {
     const parsed = new URL(baseUrl);
@@ -140,19 +133,6 @@ function formatPreflightError(error: unknown): string {
     : `${truncateUtf16Safe(classified, MAX_PREFLIGHT_ERROR_CHARS - 1)}…`;
 }
 
-function formatUnavailableReason(params: {
-  provider: string;
-  model: string;
-  baseUrl: string;
-  error: unknown;
-}): string {
-  return [
-    `This automation uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
-    `The candidate is unavailable for this run; OpenClaw will retry its provider preflight on a later scheduled run.`,
-    `Last error: ${formatPreflightError(params.error)}`,
-  ].join(" ");
-}
-
 function buildUnavailableResult(params: {
   provider: string;
   model: string;
@@ -165,12 +145,11 @@ function buildUnavailableResult(params: {
     model: params.model,
     baseUrl: params.baseUrl,
     retryAfterMs: PREFLIGHT_CACHE_TTL_MS,
-    reason: formatUnavailableReason({
-      provider: params.provider,
-      model: params.model,
-      baseUrl: params.baseUrl,
-      error: params.error,
-    }),
+    reason: [
+      `This automation uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
+      `The candidate is unavailable for this run; OpenClaw will retry its provider preflight on a later scheduled run.`,
+      `Last error: ${formatPreflightError(params.error)}`,
+    ].join(" "),
   };
 }
 
@@ -179,7 +158,7 @@ async function probeLocalProviderEndpoint(params: {
   baseUrl: string;
 }): Promise<void> {
   const { response, release } = await fetchWithSsrFGuard({
-    url: buildProbeUrl(params.api, params.baseUrl),
+    url: `${params.baseUrl}${params.api === "ollama" ? "/api/tags" : "/models"}`,
     init: { method: "GET" },
     policy: buildLocalProviderSsrFPolicy(params.baseUrl),
     timeoutMs: PREFLIGHT_TIMEOUT_MS,

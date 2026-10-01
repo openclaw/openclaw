@@ -245,7 +245,7 @@ pnpm tsx scripts/bench-cli-startup.ts --runtime-rss --case status --runs 3
 Presets:
 
 - `startup`: `--version`, `--help`, `health`, `health --json`, `status --json`, `status`
-- `real`: `health`, `status`, `status --json`, `sessions`, `sessions --json`, `tasks --json`, `tasks list --json`, `tasks audit --json`, `agents list --json`, `gateway status`, `gateway status --json`, `gateway health --json`, `config get gateway.port`
+- `real`: `health`, `status`, `status --json`, `sessions`, `sessions --json`, `agents list --json`, `gateway status`, `gateway status --json`, `gateway health --json`, `config get gateway.port`
 - `all`: both presets combined
 
 Output includes `sampleCount`, avg, p50, p95, min/max, exit-code/signal distribution, and RSS per command. The `maxRssMb` fields use MiB. By default, RSS uses the last preload marker received on stderr, preserving the historical fixture's attribution. A respawning launcher can supply that last marker. Default reports omit `memoryMetric` and sample `memory`; no runtime identity or temporary observation files are required. For a silent command, the exit marker can count as first output.
@@ -284,6 +284,15 @@ Output includes first process output, `/healthz`, `/readyz`, HTTP listen log tim
 `/healthz` is liveness (HTTP server can answer). `/readyz` is usable readiness (startup plugin sidecars, channels, and ready-critical post-attach work have settled). Startup hooks dispatch asynchronously and are not part of the readiness guarantee. Ready log time is the Gateway's internal timestamp, useful for process-side attribution but not a substitute for the external `/readyz` probe.
 
 Use JSON output or `--output` when comparing changes. Use `--cpu-prof-dir` only after trace output points at import, compile, or CPU-bound work that phase timings alone cannot explain.
+
+After readiness, the Gateway uses idle turns to prepare common Control UI handler
+modules and configured local agent skill discovery. Each item yields to admitted
+foreground work, and shutdown joins preparation that has already started. This
+work does not execute chat requests, create connection state, or fetch live provider
+catalogs. Context-window cache preparation shares this sequence and starts no
+earlier than five seconds after scheduling. Compare immediate first requests with
+requests after an idle interval; readiness alone does not guarantee every optional
+cache is warm.
 
 </Accordion>
 
@@ -414,7 +423,7 @@ Use `--probe-rounds N` for allocation comparisons with equal probe work. It
 attempts exactly N sampler rounds and N history bursts per configured history
 client, regardless of which finishes first. Each sampler round requests
 `/readyz`, the Control UI, and `sessions.list`; `--control-plane` adds one each
-of `tasks.list`, `cron.list`, and `cron.status`. Enabling `--subscribers` adds
+of `cron.list` and `cron.status`. Enabling `--subscribers` adds
 one subscribe attempt per round and an unsubscribe after each successful
 subscription. History attempts total `N × historyClients × historyBurst`, capped
 at 2048 per run. Slow clients receive the same history budget as fast clients.

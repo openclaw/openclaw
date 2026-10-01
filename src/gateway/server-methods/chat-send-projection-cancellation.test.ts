@@ -1,4 +1,3 @@
-import type { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
@@ -73,6 +72,12 @@ it.each(["reply-observation", "commentary-media"] as const)(
         agentId: scope.agentId,
         path: resolveSessionTranscriptDatabasePath(scope),
       };
+      if (scenario === "commentary-media") {
+        openOpenClawAgentDatabase(databaseOptions)
+          .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1")
+          .run();
+        await transcriptReconcile.reconcileSessionTranscriptIndexes(databaseOptions);
+      }
       const enteredWait = createDeferred();
       const waitForProjection = transcriptReconcile.waitForSessionTranscriptProjection;
       const waiting = vi
@@ -82,13 +87,30 @@ it.each(["reply-observation", "commentary-media"] as const)(
           enteredWait.resolve();
           return result;
         });
-      let stalledWorker: Worker | undefined;
-      observer.beforeCreate = (filename, options) =>
-        stalledWorker
-          ? { filename, options }
-          : { filename: "setInterval(() => {}, 1_000)", options: { eval: true } };
-      observer.onTask = ({ worker }) => {
-        stalledWorker ??= worker;
+      const projectionPaused = createDeferred();
+      let holdProjection = true;
+      let resumeProjection = () => {};
+      observer.onTask = ({ input, port, observeMessage }) => {
+        if (input.mode !== "disk" || input.path !== databaseOptions.path) {
+          return;
+        }
+        let claiming = false;
+        observeMessage((message) => {
+          claiming = message.type === "plan-start" && message.plan.sessionId === scope.sessionId;
+        });
+        const post = port.postMessage.bind(port);
+        port.postMessage = (message, transferList) => {
+          const postOptions = Array.isArray(transferList)
+            ? { transfer: transferList }
+            : transferList;
+          if (claiming && holdProjection) {
+            claiming = false;
+            resumeProjection = () => post(message, postOptions);
+            projectionPaused.resolve();
+            return;
+          }
+          post(message, postOptions);
+        };
       };
       const mediaUrl = "https://example.test/retained-attachment.png";
       const message = attachSessionTranscriptRunId(
@@ -141,7 +163,7 @@ it.each(["reply-observation", "commentary-media"] as const)(
         });
       try {
         await enteredWait.promise;
-        await vi.waitFor(() => expect(stalledWorker).toBeDefined());
+        await projectionPaused.promise;
         expect(settled).toBe(false);
         controller.abort(new Error("Operator stopped this run"));
         await vi.waitFor(() => expect(settled).toBe(true), { timeout: 500 });
@@ -152,12 +174,22 @@ it.each(["reply-observation", "commentary-media"] as const)(
         );
         expect(dispatch.hasAppendedWebchatAgentMedia()).toBe(false);
       } finally {
+        controller.abort(new Error("Projection cancellation fixture cleanup"));
         waiting.mockRestore();
-        await stalledWorker?.terminate();
+        observer.onTask = undefined;
+        holdProjection = false;
+        resumeProjection();
         await transcriptReconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);
         await operation;
         await transcriptLifecycle.dispose();
       }
+      expect(
+        openOpenClawAgentDatabase(databaseOptions)
+          .db.prepare(
+            "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
+          )
+          .get(scope.sessionId),
+      ).toMatchObject({ needs_rebuild: 0 });
       expect(loadTranscriptEventsSync(scope)).toContainEqual(
         expect.objectContaining({ id: "answer", message }),
       );

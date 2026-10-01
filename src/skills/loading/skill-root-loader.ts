@@ -1,5 +1,7 @@
 import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
 import {
@@ -97,11 +99,21 @@ function canonicalizeLoadedSkillRecord(
 export function loadSkillRootRecords(params: {
   dir: string;
   source: string;
+  worktree?: boolean;
   config?: OpenClawConfig;
   rejectHardlinks?: boolean;
   mode?: "audit";
   onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): LoadedSkillRecord[] {
+  const discoveryRoot = {
+    path: path.resolve(params.dir),
+    worktree:
+      params.worktree ??
+      isPathInside(
+        params.config?.worktreeRoot ?? path.join(resolveStateDir(), "worktrees"),
+        params.dir,
+      ),
+  };
   const limits = resolveSkillDiscoveryLimits(params.config);
   if (params.mode === "audit") {
     // Prompt budgets must not hide installed skills. Keep larger configured
@@ -132,8 +144,8 @@ export function loadSkillRootRecords(params: {
     onDiagnostic: params.onDiagnostic,
   });
   const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
-  const loadCandidate = (candidate: CandidateSkillDir) =>
-    loadContainedSkillRecord({
+  const loadCandidate = (candidate: CandidateSkillDir) => {
+    const record = loadContainedSkillRecord({
       skillDir: candidate.skillDir,
       skillDirRealPath: candidate.skillDirRealPath,
       source: params.source,
@@ -145,6 +157,11 @@ export function loadSkillRootRecords(params: {
       rejectHardlinks,
       onDiagnostic: params.onDiagnostic,
     });
+    if (record) {
+      record.skill.discoveryRoot = discoveryRoot;
+    }
+    return record;
+  };
   if (discovered.configuredRootCandidate) {
     const rootRecord = loadCandidate(discovered.configuredRootCandidate);
     if (rootRecord) {
@@ -187,6 +204,7 @@ export function loadGeneratedPluginSkillRecords(params: {
       rejectHardlinks: candidate.rejectHardlinks,
     });
     if (record) {
+      record.skill.discoveryRoot = { path: path.resolve(params.pluginSkillsDir), worktree: false };
       loadedSkills.push({
         ...record,
         syncSourceDir: candidate.skillDirRealPath,

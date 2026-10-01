@@ -275,6 +275,26 @@ if (args[1] === 'view') {
 }
 
 describe("stable closeout Linux publication", () => {
+  it.each(["stableSoakWaiver", "laneWaiver"])(
+    "refuses historical %s replay without rewriting the published receipt",
+    (field) => {
+      const fixture = linuxCloseoutFixture();
+      expect(fixture.run().status).toBe(0);
+      const receipt = JSON.parse(readFileSync(fixture.outputPath, "utf8"));
+      const original = JSON.stringify({ ...receipt, [field]: "historical published authority" });
+      writeFileSync(fixture.originalPath, original);
+      const result = fixture.run(true);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Historical waiver-bearing closeout receipt replay is unsupported",
+      );
+      expect(result.stderr).toContain(
+        "a fresh validation run cannot replace their published binding",
+      );
+      expect(readFileSync(fixture.originalPath, "utf8")).toBe(original);
+    },
+  );
+
   it("accepts only the validated exact late immutable Linux manifest", () => {
     const fixture = linuxCloseoutFixture();
     expect(fixture.run().status).toBe(0);
@@ -614,7 +634,7 @@ describe("verify-stable-main-closeout", () => {
     expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
   });
 
-  it("records operator waivers at closeout and preserves a waiver-less recorded manifest on replay", () => {
+  it("rejects removed waiver flags while preserving strict closeout replay", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "openclaw-waiver-closeout-"));
     tempDirs.push(dir);
     const version = "2026.9.6";
@@ -662,14 +682,6 @@ describe("verify-stable-main-closeout", () => {
       "--allow-failed-publish-recovery",
       "true",
     ];
-    const waiverArgs = [
-      "--stable-soak-waiver",
-      "2026.9.6 operator approved",
-      "--lane-waiver",
-      "2026.9.6 known flake",
-    ];
-
-    // A closeout recorded before waiver fields existed carries none of them.
     const initial = runCli(...args);
     expect(initial.status, initial.stderr).toBe(0);
     const recorded = JSON.parse(readFileSync(outputPath, "utf8"));
@@ -677,18 +689,15 @@ describe("verify-stable-main-closeout", () => {
     expect(recorded).not.toHaveProperty("laneWaiver");
     writeFileSync(originalPath, readFileSync(outputPath));
 
-    // Replay with waivers resolved from publish evidence keeps the recorded bytes.
-    const replay = runCli(...args, ...waiverArgs, "--existing-manifest", originalPath);
+    const replay = runCli(...args, "--existing-manifest", originalPath);
     expect(replay.status, replay.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
-
-    // A fresh closeout records the waivers that authorized the stable.
-    const waived = runCli(...args, ...waiverArgs);
-    expect(waived.status, waived.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
-      stableSoakWaiver: "2026.9.6 operator approved",
-      laneWaiver: "2026.9.6 known flake",
-    });
+    for (const flag of ["--stable-soak-waiver", "--lane-waiver"]) {
+      const rejected = runCli(...args, flag, "2026.9.6 operator approved");
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain(`${flag} was removed`);
+      expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
+    }
   });
 
   it("records a withdrawn 2026.9.6 macOS appcast from the main commit lookup", () => {
@@ -792,7 +801,6 @@ process.stdout.write(JSON.stringify([
 });
 
 describe("stable closeout workflow keyed runs and tag-only replay", () => {
-  const tempRoots = useAutoCleanupTempDirTracker(afterEach);
   const workflow = parse(
     readFileSync(path.resolve(".github/workflows/openclaw-stable-main-closeout.yml"), "utf8"),
   ) as {
@@ -810,13 +818,6 @@ describe("stable closeout workflow keyed runs and tag-only replay", () => {
       }
     >;
   };
-  const resolveStep = expectDefined(
-    workflow.jobs.resolve.steps.find(
-      (step) => step.name === "Resolve published stable release evidence",
-    ),
-    "resolve step",
-  );
-
   it("keeps push runs alive and serializes verification by resolved stable tag", () => {
     expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
     expect(workflow.concurrency.group).toContain("inputs.tag");
@@ -826,7 +827,7 @@ describe("stable closeout workflow keyed runs and tag-only replay", () => {
     });
   });
 
-  it("needs only a tag and forwards sealed waivers to the closeout gate", () => {
+  it("keeps non-tag replay inputs optional", () => {
     for (const [name, input] of Object.entries(workflow.on.workflow_dispatch.inputs)) {
       if (name === "tag") {
         continue;
@@ -838,76 +839,6 @@ describe("stable closeout workflow keyed runs and tag-only replay", () => {
         false,
       ]);
     }
-    const gateStep = expectDefined(
-      workflow.jobs.verify.steps.find((step) => step.name === "Verify release workflow evidence"),
-      "gate step",
-    );
-    expect(gateStep.env).toMatchObject({
-      PUBLISHED_STABLE_SOAK_WAIVER:
-        "${{ fromJSON(needs.resolve.outputs.published_stable_soak_waiver) }}",
-      PUBLISHED_LANE_WAIVER: "${{ fromJSON(needs.resolve.outputs.published_lane_waiver) }}",
-    });
-    expect(resolveStep.run).toContain(".laneWaiverAcknowledgement // .laneWaiver //");
-  });
-
-  const evidence = {
-    stableSoakWaiver: "Operator-approved for 2026.9.6",
-    laneWaiver: "2026.9.6 sealed lane",
-    laneWaiverAcknowledgement: "2026.9.6 acknowledged lane",
-  };
-  function resolveWaivers(sealed: unknown, soak = "", lane = "") {
-    const root = tempRoots.make("stable-closeout-waivers-");
-    const evidencePath = path.join(root, "evidence.json");
-    writeFileSync(evidencePath, JSON.stringify(sealed));
-    const run = expectDefined(resolveStep.run, "resolve script");
-    const block = expectDefined(
-      run.match(/# Operator inputs win[^]*?(?=^\{\s*$)/mu)?.[0],
-      "waiver block",
-    );
-    return spawnSync("bash", ["-euo", "pipefail"], {
-      cwd: root,
-      encoding: "utf8",
-      input: `${block}\nprintf '%s\\n' "$stable_soak_waiver" "$lane_waiver" "$published_stable_soak_waiver" "$published_lane_waiver"\n`,
-      env: {
-        PATH: process.env.PATH,
-        evidence_path: evidencePath,
-        INPUT_STABLE_SOAK_WAIVER: soak,
-        INPUT_LANE_WAIVER: lane,
-      },
-    });
-  }
-
-  it.each([
-    { name: "sealed acknowledgements", soak: "", lane: "", acknowledged: true },
-    {
-      name: "operator overrides",
-      soak: '2026.9.6 operator "approved"\nsoak',
-      lane: "2026.9.6 operator lane",
-      acknowledged: true,
-    },
-    { name: "legacy sealed lane", soak: "", lane: "", acknowledged: false },
-  ])("resolves $name while preserving published text", ({ soak, lane, acknowledged }) => {
-    const publishedLane = acknowledged ? evidence.laneWaiverAcknowledgement : evidence.laneWaiver;
-    const result = resolveWaivers(
-      { ...evidence, laneWaiverAcknowledgement: acknowledged ? publishedLane : undefined },
-      soak,
-      lane,
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trimEnd().split("\n")).toEqual(
-      [
-        soak || evidence.stableSoakWaiver,
-        lane || publishedLane,
-        evidence.stableSoakWaiver,
-        publishedLane,
-      ].map((value) => JSON.stringify(value)),
-    );
-  });
-
-  it("rejects a non-string sealed soak waiver", () => {
-    const result = resolveWaivers({ ...evidence, stableSoakWaiver: 123 });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Invalid stable soak waiver");
   });
 });
 

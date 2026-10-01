@@ -76,21 +76,6 @@ export function createShouldEmitVerboseProgress(params: {
   };
 }
 
-function resolveHarnessDefaultChannel(params: {
-  ctx: FinalizedMsgContext;
-  entry?: SessionEntry;
-}): string | undefined {
-  const originatingChannel =
-    typeof params.ctx.OriginatingChannel === "string" ? params.ctx.OriginatingChannel : undefined;
-
-  return (
-    sessionDeliveryChannel(params.entry) ??
-    originatingChannel ??
-    params.ctx.Provider ??
-    params.ctx.Surface
-  );
-}
-
 export function resolveTurnModelOverride(
   replyOptions: { isHeartbeat?: boolean; heartbeatModelOverride?: string } | undefined,
 ): string | undefined {
@@ -112,13 +97,15 @@ function resolveChannelModelCandidate(params: {
     return undefined;
   }
 
-  const channel = resolveHarnessDefaultChannel({
-    ctx: params.ctx,
-    entry: params.entry,
-  });
+  const originatingChannel =
+    typeof params.ctx.OriginatingChannel === "string" ? params.ctx.OriginatingChannel : undefined;
   const channelModelOverride = resolveChannelModelOverride({
     cfg: params.cfg,
-    channel,
+    channel:
+      sessionDeliveryChannel(params.entry) ??
+      originatingChannel ??
+      params.ctx.Provider ??
+      params.ctx.Surface,
     groupId: params.entry?.groupId,
     groupChatType: params.entry?.chatType ?? params.ctx.ChatType,
     groupChannel: params.entry?.groupChannel ?? params.ctx.GroupChannel,
@@ -274,7 +261,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
           aliasIndex,
         })?.ref
       : undefined;
-    const resolveCandidateDefault = (candidate: { provider: string; model?: string }) => {
+    const resolveCandidateDefault = (candidate: HarnessDefaultCandidate) => {
       const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
         provider: candidate.provider,
         entry: params.entry,

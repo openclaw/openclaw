@@ -28,12 +28,6 @@ type XaiTtsProviderConfig = {
   responseFormat?: XaiSpeechResponseFormat;
 };
 
-type XaiTtsProviderOverrides = {
-  voiceId?: string;
-  language?: string;
-  speed?: number;
-};
-
 export const XAI_TTS_FALLBACK_VOICES = ["ara", "eve", "leo", "rex", "sal"] as const;
 
 export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
@@ -85,18 +79,9 @@ export function resolveXaiSpeechResponseFormat(
 export function xaiSpeechResponseFormatToFileExtension(
   format: XaiSpeechResponseFormat,
 ): ".mp3" | ".pcm" | ".wav" | ".mulaw" | ".alaw" {
-  switch (format) {
-    case "wav":
-      return ".wav";
-    case "pcm":
-      return ".pcm";
-    case "mulaw":
-      return ".mulaw";
-    case "alaw":
-      return ".alaw";
-    default:
-      return ".mp3";
-  }
+  return format === "wav" || format === "pcm" || format === "mulaw" || format === "alaw"
+    ? `.${format}`
+    : ".mp3";
 }
 
 function normalizeXaiSpeechProviderConfig(
@@ -124,20 +109,18 @@ function normalizeXaiSpeechProviderConfig(
 export function readXaiSpeechProviderConfig(config: SpeechProviderConfig): XaiTtsProviderConfig {
   const normalized = normalizeXaiSpeechProviderConfig({});
   return {
-    apiKey: normalizeOptionalString(config.apiKey) ?? normalized.apiKey,
+    apiKey: normalizeOptionalString(config.apiKey),
     baseUrl: normalizeOptionalString(config.baseUrl) ?? normalized.baseUrl,
     voiceId: normalizeOptionalString(config.voiceId ?? config.voice) ?? normalized.voiceId,
-    language:
-      normalizeXaiLanguageCode(config.language ?? config.languageCode) ?? normalized.language,
-    speed: normalizeXaiSpeechSpeed(config.speed) ?? normalized.speed,
-    responseFormat:
-      normalizeXaiSpeechResponseFormat(config.responseFormat) ?? normalized.responseFormat,
+    language: normalizeXaiLanguageCode(config.language ?? config.languageCode),
+    speed: normalizeXaiSpeechSpeed(config.speed),
+    responseFormat: normalizeXaiSpeechResponseFormat(config.responseFormat),
   };
 }
 
 export function readXaiSpeechOverrides(
   overrides: SpeechProviderOverrides | undefined,
-): XaiTtsProviderOverrides {
+): Partial<Pick<XaiTtsProviderConfig, "voiceId" | "language" | "speed">> {
   if (!overrides) {
     return {};
   }
@@ -192,37 +175,24 @@ export function createXaiSpeechProviderMetadata(
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeXaiSpeechProviderConfig(baseTtsConfig);
       const responseFormat = normalizeXaiSpeechResponseFormat(talkProviderConfig.responseFormat);
+      const baseUrl = normalizeOptionalString(talkProviderConfig.baseUrl);
       return {
         ...base,
-        ...(talkProviderConfig.apiKey === undefined
-          ? {}
-          : {
-              apiKey: normalizeResolvedSecretInputString({
+        apiKey:
+          talkProviderConfig.apiKey === undefined
+            ? base.apiKey
+            : normalizeResolvedSecretInputString({
                 value: talkProviderConfig.apiKey,
                 path: "talk.providers.xai.apiKey",
               }),
-            }),
-        ...(normalizeOptionalString(talkProviderConfig.baseUrl) === undefined
-          ? {}
-          : {
-              baseUrl: normalizeXaiTtsBaseUrl(normalizeOptionalString(talkProviderConfig.baseUrl)),
-            }),
-        ...(normalizeOptionalString(talkProviderConfig.voiceId) === undefined
-          ? {}
-          : { voiceId: normalizeOptionalString(talkProviderConfig.voiceId) }),
-        ...(normalizeXaiLanguageCode(
-          talkProviderConfig.language ?? talkProviderConfig.languageCode,
-        ) === undefined
-          ? {}
-          : {
-              language: normalizeXaiLanguageCode(
-                talkProviderConfig.language ?? talkProviderConfig.languageCode,
-              ),
-            }),
-        ...(normalizeXaiSpeechSpeed(talkProviderConfig.speed) === undefined
-          ? {}
-          : { speed: normalizeXaiSpeechSpeed(talkProviderConfig.speed) }),
-        ...(responseFormat === undefined ? {} : { responseFormat }),
+        baseUrl: baseUrl === undefined ? base.baseUrl : normalizeXaiTtsBaseUrl(baseUrl),
+        voiceId: normalizeOptionalString(talkProviderConfig.voiceId) ?? base.voiceId,
+        language:
+          normalizeXaiLanguageCode(
+            talkProviderConfig.language ?? talkProviderConfig.languageCode,
+          ) ?? base.language,
+        speed: normalizeXaiSpeechSpeed(talkProviderConfig.speed) ?? base.speed,
+        responseFormat: responseFormat ?? base.responseFormat,
       };
     },
     resolveTalkOverrides: ({ params }) => ({

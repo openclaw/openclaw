@@ -6,7 +6,6 @@ import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -25,6 +24,7 @@ import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
+import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import {
@@ -53,18 +53,6 @@ export type FollowupRunnerParams = {
   defaultModel: string;
   toolProgressDetail?: "explain" | "raw";
 };
-
-export async function settleQueuedFollowupPresentation(
-  defaults: FollowupRunnerParams,
-): Promise<void> {
-  try {
-    await defaults.opts?.onQueuedFollowupSettled?.();
-  } catch (error) {
-    defaultRuntime.error?.(
-      `followup queue: queued presentation cleanup failed: ${formatErrorMessage(error)}`,
-    );
-  }
-}
 
 type FollowupSessionOwner = {
   current: () => SessionEntry | undefined;
@@ -482,7 +470,7 @@ export async function admitFollowupTurn(params: {
     return { kind: "admitted", turn };
   } catch (error) {
     if (queuedFollowupAdmitted) {
-      await settleQueuedFollowupPresentation(params.defaults);
+      await settleQueuedFollowupPresentation(params.defaults.opts?.onQueuedFollowupSettled);
     }
     operation.complete();
     throw error instanceof Error ? error : new Error(formatErrorMessage(error));

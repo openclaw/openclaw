@@ -1,4 +1,3 @@
-// Backup planning helpers for archive naming, payload paths, and deduplicated asset selection.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
@@ -41,7 +40,7 @@ import {
   type BackupResourcePlan,
 } from "./backup-resource-inventory.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
-import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
+import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
 
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
@@ -110,23 +109,14 @@ type BackupAssetCandidate = {
   exists: boolean;
 };
 
-function backupAssetPriority(kind: BackupAssetKind): number {
-  switch (kind) {
-    case "state":
-      return 0;
-    case "config":
-      return 1;
-    case "credentials":
-      return 2;
-    case "workspace":
-      return 3;
-    case "agent":
-      return 4;
-    case "managed skill":
-      return 5;
-  }
-  throw new Error("Unsupported backup asset kind");
-}
+const BACKUP_ASSET_PRIORITY = {
+  state: 0,
+  config: 1,
+  credentials: 2,
+  workspace: 3,
+  agent: 4,
+  "managed skill": 5,
+} satisfies Record<BackupAssetKind, number>;
 
 /** Format a filesystem-safe local timestamp with explicit UTC offset for backup names. */
 function formatBackupArchiveTimestamp(
@@ -149,12 +139,10 @@ function formatBackupArchiveTimestamp(
   return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}`;
 }
 
-/** Build the root directory name stored inside a backup tarball. */
 export function buildBackupArchiveRoot(nowMs = Date.now()): string {
   return `${formatBackupArchiveTimestamp(nowMs)}-openclaw-backup`;
 }
 
-/** Build the default `.tar.gz` filename for a backup archive. */
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {
   return `${buildBackupArchiveRoot(nowMs)}.tar.gz`;
 }
@@ -174,7 +162,6 @@ function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   return path.posix.join("relative", normalized);
 }
 
-/** Build the archive-relative payload path for one source path. */
 export function buildBackupArchivePath(archiveRoot: string, sourcePath: string): string {
   return path.posix.join(archiveRoot, "payload", encodeAbsolutePathForBackupArchive(sourcePath));
 }
@@ -245,41 +232,21 @@ async function resolveBackupPlanFromPaths(params: {
 
   if (onlyConfig) {
     const resolvedConfigPath = path.resolve(configPath);
-    if (!(await pathExists(resolvedConfigPath))) {
-      return {
-        stateDir,
-        configPath,
-        oauthDir,
-        workspaceDirs: [],
-        resources,
-        included: [],
-        skipped: [
-          {
-            kind: "config",
-            sourcePath: resolvedConfigPath,
-            displayPath: shortenHomePath(resolvedConfigPath),
-            reason: "missing",
-          },
-        ],
-      };
-    }
-
-    const canonicalConfigPath = await canonicalizeExistingPath(resolvedConfigPath);
+    const exists = await pathExists(resolvedConfigPath);
+    const sourcePath = exists
+      ? await canonicalizeExistingPath(resolvedConfigPath)
+      : resolvedConfigPath;
+    const asset = { kind: "config" as const, sourcePath, displayPath: shortenHomePath(sourcePath) };
     return {
       stateDir,
       configPath,
       oauthDir,
       workspaceDirs: [],
       resources,
-      included: [
-        {
-          kind: "config",
-          sourcePath: canonicalConfigPath,
-          displayPath: shortenHomePath(canonicalConfigPath),
-          archivePath: buildBackupArchivePath(archiveRoot, canonicalConfigPath),
-        },
-      ],
-      skipped: [],
+      included: exists
+        ? [{ ...asset, archivePath: buildBackupArchivePath(archiveRoot, sourcePath) }]
+        : [],
+      skipped: exists ? [] : [{ ...asset, reason: "missing" }],
     };
   }
 
@@ -462,7 +429,7 @@ function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandida
   if (depthDelta !== 0) {
     return depthDelta;
   }
-  const priorityDelta = backupAssetPriority(left.kind) - backupAssetPriority(right.kind);
+  const priorityDelta = BACKUP_ASSET_PRIORITY[left.kind] - BACKUP_ASSET_PRIORITY[right.kind];
   if (priorityDelta !== 0) {
     return priorityDelta;
   }
@@ -564,7 +531,6 @@ export async function canonicalizePathForContainment(targetPath: string): Promis
   }
 }
 
-/** Resolve one configured agent's canonical backup root and owner database path. */
 export async function resolveBackupAgentRoot(
   config: OpenClawConfig,
   agentId: string,
@@ -579,14 +545,12 @@ export async function resolveBackupAgentRoot(
   };
 }
 
-/** Resolve configured agent storage roots and their canonical database paths for backup ownership. */
 export async function resolveBackupAgentRoots(config: OpenClawConfig): Promise<BackupAgentRoot[]> {
   return await Promise.all(
     listAgentIds(config).map((agentId) => resolveBackupAgentRoot(config, agentId)),
   );
 }
 
-/** Resolve the backup plan from the current OpenClaw state/config/workspace paths on disk. */
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;
@@ -626,7 +590,7 @@ async function resolveBackupPlanFromState(params: {
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
   const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
-  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot) ?? configSnapshot;
+  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot) ?? configSnapshot;
   const configCapture = await resolveBackupConfigCapture(configRead);
   if (discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(

@@ -47,6 +47,7 @@ function parseNavigation(eventJson: string): Record<string, unknown> | undefined
 }
 
 function navigationCandidatesSql(
+  identitySeq: Expression<number | null>,
   event: Expression<string>,
   candidate: { key: "id"; eventIds: readonly string[] } | { key: "type" },
 ): RawBuilder<SqlBool> {
@@ -61,7 +62,9 @@ function navigationCandidatesSql(
         WHERE instr(member.value, requested.value) > 0)`;
   // Admit any duplicate root member; JavaScript applies last-key and full trim semantics.
   // Invalid and SQLite-overdepth rows still reach the existing JSON.parse fallback.
-  return /* kysely-allow-raw: decoded members only narrow candidates; JavaScript owns exact matching. */ sql<SqlBool>`CASE WHEN json_valid(${event}) THEN EXISTS (
+  // Fence JSON behind the anti-join so indexed payloads are never parsed just to reject them.
+  return /* kysely-allow-raw: decoded members only narrow unindexed candidates; JavaScript owns exact matching. */ sql<SqlBool>`CASE WHEN ${identitySeq} IS NOT NULL THEN 0
+    WHEN json_valid(${event}) THEN EXISTS (
       SELECT 1 FROM json_each(${event}) AS member
       WHERE member.key = ${candidate.key} AND member.type = 'text' AND ${match}
     ) ELSE 1 END`;
@@ -103,16 +106,18 @@ export function* iterateUnindexedTranscriptNavigation(
     .where("event.session_id", "=", projection.resolved.sessionId)
     .where("identity.seq", "is", null)
     .$if(canFilterEventIds(options.eventIds), (filtered) =>
-      filtered.where(
-        navigationCandidatesSql(transcriptEventNavigationSql("event"), {
+      filtered.where((eb) =>
+        navigationCandidatesSql(eb.ref("identity.seq"), transcriptEventNavigationSql("event"), {
           key: "id",
           eventIds: options.eventIds!,
         }),
       ),
     )
     .$if(options.controlsOnly === true, (filtered) =>
-      filtered.where(
-        navigationCandidatesSql(transcriptEventNavigationSql("event"), { key: "type" }),
+      filtered.where((eb) =>
+        navigationCandidatesSql(eb.ref("identity.seq"), transcriptEventNavigationSql("event"), {
+          key: "type",
+        }),
       ),
     )
     .where("event.seq", "<=", options.maxRawSeq ?? projection.state.indexedSeq)
@@ -164,8 +169,8 @@ export function* iterateUnindexedActiveTranscriptNavigation(
     .where("active.session_id", "=", projection.resolved.sessionId)
     .where("identity.seq", "is", null)
     .$if(canFilterEventIds(options.eventIds), (filtered) =>
-      filtered.where(
-        navigationCandidatesSql(transcriptEventNavigationSql("event"), {
+      filtered.where((eb) =>
+        navigationCandidatesSql(eb.ref("identity.seq"), transcriptEventNavigationSql("event"), {
           key: "id",
           eventIds: options.eventIds!,
         }),

@@ -10,12 +10,6 @@ import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
-import { listTasksForOwnerKey } from "../../tasks/task-registry.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { SessionManager } from "../sessions/index.js";
 import {
@@ -44,25 +38,13 @@ async function withTranscriptOwners(
   run: (owners: Awaited<ReturnType<typeof createTranscriptOwners>>) => Promise<void>,
 ) {
   await withStateDirEnv("openclaw-maintenance-owners-", async ({ stateDir }) => {
-    using deliveries = captureTaskDeliveryWork();
     resetCommandQueueStateForTest();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     const owners = await createTranscriptOwners(stateDir);
     try {
       await run(owners);
     } finally {
-      try {
-        await waitForDeferredTurnMaintenanceForSession(owners.target.sessionKey);
-      } finally {
-        try {
-          await deliveries.settle();
-        } finally {
-          resetCommandQueueStateForTest();
-          resetTaskRegistryForTests({ persist: false });
-          resetTaskFlowRegistryForTests({ persist: false });
-        }
-      }
+      await waitForDeferredTurnMaintenanceForSession(owners.target.sessionKey);
+      resetCommandQueueStateForTest();
     }
   });
 }
@@ -164,7 +146,6 @@ describe("context-engine maintenance transcript ownership", () => {
         expect.soft(published).not.toHaveBeenCalled();
         expect.soft(await loadTranscriptEvents(target)).toEqual(durableBefore);
         expect.soft(deferred).toHaveLength(0);
-        expect.soft(listTasksForOwnerKey(target.sessionKey)).toHaveLength(0);
       } finally {
         release.resolve();
         await Promise.allSettled([run, ...deferred]);
@@ -221,9 +202,6 @@ describe("context-engine maintenance transcript ownership", () => {
             message: { content: "durable-only sentinel" },
           });
           expect(deferred).toHaveLength(executionMode ? 0 : 1);
-          expect(listTasksForOwnerKey(target.sessionKey).map((task) => task.status)).toEqual(
-            executionMode ? [] : ["succeeded"],
-          );
         } finally {
           await Promise.allSettled([run, ...deferred]);
           open.mockRestore();
@@ -236,7 +214,7 @@ describe("context-engine maintenance transcript ownership", () => {
   it.for(modes)(
     "does not coalesce or wait for foreign durable work with executionMode=%s",
     async (executionMode, { signal }) => {
-      await withTranscriptOwners(async ({ memory, durable, params, target }) => {
+      await withTranscriptOwners(async ({ memory, durable, params }) => {
         const release = createDeferredCore();
         const foreignStarted = createDeferredCore();
         const foreignMaintain = vi.fn(async () => {
@@ -258,7 +236,6 @@ describe("context-engine maintenance transcript ownership", () => {
             signal,
           );
           expect(foreignMaintain).toHaveBeenCalledOnce();
-          const tasksBefore = listTasksForOwnerKey(target.sessionKey);
           const maintain = vi.fn(async () => ({
             changed: false,
             rewrittenEntries: 0,
@@ -274,14 +251,10 @@ describe("context-engine maintenance transcript ownership", () => {
           await expect(run).resolves.toMatchObject({ changed: false });
           expect(maintain).toHaveBeenCalledOnce();
           expect(deferred).toHaveLength(1);
-          expect(listTasksForOwnerKey(target.sessionKey)).toEqual(tasksBefore);
         } finally {
           release.resolve();
           await Promise.allSettled([...(run ? [run] : []), ...deferred]);
         }
-        expect(listTasksForOwnerKey(target.sessionKey).map((task) => task.status)).toEqual([
-          "succeeded",
-        ]);
       });
     },
   );

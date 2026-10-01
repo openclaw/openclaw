@@ -14,9 +14,7 @@ import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { readConfigFileSnapshotForWrite, type OpenClawConfig } from "../../config/config.js";
-import { readCurrentConfigForPolicyCheck } from "../../config/io.runtime.js";
-import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
+import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -25,6 +23,7 @@ import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
 import { withCommandPluginMetadata } from "../config-validation.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName } from "./add-mutators.js";
+import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 
 type InitialWizardChannelTarget =
   | { kind: "omitted" }
@@ -60,10 +59,11 @@ export async function selectChannelSetupOwner(
   }
   writeSnapshot.writeOptions.assertConfigPathForWrite?.();
   // The roster can change while the prompt waits; retain the original snapshot for the commit fence.
-  const currentConfig = readCurrentConfigForPolicyCheck({
+  const currentConfig = await readCurrentConfigForPolicyCheckAsync({
     configPath: writeSnapshot.snapshot.path,
     env: process.env,
   });
+  writeSnapshot.writeOptions.assertConfigPathForWrite?.();
   const agentId = resolveConfiguredAgentId(currentConfig, selectedAgent.agentId);
   return resolveChannelSetupOwner(currentConfig, agentId);
 }
@@ -129,7 +129,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   const { sourceConfig: cfg, hash: baseHash } = writeSnapshot.snapshot;
   const [{ buildAgentSummaries }, onboardChannels] = await Promise.all([
     import("../agents.config.js"),
-    import("../onboard-channels.js"),
+    import("../../flows/channel-setup.js"),
   ]);
   const channelSetup = onboardChannels.createChannelSetupHooks({
     runtime,
@@ -171,18 +171,13 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   });
   const commitWizardConfig = async (config: OpenClawConfig) => {
     await params.beforePersistentEffect?.();
-    const committed = await commitConfigWithPendingPluginInstalls({
-      sourceConfig: config,
+    const committed = await persistChannelPluginConfig({
+      cfg: config,
+      pluginInstalled: false,
       writeOptions: writeSnapshot.writeOptions,
-      ...(baseHash !== undefined ? { baseHash } : {}),
+      baseHash,
+      runtime,
     });
-    if (committed.movedInstallRecords) {
-      await refreshPluginRegistryAfterConfigMutation({
-        reason: "source-changed",
-        installRecords: committed.installRecords,
-        logger: { warn: (message) => runtime.log(message) },
-      });
-    }
     await channelSetup.runPostWriteHooks(committed.path);
     return committed.nextConfig;
   };
@@ -250,7 +245,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       } => Boolean(value.accountId),
     );
   if (bindTargets.length > 0) {
-    const agentSummaries = buildAgentSummaries(nextConfig);
+    const agentSummaries = await buildAgentSummaries(nextConfig);
     const bindNow =
       usesTargetedDefaults && agentSummaries.length <= 1
         ? false

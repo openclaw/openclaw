@@ -1,9 +1,7 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitCheckoutContext } from "../infra/git-read-operations.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
@@ -21,6 +19,7 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 import type { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
+import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 
 type SelectedSession = Pick<
   ReturnType<typeof loadGatewaySessionEntryReadOnly>,
@@ -38,13 +37,15 @@ export type ControlUiSessionPrTarget = {
 export type ControlUiSessionPrReadContext = {
   target: ControlUiSessionPrTarget;
   sourceIdentity: string;
+  // Internal consumers can inspect all fetched PRs without expanding the UI.
+  projection?: "publication";
   assertCurrent: () => void;
 };
 
 /** Git facts and cached snapshots belong to the recorded session and workspace source. */
 export function resolveControlUiSessionPrTarget(
   selected: SelectedSession,
-  preparedRepository?: GatewaySessionRow["repository"] | null,
+  preparedRepository: GatewaySessionRow["repository"] | null,
 ): ControlUiSessionPrTarget | undefined {
   const { cfg, agentId, canonicalKey, storePath, readSource, entry } = selected;
   if (!entry?.sessionId || !storePath || !readSource) {
@@ -52,20 +53,11 @@ export function resolveControlUiSessionPrTarget(
   }
   let source: ControlUiSessionPrTarget["source"];
   if (entry.repositoryWorkspaceId) {
-    let repository = preparedRepository;
-    if (repository === undefined) {
-      const workspace = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
-      repository =
-        workspace?.agentId === agentId && workspace.sessionKey === canonicalKey ? workspace : null;
-    }
+    const repository = preparedRepository;
     const remote = repository ? parseGitHubRemoteUrl(repository.url) : null;
     source = remote && repository ? { ...remote, branch: repository.branch } : null;
   } else {
-    source =
-      normalizeOptionalString(entry.spawnedCwd) ??
-      normalizeOptionalString(entry.spawnedWorkspaceDir) ??
-      normalizeOptionalString(resolveAgentWorkspaceDir(cfg, agentId)) ??
-      null;
+    source = resolveSessionWorkspaceRoots(cfg, agentId, entry).diffCwd ?? null;
   }
   return {
     params: { sessionKey: canonicalKey, agentId },
@@ -113,8 +105,12 @@ export async function prepareControlUiSessionPrRead(params: {
   const scopes = [...(client.connect.scopes ?? [])].toSorted().join("\0");
   const access = client.internal?.operatorAccessAuthority;
   const connectionSignal = client.connectionSignal;
+  const projection = getSessionRowProjection();
+  if (!projection) {
+    return undefined;
+  }
   let aliasRevision = -1;
-  const captureCurrent = (projection: SessionRowProjection) => {
+  const captureCurrent = () => {
     try {
       const currentActor = resolveGatewayOperatorRoleActor(client);
       if (
@@ -161,9 +157,13 @@ export async function prepareControlUiSessionPrRead(params: {
       }
       const query = { key: sessionKey, agentId: requested.agentId };
       const selected = projection.capture(query);
+      // Exact reads prepare this session; unrelated pending membership must not hide it.
       if (
         !selected?.entry ||
         !projection.isCurrent(selected) ||
+        (isIncognitoSessionKey(selected.key)
+          ? projection.needsMembershipPreparation()
+          : projection.sharingTargetState(query).status !== "ready") ||
         createSessionListEntryFilter({ cfg, client })?.(selected.key, selected.entry) === false
       ) {
         return undefined;
@@ -184,7 +184,8 @@ export async function prepareControlUiSessionPrRead(params: {
       if (!current || !storePath) {
         return undefined;
       }
-      return resolveControlUiSessionPrTarget(
+      const repository = current.materialized.row.repository ?? null;
+      const target = resolveControlUiSessionPrTarget(
         {
           cfg: captured.cfg,
           agentId: current.agentId,
@@ -193,16 +194,16 @@ export async function prepareControlUiSessionPrRead(params: {
           readSource: { agentId: current.storeTarget.agentId, path: storePath },
           entry: current.entry,
         },
-        current.materialized.row.repository ?? null,
+        repository,
       );
+      return target ? { target, repository } : undefined;
     } catch {
       return undefined;
     }
   };
   const readCurrent: ControlUiSessionPrRead = async () => {
     try {
-      const projection = getSessionRowProjection();
-      if (!projection) {
+      if (getSessionRowProjection() !== projection) {
         return undefined;
       }
       const target = await withReadySessionRows(
@@ -212,25 +213,75 @@ export async function prepareControlUiSessionPrRead(params: {
           return requested.ok ? [{ key: sessionKey, agentId: requested.agentId }] : [];
         },
         (read) => {
-          const captured = captureCurrent(projection);
+          const captured = captureCurrent();
           if (!captured) {
             return undefined;
           }
-          const preparedTarget = readPreparedCurrent(read, captured);
-          return preparedTarget
-            ? { target: preparedTarget, captured: captured.selected }
-            : undefined;
+          const prepared = readPreparedCurrent(read, captured);
+          if (!prepared) {
+            return undefined;
+          }
+          const privateRow = isIncognitoSessionKey(captured.selected.key);
+          const rowContext = projection.readPreparedRowContext();
+          if (privateRow && captured.selected.entry?.repositoryWorkspaceId && !rowContext) {
+            return undefined;
+          }
+          return {
+            ...prepared,
+            captured: privateRow ? undefined : captured.selected,
+            privateSource: privateRow
+              ? {
+                  generation: captured.selected.generation,
+                  sessionId: captured.selected.entry?.sessionId,
+                  lifecycleRevision: captured.selected.entry?.lifecycleRevision,
+                  rowContext,
+                }
+              : undefined,
+          };
         },
       );
       return target
         ? {
             ...target.target,
             assertCurrent: () => {
-              const current = captureCurrent(projection);
+              const current = captureCurrent();
+              const original = target.privateSource;
+              if (!current) {
+                throw new Error("Session pull-request target changed");
+              }
+              if (!original) {
+                if (
+                  current.selected !== target.captured ||
+                  !target.captured ||
+                  !projection.isCurrent(target.captured)
+                ) {
+                  throw new Error("Session pull-request target changed");
+                }
+                return;
+              }
+              // Private acquisition creates a new Row; retain only its native incarnation and facts.
+              const { selected } = current;
               if (
-                !current ||
-                current.selected !== target.captured ||
-                !projection.isCurrent(target.captured)
+                selected.generation !== original.generation ||
+                selected.entry?.sessionId !== original.sessionId ||
+                selected.entry?.lifecycleRevision !== original.lifecycleRevision ||
+                (selected.entry?.repositoryWorkspaceId &&
+                  (!original.rowContext ||
+                    projection.readPreparedRowContext() !== original.rowContext)) ||
+                resolveControlUiSessionPrTarget(
+                  {
+                    cfg: current.cfg,
+                    agentId: selected.agentId,
+                    canonicalKey: selected.key,
+                    storePath: selected.storeTarget.storePath,
+                    readSource: {
+                      agentId: selected.storeTarget.agentId,
+                      path: selected.storeTarget.storePath,
+                    },
+                    entry: selected.entry,
+                  },
+                  target.repository,
+                )?.identity !== target.target.identity
               ) {
                 throw new Error("Session pull-request target changed");
               }

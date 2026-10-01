@@ -1,3 +1,8 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeInheritedToolAllowlist,
+  normalizeInheritedToolDenylist,
+} from "../agents/inherited-tool-deny.js";
 import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -93,5 +98,30 @@ export function resolveSessionCreateInheritance(params: {
       inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parent),
     },
     ...(ownerAssignment ? { ownerAssignment } : {}),
+  };
+}
+
+/** Project the trusted spawn policy only onto a genuinely new child row. */
+export function resolveSessionCreateSpawnPolicy(
+  params: Pick<CreateGatewaySessionParams, "spawnToolPolicy" | "preparedPermissionSelection">,
+  parentSessionKey: string | undefined,
+): Partial<SessionEntry> | undefined {
+  if (!params.spawnToolPolicy || !parentSessionKey) {
+    return undefined;
+  }
+  const completionOwnerSessionKey = normalizeOptionalString(
+    params.spawnToolPolicy.completionOwnerSessionKey,
+  );
+  const allow = normalizeInheritedToolAllowlist(params.spawnToolPolicy.allow);
+  const deny = normalizeInheritedToolDenylist(params.spawnToolPolicy.deny);
+  return {
+    spawnedBy: parentSessionKey,
+    ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
+    inheritedToolPolicyVersion: 1,
+    ...(params.preparedPermissionSelection
+      ? { permissionMode: params.preparedPermissionSelection.mode }
+      : {}),
+    ...(allow.length > 0 ? { inheritedToolAllow: allow } : {}),
+    ...(deny.length > 0 ? { inheritedToolDeny: deny } : {}),
   };
 }

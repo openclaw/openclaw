@@ -49,8 +49,13 @@ type Installation =
   | "canonical default"
   | "Compose env ports"
   | "explicit relocated";
+type AfterRemoval = "legacy alias" | "unverifiable alias";
 
-async function exerciseDoctor(installation: Installation, difference?: Difference) {
+async function exerciseDoctor(
+  installation: Installation,
+  difference?: Difference,
+  afterRemoval?: AfterRemoval,
+) {
   const home = await fs.realpath(dirs.make("doctor-dueling-identity-"));
   const profile =
     installation === "default" || installation === "canonical default" ? undefined : "lisa";
@@ -108,6 +113,11 @@ async function exerciseDoctor(installation: Installation, difference?: Differenc
       .map(([key, value]) => `Environment="${key}=${value}"`)
       .join("\n")}\n`;
   await fs.writeFile(userPath, unit(userName));
+  const legacyName = "openclaw-lisa.service";
+  const legacyPath = path.join(path.dirname(userPath), legacyName);
+  if (afterRemoval) {
+    await fs.writeFile(legacyPath, unit(legacyName));
+  }
   await fs.writeFile(systemFile, `${unit(systemName)}User=gateway\n`);
 
   // System-unit discovery uses its real paths; only this fixture's file lives under HOME.
@@ -207,6 +217,7 @@ async function exerciseDoctor(installation: Installation, difference?: Differenc
     ]);
   }
   const unexpected: string[] = [];
+  let removed = false;
   native.exec.mockReset().mockImplementation(async (command, commandArgs) => {
     if (command === "systemctl" && commandArgs[0] === "is-active") {
       return success();
@@ -226,10 +237,14 @@ async function exerciseDoctor(installation: Installation, difference?: Differenc
         return success(JSON.stringify(property("u", [system ? 0 : 2001])));
       }
       if (commandArgs.includes("GetUnit") || commandArgs.includes("LoadUnit")) {
-        if (system && difference === "unavailable") {
+        if (
+          system &&
+          (difference === "unavailable" || (removed && afterRemoval === "unverifiable alias"))
+        ) {
           return { ...success(), code: 1, stderr: "Synthetic system inspection unavailable" };
         }
-        if (commandArgs.at(-1) === (system ? systemName : userName)) {
+        const selectedUserName = removed && afterRemoval ? legacyName : userName;
+        if (commandArgs.at(-1) === (system ? systemName : selectedUserName)) {
           return success(
             JSON.stringify(
               property("o", [`/org/freedesktop/systemd1/unit/${system ? "system" : "user"}`]),
@@ -241,7 +256,9 @@ async function exerciseDoctor(installation: Installation, difference?: Differenc
       if (index >= 0) {
         const values: Record<string, ReturnType<typeof property>> = system
           ? systemProperties
-          : userProperties;
+          : removed && afterRemoval
+            ? properties(legacyName, legacyPath)
+            : userProperties;
         const names = commandArgs.slice(index + 1);
         if (names.every((name) => Object.hasOwn(values, name))) {
           return success(names.map((name) => JSON.stringify(values[name])).join("\n"));
@@ -251,11 +268,10 @@ async function exerciseDoctor(installation: Installation, difference?: Differenc
     unexpected.push(`${command} ${commandArgs.join(" ")}`);
     return { ...success(), code: 1, stderr: "Unexpected fixture native command" };
   });
-  native.uninstall.mockReset().mockResolvedValue({
-    unitName: userName,
-    unitPath: userPath,
-    removed: true,
-    disabled: true,
+  native.uninstall.mockReset().mockImplementation(async () => {
+    await fs.unlink(userPath);
+    removed = true;
+    return { unitName: userName, unitPath: userPath, removed: true, disabled: true };
   });
   await withEnvAsync(
     {
@@ -307,6 +323,23 @@ async function exerciseDoctor(installation: Installation, difference?: Differenc
           stdout: process.stdout,
           target: { scope: "user", unitName: userName, unitPath: userPath },
         });
+        if (afterRemoval) {
+          expect(await fs.readFile(legacyPath, "utf8")).toBe(unit(legacyName));
+          expect(runtime.error).not.toHaveBeenCalled();
+          expect(runtime.log).not.toHaveBeenCalledWith(
+            expect.stringContaining("sole gateway manager"),
+          );
+          expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor"));
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining(
+              afterRemoval === "legacy alias" ? legacyPath : "could not be verified",
+            ),
+          );
+        } else {
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining("No other matching installed user-scope unit was found."),
+          );
+        }
       }
     },
   );
@@ -337,4 +370,9 @@ it.each<Difference>([
   "confirmation drift",
 ])("Doctor preserves the user unit when system identity differs: %s", async (difference) =>
   exerciseDoctor("named", difference),
+);
+
+it.each<AfterRemoval>(["legacy alias", "unverifiable alias"])(
+  "Doctor reports the remaining %s without removing it",
+  async (afterRemoval) => exerciseDoctor("named", undefined, afterRemoval),
 );

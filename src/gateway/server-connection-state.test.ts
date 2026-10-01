@@ -11,12 +11,19 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listSystemPresence, upsertPresence } from "../infra/system-presence.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { systemHandlers } from "./server-methods/system.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
+import { buildGatewaySnapshot } from "./server/health-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
 type ConnectionIdReads = { count: number };
@@ -97,6 +104,7 @@ describe("gateway connection state", () => {
         );
       }
       const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
         bootId: "committed-event-policy",
         cfg: restricted,
         getRuntimeConfig: () => runtimeConfig,
@@ -183,6 +191,86 @@ describe("gateway connection state", () => {
           await projection.ensureMaterialized();
           committedConfig = relaxed;
           publish("committed relaxation without a projection mark", [ownKey, foreignKey]);
+
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: ownKey },
+            { parentSessionKey: foreignKey },
+          );
+          const later = makeClient("later-policy-reader", { count: 0 });
+          later.client.connect = { ...peer.client.connect };
+          later.client.authenticatedUserProfile = peer.client.authenticatedUserProfile;
+          prepareGatewayRecipientProfile(later.client);
+          state.clients.add(later.client);
+          peer.send.mockClear();
+          peer.send.mockImplementationOnce(() => {
+            committedConfig = restricted;
+          });
+          await projection.withPreparedExactRows(
+            () => [{ key: ownKey, agentId: "main" }],
+            (read) => {
+              state.broadcast(
+                "sessions.changed",
+                { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+                {
+                  sessionKeys: [ownKey],
+                  agentId: "main",
+                  prepareSessionProjection: prepareSessionEventProjection(projection, read),
+                },
+              );
+            },
+            { includeAncestors: true },
+          );
+          expect(peer.send).toHaveBeenCalledOnce();
+          expect(later.send).toHaveBeenCalledOnce();
+          expect(JSON.parse(peer.send.mock.lastCall![0]).payload).toMatchObject({
+            session: { key: ownKey },
+            ancestorSessions: [{ key: foreignKey }],
+          });
+          expect(JSON.parse(later.send.mock.lastCall![0]).payload).toMatchObject({
+            session: { key: ownKey },
+            ancestorSessions: [],
+          });
+          expect(JSON.parse(later.send.mock.lastCall![0]).payload).not.toHaveProperty(
+            "ancestorSessionRefs",
+          );
+          const replacement = await createSessionRowProjection({
+            cfg: runtimeConfig,
+            getPolicyConfig: () => committedConfig,
+          });
+          let detachReplacement: (() => void) | undefined;
+          try {
+            await replacement.ensureMaterialized();
+            peer.send.mockClear();
+            later.send.mockClear();
+            await projection.withPreparedExactRows(
+              () => [{ key: ownKey, agentId: "main" }],
+              (read) => {
+                detachReplacement = state.attachSessionRowProjection(replacement);
+                state.broadcast(
+                  "sessions.changed",
+                  { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+                  {
+                    sessionKeys: [ownKey],
+                    agentId: "main",
+                    prepareSessionProjection: prepareSessionEventProjection(projection, read),
+                  },
+                );
+              },
+              { includeAncestors: true },
+            );
+            expect(peer.send).not.toHaveBeenCalled();
+            expect(later.send).not.toHaveBeenCalled();
+            state.broadcast(
+              "sessions.changed",
+              { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+              { sessionKeys: [ownKey], agentId: "main" },
+            );
+            expect(peer.send).toHaveBeenCalledOnce();
+            expect(later.send).toHaveBeenCalledOnce();
+          } finally {
+            detachReplacement?.();
+            replacement.dispose();
+          }
         } finally {
           detach();
           projection.dispose();
@@ -196,6 +284,7 @@ describe("gateway connection state", () => {
   it("advertises online people only through live operator connections", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
         bootId: "online-recipients",
         cfg: { agents: { entries: { main: {} } } },
       });
@@ -268,8 +357,12 @@ describe("gateway connection state", () => {
         }
       });
       const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-      const state = createGatewayConnectionState({ bootId: "members", cfg: {} });
-      state.attachSessionRowProjection(projection);
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "members",
+        cfg: {},
+      });
+      const detach = state.attachSessionRowProjection(projection);
       const peers = Array.from({ length: 50 }, (_, index) => {
         const peer = makeClient(`viewer-${index}`, { count: 0 });
         peer.client.authenticatedUserProfile = {
@@ -379,6 +472,149 @@ describe("gateway connection state", () => {
         expect(publicationDirtyRows.every((count) => count > 0)).toBe(true);
       } finally {
         stopPublication();
+        detach();
+        projection.dispose();
+        state.mentionInbox.dispose();
+      }
+    });
+  });
+
+  it("serves current presence through broadcasts, RPCs, and hello without SQL while display rows are dirty", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const reader = ensureProfileForEmail("presence-reader@example.test");
+      const sharedKey = "agent:main:presence-shared";
+      const draftKey = "agent:main:presence-draft";
+      const incognitoKey = "agent:main:dashboard:incognito-presence";
+      const missingKey = "agent:main:presence-missing";
+      for (const [sessionKey, visibility] of [
+        [sharedKey, "shared"],
+        [draftKey, "draft"],
+        [incognitoKey, "shared"],
+        ["global", "shared"],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            visibility,
+            createdActor: { type: "human", source: "profile", id: "other-owner" },
+            ...(sessionKey === incognitoKey ? { incognito: true } : {}),
+          },
+        );
+      }
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "presence-boundaries",
+        cfg,
+      });
+      const detach = state.attachSessionRowProjection(projection);
+      const peers = ["reader", "admin", "trailing-reader"].map((name) => {
+        const peer = makeClient(`presence-${name}`, { count: 0 });
+        peer.client.connect.scopes = [name === "admin" ? "operator.admin" : "operator.read"];
+        peer.client.authenticatedUserProfile = {
+          profileId: reader.id,
+          displayName: null,
+          avatarRevision: "test",
+          hasAvatar: false,
+          updatedAt: reader.updatedAt,
+        };
+        prepareGatewayRecipientProfile(peer.client);
+        state.clients.add(peer.client);
+        return peer;
+      });
+      const context = createGatewayRequestContext(
+        makeContextParams({
+          clients: state.clients,
+          getSessionRowProjection: state.getSessionRowProjection,
+        }),
+      );
+      const presenceKey = "presence-boundary-watcher";
+      upsertPresence(presenceKey, {
+        text: presenceKey,
+        watchedSessions: [sharedKey, draftKey, incognitoKey, missingKey, "agent:main:global"],
+      });
+      try {
+        await projection.ensureMaterialized();
+        const scope = { agentId: "main", sessionKey: sharedKey };
+        sessionChanges.emit(scope);
+        const verify = (sharedVisible: boolean) => {
+          expect(projection.dirtyRowCount).toBeGreaterThan(0);
+          const sql = observeHostDataSql();
+          try {
+            peers.forEach(({ send }) => send.mockClear());
+            state.broadcast("presence", { presence: listSystemPresence() });
+            for (const [index, peer] of peers.entries()) {
+              const watchedSessions =
+                index === 1
+                  ? [sharedKey, draftKey, incognitoKey, "agent:main:global"]
+                  : [...(sharedVisible ? [sharedKey] : []), "agent:main:global"];
+              const expected = expect.arrayContaining([
+                expect.objectContaining({ text: presenceKey, watchedSessions }),
+              ]);
+              expect(peer.send).toHaveBeenCalledOnce();
+              const frame = peer.send.mock.calls[0]?.[0];
+              expect(typeof frame).toBe("string");
+              expect(JSON.parse(String(frame))).toMatchObject({
+                event: "presence",
+                payload: { presence: expected },
+              });
+              const respond = vi.fn();
+              void systemHandlers["system-presence"]!({
+                req: { type: "req", id: "presence", method: "system-presence" },
+                params: {},
+                client: peer.client,
+                respond,
+                context,
+                isWebchatConnect: () => true,
+              });
+              expect(respond).toHaveBeenCalledExactlyOnceWith(true, expected, undefined);
+              expect(
+                buildGatewaySnapshot({
+                  client: peer.client,
+                  sessionRowProjection: projection,
+                  revisionProjector: context.configRevisionProjector,
+                }).presence,
+              ).toEqual(expected);
+            }
+            expect(sql.queries).toEqual([]);
+          } finally {
+            sql.restore();
+          }
+        };
+        verify(true);
+        replaceSessionEntrySync(scope, {
+          sessionId: sharedKey,
+          updatedAt: 2,
+          visibility: "draft",
+          createdActor: { type: "human", source: "profile", id: "other-owner" },
+        });
+        verify(false);
+        replaceSessionEntrySync(scope, {
+          sessionId: sharedKey,
+          updatedAt: 3,
+          visibility: "shared",
+        });
+        peers[0]!.send.mockImplementationOnce(() => {
+          replaceSessionEntrySync(scope, {
+            sessionId: sharedKey,
+            updatedAt: 4,
+            visibility: "draft",
+          });
+        });
+        state.broadcast("presence", { presence: listSystemPresence() });
+        const trailing = JSON.parse(String(peers[2]!.send.mock.lastCall?.[0]));
+        expect(trailing.payload.presence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ text: presenceKey, watchedSessions: ["agent:main:global"] }),
+          ]),
+        );
+      } finally {
+        upsertPresence(presenceKey, { watchedSessions: undefined });
+        detach();
         projection.dispose();
         state.mentionInbox.dispose();
       }
@@ -387,6 +623,7 @@ describe("gateway connection state", () => {
 
   it("bounds targeted delivery and connection lookups to the requested connection", () => {
     const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
       bootId: "targeted-delivery",
       cfg: {} as OpenClawConfig,
     });
@@ -445,6 +682,7 @@ describe("gateway connection state", () => {
 
   it("preserves connection insertion order for targeted fanout", () => {
     const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
       bootId: "ordered-delivery",
       cfg: {} as OpenClawConfig,
     });

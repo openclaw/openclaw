@@ -25,7 +25,8 @@ import {
   type SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
@@ -40,10 +41,13 @@ async function withCatalog(
     let fixture: Awaited<ReturnType<typeof createCatalog>> | undefined;
     try {
       fixture = await createCatalog();
+      // Deferred providers must not race the response budget while privacy writes settle.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       await run(fixture);
     } finally {
       fixture?.projection.dispose();
       setActivePluginRegistry(previousRegistry);
+      vi.useRealTimers();
     }
   });
 }

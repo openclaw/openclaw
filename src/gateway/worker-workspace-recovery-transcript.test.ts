@@ -222,13 +222,13 @@ describe("worker workspace recovery transcript reporting", () => {
         workspacePath,
       };
       const harness = createHarness(openOpenClawStateDatabase(), placements, harnessOptions);
-      const active = harness.placements.seedActive(2);
+      const active = await harness.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("expected active worker placement");
       }
       harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
       harness.markEnvironmentNodeDeviceId("workspace-recovery-worker-node");
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...REQUEST,
         claimId: "workspace-recovery-claim",
         runId: "workspace-recovery-run",

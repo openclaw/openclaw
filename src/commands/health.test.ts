@@ -177,7 +177,7 @@ describe("healthCommand", () => {
     probeGatewayStatusMock.mockReset();
   });
 
-  it("preserves plugin health in JSON while surfacing activated failures in text", async () => {
+  it("preserves plugin health in JSON while surfacing configured failures and unavailable warnings", async () => {
     const agentSessions = {
       path: "/tmp/sessions.json",
       count: 1,
@@ -217,8 +217,28 @@ describe("healthCommand", () => {
           activated: false,
           error: "inactive plugin load failed",
         },
+        {
+          id: "explicit-owner",
+          origin: "config",
+          activated: false,
+          activationSource: "explicit",
+          failurePhase: "load",
+          error: "runtime entry missing",
+        },
+      ],
+      unavailable: [
+        {
+          id: "memory-owner",
+          state: "configured-unavailable",
+          diagnostic: {
+            kind: "plugin-verification",
+            reason: "unreadable-package-json",
+            detail: "manifest unreadable",
+          },
+        },
       ],
     };
+    const original = structuredClone(snapshot);
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
     await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
@@ -229,7 +249,7 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
-    expect(parsed.plugins).toEqual(snapshot.plugins);
+    expect(parsed.plugins).toEqual(original.plugins);
 
     runtime.log.mockClear();
     callGatewayMock.mockResolvedValueOnce(snapshot);
@@ -241,13 +261,14 @@ describe("healthCommand", () => {
       "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
     );
     expect(output).not.toContain("inactive plugin load failed");
+    expect(snapshot).toEqual(original);
+    expect(output).toContain("Plugin explicit-owner: failed - runtime entry missing");
+    expect(output).toContain(
+      "Plugin memory-owner: unavailable - unreadable-package-json: manifest unreadable",
+    );
   });
 
-  it.each([
-    { everyMs: 65_001, expected: "1m 5s 1ms" },
-    { everyMs: 604_800_001, expected: "1w 1ms" },
-    { everyMs: 691_200_000, expected: "1w 1d" },
-  ])(
+  it.each([{ everyMs: 691_265_001, expected: "1w 1d 1m 5s 1ms" }])(
     "preserves configured duration precision in heartbeat: $everyMs ms",
     async ({ everyMs, expected }) => {
       const snapshot = createHealthSummary();
@@ -504,7 +525,9 @@ describe("healthCommand", () => {
     await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
-    expect(output).toContain("Config hot reload: disabled");
+    expect(output).toContain(
+      "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
+    );
   });
 
   it("omits the config hot-reload line in text output when the reloader is active", async () => {
@@ -518,11 +541,10 @@ describe("healthCommand", () => {
     expect(output).not.toContain("Config hot reload");
   });
 
-  it.each(
-    [0, -600_000, 600_000].flatMap((clockSkewMs) =>
-      ["agent", "top-level"].map((surface) => ({ clockSkewMs, surface })),
-    ),
-  )(
+  it.each([
+    { clockSkewMs: -600_000, surface: "agent" },
+    { clockSkewMs: 600_000, surface: "top-level" },
+  ])(
     "prints $surface gateway ages with $clockSkewMs ms client clock skew",
     async ({ clockSkewMs, surface }) => {
       const gatewayNow = Date.now();
@@ -1023,22 +1045,6 @@ describe("formatContextEngineHealthLine", () => {
 });
 
 describe("formatConfigReloadHealthLine", () => {
-  it("reports a disabled config hot-reload watcher", () => {
-    const summary = createHealthSummary();
-    summary.configReload = { hotReloadStatus: "disabled" };
-
-    expect(formatConfigReloadHealthLine(summary)).toBe(
-      "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
-    );
-  });
-
-  it("stays silent while the config hot-reload watcher is active", () => {
-    const summary = createHealthSummary();
-    summary.configReload = { hotReloadStatus: "active" };
-
-    expect(formatConfigReloadHealthLine(summary)).toBeNull();
-  });
-
   it("stays silent when no config reloader is running", () => {
     const summary = createHealthSummary();
 

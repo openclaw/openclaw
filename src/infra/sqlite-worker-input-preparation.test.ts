@@ -101,10 +101,10 @@ it.each([
   },
 );
 
-it("bounds oversized preparation and releases each reservation only once", () => {
+it("bounds oversized streams and releases each reservation only once", () => {
   const broker = createBroker();
   const first = broker.reserveInputPreparation(100 * MIB);
-  const second = broker.reserveInputPreparation(100 * MIB);
+  const second = broker.reserveInputPreparation(100 * MIB, "stream");
   const concurrent: ReturnType<typeof broker.reserveInputPreparation>[] = [];
   try {
     for (let index = 0; index < 3; index += 1) {
@@ -130,6 +130,30 @@ it("bounds oversized preparation and releases each reservation only once", () =>
     first.release();
     second.release();
   }
+});
+
+it("charges complete snapshots and releases exact custody after canceled dispatch", async () => {
+  const broker = createBroker();
+  const reserve = (mib: number) => {
+    const prepared = broker.reserveInputPreparation(mib * MIB, "snapshot");
+    concurrentInputs.add(prepared);
+    return prepared;
+  };
+  const first = reserve(100);
+  const second = reserve(100);
+  expect(() => reserve(100)).toThrow(expect.objectContaining({ code: "overloaded" }));
+
+  const reason = new Error("snapshot canceled before dispatch");
+  await expect(first.handoff(() => Promise.reject(reason))).rejects.toBe(reason);
+  first.release();
+  reserve(100);
+  reserve(56);
+  expect(() => reserve(1)).toThrow(expect.objectContaining({ code: "overloaded" }));
+
+  second.release();
+  second.release();
+  reserve(100);
+  expect(() => reserve(1)).toThrow(expect.objectContaining({ code: "overloaded" }));
 });
 
 it("joins captured input before drainage returns and refuses stale handoff", async () => {

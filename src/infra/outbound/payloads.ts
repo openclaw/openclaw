@@ -147,27 +147,15 @@ export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string 
 
 function isSuppressedRelayStatusText(text: string): boolean {
   const normalized = text.trim();
-  if (!normalized) {
-    return false;
-  }
-  if (/^no channel reply\.?$/i.test(normalized)) {
-    return true;
-  }
-  if (/^replied in-thread\.?$/i.test(normalized)) {
-    return true;
-  }
-  if (/^replied in #[-\w]+\.?$/i.test(normalized)) {
-    return true;
-  }
   // Prevent relay housekeeping text from leaking into user-visible channels.
-  if (
+  return (
+    /^no channel reply\.?$/i.test(normalized) ||
+    /^replied in-thread\.?$/i.test(normalized) ||
+    /^replied in #[-\w]+\.?$/i.test(normalized) ||
     /^updated\s+\[[^\]]*wiki\/[^\]]+\](?:\([^)]+\))?(?:\s+with\b[\s\S]*)?(?:\.\s*)?(?:no channel reply\.?)?$/i.test(
       normalized,
     )
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 function normalizeRawOutboundPayload(
@@ -342,10 +330,9 @@ export function projectOutboundPayloadPlanForOutbound(
 export function projectOutboundPayloadPlanForJson(
   plan: readonly OutboundPayloadPlan[],
 ): OutboundPayloadJson[] {
-  const normalized: OutboundPayloadJson[] = [];
-  for (const entry of plan) {
+  return plan.map((entry) => {
     const payload = entry.payload;
-    normalized.push({
+    return {
       text: entry.parts.text,
       isError: payload.isError,
       mediaUrl: payload.mediaUrl ?? null,
@@ -359,9 +346,8 @@ export function projectOutboundPayloadPlanForJson(
       interactive: payload.interactive,
       channelData: payload.channelData,
       ...(payload.location ? { location: payload.location } : {}),
-    });
-  }
-  return normalized;
+    };
+  });
 }
 
 /** Projects a payload plan into text/media content for session mirroring. */

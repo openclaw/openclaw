@@ -3,13 +3,14 @@ import { realpathSync, statSync, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
-import { isPathInside } from "@openclaw/fs-safe/path";
+import { isNotFoundPathError, isPathInside } from "@openclaw/fs-safe/path";
 import { normalizeWindowsNamespaceAlias } from "../infra/backup-archive-path-policy.js";
 import { isTransientBackupPath, isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { walkDirectory } from "../infra/fs-safe.js";
 import { isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import type { ResolvedPluginBackupResource } from "../plugins/manifest-backup-resources.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 export type BackupAgentRoot = Readonly<{
@@ -90,7 +91,7 @@ async function listDefaultAgentTemporaryRoots(
   try {
     agentDirectories = await fs.readdir(path.join(stateDir, "agents"), { withFileTypes: true });
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+    if (isNotFoundPathError(error)) {
       return temporaryRoots;
     }
     throw error;
@@ -109,9 +110,7 @@ async function listDefaultAgentTemporaryRoots(
       descend: (entry) =>
         entry.name !== "tmp" && entry.name !== ".tmp" && !isCustomAgentPath(entry.path),
     });
-    const failure = scan.failedDirs.find(
-      ({ error }) => !hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR"),
-    );
+    const failure = scan.failedDirs.find(({ error }) => !isNotFoundPathError(error));
     if (failure) {
       throw failure.error;
     }
@@ -194,21 +193,14 @@ export async function createBackupResourcePlan(params: {
     }
   }
 
-  const seenRegenerableRoots = new Set<string>();
   const uniqueRegenerableRoots = Object.freeze(
-    regenerableRoots
-      .toSorted(
+    dedupeByKey(
+      regenerableRoots.toSorted(
         (left, right) =>
           left.sourcePath.localeCompare(right.sourcePath) || left.kind.localeCompare(right.kind),
-      )
-      .filter((resource) => {
-        const key = `${resource.kind}\0${resource.sourcePath}`;
-        if (seenRegenerableRoots.has(key)) {
-          return false;
-        }
-        seenRegenerableRoots.add(key);
-        return true;
-      }),
+      ),
+      (resource) => `${resource.kind}\0${resource.sourcePath}`,
+    ),
   );
   const protectedPaths = Object.freeze([...protectedPathSet].toSorted());
   // Workspace exclusions stop traversal but are not regenerable resources;

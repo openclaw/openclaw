@@ -191,21 +191,17 @@ export function replaceChatAttachmentsFromEditor(
   );
 }
 
-function discardChatAttachmentDataUrl(id: string): void {
-  const payload = payloads.get(id);
-  if (!payload) {
-    return;
-  }
-  releaseVideoPoster(payload);
-  if (payload.previewUrl) {
-    payloads.set(id, { previewUrl: payload.previewUrl });
-    return;
-  }
-  payloads.delete(id);
-}
-
 export function discardChatAttachmentDataUrls(attachments: readonly ChatAttachment[] = []): void {
-  for (const attachment of attachments) {
-    discardChatAttachmentDataUrl(attachment.id);
+  for (const { id } of attachments) {
+    const payload = payloads.get(id);
+    if (!payload) {
+      continue;
+    }
+    releaseVideoPoster(payload);
+    if (payload.previewUrl) {
+      payloads.set(id, { previewUrl: payload.previewUrl });
+    } else {
+      payloads.delete(id);
+    }
   }
 }

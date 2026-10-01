@@ -69,14 +69,18 @@ export function renderTerminalPanelViewport({
             })
           : nothing
       }
-      <input
-        class="tp-file-input"
-        type="file"
-        multiple
-        aria-hidden="true"
-        tabindex="-1"
-        @change=${uploadController.handleFileSelection}
-      />
+      ${
+        uploadController.uploadsEnabled()
+          ? html`<input
+              class="tp-file-input"
+              type="file"
+              multiple
+              aria-hidden="true"
+              tabindex="-1"
+              @change=${uploadController.handleFileSelection}
+            />`
+          : nothing
+      }
       ${renderTerminalUploadLayer(uploadController)}
     </wa-tab-panel>
   `;

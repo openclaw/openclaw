@@ -15,7 +15,7 @@ import {
   persistCompactionBoundaryWithSessionEntrySync,
   loadTranscriptEventsSync,
   replaceTranscriptSuffixEventsSync,
-  replaceSessionEntry,
+  replaceSessionEntrySync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
@@ -49,7 +49,8 @@ it("refuses synchronous writes to cold current history without mutating or resto
     sessionKey: "agent:main:cold-sync-writes",
     sessionId: "inactive-current-window",
   };
-  await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  // This test owns cold maintenance explicitly; seeding must not schedule age retention.
+  replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: scope.sessionId },
     {
@@ -61,7 +62,7 @@ it("refuses synchronous writes to cold current history without mutating or resto
     },
   ]);
   await waitForSessionTranscriptIndexReconcile(options);
-  await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   runOpenClawAgentWriteTransaction(({ db: database }) => {
     executeSqliteQuerySync(
       database,

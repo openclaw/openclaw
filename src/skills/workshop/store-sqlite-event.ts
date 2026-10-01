@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -21,18 +22,9 @@ import type {
 } from "./types.js";
 
 export type NewSkillProposalEvent = Omit<SkillProposalEvent, "sequence">;
-type StoredSkillProposalEventRow = {
-  sequence: number;
-  event_id: string;
-  proposal_id: string;
-  proposed_version: string;
-  revision_hash: string;
-  event_type: string;
-  occurred_at: string;
-  actor_json: string;
-  correlation_id: string | null;
-  payload_json: string | null;
-};
+type StoredSkillProposalEventRow = Selectable<
+  SkillWorkshopDatabase["skill_workshop_proposal_events"]
+>;
 const STORED_EVENT_DATA_VERSION = 1;
 const MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES = MAX_SKILL_PROPOSAL_EVALUATION_BYTES + 64 * 1024;
 const MAX_SKILL_PROPOSAL_EVENTS_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -102,18 +94,7 @@ export function listStoredSkillProposalEventsInDatabase(
       "skill_workshop_proposals.proposal_id",
       "skill_workshop_proposal_events.proposal_id",
     )
-    .select([
-      "skill_workshop_proposal_events.sequence",
-      "skill_workshop_proposal_events.event_id",
-      "skill_workshop_proposal_events.proposal_id",
-      "skill_workshop_proposal_events.proposed_version",
-      "skill_workshop_proposal_events.revision_hash",
-      "skill_workshop_proposal_events.event_type",
-      "skill_workshop_proposal_events.occurred_at",
-      "skill_workshop_proposal_events.actor_json",
-      "skill_workshop_proposal_events.correlation_id",
-      "skill_workshop_proposal_events.payload_json",
-    ])
+    .selectAll("skill_workshop_proposal_events")
     .where("skill_workshop_proposal_events.sequence", ">", input.afterSequence ?? 0);
   if (input.proposalId) {
     query = query.where("skill_workshop_proposal_events.proposal_id", "=", input.proposalId);
@@ -267,9 +248,6 @@ function parseSkillProposalEventPayload(
     )
   ) {
     return undefined;
-  }
-  if (entries.length === 0) {
-    return {};
   }
   return Object.fromEntries(entries);
 }

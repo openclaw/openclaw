@@ -1,4 +1,3 @@
-// Telegram plugin module implements shared runtime behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import {

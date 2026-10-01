@@ -180,34 +180,21 @@ export function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
 
   const parts: Array<ReturnType<typeof html>> = [];
 
-  // Token counts: ↑input ↓output
-  if (meta.input) {
-    parts.push(html`<span class="msg-meta__tokens">↑${formatCompactTokenCount(meta.input)}</span>`);
-  }
-  if (meta.output) {
-    parts.push(
-      html`<span class="msg-meta__tokens">↓${formatCompactTokenCount(meta.output)}</span>`,
-    );
-  }
-
-  // Cache: R/W
-  if (meta.cacheRead) {
-    parts.push(
-      html`<span class="msg-meta__cache">R${formatCompactTokenCount(meta.cacheRead)}</span>`,
-    );
-  }
-  if (meta.cacheWrite) {
-    parts.push(
-      html`<span class="msg-meta__cache">W${formatCompactTokenCount(meta.cacheWrite)}</span>`,
-    );
+  for (const [value, prefix, className] of [
+    [meta.input, "↑", "msg-meta__tokens"],
+    [meta.output, "↓", "msg-meta__tokens"],
+    [meta.cacheRead, "R", "msg-meta__cache"],
+    [meta.cacheWrite, "W", "msg-meta__cache"],
+  ] as const) {
+    if (value) {
+      parts.push(html`<span class=${className}>${prefix}${formatCompactTokenCount(value)}</span>`);
+    }
   }
 
-  // Cost
   if (meta.cost > 0) {
     parts.push(html`<span class="msg-meta__cost">${formatCost(meta.cost)}</span>`);
   }
 
-  // Context %
   if (meta.contextPercent !== null) {
     const pct = meta.contextPercent;
     const cls =
@@ -219,9 +206,7 @@ export function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
     parts.push(html`<span class="${cls}">${pct}% ctx</span>`);
   }
 
-  // Model
   if (meta.model) {
-    // Shorten model name: strip provider prefix if present (e.g. "anthropic/claude-3.5-sonnet" → "claude-3.5-sonnet")
     const shortModel = meta.model.includes("/") ? meta.model.split("/").pop()! : meta.model;
     parts.push(html`<span class="msg-meta__model">${shortModel}</span>`);
   }

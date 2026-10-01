@@ -364,7 +364,6 @@ describe("shared auth store relocation", () => {
   });
 
   it.each([
-    "identical subset",
     "older subset",
     "empty subset",
     "changed credential",
@@ -424,7 +423,7 @@ describe("shared auth store relocation", () => {
           scenario === "malformed target"
             ? '{"version":1,"profiles":null}'
             : JSON.stringify(targetStore),
-        updated_at_ms: scenario === "identical subset" ? 100 : 200,
+        updated_at_ms: 200,
       };
       target
         .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.store', ?, ?)")

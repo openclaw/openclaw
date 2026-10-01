@@ -99,10 +99,10 @@ async function completePersistedInternalSourceReply(params: {
     touchSessionEntry: false,
     updateMode: "file-only",
     publishWhen: "always",
-    onMessageCommitted: (result) => {
+    onMessageCommitted: (result, acceptCompletion) => {
       // The queue await can outlive admission or the active branch; promotion must use current ownership.
       assertCurrentReplay(result.messageId);
-      attachSourceReplyMedia(result);
+      attachSourceReplyMedia(result, acceptCompletion);
     },
   });
   if (replay.rejectedReason || replay.messages.length === 0) {
@@ -111,17 +111,21 @@ async function completePersistedInternalSourceReply(params: {
   return true;
 }
 
-function attachSourceReplyMedia(result: TranscriptMessageAppendResult<unknown>): void {
+function attachSourceReplyMedia(
+  result: TranscriptMessageAppendResult<unknown>,
+  acceptCompletion: (complete: () => Promise<void>) => void,
+): void {
   // Catalog cards are display content, not media custody; only media is promoted after commit.
   const message = result.message;
   const blocks = readAssistantDisplayContent(message).filter(
     (block) => block.type !== "text" && block.type !== "clawhub",
   );
-  if (
-    blocks.length > 0 &&
-    !attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks })
-  ) {
-    throw new Error("Internal source reply media ownership could not be persisted");
+  if (blocks.length > 0) {
+    acceptCompletion(async () => {
+      if (!(await attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks }))) {
+        throw new Error("Internal source reply media ownership could not be persisted");
+      }
+    });
   }
 }
 
@@ -198,10 +202,10 @@ export async function persistInternalSourceReply(params: {
             }
           : {}),
         config: params.cfg,
-        onMessageCommitted: (result) => {
+        onMessageCommitted: (result, acceptCompletion) => {
           // Publication can fail after commit; cleanup must never delete owned media.
           committed = result.appended;
-          attachSourceReplyMedia(result);
+          attachSourceReplyMedia(result, acceptCompletion);
         },
       });
       if (!appended.ok) {

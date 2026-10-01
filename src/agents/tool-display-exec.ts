@@ -14,6 +14,7 @@ import {
   hasShellCompoundCommand,
   optionValue,
   positionalArgs,
+  parseHeredocMarker,
   scanTopLevelChars,
   parseShellWords,
   parseShellOptions,
@@ -62,15 +63,6 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
       if (token === "--") {
         sub = firstPositional(words, i + 1);
         break;
-      }
-      if (token.startsWith("--")) {
-        if (token.includes("=")) {
-          continue;
-        }
-        if (globalWithValue.has(token)) {
-          i += 1;
-        }
-        continue;
       }
       if (token.startsWith("-")) {
         if (globalWithValue.has(token)) {
@@ -391,68 +383,15 @@ type HeredocTerminator = {
 
 function collectHeredocTerminators(commandLine: string): HeredocTerminator[] {
   const terminators: HeredocTerminator[] = [];
-  scanTopLevelChars(commandLine, (char, index) => {
-    if (
-      char !== "<" ||
-      commandLine[index - 1] === "<" ||
-      commandLine[index + 1] !== "<" ||
-      commandLine[index + 2] === "<"
-    ) {
-      return true;
-    }
-
-    const stripLeadingTabs = commandLine[index + 2] === "-";
-    const parsed = parseHeredocTerminator(commandLine, index + (stripLeadingTabs ? 3 : 2));
-    if (parsed) {
-      terminators.push({ value: parsed, stripLeadingTabs });
+  scanTopLevelChars(commandLine, (_char, index) => {
+    // Lines accept all whitespace; the whole-script scanner must not skip newlines.
+    const marker = parseHeredocMarker(commandLine, index, /\s/u);
+    if (marker) {
+      terminators.push(marker);
     }
     return true;
   });
   return terminators;
-}
-
-function parseHeredocTerminator(commandLine: string, rawStart: number): string | undefined {
-  let start = rawStart;
-  while (/\s/u.test(commandLine[start] ?? "")) {
-    start += 1;
-  }
-
-  let value = "";
-  let quote: '"' | "'" | undefined;
-
-  for (let index = start; index < commandLine.length; index += 1) {
-    const char = commandLine[index] ?? "";
-
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-        continue;
-      }
-      if (quote === '"' && char === "\\" && index + 1 < commandLine.length) {
-        index += 1;
-        value += commandLine[index] ?? "";
-        continue;
-      }
-      value += char;
-      continue;
-    }
-
-    if (/[\s;&|<>]/u.test(char)) {
-      break;
-    }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (char === "\\" && index + 1 < commandLine.length) {
-      index += 1;
-      value += commandLine[index] ?? "";
-      continue;
-    }
-    value += char;
-  }
-
-  return value || undefined;
 }
 
 function commandWithoutHeredocBodies(command: string): string | undefined {
@@ -504,31 +443,19 @@ type ExecSummary = {
   allGeneric?: boolean;
 };
 
-function normalizePathForDisplay(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/g, "");
-}
-
 function classifyWorkspacePath(
   path: string,
 ): "agent" | "repo" | "sandbox" | "workspace" | undefined {
-  const normalized = normalizePathForDisplay(path);
-  const segments = normalized.split("/").filter(Boolean);
-  if (segments.length === 0) {
-    return undefined;
-  }
+  const segments = path.split(/[\\/]/).filter(Boolean);
 
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = segments[index];
-    if (!segment) {
-      continue;
-    }
+  for (const [index, segment] of segments.entries()) {
     if (segment === ".openclaw" && segments[index + 1] === "workspace") {
       return "agent";
     }
     if (segment === ".openclaw" && segments[index + 1] === "sandboxes") {
       return "sandbox";
     }
-    if (/[-_]workspace$/i.test(segment) && segment.toLowerCase() !== "workspace") {
+    if (/[-_]workspace$/i.test(segment)) {
       return "agent";
     }
     if (/^workspace[-_]/i.test(segment)) {

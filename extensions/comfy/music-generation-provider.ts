@@ -1,4 +1,3 @@
-// Comfy provider module implements model/runtime integration.
 import type {
   MusicGenerationProvider,
   MusicGenerationSourceImage,

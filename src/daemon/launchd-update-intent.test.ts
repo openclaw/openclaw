@@ -30,6 +30,7 @@ import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import { stopLaunchAgent } from "./launchd-stop.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
+import * as serviceMembership from "./service-process-membership.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -173,6 +174,10 @@ beforeEach(async () => {
   closed = once(child, "close");
   await once(child.stdout!, "data");
   pid = child.pid!;
+  // The synthetic LaunchAgent has a live PID but no native job separate from this runner.
+  vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockImplementation((target) =>
+    target === pid ? "outside" : "unknown",
+  );
   const startedAt = getFileLockProcessStartTime(pid);
   expect(startedAt).not.toBeNull();
   const now = Date.now();

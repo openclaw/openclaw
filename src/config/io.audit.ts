@@ -1,8 +1,12 @@
-// Audits config paths and values for diagnostics and safety checks.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
@@ -234,14 +238,10 @@ export type ConfigAuditRecord =
   | ConfigObserveAuditRecord
   | ConfigExternalChangeAuditRecord;
 
-type ConfigAuditStatMetadata = {
-  dev: string | null;
-  ino: string | null;
-  mode: number | null;
-  nlink: number | null;
-  uid: number | null;
-  gid: number | null;
-};
+type ConfigAuditStatMetadata = Pick<
+  ConfigHealthFingerprint,
+  "dev" | "ino" | "mode" | "nlink" | "uid" | "gid"
+>;
 
 type ConfigAuditProcessInfo = {
   pid: number;
@@ -250,14 +250,6 @@ type ConfigAuditProcessInfo = {
   argv: string[];
   execArgv: string[];
 };
-
-function normalizeAuditLabel(value: string | undefined): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
 
 function resolveConfigAuditProcessInfo(
   processInfo?: ConfigAuditProcessInfo,
@@ -322,8 +314,8 @@ export function createConfigWriteAuditRecordBase(params: {
     argv: processSnapshot.argv,
     execArgv: processSnapshot.execArgv,
     watchMode: params.env.OPENCLAW_WATCH_MODE === "1",
-    watchSession: normalizeAuditLabel(params.env.OPENCLAW_WATCH_SESSION),
-    watchCommand: normalizeAuditLabel(params.env.OPENCLAW_WATCH_COMMAND),
+    watchSession: normalizeNullableString(params.env.OPENCLAW_WATCH_SESSION),
+    watchCommand: normalizeNullableString(params.env.OPENCLAW_WATCH_COMMAND),
     existsBefore: params.existsBefore,
     previousHash: params.previousHash,
     nextHash: params.nextHash,
@@ -370,40 +362,22 @@ export function finalizeConfigWriteAuditRecord(params: {
   nextMetadata?: ConfigAuditStatMetadata | null;
   err?: unknown;
 }) {
-  const errorCode =
-    params.err &&
-    typeof params.err === "object" &&
-    "code" in params.err &&
-    typeof params.err.code === "string"
-      ? params.err.code
-      : undefined;
-  const errorMessage =
-    params.err &&
-    typeof params.err === "object" &&
-    "message" in params.err &&
-    typeof params.err.message === "string"
-      ? params.err.message
-      : undefined;
-  const nextMetadata = params.nextMetadata ?? {
-    dev: null,
-    ino: null,
-    mode: null,
-    nlink: null,
-    uid: null,
-    gid: null,
-  };
+  const errorRecord = asOptionalObjectRecord(params.err);
+  const errorCode = readStringField(errorRecord, "code");
+  const errorMessage = readStringField(errorRecord, "message");
   const success = params.result !== "failed" && params.result !== "rejected";
+  const nextMetadata = success ? params.nextMetadata : undefined;
   return {
     ...params.base,
     result: params.result,
     nextHash: success ? params.base.nextHash : null,
     nextBytes: success ? params.base.nextBytes : null,
-    nextDev: success ? nextMetadata.dev : null,
-    nextIno: success ? nextMetadata.ino : null,
-    nextMode: success ? nextMetadata.mode : null,
-    nextNlink: success ? nextMetadata.nlink : null,
-    nextUid: success ? nextMetadata.uid : null,
-    nextGid: success ? nextMetadata.gid : null,
+    nextDev: nextMetadata == null ? null : nextMetadata.dev,
+    nextIno: nextMetadata == null ? null : nextMetadata.ino,
+    nextMode: nextMetadata == null ? null : nextMetadata.mode,
+    nextNlink: nextMetadata == null ? null : nextMetadata.nlink,
+    nextUid: nextMetadata == null ? null : nextMetadata.uid,
+    nextGid: nextMetadata == null ? null : nextMetadata.gid,
     ...(errorCode !== undefined ? { errorCode } : {}),
     ...(errorMessage !== undefined ? { errorMessage } : {}),
   };
@@ -411,26 +385,11 @@ export function finalizeConfigWriteAuditRecord(params: {
 
 type ConfigWriteAuditRecord = ReturnType<typeof finalizeConfigWriteAuditRecord>;
 
-type ConfigAuditAppendContext = {
+type ConfigAuditAppendParams = {
   env: NodeJS.ProcessEnv;
   homedir: () => string;
+  record: ConfigAuditRecord;
 };
-
-type ConfigAuditAppendParams = ConfigAuditAppendContext &
-  (
-    | {
-        record: ConfigAuditRecord;
-      }
-    | ConfigAuditRecord
-  );
-
-function resolveConfigAuditAppendRecord(params: ConfigAuditAppendParams): ConfigAuditRecord {
-  if ("record" in params) {
-    return params.record;
-  }
-  const { env: _env, homedir: _homedir, ...record } = params;
-  return record as ConfigAuditRecord;
-}
 
 export type ConfigAuditScrubResult = {
   scanned: number;
@@ -472,7 +431,6 @@ export async function scrubConfigAuditLog(params: {
   let scanned = 0;
   let rewritten = 0;
   let skipped = 0;
-  let changed = false;
   const outLines: string[] = [];
   const lines = raw.split("\n");
 
@@ -506,28 +464,20 @@ export async function scrubConfigAuditLog(params: {
         continue;
       }
       const redacted = redactConfigAuditArgv(value);
-      let differs = false;
-      for (let i = 0; i < redacted.length; i++) {
-        if (redacted[i] !== value[i]) {
-          differs = true;
-          break;
-        }
-      }
-      if (differs) {
+      if (redacted.some((entry, index) => entry !== value[index])) {
         obj[key] = redacted;
         mutated = true;
       }
     }
     if (mutated) {
       rewritten += 1;
-      changed = true;
       outLines.push(JSON.stringify(obj));
     } else {
       outLines.push(line);
     }
   }
 
-  if (!changed || params.dryRun) {
+  if (rewritten === 0 || params.dryRun) {
     return { scanned, rewritten, skipped, aborted: false };
   }
 
@@ -602,7 +552,7 @@ export async function appendConfigAuditRecord(
 ): Promise<void> {
   assertCurrent?.();
   try {
-    const record = sanitizeConfigAuditRecord(resolveConfigAuditAppendRecord(params));
+    const record = sanitizeConfigAuditRecord(params.record);
     await registerSqliteAuditRecordAsync(
       {
         scope: CONFIG_AUDIT_SCOPE,
@@ -620,7 +570,7 @@ export async function appendConfigAuditRecord(
 
 export function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): void {
   try {
-    const record = sanitizeConfigAuditRecord(resolveConfigAuditAppendRecord(params));
+    const record = sanitizeConfigAuditRecord(params.record);
     openConfigAuditStore(resolveConfigAuditStoreEnv(params)).register(
       configAuditEntryKey(record),
       record,

@@ -62,7 +62,7 @@ async function arrangeMetadata(waveformFails = false) {
     if (waveformFails) {
       throw new Error("waveform conversion failed");
     }
-    const pcm = Buffer.alloc(512);
+    const pcm = Buffer.alloc(6);
     for (let offset = 0; offset < pcm.length; offset += 2) {
       pcm.writeInt16LE(1_000, offset);
     }
@@ -93,45 +93,42 @@ async function arrangeMetadata(waveformFails = false) {
 }
 
 describe("voice metadata settlement owns waveform cleanup", () => {
-  it.each(["failure", "cancellation"] as const)(
-    "joins waveform cleanup before reporting duration %s",
-    async (failure) => {
-      const fixture = await arrangeMetadata();
-      const probeError = Object.assign(new Error(`duration ${failure}`), {
-        signal: failure === "cancellation" ? "SIGTERM" : undefined,
-      });
-      let settledBeforeWaveformRelease = false;
-      try {
-        await vi.waitFor(() => expect(media.waveform).toHaveBeenCalledOnce());
-        await fixture.started;
-        fixture.probe.reject(probeError);
-        await setImmediate();
-        settledBeforeWaveformRelease = fixture.isSettled();
-      } finally {
-        fixture.probe.resolve("1.25\n");
-        fixture.release.resolve();
-        await fixture.cleaned;
-        await fixture.outcome;
-      }
+  it("joins waveform cleanup before reporting duration cancellation", async () => {
+    const fixture = await arrangeMetadata();
+    const probeError = Object.assign(new Error("duration cancellation"), {
+      signal: "SIGTERM",
+    });
+    let settledBeforeWaveformRelease = false;
+    try {
+      await fixture.started;
+      expect(media.waveform).toHaveBeenCalledOnce();
+      fixture.probe.reject(probeError);
+      await setImmediate();
+      settledBeforeWaveformRelease = fixture.isSettled();
+    } finally {
+      fixture.probe.resolve("1.25\n");
+      fixture.release.resolve();
+      await fixture.cleaned;
+      await fixture.outcome;
+    }
 
-      const result = await fixture.outcome;
-      expect(result.error).toMatchObject({
-        message: `Failed to get audio duration: duration ${failure}`,
-        cause: probeError,
-      });
-      expect(await fs.readFile(fixture.inputPath)).toEqual(fixture.original);
-      expect(await fs.readdir(media.root)).toEqual(["original.ogg"]);
-      expect(settledBeforeWaveformRelease).toBe(false);
-    },
-  );
+    const result = await fixture.outcome;
+    expect(result.error).toMatchObject({
+      message: "Failed to get audio duration: duration cancellation",
+      cause: probeError,
+    });
+    expect(await fs.readFile(fixture.inputPath)).toEqual(fixture.original);
+    expect(await fs.readdir(media.root)).toEqual(["original.ogg"]);
+    expect(settledBeforeWaveformRelease).toBe(false);
+  });
 
   it.each([false, true])(
     "returns usable metadata after waveform failure=%s and cleanup",
     async (waveformFails) => {
       const fixture = await arrangeMetadata(waveformFails);
       try {
-        await vi.waitFor(() => expect(media.waveform).toHaveBeenCalledOnce());
         await fixture.started;
+        expect(media.waveform).toHaveBeenCalledOnce();
         fixture.probe.resolve("1.25\n");
       } finally {
         fixture.probe.resolve("1.25\n");
@@ -144,6 +141,11 @@ describe("voice metadata settlement owns waveform cleanup", () => {
       expect(result.error).toBeUndefined();
       expect(result.value?.durationSecs).toBe(1.25);
       expect(Buffer.from(result.value?.waveform ?? "", "base64")).toHaveLength(256);
+      if (!waveformFails) {
+        expect(Buffer.from(result.value?.waveform ?? "", "base64")).toEqual(
+          Buffer.concat([Buffer.from([8, 8, 8]), Buffer.alloc(253)]),
+        );
+      }
       expect(await fs.readFile(fixture.inputPath)).toEqual(fixture.original);
       expect(await fs.readdir(media.root)).toEqual(["original.ogg"]);
     },

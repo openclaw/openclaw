@@ -31,16 +31,7 @@ function confirmsDiscoveryFileRead(text: string) {
   const lower = normalizeLowercaseStringOrEmpty(text);
   const mentionsAllRefs = REQUIRED_DISCOVERY_REFS_LOWER.every((ref) => lower.includes(ref));
   const mentionsReadVerb = /(?:read|retrieved|inspected|loaded|accessed|digested)/.test(lower);
-  const requiredCountPattern = "(?:three|3|four|4)";
-  const confirmsRead =
-    new RegExp(
-      `(?:read|retrieved|inspected|loaded|accessed|digested)\\s+all\\s+${requiredCountPattern}\\s+(?:(?:requested|required|mandated|seeded)\\s+)?files`,
-    ).test(lower) ||
-    new RegExp(
-      `all\\s+${requiredCountPattern}\\s+(?:(?:requested|required|mandated|seeded)\\s+)?files\\s+(?:were\\s+)?(?:read|retrieved|inspected|loaded|accessed|digested)(?:\\s+\\w+)?`,
-    ).test(lower) ||
-    new RegExp(`all\\s+${requiredCountPattern}\\s+seeded files readable`).test(lower);
-  return mentionsAllRefs && (confirmsRead || mentionsReadVerb);
+  return mentionsAllRefs && mentionsReadVerb;
 }
 
 export function hasDiscoveryLabels(text: string) {

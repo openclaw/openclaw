@@ -26,6 +26,26 @@ import type { UpdateRunResult } from "./update-runner-types.js";
 import { formatUpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
+
+const IN_PROGRESS_REPORT_PREFIX = "⬆️ OpenClaw update in progress: ";
+const FAILURE_RECOVERY_HINTS: Readonly<Record<string, string>> = {
+  "preflight-insufficient-space":
+    "Free space on the preflight staging and package-manager store filesystems, then rerun the update.",
+  "pnpm-corepack-missing":
+    "This pnpm checkout could not auto-enable pnpm because corepack is missing. Install pnpm manually or install Node with corepack available, then rerun the update command.",
+  "pnpm-corepack-enable-failed":
+    "Run corepack enable manually or install pnpm manually, then rerun the update command.",
+  "pnpm-npm-bootstrap-failed":
+    "This pnpm checkout could not bootstrap pnpm from npm automatically. Install pnpm manually, then rerun the update command.",
+  "preferred-manager-unavailable":
+    "Install the checkout's declared package manager manually, then rerun the update command.",
+};
+
+/** Recognizes pending projections written by this renderer, including shipped reports. */
+export function isUpdateRunReportInProgress(markdown: string): boolean {
+  return markdown.startsWith(IN_PROGRESS_REPORT_PREFIX);
+}
+
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type ReportInput = Pick<
   UpdateRunRecord,
@@ -39,7 +59,8 @@ type ReportInput = Pick<
   | "verification"
   | "repair"
   | "downtimeMs"
->;
+> &
+  Partial<Pick<UpdateRunRecord, "target">>;
 const PHASES = new Set<string>(UPDATE_RUN_PHASES);
 
 type UpdateRunIdentity =
@@ -170,6 +191,9 @@ function bounded(text: string, limit: number): string {
 }
 
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
+  if (run.target?.installationMethod === "ocm") {
+    return nextAction ? [] : run.origin.nextAction ? [run.origin.nextAction] : [];
+  }
   if (run.status === "running") {
     return ["Check progress with openclaw update status."];
   }
@@ -185,28 +209,11 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   if (run.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
     return nextAction ? [] : [`Next step: ${UPDATE_DESTINATION_RECOVERY}`];
   }
-  const hints: string[] = [];
-  if (run.reason === "preflight-insufficient-space") {
-    hints.push(
-      "Free space on the preflight staging and package-manager store filesystems, then rerun the update.",
-    );
-  } else if (run.reason === "pnpm-corepack-missing") {
-    hints.push(
-      "This pnpm checkout could not auto-enable pnpm because corepack is missing. Install pnpm manually or install Node with corepack available, then rerun the update command.",
-    );
-  } else if (run.reason === "pnpm-corepack-enable-failed") {
-    hints.push(
-      "Run corepack enable manually or install pnpm manually, then rerun the update command.",
-    );
-  } else if (run.reason === "pnpm-npm-bootstrap-failed") {
-    hints.push(
-      "This pnpm checkout could not bootstrap pnpm from npm automatically. Install pnpm manually, then rerun the update command.",
-    );
-  } else if (run.reason === "preferred-manager-unavailable") {
-    hints.push(
-      "Install the checkout's declared package manager manually, then rerun the update command.",
-    );
-  }
+  const hint =
+    run.reason && Object.hasOwn(FAILURE_RECOVERY_HINTS, run.reason)
+      ? FAILURE_RECOVERY_HINTS[run.reason]
+      : undefined;
+  const hints = hint ? [hint] : [];
   if (!nextAction) {
     hints.push("Run openclaw triage to diagnose and repair the failed update.");
   }
@@ -226,7 +233,10 @@ export function renderUpdateRunReport(
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
   const currentHealth: UpdateRunReportHealth | undefined =
     opts.currentHealth ??
-    (run.status !== "running" && opts.nextAction === undefined && run.origin.nextAction
+    (run.target?.installationMethod !== "ocm" &&
+    run.status !== "running" &&
+    opts.nextAction === undefined &&
+    run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
   // Git updates can change commits without changing the package version.
@@ -269,7 +279,7 @@ export function renderUpdateRunReport(
       headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
       break;
     case "running":
-      headline = `⬆️ OpenClaw update in progress: ${run.phase}.`;
+      headline = `${IN_PROGRESS_REPORT_PREFIX}${run.target?.installationMethod === "ocm" ? "managed by OCM" : run.phase}.`;
       break;
   }
   headline = bounded(headline, 500);
@@ -293,8 +303,21 @@ export function renderUpdateRunReport(
     }
   }
   for (const step of run.steps) {
+    if (run.status === "running" && step.status === "in_progress" && step.detail) {
+      lines.push(
+        `Waiting: ${step.step}${step.startedAtMs !== undefined ? ` (started ${new Date(step.startedAtMs).toISOString()})` : ""} — ${step.detail}`,
+      );
+    }
     if (step.snapshotCapacity) {
       lines.push(formatUpdateSnapshotCapacity(step.snapshotCapacity));
+    }
+    if (
+      step.detail &&
+      (step.step.startsWith("diagnostic:database snapshot") ||
+        step.step.startsWith("diagnostic:database migration writes") ||
+        step.step.startsWith("diagnostic:database rollback"))
+    ) {
+      lines.push(step.detail);
     }
     if (step.configWriteRefusal) {
       lines.push(formatUpdateDoctorConfigWriteRefusal(step.configWriteRefusal));
@@ -344,32 +367,30 @@ export function renderUpdateRunReport(
   for (const message of updateRunWarningMessages(run.steps, 3)) {
     lines.push(`Warning: ${bounded(message, 500)}`);
   }
-  const verification: string[] = [];
   const facts = run.verification;
   const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
   const recovery = observation && formatUpdateRunRecovery(facts, observation);
   if (recovery) {
     lines.push(`Recovery: ${recovery}.`);
   }
-  if (facts.booted) {
-    verification.push("gateway booted");
-  }
-  if (facts.serviceRunning !== undefined) {
-    verification.push(facts.serviceRunning ? "service running" : "service stopped");
-  }
-  const identity = formatUpdateRunIdentity(facts, run.after);
-  if (identity) {
-    verification.push(identity);
-  }
-  if (facts.channelsReady !== undefined) {
-    verification.push(facts.channelsReady ? "channels ready" : "channels not ready");
-  }
-  if (facts.readyz !== undefined) {
-    verification.push(facts.readyz ? "HTTP ready" : "HTTP not ready");
-  }
-  if (facts.pluginErrors?.length) {
-    verification.push(`${facts.pluginErrors.length} plugin activation error(s)`);
-  }
+  const verification = [
+    facts.booted ? "gateway booted" : undefined,
+    facts.serviceRunning === undefined
+      ? undefined
+      : facts.serviceRunning
+        ? "service running"
+        : "service stopped",
+    formatUpdateRunIdentity(facts, run.after),
+    facts.channelsReady === undefined
+      ? undefined
+      : facts.channelsReady
+        ? "channels ready"
+        : "channels not ready",
+    facts.readyz === undefined ? undefined : facts.readyz ? "HTTP ready" : "HTTP not ready",
+    facts.pluginErrors?.length
+      ? `${facts.pluginErrors.length} plugin activation error(s)`
+      : undefined,
+  ].filter(Boolean);
   if (verification.length) {
     lines.push(
       `${currentHealth ? "Recorded verification" : "Verification"}: ${verification.join("; ")}.`,

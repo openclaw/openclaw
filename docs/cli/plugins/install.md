@@ -146,11 +146,16 @@ Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plug
 
 When legacy metadata supplies `files[]` without an archive digest, OpenClaw verifies the canonical extracted paths and SHA-256 hashes before installing. Harmless archive spellings such as backslash separators may normalize to those paths; missing, changed, or extra files and named unsupported records still fail verification. Root-only records that create no output are ignored. Server-provided paths and generated `_meta.json` metadata remain strictly validated.
 
+ZIP archives with entry names that differ only by case or Unicode normalization
+are rejected on every platform. ClawHub fallback verification reports the archive
+conflict; the package author must rename the colliding entries and publish a
+corrected archive before installation can continue.
+
 ### Config includes and invalid-config repair
 
 If your `plugins` section, or the `plugins.entries.<id>` entry being changed, is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to the deepest included file that owns the change and leave `openclaw.json` untouched. Root includes (every section of a config whose root object authors `$include`), include arrays, includes with sibling overrides, changes spanning several include files, and an include whose own file still authors a nested `$include` fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
 
-If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. Gateway startup can apply [safe legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale), but plugin config that remains invalid still fails closed; hot reload also rejects invalid plugin config. `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. Doctor owns [legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale) and can quarantine invalid plugin entries. Gateway startup and hot reload reject invalid plugin config without running that repair. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
 
 When the existing host config is valid but the newly installed plugin's own config is absent, OpenClaw records the install disabled instead of writing an invalid enabled entry. Configure `plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an existing plugin config entry is present but invalid, install fails without rewriting it.
 

@@ -24,10 +24,6 @@ function readMcpAppResourceUri(item: CodexThreadItem): string | undefined {
   return uri?.startsWith("ui://") ? uri : undefined;
 }
 
-function readMcpAppConnectorId(item: CodexThreadItem): string | undefined {
-  return normalizeOptionalString(asOptionalRecord(item.appContext)?.connectorId);
-}
-
 function readMcpToolResult(item: CodexThreadItem): ToolCallResult | undefined {
   const result = asOptionalRecord(item.result);
   if (!result || !Array.isArray(result.content)) {
@@ -185,7 +181,7 @@ export function createCodexNativeMcpAppResultDetailsPreparer(params: {
     const serverName = normalizeOptionalString(item.server);
     const toolName = normalizeOptionalString(item.tool);
     const uiResourceUri = readMcpAppResourceUri(item);
-    const connectorId = readMcpAppConnectorId(item);
+    const connectorId = normalizeOptionalString(asOptionalRecord(item.appContext)?.connectorId);
     const toolResult = readMcpToolResult(item);
     if (!serverName || !toolName || !uiResourceUri || !toolResult) {
       return undefined;

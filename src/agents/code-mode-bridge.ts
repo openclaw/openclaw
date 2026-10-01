@@ -14,8 +14,7 @@ import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { CodeModeResultsAccess } from "./code-mode-results.js";
-import type { PendingBridgeRequest } from "./code-mode-runtime.js";
-import { readCodeModeSkill } from "./code-mode-skills.js";
+import { CODE_MODE_EXEC_YIELD_MARGIN_MS, type PendingBridgeRequest } from "./code-mode-runtime.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -207,6 +206,27 @@ function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   }
 }
 
+/** Recognize explicit required intent only on the authorized core tool bindings. */
+export function requiresCodeModeCompletion(
+  requests: readonly PendingBridgeRequest[],
+  catalogProjection: CodeModeCatalogProjection,
+): boolean {
+  return requests.some((request) => {
+    if (
+      request.method !== "callValue" ||
+      !isRecord(request.args[1]) ||
+      request.args[1].required !== true
+    ) {
+      return false;
+    }
+    const binding =
+      typeof request.args[0] === "string"
+        ? catalogProjection.byCallableName.get(request.args[0])
+        : undefined;
+    return binding?.id === "openclaw:core:exec" || binding?.id === "openclaw:core:agents_wait";
+  });
+}
+
 export async function runBridgeRequest(params: {
   runtime: ToolSearchRuntime;
   catalogProjection: CodeModeCatalogProjection;
@@ -216,6 +236,7 @@ export async function runBridgeRequest(params: {
   reply: CodeModeReplyLease;
   results: CodeModeResultsAccess;
   remainingMs: number;
+  completionRequired?: boolean;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -324,6 +345,13 @@ export async function runBridgeRequest(params: {
         }
         let input = values[1] ?? {};
         if (
+          binding.id === "openclaw:core:exec" &&
+          isRecord(input) &&
+          input.background !== true &&
+          params.completionRequired
+        ) {
+          input = { ...input, required: true };
+        } else if (
           binding.source === "openclaw" &&
           binding.name === "exec" &&
           binding.input?.includes("yieldMs") === true &&
@@ -331,24 +359,27 @@ export async function runBridgeRequest(params: {
           input.background !== true &&
           input.yieldMs === undefined
         ) {
-          // The shell's 10s default equals Code Mode's default budget. Yield
-          // within the remaining shared deadline so late sequential calls can
-          // still return their process handle and resume the guest inline.
+          // Use the remaining call budget except the margin for inline guest resumption.
+          // Late sequential calls yield sooner so their process handle returns in this call.
           input = {
             ...input,
-            yieldMs: Math.max(1, Math.min(1_000, Math.floor(params.remainingMs / 4))),
+            yieldMs: Math.max(1, Math.floor(params.remainingMs) - CODE_MODE_EXEC_YIELD_MARGIN_MS),
           };
         }
-        const called = await params.runtime.callExactId(binding.id, input, {
+        if (
+          binding.id === "openclaw:core:agents_wait" &&
+          params.completionRequired &&
+          isRecord(input) &&
+          input.timeoutSeconds === undefined
+        ) {
+          input = { ...input, required: true };
+        }
+        value = await params.runtime.callExactValue(binding.id, input, {
           recoverySurface: "catalog",
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
         });
-        value =
-          isRecord(called.result) && "details" in called.result
-            ? called.result.details
-            : called.result;
         break;
       }
       case "nodes": {
@@ -410,25 +441,58 @@ export async function runBridgeRequest(params: {
         break;
       }
       case "skillsList": {
-        value = (params.ctx.codeModeSkills ?? []).map(({ name, description, location }) => ({
-          name,
-          description,
-          location,
-        }));
+        if (
+          !catalogProjection.bindings.some(
+            (entry) => entry.source === "openclaw" && entry.name === "skills_search",
+          )
+        ) {
+          throw new ToolInputError("skills_search is not available in this run.");
+        }
+        if (
+          params.ctx.toolExecutionAllow &&
+          !isToolExecutionAllowed(params.ctx.toolExecutionAllow, "skills_search")
+        ) {
+          throw new ToolInputError(TOOL_EXECUTION_GATED_MESSAGE);
+        }
+        const offset = values[0] ?? 0;
+        if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
+          throw new ToolInputError("skills.list offset must be a non-negative integer.");
+        }
+        value = (params.ctx.codeModeSkills ?? [])
+          .slice(offset, offset + 20)
+          .map(({ name, description, location }) => ({
+            name,
+            description: description.slice(0, 512),
+            location,
+          }));
         break;
       }
+      case "skillsSearch":
       case "skillsRead": {
-        const name = values[0];
-        const available = params.ctx.codeModeSkills ?? [];
-        const skill =
-          typeof name === "string" ? available.find((entry) => entry.name === name) : null;
-        if (!skill) {
-          const names = available.map((entry) => entry.name).join(", ") || "(none)";
-          throw new ToolInputError(
-            `Unknown skill ${JSON.stringify(name)}. Available skills: ${names}`,
-          );
+        const toolName = params.request.method === "skillsRead" ? "skills_read" : "skills_search";
+        const binding = catalogProjection.bindings.find(
+          (entry) => entry.source === "openclaw" && entry.name === toolName,
+        );
+        if (!binding) {
+          throw new ToolInputError(`${toolName} is not available in this run.`);
         }
-        value = await readCodeModeSkill(skill, params.signal);
+        const called = await params.runtime.callExactId(
+          binding.id,
+          params.request.method === "skillsRead"
+            ? { name: values[0] }
+            : { query: values[0], ...(values[1] === undefined ? {} : { limit: values[1] }) },
+          {
+            recoverySurface: "catalog",
+            parentToolCallId: params.parentToolCallId,
+            signal: params.signal,
+            onUpdate: params.onUpdate,
+          },
+        );
+        const result = called.result;
+        if (!isRecord(result) || result.isError || !isRecord(result.details)) {
+          throw new ToolInputError("Installed skill request failed.");
+        }
+        value = params.request.method === "skillsRead" ? result.details.content : result.details;
         break;
       }
       case "sleep": {

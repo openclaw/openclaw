@@ -245,9 +245,9 @@ export async function validate(ctx: ReleaseContext): Promise<void> {
     "-f",
     'publication_selection_json={"route":"normal","npmDistTag":"latest","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}',
     "-f",
-    "release_profile=beta",
+    "release_profile=stable",
     "-f",
-    "run_release_soak=false",
+    "run_release_soak=true",
   ];
   await ctx.run("pnpm", args, { allowFailure: true });
   let request: unknown;
@@ -275,7 +275,7 @@ export async function validate(ctx: ReleaseContext): Promise<void> {
     );
   }
   const id = String(request.run.id);
-  if (request.request !== undefined) {
+  if (!ctx.options.dryRun) {
     const identity = request.request;
     const expected = {
       targetSha: state.cut.releaseSha,
@@ -287,10 +287,13 @@ export async function validate(ctx: ReleaseContext): Promise<void> {
     };
     if (
       !isRecord(identity) ||
-      Object.entries(expected).some(([key, value]) => identity[key] !== value)
+      Object.entries(expected).some(([key, value]) => identity[key] !== value) ||
+      !isRecord(identity.inputs) ||
+      identity.inputs.release_profile !== "stable" ||
+      identity.effectiveSoak !== true
     ) {
       throw new ReleaseRefusal(
-        `Retained Full Release Validation request ${requestFile} does not match this release and tooling.`,
+        `Retained Full Release Validation request ${requestFile} does not match this release, tooling, and strict stable validation selection.`,
         [
           shellCommand("pnpm", ["ci:full-release", "--", "--reconcile-request", requestFile]),
           ctx.resume("validate"),
@@ -301,46 +304,22 @@ export async function validate(ctx: ReleaseContext): Promise<void> {
   state.validate.runId = id;
   state.validate.runAttempt = request.run.attempt;
   ctx.save();
-  for (;;) {
-    const run = await pollRelease(ctx, {
-      label: `Full Release Validation ${id}`,
-      timeoutMs: 4 * HOUR,
-      next: [ctx.resume("validate")],
-      probe: async () => {
-        const current = await readReleaseRun(ctx, state.repo, id);
-        return current.status === "completed" ? current : undefined;
-      },
-    });
-    if (run.conclusion === "success") {
-      state.validate.runAttempt = Number(run.run_attempt);
-      ctx.save();
-      break;
-    }
-    if (state.validate.continues >= 2) {
-      throw new ReleaseRefusal(`Full Release Validation ${id} failed after two continues.`, [
-        shellCommand("pnpm", ["frv", "status", "--run", id]),
-        ctx.resume("validate"),
-      ]);
-    }
-    state.validate.continues += 1;
-    ctx.save();
-    await ctx.run("pnpm", ["frv", "continue", "--failed", "--run", id]);
+  const run = await pollRelease(ctx, {
+    label: `Full Release Validation ${id}`,
+    timeoutMs: 4 * HOUR,
+    next: [ctx.resume("validate")],
+    probe: async () => {
+      const current = await readReleaseRun(ctx, state.repo, id);
+      return current.status === "completed" ? current : undefined;
+    },
+  });
+  if (run.conclusion !== "success") {
+    throw new ReleaseRefusal(
+      `Full Release Validation ${id} failed; diagnose before operator recovery.`,
+      [shellCommand("pnpm", ["frv", "status", "--run", id]), ctx.resume("validate")],
+    );
   }
-  if (options.stableSoakWaiver) {
-    state.validate.stableSoakWaiver = options.stableSoakWaiver;
-  } else if (!state.validate.stableSoakWaiver) {
-    const previous = (
-      await ctx.run("npm", ["view", "openclaw", "dist-tags.latest"], { dryRunStdout: "2026.9.1" })
-    ).stdout.trim();
-    if (!previous || previous === state.release) {
-      throw new ReleaseRefusal(
-        "The previous stable release is missing or already equals this release; supply the explicit soak waiver.",
-        [ctx.resume("validate", ["--stable-soak-waiver", "<reason>"])],
-      );
-    }
-    state.validate.stableSoakWaiver = `Operator-approved by ${state.operator.name} for ${state.release}: beta-profile Full Release Validation ${id} attempt ${state.validate.runAttempt} green; soak, live/E2E, Telegram, QA-live, and Parallels deferred to postpublish confidence; update from ${previous} to the candidate proven.`;
-  }
-  state.validate.laneWaiver = options.laneWaiver ?? state.validate.laneWaiver ?? "";
+  state.validate.runAttempt = Number(run.run_attempt);
   ctx.save();
 }
 
@@ -465,15 +444,29 @@ async function ensureFinalTag(ctx: ReleaseContext): Promise<void> {
   }
   const tagged = await ctx.run(
     "git",
-    ["tag", "-a", state.tag, sha, "-m", `OpenClaw ${state.release}`],
+    ["tag", "-s", state.tag, sha, "-m", `OpenClaw ${state.release}`],
     { allowFailure: true },
   );
   if (tagged.exitCode !== 0) {
-    const local = await ctx.run("git", ["rev-parse", `${state.tag}^{}`]);
-    if (local.stdout.trim() !== sha) {
-      throw new ReleaseRefusal(`Local final tag ${state.tag} does not point to ${sha}.`, [
-        ctx.resume("publish"),
-      ]);
+    const local = await ctx.run("git", ["rev-parse", `${state.tag}^{}`], { allowFailure: true });
+    if (local.exitCode !== 0 || local.stdout.trim() !== sha) {
+      throw new ReleaseRefusal(
+        `Could not create signed final tag ${state.tag} at ${sha}. Configure Git tag signing and resume publication.`,
+        [ctx.resume("publish")],
+      );
+    }
+    const resigned = await ctx.run(
+      "git",
+      ["tag", "-s", "-f", state.tag, sha, "-m", `OpenClaw ${state.release}`],
+      {
+        allowFailure: true,
+      },
+    );
+    if (resigned.exitCode !== 0) {
+      throw new ReleaseRefusal(
+        `Could not create signed final tag ${state.tag} at ${sha}. Configure Git tag signing and resume publication.`,
+        [ctx.resume("publish")],
+      );
     }
   }
   await ctx.run("git", ["push", "origin", `refs/tags/${state.tag}`]);
@@ -496,9 +489,7 @@ async function candidateInputs(ctx: ReleaseContext): Promise<Map<string, string>
     "--publication-route",
     "normal",
     "--release-profile",
-    "beta",
-    "--stable-soak-waiver",
-    requireValue(state.validate.stableSoakWaiver, "stable soak waiver"),
+    "stable",
     "--full-release-run",
     requireValue(state.validate.runId, "Full Release Validation run"),
     "--publish-workflow-ref",
@@ -509,9 +500,6 @@ async function candidateInputs(ctx: ReleaseContext): Promise<Map<string, string>
     "--output-dir",
     candidateDir,
   ];
-  if (state.validate.laneWaiver) {
-    args.push("--lane-waiver", state.validate.laneWaiver);
-  }
   if (options.pluginSdkApiAcknowledgement) {
     args.push("--plugin-sdk-api-acknowledgement", options.pluginSdkApiAcknowledgement);
   }
@@ -537,8 +525,6 @@ async function candidateInputs(ctx: ReleaseContext): Promise<Map<string, string>
         npmDistTag: "latest",
         pluginPublishScope: "all-publishable",
         workflowRef: requireValue(state.validate.toolingTag, "tooling tag"),
-        stableSoakWaiver: state.validate.stableSoakWaiver,
-        laneWaiver: state.validate.laneWaiver,
       },
       String(state.validate.runAttempt),
       requireValue(state.validate.toolingTag, "tooling tag"),
@@ -612,7 +598,7 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
   if (!state.operator.publicationApproved) {
     ctx.log(
       "publish",
-      `tag=${state.tag}\nrelease SHA=${state.cut.releaseSha}\ntooling tag=${state.validate.toolingTag}\nFRV=${state.validate.runId} attempt ${state.validate.runAttempt}\n${state.validate.stableSoakWaiver}\n${state.validate.laneWaiver || ""}\nDispatch inputs:\n${[...inputs].map(([key, value]) => `${key}=${value}`).join("\n")}`,
+      `tag=${state.tag}\nrelease SHA=${state.cut.releaseSha}\ntooling tag=${state.validate.toolingTag}\nFRV=${state.validate.runId} attempt ${state.validate.runAttempt}\nDispatch inputs:\n${[...inputs].map(([key, value]) => `${key}=${value}`).join("\n")}`,
     );
     if (!options.approvePublication) {
       await confirmRelease(ctx, `Approve publication of ${state.tag}? [y/N]`, [
@@ -630,6 +616,8 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
       }
     }
     inputs.set("wait_for_clawhub", "false");
+    // flip-github activates the release itself; keep Docker off the activation gate.
+    inputs.delete("finalize_release_before_docker");
     const dispatched = await dispatchReleaseWorkflow(ctx, {
       phase: "publish",
       workflow: "openclaw-release-publish.yml",
@@ -666,7 +654,7 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
     next,
     probe: async () => {
       await approveReleaseGates(ctx, state.repo, id, "npm-release");
-      if (!state.capabilities?.parentApprovalReceipt) {
+      if (!state.capabilities?.childNpmPublishEnvironment) {
         await reportWaitingChildren(ctx, reportedChildren);
       }
       const npm = await ctx.run(

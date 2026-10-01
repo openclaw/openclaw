@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { SqliteWorkerAdmissionRequest } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
+  withSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 
 const chmodFailHook = vi.hoisted(() => ({
   error: undefined as Error | undefined,
@@ -81,7 +85,20 @@ describe("agent database permission repair", () => {
         { databasePath },
       );
       backends.add(backend);
-      backend.execute({ type: "database.prepareWrite", input: undefined });
+      const execute = (command: Parameters<typeof backend.execute>[0]) => {
+        const admission = createSqliteWorkerOperationAdmission(() => {}, {
+          kind: "agent-execution",
+          startupJournal: false,
+        });
+        try {
+          return withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+            backend.execute(command),
+          );
+        } finally {
+          admission.finish();
+        }
+      };
+      execute({ type: "database.prepareWrite", input: undefined });
       const database = openOpenClawAgentDatabase(options);
       const bind = {
         type: "database.domain.bind" as const,
@@ -92,9 +109,9 @@ describe("agent database permission repair", () => {
         },
       };
       await backend.prepare?.(bind);
-      backend.execute(bind);
+      execute(bind);
       const append = (value: string) =>
-        backend.execute({
+        execute({
           type: "database.domain.execute",
           input: {
             id: bind.input.id,

@@ -60,11 +60,10 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-it.each(
-  (["inspection", "fallback"] as const).flatMap((phase) =>
-    (["forced", "uncertain"] as const).map((cleanupResult) => ({ phase, cleanupResult })),
-  ),
-)(
+it.each([
+  { phase: "inspection", cleanupResult: "uncertain" },
+  { phase: "fallback", cleanupResult: "forced" },
+] as const)(
   "joins $phase cleanup before returning unavailable ($cleanupResult)",
   async ({ phase, cleanupResult }) => {
     const cleanup = createDeferredCore<"forced" | "uncertain">();

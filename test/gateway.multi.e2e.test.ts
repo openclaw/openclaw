@@ -191,7 +191,10 @@ describe("gateway multi-instance e2e", () => {
 import { CronService } from "./src/cron/service.ts";
 import { resolveCronJobsStorePath } from "./src/cron/store.ts";
 import { toPublicCronJob } from "./src/cron/public-job.ts";
+import { createTestGatewayScheduler } from "./src/test-utils/gateway-scheduler-clock.ts";
 const cron = new CronService({
+  scheduler: createTestGatewayScheduler(),
+  nowMs: () => Date.now(),
   cronEnabled: true,
   storePath: resolveCronJobsStorePath(),
   log: { debug() {}, info() {}, warn() {}, error() {} },

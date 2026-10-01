@@ -3,14 +3,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
-import {
-  extractAgentRunTerminalError,
-  extractAgentRunText,
-  type AgentRunResultView,
-} from "../agents/agent-run-result.js";
+import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-backends.js";
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
+import type { EmbeddedAgentRunResult } from "../agents/embedded-agent.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -90,12 +87,6 @@ export function createSystemAgentSession(
   };
 }
 
-type SystemAgentRunEmbeddedAgent = (
-  params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
-    systemAgentTool?: import("../agents/tools/system-agent-tool.js").SystemAgentToolOptions;
-  },
-) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
-
 type SystemAgentRunCliAgent = (
   params: Parameters<typeof import("../agents/cli-runner.js").runCliAgent>[0] & {
     systemAgentTool?: import("../agents/tools/system-agent-tool.js").SystemAgentToolOptions;
@@ -103,18 +94,9 @@ type SystemAgentRunCliAgent = (
 ) => ReturnType<typeof import("../agents/cli-runner.js").runCliAgent>;
 
 type SystemAgentTurnDeps = SystemAgentVerifiedInferenceDeps & {
-  runEmbeddedAgent?: SystemAgentRunEmbeddedAgent;
+  runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
   runCliAgent?: SystemAgentRunCliAgent;
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-};
-
-type EmbeddedRunResult = AgentRunResultView & {
-  meta?: {
-    agentMeta?: {
-      cliSessionBinding?: CliSessionBinding;
-      clearCliSessionBinding?: boolean;
-    };
-  };
 };
 
 async function ensureSystemAgentDirs(): Promise<{ workspaceDir: string }> {
@@ -131,14 +113,10 @@ export async function cleanupSystemAgentSession(session: SystemAgentSession): Pr
 
 type SystemAgentTurnParams = Parameters<SystemAgentTurnRunner>[0];
 
-function clearSystemAgentCliSession(session: SystemAgentSession): void {
-  delete session.cliSession;
-}
-
 function clearFailedSystemAgentSessionState(session: SystemAgentSession): void {
   session.proposalRef.current = undefined;
   session.proposalRef.operation = undefined;
-  clearSystemAgentCliSession(session);
+  delete session.cliSession;
 }
 
 function throwSystemAgentInferenceUnavailable(params: {
@@ -356,7 +334,7 @@ async function runSystemAgentTurnWithDeps(
     directiveRef,
   };
   try {
-    let result: EmbeddedRunResult;
+    let result: EmbeddedAgentRunResult;
     if (plan.runner === "cli") {
       const backend = resolveSystemAgentCliBackend(plan);
       const cliToolAvailability = resolveSystemAgentCliToolAvailability(backend);
@@ -366,7 +344,7 @@ async function runSystemAgentTurnWithDeps(
           ? params.session.cliSession.binding
           : undefined;
       if (!previousBinding) {
-        clearSystemAgentCliSession(params.session);
+        delete params.session.cliSession;
       }
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
       const stopToolStateMirror = await mirrorSystemAgentToolStateFromEvents({
@@ -375,7 +353,7 @@ async function runSystemAgentTurnWithDeps(
         directiveRef,
       });
       try {
-        result = (await runCli({
+        result = await runCli({
           ...shared,
           preparedRunAdmission,
           provider: plan.provider,
@@ -390,7 +368,7 @@ async function runSystemAgentTurnWithDeps(
           runtimePolicySessionKey: policySessionKey,
           disableCliLiveSession: true,
           cleanupCliLiveSessionOnRunEnd: true,
-        })) as EmbeddedRunResult;
+        });
       } finally {
         stopToolStateMirror();
       }
@@ -398,8 +376,8 @@ async function runSystemAgentTurnWithDeps(
       // native CLI transcript instead of reseeding from scratch.
       const agentMeta = result.meta?.agentMeta;
       if (agentMeta?.clearCliSessionBinding || !agentMeta?.cliSessionBinding?.sessionId) {
-        clearSystemAgentCliSession(params.session);
-      } else if (agentMeta?.cliSessionBinding?.sessionId) {
+        delete params.session.cliSession;
+      } else {
         params.session.cliSession = {
           routeKey,
           binding: agentMeta.cliSessionBinding,
@@ -408,10 +386,10 @@ async function runSystemAgentTurnWithDeps(
     } else {
       // An intervening embedded turn cannot be represented in the CLI's native
       // transcript. A later CLI route must reseed instead of reviving stale context.
-      clearSystemAgentCliSession(params.session);
+      delete params.session.cliSession;
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
-      result = (await runEmbedded({
+      result = await runEmbedded({
         ...shared,
         lane: CommandLane.SystemAgentInference,
         preparedRunAdmission,
@@ -430,7 +408,7 @@ async function runSystemAgentTurnWithDeps(
         ...(plan.authProfileId
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),
-      })) as EmbeddedRunResult;
+      });
     }
     // Failed runs can retain partial text; it must not publish a reply or a tool directive.
     const terminalError = extractAgentRunTerminalError(result);

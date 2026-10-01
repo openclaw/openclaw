@@ -6,8 +6,12 @@ import {
   runSqliteImmediateTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
@@ -78,8 +82,14 @@ export function bindSqliteWorkerBackend(
   };
   return {
     execute(command) {
+      const scope = { ...command.input.scope };
+      const target = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope)));
+      if (readDatabasePathIdentitySync(target).canonicalPath !== context.databasePath) {
+        throw new Error("Session collaboration target changed its database owner");
+      }
+      scope.storePath = context.databasePath;
       if (command.type === "category.prepare") {
-        const database = categoryDatabase(command.input.scope);
+        const database = categoryDatabase(scope);
         return withSqlitePostCommitPublications(db, () =>
           runSqliteDeferredTransactionSync(db, () => {
             categoryPlan = {
@@ -116,7 +126,6 @@ export function bindSqliteWorkerBackend(
             db,
             () => {
               context.admit("transaction");
-              const scope = command.input.scope;
               if (command.type === "category.apply") {
                 const database = categoryDatabase(scope);
                 if (

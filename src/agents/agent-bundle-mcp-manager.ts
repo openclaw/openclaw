@@ -26,6 +26,7 @@ import {
   buildMcpRequesterRuntimeCacheKey,
   partitionMcpServersByConnectionScope,
 } from "./mcp-connection-resolver.js";
+import { resetMcpStartupBackoff } from "./mcp-startup-backoff.js";
 
 type RuntimeAcquisitionParams = Parameters<SessionMcpRuntimeManager["acquire"]>[0];
 type PreparedAcquisitionParams = RuntimeAcquisitionParams & {
@@ -42,9 +43,7 @@ const createSessionMcpRuntimeLazy: CreateSessionMcpRuntime = async (params) => {
   return runtime.createSessionMcpRuntime(params);
 };
 
-export function createSessionMcpRuntimeManager(
-  opts: SessionMcpRuntimeManagerOpts = {},
-): SessionMcpRuntimeManager {
+export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpts) {
   const store = createSessionMcpRuntimeManagerStore(opts, createSessionMcpRuntimeLazy);
   const lifecycle = createSessionMcpRuntimeManagerLifecycle(store);
   const install = createSessionMcpRuntimeManagerInstall(lifecycle);
@@ -95,6 +94,7 @@ export function createSessionMcpRuntimeManager(
         return await lifecycle.runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
           await Promise.all([priorDisposal, priorSessionWork].filter((work) => work !== undefined));
           for (;;) {
+            store.scheduler.signal.throwIfAborted();
             const next = store.configReload;
             // A publication can cross queued admission before a producer starts.
             if (next && next !== publication) {
@@ -105,6 +105,7 @@ export function createSessionMcpRuntimeManager(
             acquired = await acquire(input);
             // Keep one hidden lease until its successor owns unchanged transports.
             previous?.releaseLease();
+            store.scheduler.signal.throwIfAborted();
             if (!store.configReload || store.configReload === publication) {
               return acquired;
             }
@@ -339,7 +340,10 @@ export function createSessionMcpRuntimeManager(
       if (runtime !== undefined && runtime.sessionId !== sessionId) {
         return false;
       }
-      if (!store.deferredRetirementSessionIds.has(sessionId)) {
+      const deferred = store.deferredRetirementSessionIds.has(sessionId);
+      // A late acquisition can settle after its last idle-sweep owner stopped.
+      const unmaintained = !deferred && store.scheduler.signal.aborted;
+      if (!deferred && !unmaintained) {
         for (const runtimeKey of lifecycle.runtimeKeysForSessionId(sessionId)) {
           const current = store.runtimesBySessionId.get(runtimeKey);
           if (current && sessionMcpRuntimeOwners.get(current)?.hasServers() === false) {
@@ -371,10 +375,12 @@ export function createSessionMcpRuntimeManager(
       // intent survives replacement and completes when its last transferred lease releases.
       await lifecycle.disposeManagedRuntimes(sessionId, {
         preserveRequiredRetirement: store.requiredRetirementSessionIds.has(sessionId),
+        requireStoppedScheduler: unmaintained,
       });
-      return true;
+      return !unmaintained || lifecycle.runtimeKeysForSessionId(sessionId).length === 0;
     },
     async reloadConfig(reload) {
+      resetMcpStartupBackoff();
       store.configReload = {
         ...reload,
         pluginGeneration:
@@ -399,7 +405,10 @@ export function createSessionMcpRuntimeManager(
         }),
       );
     },
-    disposeAll: () => lifecycle.disposeManagedRuntimes(),
+    disposeAll: () => {
+      resetMcpStartupBackoff();
+      return lifecycle.disposeManagedRuntimes();
+    },
     sweepIdleRuntimes: lifecycle.sweepIdleRuntimes,
     listSessionIds() {
       return [
@@ -424,5 +433,5 @@ export function createSessionMcpRuntimeManager(
       advertisedScopedCatalogs: store.advertisedScopedCatalogBySessionId.size,
     }),
   });
-  return manager;
+  return Object.assign(manager, { setScheduler: lifecycle.setScheduler });
 }

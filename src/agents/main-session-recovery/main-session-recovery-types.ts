@@ -100,15 +100,9 @@ export type MainSessionRecoveryCommand =
     }
   | ({
       kind: "bind_admitted_execution_identity";
-      attempt: number;
-      cycleId: string;
       token: MainSessionRecoveryExecutionIdentity;
-    } & RecoveryRunOwner)
-  | ({
-      kind: "register_recovery_turn";
-      attempt: number;
-      cycleId: string;
-    } & RecoveryRunOwner)
+    } & AdmittedRecoveryAttempt)
+  | ({ kind: "register_recovery_turn" } & AdmittedRecoveryAttempt)
   | {
       kind: "cancel_reservation" | "abandon_reservation";
       reservation: MainSessionRecoveryReservation;
@@ -122,15 +116,7 @@ export type MainSessionRecoveryCommand =
       kind: "mark_admitted_recovery_interrupted";
       now: number;
     } & AdmittedRecoveryAttempt)
-  | {
-      kind: "claim_foreground";
-      cycleId: string;
-      lifecycleGeneration: string;
-      sessionId: string;
-      sessionKey: string;
-      claimId: string;
-      runId?: string;
-    }
+  | ({ kind: "claim_foreground" } & MainSessionRecoveryOwnerClaim)
   | { kind: "bind_foreground_run"; claim: MainSessionRecoveryOwnerClaim; runId: string }
   | { kind: "validate_foreground"; claim: MainSessionRecoveryOwnerClaim }
   | { kind: "release_foreground"; claim: MainSessionRecoveryOwnerClaim }

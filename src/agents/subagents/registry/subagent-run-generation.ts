@@ -42,6 +42,23 @@ export function recordLatestSubagentRun<T extends ComparableSubagentRun>(
   }
 }
 
+/** Selects the newest matching generation from an existing group. */
+export function latestSubagentRun<T extends ComparableSubagentRun>(
+  runs: Iterable<T>,
+  matches?: (entry: T) => boolean,
+): T | undefined {
+  let latest: T | undefined;
+  for (const entry of runs) {
+    if (
+      (!matches || matches(entry)) &&
+      (!latest || compareSubagentRunGeneration(entry, latest) > 0)
+    ) {
+      latest = entry;
+    }
+  }
+  return latest;
+}
+
 /** Allocates a durable monotonic generation within one child session. */
 export function nextSubagentRunGeneration(
   runs: Iterable<GenerationalSubagentRun>,

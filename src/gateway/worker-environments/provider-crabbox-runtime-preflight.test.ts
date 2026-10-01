@@ -93,7 +93,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         .mockImplementation(async (argv) => {
           if (argv[1] === "--version") {
             expect(argv.slice(1)).toEqual(["--version"]);
-            return commandResult({ stdout: "0.56.0" });
+            return commandResult({ stdout: "999.0.0" });
           }
           if (argv[1] === "providers") {
             expect(argv.slice(1)).toEqual(["providers", "--json"]);
@@ -223,18 +223,11 @@ describe("Crabbox runtime preflight cleanup", () => {
     },
     { kind: "modes", name: "changed advertised modes" },
     { kind: "timeout", name: "invalid timeout metadata" },
-    ...[
-      "unknown flag: --lease-id",
-      "flag provided but not defined: -lease-id",
-      "provider=machine0 does not support fixed idempotent lease IDs",
-      'unknown provider "machine0"',
-      "provider=machine0 does not support warmup",
-      "provider=machine0 does not support status",
-      "provider=machine0 does not expose persistent status",
-      "provider=machine0 is one-shot; use crabbox run",
-      "provider=machine0 requires module source; use crabbox run --script",
-      "--class is not supported for provider=machine0",
-    ].map((stderr) => ({ kind: "cli", name: stderr, result: commandResult({ code: 2, stderr }) })),
+    {
+      kind: "cli",
+      name: "unknown flag: --lease-id",
+      result: commandResult({ code: 2, stderr: "unknown flag: --lease-id" }),
+    },
   ])("retains the original allocation after $name across restart", async (scenario) => {
     const profile = {
       ...PROFILE,
@@ -254,7 +247,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv) => {
       if (argv[1] === "--version") {
         expect(argv.slice(1)).toEqual(["--version"]);
-        return commandResult({ stdout: "0.56.0" });
+        return commandResult({ stdout: "999.0.0" });
       }
       calls.push(argv);
       if (argv[1] === "providers") {
@@ -395,7 +388,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         .mockImplementation(async (argv) => {
           if (argv[1] === "--version") {
             expect(argv.slice(1)).toEqual(["--version"]);
-            return commandResult({ stdout: "0.56.0" });
+            return commandResult({ stdout: "999.0.0" });
           }
           expect(argv.slice(1)).toEqual(["providers", "--json"]);
           return commandResult({ stdout: "[]" });

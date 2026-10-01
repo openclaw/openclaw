@@ -1,20 +1,17 @@
-/**
- * Runs the fail-closed before_agent_run gate and persists blocked turns.
- */
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { log } from "../logger.js";
-import { flushSessionManagerTranscript } from "./attempt-transcript-helpers.js";
 import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type HookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
 type BeforeAgentRunHookRunner = Pick<HookRunner, "hasHooks" | "runBeforeAgentRun">;
 type HookContext = Parameters<HookRunner["runBeforeAgentRun"]>[1];
-type AttemptSessionManager = Parameters<typeof flushSessionManagerTranscript>[0];
+type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type BeforeAgentRunSession = {
@@ -48,10 +45,10 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   const persistBlockedBeforeAgentRun = async (block: {
     message: string;
     pluginId: string;
-  }): Promise<boolean> => {
+  }): Promise<void> => {
     const idempotencyKey = `hook-block:before_agent_run:user:${input.attempt.runId}`;
     if (sessionMessagesContainIdempotencyKey(input.activeSession.messages, idempotencyKey)) {
-      return true;
+      return;
     }
     const nowMs = Date.now();
     const redactedUserMessage = {
@@ -72,20 +69,18 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
           input.sessionManager.appendMessage(
             redactedUserMessage as Parameters<typeof input.sessionManager.appendMessage>[0],
           );
-          flushSessionManagerTranscript(input.sessionManager);
+          input.sessionManager.flushPendingPersistence();
         }),
       );
       input.activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
         input.sessionManager.buildSessionContext().messages,
       );
-      return true;
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted user message: ${
           (err as Error)?.message ?? String(err)
         }`,
       );
-      return false;
     }
   };
 

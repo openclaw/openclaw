@@ -1,12 +1,5 @@
-/**
- * The memory flush warning must reflect the final authorized tool list.
- * tools.deny and the rest of the policy pipeline run after the flush surface is
- * assembled, so a run can hold `write` there and still lose it before dispatch.
- */
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const warnings = vi.hoisted(() => [] as string[]);
 
@@ -29,65 +22,44 @@ import { createOpenClawCodingTools } from "./agent-tools.js";
 const MEMORY_PATH = "memory/2026-08-22.md";
 
 describe("memory flush writer availability", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => {
     warnings.length = 0;
   });
 
-  it("warns when tools.deny removes write after the flush surface is built", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-deny-"));
-    try {
-      const tools = createOpenClawCodingTools({
-        workspaceDir,
-        config: { tools: { deny: ["write"] } },
-        trigger: "memory",
-        memoryFlushWritePath: MEMORY_PATH,
-        senderIsOwner: true,
-      });
-
-      expect(tools.some((tool) => tool.name === "write")).toBe(false);
-      expect(
-        warnings.some((line) => line.includes(`memory flush cannot persist ${MEMORY_PATH}`)),
-      ).toBe(true);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("stays quiet when the transport was never meant to carry write", async () => {
-    // TOOL_ALLOW_BY_MESSAGE_PROVIDER.node lists only canvas, pdf, tts, view_image,
-    // web_fetch and web_search, so every node-originated flush loses the writer by
-    // design. Warning here would fire on an intended configuration on every flush.
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-node-"));
-    try {
-      const tools = createOpenClawCodingTools({
-        workspaceDir,
-        trigger: "memory",
-        memoryFlushWritePath: MEMORY_PATH,
-        messageProvider: "node",
-        senderIsOwner: true,
-      });
-
-      expect(tools.some((tool) => tool.name === "write")).toBe(false);
-      expect(warnings.some((line) => line.includes("memory flush cannot persist"))).toBe(false);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("stays quiet when the flush run keeps its writer", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-ok-"));
-    try {
-      const tools = createOpenClawCodingTools({
-        workspaceDir,
-        trigger: "memory",
-        memoryFlushWritePath: MEMORY_PATH,
-        senderIsOwner: true,
-      });
-
-      expect(tools.some((tool) => tool.name === "write")).toBe(true);
-      expect(warnings.some((line) => line.includes("memory flush cannot persist"))).toBe(false);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+  it.each([
+    {
+      name: "denied by policy",
+      config: { tools: { deny: ["write"] } },
+      messageProvider: undefined,
+      writable: false,
+      warning: true,
+    },
+    {
+      name: "excluded by transport",
+      config: undefined,
+      messageProvider: "node",
+      writable: false,
+      warning: false,
+    },
+    {
+      name: "available",
+      config: undefined,
+      messageProvider: undefined,
+      writable: true,
+      warning: false,
+    },
+  ])("reports a writer $name", ({ config, messageProvider, writable, warning }) => {
+    const tools = createOpenClawCodingTools({
+      workspaceDir: tempDirs.make("openclaw-flush-writer-"),
+      config,
+      messageProvider,
+      trigger: "memory",
+      memoryFlushWritePath: MEMORY_PATH,
+      senderIsOwner: true,
+    });
+    expect(tools.some((tool) => tool.name === "write")).toBe(writable);
+    const flushWarnings = warnings.filter((line) => line.includes("memory flush cannot persist"));
+    expect(flushWarnings).toEqual(warning ? [expect.stringContaining(MEMORY_PATH)] : []);
   });
 });

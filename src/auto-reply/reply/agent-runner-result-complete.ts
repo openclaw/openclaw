@@ -3,6 +3,7 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -84,7 +85,6 @@ export async function completeReplyAgentRun(input: {
       });
     }
 
-    // Inject post-compaction workspace context for the next agent turn
     if (sessionKey) {
       const contextContent = await readPostCompactionContext(followupRun.run.workspaceDir, {
         cfg,
@@ -197,28 +197,31 @@ export async function completeReplyAgentRun(input: {
     const pendingText = sourceReplyPolicy.suppressDelivery
       ? ""
       : (recoverablePendingFinalText ?? "");
-    const heartbeatAckMaxChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-    const resolvedPendingText = isHeartbeat
-      ? (() => {
-          const stripped = stripHeartbeatToken(pendingText, {
-            mode: "heartbeat",
-            maxAckChars: heartbeatAckMaxChars,
-          });
-          return stripped.shouldSkip ? "" : stripped.text || pendingText;
-        })()
-      : pendingText;
+    let resolvedPendingText = pendingText;
+    if (isHeartbeat) {
+      const stripped = stripHeartbeatToken(pendingText, {
+        mode: "heartbeat",
+        maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+      });
+      resolvedPendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
+    }
     const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
       ? []
       : finalPayloads.filter(
           (payload) => normalizePendingFinalDeliveryPayloads([payload]).length > 0,
         );
     if (sendableFinalPayloads.length > 0) {
+      const commandOwner = getCommandOwnerAuthority(followupRun.run);
+      const commandOwnerReference = commandOwner
+        ? (commandOwner.recoveryReference ?? null)
+        : undefined;
       const pendingFinalDeliveryIntentId = crypto.randomUUID();
       const expectedSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
       const pendingFinalDeliveries = sendableFinalPayloads.map((payload) => {
         const deliveryId = crypto.randomUUID();
         setReplyPayloadMetadata(payload, {
           pendingFinalDeliveryCompletion: {
+            commandOwnerReference,
             agentId: followupRun.run.agentId,
             deliveryId,
             intentId: pendingFinalDeliveryIntentId,
@@ -248,7 +251,7 @@ export async function completeReplyAgentRun(input: {
           entry.sessionId === expectedSessionId
             ? {
                 pendingFinalDelivery: {
-                  ...(resolvedPendingText
+                  ...(resolvedPendingText && commandOwnerReference === undefined
                     ? { kind: "replayable" as const, text: resolvedPendingText }
                     : { kind: "transport-only" as const }),
                   intentId: pendingFinalDeliveryIntentId,

@@ -254,33 +254,20 @@ export function isJavaScriptModulePath(modulePath: string): boolean {
   return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
 }
 
-function isBundledPluginDistModulePath(modulePath: string): boolean {
-  return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
-}
-
-function shouldPreferNativeModuleLoad(modulePath: string): boolean {
-  switch (path.extname(modulePath).trim().toLowerCase()) {
-    case ".js":
-    case ".mjs":
-    case ".cjs":
-    case ".json":
-      return true;
-    default:
-      return false;
-  }
-}
-
 export function resolvePluginLoaderTryNative(
   modulePath: string,
   options?: {
     preferBuiltDist?: boolean;
   },
 ): boolean {
-  if (isBundledPluginDistModulePath(modulePath)) {
-    return shouldPreferNativeModuleLoad(modulePath);
+  const nativeExtension = [".js", ".mjs", ".cjs", ".json"].includes(
+    path.extname(modulePath).trim().toLowerCase(),
+  );
+  if (modulePath.replace(/\\/g, "/").includes("/dist/extensions/")) {
+    return nativeExtension;
   }
   return (
-    shouldPreferNativeModuleLoad(modulePath) ||
+    nativeExtension ||
     (options?.preferBuiltDist === true && modulePath.includes(`${path.sep}dist${path.sep}`))
   );
 }

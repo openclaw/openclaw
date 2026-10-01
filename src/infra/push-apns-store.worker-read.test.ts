@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
+  clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,
   type ApnsRegistration,
@@ -36,12 +37,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 }));
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
-}));
-vi.mock("./state-database-coordinator.js", () => ({
-  captureStateDatabaseCoordinatorRuntime: () => ({
-    directory: "/synthetic/coordinator",
-    keepAlive: false,
-  }),
 }));
 vi.mock("./device-pairing-store.js", () => ({
   loadPairedDevicePairingStoreRecordFromDatabase: mocks.native,
@@ -148,4 +143,39 @@ describe("APNs registration worker reads", () => {
     await expect(loadApnsRegistration("device-a", "/synthetic/apns-a")).rejects.toBe(failure);
     expect(mocks.native).not.toHaveBeenCalled();
   });
+});
+
+describe("APNs registration worker cleanup", () => {
+  it.each([true, false, new Error("cleanup refused")])(
+    "awaits conditional cleanup without host SQLite: %s",
+    async (result) => {
+      const ready = createDeferredCore<boolean>();
+      void ready.promise.catch(() => {});
+      mocks.execute.mockReturnValue(ready.promise);
+      const observed = { ...registration };
+      const completed = vi.fn();
+      const pending = clearApnsRegistrationIfCurrent({
+        nodeId: " device-a ",
+        registration: observed,
+        baseDir: "/synthetic/apns-a",
+      });
+      const outcome = pending.then(completed, (error: unknown) => error);
+      observed.updatedAtMs += 1;
+      expect(completed).not.toHaveBeenCalled();
+      if (result instanceof Error) {
+        ready.reject(result);
+        expect(await outcome).toBe(result);
+        expect(completed).not.toHaveBeenCalled();
+      } else {
+        ready.resolve(result);
+        await outcome;
+        expect(completed).toHaveBeenCalledWith(result);
+      }
+      expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
+        type: "apns.registration.clearIfCurrent",
+        input: { nodeId: "device-a", registration, nowMs: expect.any(Number) },
+      });
+      expect(mocks.native).not.toHaveBeenCalled();
+    },
+  );
 });

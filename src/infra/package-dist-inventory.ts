@@ -1,31 +1,28 @@
-// Collects and verifies package dist inventory metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import pLimit, { type LimitFunction } from "p-limit";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   parsePackageDistContentInventory,
   comparePackageDistContentInventory,
   createPackageDistContentInventoryEntry,
   type PackageDistContentInventoryEntry,
 } from "../../scripts/lib/package-dist-inventory-contract.mts";
 import { escapeRegExp } from "../shared/regexp.js";
-import { sha256Hex } from "./crypto-digest.js";
 import { sha256File } from "./directory-durability.js";
 import { isMissingPathError } from "./errno.js";
-import { FsSafeError, root as openFsRoot } from "./fs-safe.js";
+import { root as openFsRoot } from "./fs-safe.js";
 import { readJsonIfExists } from "./json-files.js";
 export {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   type PackageDistContentInventoryEntry,
 } from "../../scripts/lib/package-dist-inventory-contract.mts";
 
-export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
 const PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY = 32;
-const PACKAGE_DIST_INVENTORY_BUFFER_BYTES = 64 * 1024;
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
 const OMITTED_QA_EXTENSION_PREFIXES = [
@@ -87,23 +84,13 @@ type PackageDistExclusionRules = {
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
 }
-function splitRelativePath(relativePath: string): string[] {
-  return normalizeRelativePath(relativePath).split("/");
-}
-
 function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
-  const parts = splitRelativePath(relativePath);
+  const parts = normalizeRelativePath(relativePath).split("/");
   if (parts[0]?.toLowerCase() !== "dist" || parts[1]?.toLowerCase() !== "extensions") {
     return false;
   }
 
-  const rootDependencyDir = parts[2] ?? "";
-  if (rootDependencyDir.toLowerCase() === "node_modules") {
-    return true;
-  }
-
-  const pluginDependencyDir = parts[3] ?? "";
-  return pluginDependencyDir.toLowerCase() === "node_modules";
+  return parts[2]?.toLowerCase() === "node_modules" || parts[3]?.toLowerCase() === "node_modules";
 }
 
 function compilePackageFilesExclusionPattern(pattern: string): RegExp {
@@ -199,41 +186,20 @@ function isPackagedDistPath(relativePath: string, rules: PackageDistExclusionRul
       !isLegacyPluginDependencyDirPath(relativePath)
     );
   }
-  if (isPackageFilesExcludedDistPath(relativePath, rules)) {
-    return false;
-  }
-  if (isLegacyPluginDependencyDirPath(relativePath)) {
-    return false;
-  }
-  if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
-    return false;
-  }
-  if (isLocalBuildMetadataDistPath(relativePath)) {
-    return false;
-  }
-  if (relativePath.endsWith(".map")) {
-    return false;
-  }
-  if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
-    return false;
-  }
-  if (OMITTED_PLUGIN_SDK_TEST_FILES.has(relativePath)) {
-    return false;
-  }
-  if (relativePath.startsWith(OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX)) {
-    return false;
-  }
-  if (
+  return !(
+    isPackageFilesExcludedDistPath(relativePath, rules) ||
+    isLegacyPluginDependencyDirPath(relativePath) ||
+    relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH ||
+    isLocalBuildMetadataDistPath(relativePath) ||
+    relativePath.endsWith(".map") ||
+    relativePath === "dist/plugin-sdk/.tsbuildinfo" ||
+    OMITTED_PLUGIN_SDK_TEST_FILES.has(relativePath) ||
+    relativePath.startsWith(OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX) ||
     OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
     OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES.has(relativePath) ||
-    OMITTED_PRIVATE_QA_DIST_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
-  ) {
-    return false;
-  }
-  if (OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))) {
-    return false;
-  }
-  return true;
+    OMITTED_PRIVATE_QA_DIST_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
+    OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
+  );
 }
 
 function isOmittedDistSubtree(relativePath: string, rules: PackageDistExclusionRules): boolean {
@@ -405,34 +371,16 @@ export async function collectPackageDistContentInventory(
   const entries = await Promise.all(
     files.map((relativePath) =>
       fsLimit(async () => {
-        const opened = await packageFs.open(relativePath, {
+        await using opened = await packageFs.open(relativePath, {
           hardlinks: "allow",
           nonBlockingRead: true,
           symlinks: "reject",
         });
-        try {
-          let hash;
-          try {
-            if (opened.stat.size <= PACKAGE_DIST_INVENTORY_BUFFER_BYTES) {
-              const content = await readFileHandleBounded(
-                opened.handle,
-                PACKAGE_DIST_INVENTORY_BUFFER_BYTES,
-              );
-              hash = { bytes: content.byteLength, digest: sha256Hex(content) };
-            } else {
-              hash = await sha256File(opened.handle);
-            }
-          } catch (error) {
-            if (!(error instanceof FsSafeError) || error.code !== "too-large") {
-              throw error;
-            }
-            // A file can grow after admission; positioned hashing restarts at byte zero.
-            hash = await sha256File(opened.handle);
-          }
-          return createPackageDistContentInventoryEntry(relativePath, hash, opened.stat.mode);
-        } finally {
-          await opened[Symbol.asyncDispose]();
-        }
+        return createPackageDistContentInventoryEntry(
+          relativePath,
+          await sha256File(opened.handle),
+          opened.stat.mode,
+        );
       }),
     ),
   );

@@ -27,13 +27,15 @@ const moveDestinationMocks = vi.hoisted(() => ({
   })),
   resolveSessionRuntime: vi.fn(() => "codex"),
   resolveSessionTarget: vi.fn(
-    (
+    async (
       _params: Parameters<
         typeof import("./server-worker-placement-session-target.js").resolveWorkerPlacementSessionTarget
       >[0],
     ): ReturnType<
       typeof import("./server-worker-placement-session-target.js").resolveWorkerPlacementSessionTarget
     > => ({
+      assertCurrent: () => {},
+      assertBindingCurrent: () => {},
       config: {},
       entry: {},
       target: {

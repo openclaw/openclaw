@@ -55,7 +55,7 @@ describe("private session source staging", () => {
     "publishes forced $mode memory and session sources without the application-thread kernel",
     async ({ vectorEnabled }) => {
       const { manager, db } = await setup(vectorEnabled);
-      vi.spyOn(MemorySourceIndexKernel.prototype, "replace").mockImplementation(() => {
+      vi.spyOn(MemorySourceIndexKernel.prototype, "replaceRows").mockImplementation(() => {
         throw new Error("source publication reached the application thread");
       });
       await manager.sync({ reason: "cli", force: true });
@@ -116,44 +116,41 @@ describe("private session source staging", () => {
     );
   });
 
-  it.each([false, true])(
-    "releases publication capacity and retries cleanup (close failure: %s)",
-    async (failClose) => {
-      const { manager } = await setup();
-      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
-      const probeReleased: Array<() => Promise<unknown>> = [];
-      vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
-        async (...args) => {
-          const worker = await open(...args);
-          probeReleased.push(() =>
-            worker.run(
-              async () => "still admitted",
-              () => undefined,
-            ),
-          );
-          if (failClose && probeReleased.length === 1) {
-            const close = worker.close.bind(worker);
-            vi.spyOn(worker, "close").mockImplementationOnce(async () => {
-              await close();
-              throw new Error("controlled generation close failure");
-            });
-          }
-          return worker;
-        },
-      );
-      for (let index = 0; index < 2; index++) {
-        const sync = manager.sync({ reason: "repeat-generation", force: true });
-        if (failClose && index === 0) {
-          await expect(sync).rejects.toThrow("controlled generation close failure");
-        } else {
-          await sync;
+  it("releases publication capacity and retries cleanup after a close failure", async () => {
+    const { manager } = await setup();
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+    const probeReleased: Array<() => Promise<unknown>> = [];
+    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
+      async (...args) => {
+        const worker = await open(...args);
+        probeReleased.push(() =>
+          worker.run(
+            async () => "still admitted",
+            () => undefined,
+          ),
+        );
+        if (probeReleased.length === 1) {
+          const close = worker.close.bind(worker);
+          vi.spyOn(worker, "close").mockImplementationOnce(async () => {
+            await close();
+            throw new Error("controlled generation close failure");
+          });
         }
-        expect(probeReleased).toHaveLength(index + 1);
-        await expect(probeReleased[index]!()).rejects.toThrow("owner is closed");
-        expect((await manager.search("Violet")).length).toBeGreaterThan(0);
+        return worker;
+      },
+    );
+    for (let index = 0; index < 2; index++) {
+      const sync = manager.sync({ reason: "repeat-generation", force: true });
+      if (index === 0) {
+        await expect(sync).rejects.toThrow("controlled generation close failure");
+      } else {
+        await sync;
       }
-    },
-  );
+      expect(probeReleased).toHaveLength(index + 1);
+      await expect(probeReleased[index]!()).rejects.toThrow("owner is closed");
+      expect((await manager.search("Violet")).length).toBeGreaterThan(0);
+    }
+  });
 
   it("preserves publication and generation cleanup failures through sync", async () => {
     const { manager, db } = await setup();
@@ -327,7 +324,7 @@ describe("private session source staging", () => {
           }
         }
       });
-    vi.spyOn(MemorySourceIndexKernel.prototype, "replace").mockImplementation(() => {
+    vi.spyOn(MemorySourceIndexKernel.prototype, "replaceRows").mockImplementation(() => {
       throw new Error("failed transfer replayed on the application thread");
     });
     await expect(manager.sync({ reason: "cli", force: true })).rejects.toMatchObject({

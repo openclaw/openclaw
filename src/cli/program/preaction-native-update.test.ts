@@ -52,28 +52,20 @@ describe("native update capability startup", () => {
     ).toMatchObject({ skipConfigGuard: false, hideBanner: false });
   });
 
-  it.each(
-    ["gateway", "daemon"].flatMap((parent) =>
-      ["install", "restart", "stop"].map((action) => [parent, action]),
-    ),
-  )("keeps parsed native capability check cold for %s %s", async (parent, action) => {
+  it("keeps a parsed native capability check cold", async () => {
     const { runGatewayServiceUpdateCommand } = await import("../daemon-cli/update-executor.js");
     const parseProgram = new Command().name("openclaw");
     const operation = vi.fn();
     const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     parseProgram
-      .command(parent)
-      .command(action)
+      .command("gateway")
+      .command("install")
       .option("--update-executor <mode>")
       .action(async (opts) =>
-        runGatewayServiceUpdateCommand(
-          opts.updateExecutor,
-          action as "install" | "restart" | "stop",
-          operation,
-        ),
+        runGatewayServiceUpdateCommand(opts.updateExecutor, "install", operation),
       );
     registerPreActionHooks(parseProgram, "9.9.9-test");
-    process.argv = ["node", "openclaw", parent, action, "--update-executor", "check"];
+    process.argv = ["node", "openclaw", "gateway", "install", "--update-executor", "check"];
     await parseProgram.parseAsync(process.argv);
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();

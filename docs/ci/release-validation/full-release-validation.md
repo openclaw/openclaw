@@ -9,6 +9,50 @@ sidebarTitle: "Full Release Validation"
 
 The Full Release Validation umbrella, release publish, and Docker Release dispatch. Part of the [Release validation workflows](/ci/release-validation) index.
 
+## Mobile store releases
+
+`iOS Store Release` (`ios-store-release.yml`) and `Android Store Release`
+(`android-store-release.yml`) are separate manual workflows. Choose `main` and
+click **Run workflow** with the defaults; no release parameters are needed.
+The iOS workflow also offers a **screenshots** operation for capture without an
+upload. Each platform queues its own runs without cancelling an active upload.
+
+The workflows run the same commands available from a clean, current local
+`main` checkout: `pnpm ios:release:upload` and `pnpm android:release:upload`.
+Both freeze the source commit, plan the release using repository versions and
+current store state, generate platform release notes, then build, sign, and upload. Set
+`OPENAI_API_KEY` locally; Actions reads the repository secret with that name.
+Platform setup, signing, and store credentials are documented in each app's
+`fastlane/SETUP.md`.
+
+Release preparation stays outside tracked source files and creates no commits
+or pull requests. Successful upload records point at the original source SHA
+under `refs/openclaw/mobile-releases/`. Actions retains the platform plan,
+`release-notes.json`, and available signed binaries for 30 days. Inspect these
+artifacts and store state after a failure before starting another upload.
+App Review submission and Android production promotion remain manual.
+
+To preview notes without building or uploading, use a saved platform plan and a
+new output path:
+
+```bash
+pnpm mobile:release:notes -- generate --platform ios --plan /path/to/ios-plan.json --output /path/to/preview-notes.json
+```
+
+Use `--platform android` with `android-plan.json` for phone and Wear notes. The
+plan identifies the target version/build, exact source SHA, and public baseline
+builds. For a historical candidate, add `--source-sha <full-commit-sha>` matching
+that plan; the commit must exist locally. Existing output is validated and reused
+without a model call. Use a new output file to evaluate a different draft.
+
+Generation uses the OpenAI Responses API with structured output, source evidence
+extraction, and a separate factual review. It covers the app and bundled shared
+code, including Play-specific sources and Watch RTC. Drafts must fit the store's
+character limit, and a failed generation or review stops the upload. A model can
+still omit or misunderstand a change; inspect the saved notes in the run summary
+before manual public promotion. Notes are reproducible by retaining the artifact,
+not by expecting a fresh model request to return identical words.
+
 ## Full Release Validation
 
 `Full Release Validation` is the manual release umbrella. Every run binds an
@@ -23,7 +67,13 @@ stage matrix, exact workflow job names, profile differences, the `npm-beta-v1`
 and `npm-stable-v1` coverage policies, artifacts, and focused rerun handles.
 
 The `normal_ci` child dispatches `ci.yml` with the exact target and release scope,
-without `release_gate`. Complete campaigns (`rerun_group=all`) retain QA Smoke's
+without `release_gate`. In FRV only, `windows-node-ci` failures and eligible jobs
+with authenticated `recorded-flake` receipts are advisory. Receipts bind exact
+failed job attempts and retain the reason and fix-in-parallel issue/PR in the
+manifest and release notes. Other children stay strict; coverage, package,
+install/update, and artifact gates cannot be classified. See
+[record a flake](/reference/full-release-validation/continuation#record-a-flake).
+Complete campaigns (`rerun_group=all`) retain QA Smoke's
 full scenario profile and Control UI performance independently of changed paths.
 Docker seed runs all six lanes in every ordinary manual/release scope:
 `cron-mcp-cleanup`, `fleet-cache`, `mcp-channels`, `mcp-code-mode-gateway`,
@@ -31,10 +81,16 @@ Docker seed runs all six lanes in every ordinary manual/release scope:
 `npm-beta` and `npm-stable` qualification. The survivor uses `legacy-operator-state`
 with `auto-auth`, so the published driver must update
 the running managed Gateway. Every admitted canonical main run retains this
-exact combination; PRs omit Docker seed and QA Smoke. Manual/release CI builds
-the full declaration-complete package. Main's smoke package instead uses the
+exact combination. Frozen targets retain it when their declared scenario catalog
+supports `legacy-operator-state`; historical targets retain `base` with `auto-auth`.
+Missing historical catalogs keep that fallback; malformed or invalid catalogs fail.
+PRs defer the complete survivor to hourly main and Full Release Validation, while
+the other Docker seed lanes and QA Smoke retain their owner maps.
+Ordinary manual/release CI builds the full declaration-complete package. Main and
+selected PRs, including exact-head `release_gate` fallbacks, use the
 existing `ciArtifacts` profile and canonical packer with `--skip-build`, retaining
 the runtime, public SDK declarations, and unchanged tarball integrity check.
+The hourly protected cache warmer also retains full declaration generation.
 Hosted manual CI splits QA Smoke into six parts; normal hybrid first attempts use four parts
 with the same coverage.
 
@@ -73,8 +129,7 @@ regular beta and stable publishes from a protected lightweight
 `release-publish/<tooling-sha12>-<epoch>` tag at the frozen Tooling SHA after the
 release tag exists and after the OpenClaw npm preflight has succeeded (the preflight runs
 `pnpm plugins:sync:check` among its checks). The tag still selects the exact
-release commit, including a commit on `release/YYYY.M.PATCH`; Tideclaw alpha
-publishes keep using their matching alpha branch. For current validation runs,
+release commit, including a commit on `release/YYYY.M.PATCH`. For current validation runs,
 set `preflight_run_id` and `full_release_validation_run_id` to the same successful
 Full Release Validation run ID and pin `full_release_validation_run_attempt`.
 The publisher resolves the independent `Full Release Artifacts` producer from
@@ -91,7 +146,7 @@ secrets. Failed preparation, denied approval and cancellation cannot publish.
 
 Historical recovery may still supply a separate successful `OpenClaw NPM Release`
 preflight run ID alongside the matching successful Full Release Validation run
-and attempt. Create the tooling tag with the [release publish commands](/reference/RELEASING#regular-release-publish-automation);
+and attempt. Create the tooling tag with the [release publish commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md#qualify-publication-bytes);
 real core npm, plugin npm, or ClawHub publication from `main` is rejected before
 child dispatch. Docker-only recovery may still use `main`.
 
@@ -112,8 +167,8 @@ approval; core npm and GitHub release finalization do not wait for it. The whole
 parent can remain active after core publication while native qualification
 finishes. Existing full evidence and macOS's independent validation retain their
 native qualification contracts. A mismatched Android pin skips both native
-qualification and APK publication, with the pin, release train, and shared
-mobile cutter (`scripts/mobile-release-version.ts --prepare`) remedy recorded
+qualification and APK publication, with the pin, release train, and Android
+version pinning (`pnpm android:version:pin -- --from-gateway`) remedy recorded
 in the parent summary and release proof.
 Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
 package list. Plugin-only `all-publishable` runs require the same immutable npm
@@ -157,13 +212,14 @@ For nonpublish work, explicitly select
 publication selection; profile and filters still select the actual coverage.
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
-helper pushes a temporary `release-ci/<sha>-...` branch at a trusted Tooling
-SHA, passes the requested Validation SHA through `ref` and `expected_sha`, reuses
+helper first proves GitHub serves the exact Validation SHA by bare-SHA fetch in a
+fresh temporary repository, including in dry runs. It then pushes one immutable
+`release-ci/*` workflow ref at the trusted Tooling SHA, passes the exact Validation
+SHA through `ref` and `expected_sha`, reuses
 strict exact-target evidence when available, and verifies every child workflow
 `headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
 it from moving `main`. Regular release branches accept only their final package
-version or a matching beta prerelease; Tideclaw alpha validation uses its exact
-alpha tag and matching alpha branch.
+version or a matching beta prerelease.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you
@@ -186,10 +242,13 @@ checks them during that parent attempt. Parent cancellation or timeout leaves
 adopted exact children running; cancel one explicitly when it is no longer
 needed.
 
-For recovery, classify product, harness/tooling/provenance,
+For recovery, decide blocker or flake for every failed test, then classify product, harness/tooling/provenance,
 infrastructure/credential, and wrapper failures before editing. Only confirmed
 product failure changes the Code SHA. Diagnose and fix the owning defect before an explicit narrow `rerun_group`
-validation run; never retry a failed test automatically or widen to `all`. Narrow evidence is not publish authorization by itself.
+validation run; never retry a failed test automatically or widen to `all`.
+Flakes get at most two explicit same-SHA reruns and a tracked fix on `main`;
+record an eligible still-failing job instead of changing tooling, re-cutting,
+or starting another Full Release Validation. Narrow evidence is not publish authorization by itself.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs. For the Codex npm-plugin live lane, release checks either pass a matching published plugin spec derived from `release_package_spec`, pass the operator-supplied `codex_plugin_spec`, or leave the input blank so the Docker script packs the selected checkout's Codex plugin.
 

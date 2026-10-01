@@ -159,5 +159,6 @@ export function updateCandidateAuthProfileStore(params: {
       env: params.candidate.env,
       path: params.candidate.databasePath,
     },
+    { operationLabel: "auth-profiles.candidate.update" },
   );
 }

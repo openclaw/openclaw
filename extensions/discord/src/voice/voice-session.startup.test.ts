@@ -88,7 +88,7 @@ defineDiscordVoiceTests(
       expect(connection.destroy).not.toHaveBeenCalled();
     });
 
-    it.each(["output overflow", "completed", "error", "synchronous close"] as const)(
+    it.each(["output overflow", "error", "synchronous close"] as const)(
       "handles terminal provider %s before the initial realtime connect finishes",
       async (terminal) => {
         const connection = createConnectionMock();

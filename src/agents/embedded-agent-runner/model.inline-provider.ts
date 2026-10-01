@@ -52,6 +52,7 @@ export function normalizeResolvedTransportApi(
     case "bedrock-converse-stream":
     case "github-copilot":
     case "google-generative-ai":
+    case "google-interactions":
     case "google-vertex":
     case "ollama":
     case "openai-chatgpt-responses":
@@ -131,19 +132,6 @@ export function resolveProviderModelInput(params: {
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }
 
-function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: string }): {
-  api?: Api;
-  baseUrl?: string;
-} {
-  const api = normalizeResolvedTransportApi(params.api);
-  return {
-    api,
-    baseUrl:
-      api === "google-generative-ai" ? normalizeGoogleApiBaseUrl(params.baseUrl) : params.baseUrl,
-  };
-}
-
-/** Builds runtime model records from inline provider config. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
   options: { providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps } = {},
@@ -163,17 +151,19 @@ export function buildInlineProviderModels(
       normalizeModelId: (modelId) => modelId.trim(),
     });
     return Array.from(models.values()).map((model) => {
-      const transport = resolveInlineProviderTransport({
-        api: model.api ?? entry?.api,
-        baseUrl: model.baseUrl ?? entry?.baseUrl,
-      });
+      const api = normalizeResolvedTransportApi(model.api ?? entry?.api);
+      const configuredBaseUrl = model.baseUrl ?? entry?.baseUrl;
+      const baseUrl =
+        api === "google-generative-ai"
+          ? normalizeGoogleApiBaseUrl(configuredBaseUrl)
+          : configuredBaseUrl;
       const modelHeaders = sanitizeModelHeaders(model.headers, {
         stripSecretRefMarkers: true,
       });
       const requestConfig = resolveProviderRequestConfig({
         provider: trimmed,
-        api: transport.api ?? model.api,
-        baseUrl: transport.baseUrl,
+        api: api ?? model.api,
+        baseUrl,
         ...(options.providerMetadataOwners
           ? { providerMetadataOwners: options.providerMetadataOwners }
           : {}),
@@ -198,7 +188,7 @@ export function buildInlineProviderModels(
                 input: model.input,
               }),
               provider: trimmed,
-              baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+              baseUrl: requestConfig.baseUrl ?? baseUrl,
               api: requestConfig.api ?? model.api,
               headers: requestConfig.headers,
             },

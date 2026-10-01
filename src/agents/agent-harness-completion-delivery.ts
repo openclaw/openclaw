@@ -1,16 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getRuntimeConfig } from "../config/config.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   getRestartRecoveryTerminalDeliveryEvidence,
   hasRestartRecoveryTerminalRun,
 } from "../config/sessions/restart-recovery-state.js";
-import type {
-  HarnessCompletionRecovery,
-  RestartRecoveryTerminalDeliveryEvidence,
-} from "../config/sessions/restart-recovery-types.js";
+import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import {
   loadExactSessionEntry,
   readSessionSubmittedInput,
@@ -18,59 +12,18 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import {
   getAgentRunContext,
-  hasAgentRunContextExecutionOwner,
   getAgentRunLifecycleGeneration,
+  hasAgentRunContextExecutionOwner,
 } from "../infra/agent-run-registry.js";
-import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   getOwedHarnessCompletionTask,
+  hasHarnessCompletionFinalReceipt,
   readAdmittedHarnessCompletionInput,
-  settleHarnessCompletionTask,
-} from "../tasks/agent-harness-completion-recovery.js";
-import { getTaskByIdForOwner } from "../tasks/task-owner-access.js";
-import { listTaskRecords } from "../tasks/task-registry-query.js";
-import { resolveTaskSessionAgentId } from "../tasks/task-session-identity.js";
+} from "./agent-harness-completion-recovery.js";
 
 const log = createSubsystemLogger("agents/harness-completion-recovery");
-
-/** These receipts are stricter than legacy live-return classification: omission is not success. */
-function hasHarnessCompletionFinalReceipt(
-  receipt: RestartRecoveryTerminalDeliveryEvidence,
-): boolean {
-  const target = receipt.deliveryContext;
-  if (
-    !target?.channel ||
-    !target.to ||
-    receipt.payloadsTruncated ||
-    receipt.messagingToolSentTargetsTruncated ||
-    receipt.messagingToolAggregateEvidenceUnaccounted
-  ) {
-    return false;
-  }
-  const requiredProvider = normalizeOptionalString(target.channel)?.toLowerCase();
-  if (!requiredProvider) {
-    return false;
-  }
-  if (
-    receipt.messagingToolSentTargets?.some(
-      (sent) =>
-        normalizeOptionalString(sent.provider)?.toLowerCase() === requiredProvider &&
-        normalizeOptionalString(sent.accountId) === normalizeOptionalString(target.accountId) &&
-        sent.sourceReplyFinal === true &&
-        sent.visible === true &&
-        sourceDeliveryTargetsMatch(sent, target),
-    )
-  ) {
-    return true;
-  }
-  return (
-    receipt.deliveryStatus?.status === "sent" &&
-    (receipt.deliveryStatus.resultCount ?? 0) > 0 &&
-    receipt.payloads?.some((payload) => payload.visible === true) === true
-  );
-}
 
 function sameRequester(claim: HarnessCompletionRecovery, entry: SessionEntry): boolean {
   return claim.sessionId === entry.sessionId && claim.lifecycleRevision === entry.lifecycleRevision;
@@ -113,7 +66,7 @@ function hasLiveCompletionOwner(claim: HarnessCompletionRecovery, runId: string)
 export function reconcileHarnessCompletionDelivery(
   params: CompletionTarget & {
     sourceRunId: string;
-    taskRunId: string;
+    taskRunId?: string;
   },
 ): "unowned" | "pending" | "delivered" | "blocked" {
   const entry = readCurrent(params);
@@ -141,29 +94,11 @@ export function reconcileHarnessCompletionDelivery(
   }
   if (
     claim.sourceRunId !== params.sourceRunId ||
-    claim.taskRunId !== params.taskRunId ||
+    (params.taskRunId !== undefined && claim.taskRunId !== params.taskRunId) ||
     claim.requesterAgentId !== params.agentId ||
     claim.requesterSessionKey !== params.sessionKey ||
     !sameRequester(claim, entry)
   ) {
-    return "blocked";
-  }
-  const task = getTaskByIdForOwner({
-    taskId: claim.taskId,
-    callerOwnerKey: claim.requesterSessionKey,
-    callerAgentId: claim.requesterAgentId,
-  });
-  if (
-    !task ||
-    task.runId !== claim.taskRunId ||
-    task.requesterSessionKey !== claim.requesterSessionKey
-  ) {
-    return "blocked";
-  }
-  if (task.deliveryStatus === "delivered") {
-    return "delivered";
-  }
-  if (!getOwedHarnessCompletionTask(claim, entry)) {
     return "blocked";
   }
   if (
@@ -171,19 +106,10 @@ export function reconcileHarnessCompletionDelivery(
     receipt !== undefined &&
     hasHarnessCompletionFinalReceipt(receipt)
   ) {
-    const settled = settleHarnessCompletionTask({
-      claim,
-      readCurrentSession: () => readCurrent(params),
-      hasQualifyingReceipt(current) {
-        const actual = getRestartRecoveryTerminalDeliveryEvidence(current, claim.sourceRunId);
-        return (
-          isDeepStrictEqual(actual?.harnessCompletion, claim) &&
-          actual !== undefined &&
-          hasHarnessCompletionFinalReceipt(actual)
-        );
-      },
-    });
-    return settled ? "delivered" : "blocked";
+    return "delivered";
+  }
+  if (!getOwedHarnessCompletionTask(claim, entry)) {
+    return "blocked";
   }
   if (
     entry.status !== "running" ||
@@ -215,48 +141,5 @@ export function reconcileHarnessCompletionDelivery(
       `Could not inspect harness completion custody for ${params.sessionKey}: ${String(error)}`,
     );
     return "blocked";
-  }
-}
-
-/** Startup and command cleanup settle retained receipts even if no native monitor survives. No model/send. */
-export function reconcileRetainedHarnessCompletionDeliveries(): void {
-  const cfg = getRuntimeConfig();
-  const scopes = new Map<string, CompletionTarget>();
-  for (const task of listTaskRecords()) {
-    if (task.runtime !== "subagent" || !task.taskKind || task.deliveryStatus !== "pending") {
-      continue;
-    }
-    const agentId = resolveTaskSessionAgentId(task.requesterSessionKey, task.requesterAgentId, cfg);
-    if (!agentId) {
-      continue;
-    }
-    const target = {
-      agentId,
-      sessionKey: task.requesterSessionKey,
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-    };
-    scopes.set(`${agentId}\n${target.sessionKey}`, target);
-  }
-  for (const target of scopes.values()) {
-    try {
-      reconcileSessionHarnessCompletionDeliveries(target);
-    } catch (error) {
-      // A removed or temporarily unreadable requester is not execution authority.
-      // Keep its task pending without blocking unrelated Gateway startup work.
-      log.warn(`Could not reconcile harness completion for ${target.sessionKey}: ${String(error)}`);
-    }
-  }
-}
-
-export function reconcileSessionHarnessCompletionDeliveries(target: CompletionTarget): void {
-  const entry = readCurrent(target);
-  for (const receipt of entry?.restartRecoveryTerminalDeliveryEvidence ?? []) {
-    if (receipt.harnessCompletion) {
-      reconcileHarnessCompletionDelivery({
-        ...target,
-        sourceRunId: receipt.runId,
-        taskRunId: receipt.harnessCompletion.taskRunId,
-      });
-    }
   }
 }

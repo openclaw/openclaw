@@ -1,13 +1,9 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentPlanStep, AgentPlanStepStatus } from "openclaw/plugin-sdk/channel-outbound";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  readNonNegativeInteger,
-  readNullableString,
-  splitPlanText,
-} from "./event-projector-values.js";
+import { readNullableString } from "./event-projector-values.js";
 import type { CodexNativePlan } from "./plan-compaction-state.js";
-import type { CodexThreadItem, JsonObject } from "./protocol.js";
+import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
 type ReasoningDeltaMethod = "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta";
 
@@ -45,10 +41,9 @@ export class CodexReasoningProjection {
     };
     this.reasoningTextByItem.set(itemId, item);
     // Codex indexes reasoning sections independently within an item.
+    const index = params[method === "item/reasoning/textDelta" ? "contentIndex" : "summaryIndex"];
     const groupIndex =
-      method === "item/reasoning/textDelta"
-        ? (readNonNegativeInteger(params, "contentIndex") ?? 0)
-        : (readNonNegativeInteger(params, "summaryIndex") ?? 0);
+      typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : 0;
     const sections = method === "item/reasoning/textDelta" ? item.content : item.summary;
     sections.set(groupIndex, `${sections.get(groupIndex) ?? ""}${delta}`);
     await this.params.onReasoningStream?.({
@@ -63,12 +58,7 @@ export class CodexReasoningProjection {
     if (!delta) {
       return;
     }
-    const text = `${this.planTextByItem.get(itemId) ?? ""}${delta}`;
-    this.planTextByItem.set(itemId, text);
-    this.emitPlanUpdate({
-      explanation: undefined,
-      steps: splitPlanText(text).map((step) => ({ step, status: "pending" })),
-    });
+    this.recordPlanText(itemId, `${this.planTextByItem.get(itemId) ?? ""}${delta}`);
   }
 
   async handleTurnPlanUpdated(
@@ -78,15 +68,14 @@ export class CodexReasoningProjection {
     const explanation = readNullableString(params, "explanation");
     const plan = Array.isArray(params.plan)
       ? params.plan.flatMap((entry) => {
-          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          if (!isJsonObject(entry)) {
             return [];
           }
-          const record = entry as JsonObject;
-          const step = readString(record, "step");
+          const step = readString(entry, "step");
           if (!step) {
             return [];
           }
-          return [{ step, status: normalizePlanStepStatus(readString(record, "status")) }];
+          return [{ step, status: normalizePlanStepStatus(readString(entry, "status")) }];
         })
       : undefined;
     const planText = [
@@ -131,11 +120,7 @@ export class CodexReasoningProjection {
       return;
     }
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
-      this.planTextByItem.set(item.id, item.text);
-      this.emitPlanUpdate({
-        explanation: undefined,
-        steps: splitPlanText(item.text).map((step) => ({ step, status: "pending" })),
-      });
+      this.recordPlanText(item.id, item.text);
     }
   }
 
@@ -161,6 +146,17 @@ export class CodexReasoningProjection {
       this.turnPlanText ??
       [...this.planTextByItem.values()].filter((text) => text.trim().length > 0).join("\n\n")
     );
+  }
+
+  private recordPlanText(itemId: string, text: string): void {
+    this.planTextByItem.set(itemId, text);
+    this.emitPlanUpdate({
+      steps: text
+        .split(/\r?\n/)
+        .map((line) => line.trim().replace(/^[-*]\s+/, ""))
+        .filter((line) => line.length > 0)
+        .map((step) => ({ step, status: "pending" })),
+    });
   }
 
   private emitPlanUpdate(

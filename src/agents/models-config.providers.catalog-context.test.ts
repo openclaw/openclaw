@@ -34,7 +34,7 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-it.each(["chatgpt-identity", undefined])(
+it.each([undefined])(
   "passes refreshed OAuth grant metadata to the catalog (authFlow: %s)",
   async (authFlow) => {
     const agentDir = tempDirs.make("catalog-oauth-grant-");

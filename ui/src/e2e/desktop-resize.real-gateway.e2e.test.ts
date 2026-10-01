@@ -394,7 +394,9 @@ suite.define(() => {
           const assets = new Map<string, string>();
           const assetReads: Promise<unknown>[] = [];
           page.on("response", (response) => {
-            if (/\/assets\/(?:index|desktop)[^/]*\.js$/u.test(new URL(response.url()).pathname)) {
+            if (
+              /\/assets\/(?:index|desktop|novnc-)[^/]*\.js$/u.test(new URL(response.url()).pathname)
+            ) {
               assetReads.push(
                 response.body().then(
                   (bytes) =>
@@ -634,7 +636,12 @@ suite.define(() => {
             await verifyMatch(stage, observerCanvas);
             expect(
               await observerPanel.locator(".desktop-touch-action, .desktop-sizing").count(),
-            ).toBe(5);
+            ).toBe(6);
+            expect(
+              await observerPanel
+                .getByRole("button", { name: "Audio unavailable", exact: true })
+                .isDisabled(),
+            ).toBe(true);
           }
           const colorCount = await sampledFramebufferColors(observerCanvas);
           expect(colorCount).toBeGreaterThan(8);

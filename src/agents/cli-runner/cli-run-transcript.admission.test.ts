@@ -160,23 +160,46 @@ function run(branch: "native" | "supplied") {
   };
 }
 
-function deferAdmission() {
+function deferOperation() {
   const queued = createDeferredCore();
   const released = createDeferredCore();
   let didQueue = false;
-  mocks.admit.mockImplementation(async (write) => {
-    didQueue = true;
-    queued.resolve();
-    await released.promise;
-    write();
-  });
   return {
+    enter: async () => {
+      didQueue = true;
+      queued.resolve();
+      await released.promise;
+    },
     wait: async (result: Promise<void>) => {
       await Promise.race([queued.promise, result]);
       expect(didQueue).toBe(true);
     },
     release: () => released.resolve(),
   };
+}
+
+function deferAdmission() {
+  const admission = deferOperation();
+  mocks.admit.mockImplementation(async (write) => {
+    await admission.enter();
+    write();
+  });
+  return admission;
+}
+
+function deferRestoration() {
+  const restoration = deferOperation();
+  mocks.restore.mockImplementation(
+    async (scope: { env?: NodeJS.ProcessEnv }, assertCurrent?: () => void) => {
+      await restoration.enter();
+      if (scope.env !== capturedEnv) {
+        throw new Error("Cold restoration lost its captured environment");
+      }
+      assertCurrent?.();
+      mocks.restoreCommit();
+    },
+  );
+  return restoration;
 }
 
 it.each(["native", "supplied"] as const)(
@@ -299,68 +322,32 @@ it("keeps the native target captured before the caller changes its request", asy
   expect(mocks.append).toHaveBeenCalledOnce();
 });
 
-it.each(["missing", "retired", "store"] as const)(
-  "refuses a %s native target before deferred cold restoration mutates it",
-  async (change) => {
-    const entered = createDeferredCore();
-    const released = createDeferredCore();
-    let didEnter = false;
-    mocks.restore.mockImplementation(async (_scope, assertCurrent?: () => void) => {
-      didEnter = true;
-      entered.resolve();
-      await released.promise;
-      assertCurrent?.();
-      mocks.restoreCommit();
-    });
-    const { result } = run("native");
-    try {
-      await Promise.race([entered.promise, result]);
-      expect(didEnter).toBe(true);
-      expect(mocks.restoreCommit).not.toHaveBeenCalled();
-      if (change === "missing") {
-        current = undefined;
-      } else if (change === "retired") {
-        mocks.owned.mockImplementationOnce(() => {
-          throw new Error("Retired source");
-        });
-      } else {
-        currentSource = { ...source, agentId: "successor-owner" };
-      }
-    } finally {
-      released.resolve();
-      await result;
-    }
-    expect(mocks.restoreCommit).not.toHaveBeenCalled();
-    expect(mocks.databaseWrite).not.toHaveBeenCalled();
-    expect(mocks.open).not.toHaveBeenCalled();
-    expect(mocks.append).not.toHaveBeenCalled();
-    expect(mocks.warn).toHaveBeenCalledOnce();
-  },
-);
-
-it("retains the captured environment through cold restoration and admitted native writes", async () => {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
-  let didEnter = false;
-  mocks.restore.mockImplementation(
-    async (scope: { env?: NodeJS.ProcessEnv }, assertCurrent?: () => void) => {
-      didEnter = true;
-      entered.resolve();
-      await released.promise;
-      if (scope.env !== capturedEnv) {
-        throw new Error("Cold restoration lost its captured environment");
-      }
-      assertCurrent?.();
-      mocks.restoreCommit();
-    },
-  );
+it("refuses a changed store owner before deferred cold restoration mutates it", async () => {
+  const restoration = deferRestoration();
   const { result } = run("native");
   try {
-    await Promise.race([entered.promise, result]);
-    expect(didEnter).toBe(true);
+    await restoration.wait(result);
+    expect(mocks.restoreCommit).not.toHaveBeenCalled();
+    currentSource = { ...source, agentId: "successor-owner" };
+  } finally {
+    restoration.release();
+    await result;
+  }
+  expect(mocks.restoreCommit).not.toHaveBeenCalled();
+  expect(mocks.databaseWrite).not.toHaveBeenCalled();
+  expect(mocks.open).not.toHaveBeenCalled();
+  expect(mocks.append).not.toHaveBeenCalled();
+  expect(mocks.warn).toHaveBeenCalledOnce();
+});
+
+it("retains the captured environment through cold restoration and admitted native writes", async () => {
+  const restoration = deferRestoration();
+  const { result } = run("native");
+  try {
+    await restoration.wait(result);
     ambientSource = { agentId: "ambient-successor", path: "/synthetic/ambient-successor" };
   } finally {
-    released.resolve();
+    restoration.release();
     await result;
   }
   expect(mocks.restoreCommit).toHaveBeenCalledOnce();

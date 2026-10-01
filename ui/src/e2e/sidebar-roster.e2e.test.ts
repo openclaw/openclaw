@@ -9,6 +9,11 @@ import { installMockGateway, waitForControlUiRoute } from "../test-helpers/contr
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
+import {
+  chooseSidebarOwner,
+  closeSidebarMenu,
+  openSidebarMenu,
+} from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI sidebar agent roster" });
 
@@ -172,8 +177,13 @@ suite.define(() => {
         );
         for (const agent of agentsList.agents) {
           const group = sidebar.locator(`[data-agent-group="${agent.id}"]`);
+          const pin = sidebar.locator(
+            `.sidebar-nav [data-session-key="agent:${agent.id}:project"]`,
+          );
+          expect(await pin.count()).toBe(1);
+          expect(await pin.textContent()).toContain(`${agent.name} project`);
+          expect(await pin.locator(".identity-avatar--agent").count()).toBe(1);
           expect(await group.locator(".sidebar-recent-session").allTextContents()).toEqual([
-            expect.stringContaining(`${agent.name} project`),
             expect.stringContaining(`${agent.name} notes`),
           ]);
           expect(
@@ -199,7 +209,8 @@ suite.define(() => {
           const title = await row.locator(".sidebar-recent-session__name").boundingBox();
           expect(lead).not.toBeNull();
           expect(title).not.toBeNull();
-          expect(title!.x - (lead!.x + lead!.width)).toBeGreaterThanOrEqual(8);
+          // The renderer reports fractional layout values; allow 0.01 px of rounding.
+          expect(title!.x - (lead!.x + lead!.width)).toBeGreaterThanOrEqual(8 - 0.01);
         }
         await page.mouse.move(600, 60);
         await captureSidebarUiProof(suite, page, "sidebar-roster-after.png");
@@ -306,14 +317,22 @@ suite.define(() => {
         await expectWorkspace();
         await expect.poll(() => sessionRows.count()).toBe(8);
         await sidebar.locator(".sidebar-session-sort").click();
+        await openSidebarMenu(page);
         expect(
-          await sidebar.locator('.sidebar-session-sort-menu [value^="grouping:"]').count(),
+          await sidebar
+            .locator(".sidebar-session-sort-menu")
+            .locator("#sidebar-sessions-group")
+            .count(),
         ).toBe(0);
         expect(
-          await sidebar.locator('.sidebar-session-sort-menu [value="hide-empty-groups"]').count(),
+          await sidebar
+            .locator(".sidebar-session-sort-menu")
+            .getByRole("radiogroup", { name: "Hide empty groups", exact: true })
+            .count(),
         ).toBe(0);
-        await sidebar.locator(".sidebar-session-sort-menu .sidebar-session-owner-submenu").hover();
-        await sidebar.locator('.sidebar-session-sort-menu [value="owner:profile-riley"]').click();
+        await openSidebarMenu(page);
+        await chooseSidebarOwner(page, "owner:profile-riley");
+        await closeSidebarMenu(page);
         await expect.poll(() => sessionRows.count()).toBe(4);
         expect(await sessionRows.allTextContents()).toEqual([
           expect.stringContaining("Harbor project"),
@@ -322,11 +341,13 @@ suite.define(() => {
           expect.stringContaining("Bloom project"),
         ]);
         await sidebar.locator(".sidebar-session-sort").click();
-        await sidebar.locator('.sidebar-session-sort-menu [value="owner:"]').click();
+        await openSidebarMenu(page);
+        await chooseSidebarOwner(page, "all");
+        await closeSidebarMenu(page);
         await expect.poll(() => sessionRows.count()).toBe(8);
 
         await sidebar.locator('[data-agent-collapse="bloom"]').click();
-        await expect.poll(() => sessionRows.count()).toBe(6);
+        await expect.poll(() => sessionRows.count()).toBe(7);
         expect(new URL(page.url()).pathname).toBe("/chat/forge/notes");
         await page.reload();
         await expect.poll(() => headers.count()).toBe(4);
@@ -335,7 +356,7 @@ suite.define(() => {
             sidebar.locator('[data-agent-collapse="bloom"]').getAttribute("aria-expanded"),
           )
           .toBe("false");
-        await expect.poll(() => sessionRows.count()).toBe(6);
+        await expect.poll(() => sessionRows.count()).toBe(7);
         await expectWorkspace();
         const forgeGroup = sidebar.locator('[data-agent-group="forge"]');
         const actions = forgeGroup.locator(".sidebar-agent-roster__actions");

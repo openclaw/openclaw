@@ -218,7 +218,7 @@ on_exit 0
   describe.each(process.platform === "darwin" ? ["/bin/bash", "bash"] : ["bash"])(
     "%s wrapper",
     (shell) => {
-      it("reaches the direct child invocation with empty optional arguments", () => {
+      it("reaches the direct auto-auth child through private cgroup setup", () => {
         const { captureDir, result } = runSurvivor(
           {
             OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "0",
@@ -237,7 +237,13 @@ on_exit 0
           .slice(0, -1);
         expect(args).toContain("run");
         expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth");
-        expect(args).not.toContain("--user");
+        expect(args[args.indexOf("--user") + 1]).toBe("root");
+        expect(args[args.indexOf("--cgroupns") + 1]).toBe("private");
+        const setup = args.indexOf(
+          "/tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh",
+        );
+        expect(setup).toBeGreaterThan(0);
+        expect(args.slice(setup - 1, setup + 2)).toEqual(["bash", args[setup], "timeout"]);
         expect(args).not.toContain("");
         expect(args.at(-2)).toBe("-lc");
       });
@@ -345,6 +351,10 @@ on_exit 0
     expect(readFileSync(join(captureDir, "docker-args"), "utf8")).toContain(
       ":/tmp/openclaw-prepublish-plugin-registry:ro",
     );
+    const args = readFileSync(join(captureDir, "docker-run-args"), "utf8").split("\0");
+    expect(args).not.toContain("--user");
+    expect(args).not.toContain("--cap-add");
+    expect(args).not.toContain("--security-opt");
   });
 
   it.each([
@@ -380,7 +390,7 @@ on_exit 0
     expect(existsSync(packageTarball)).toBe(true);
   });
 
-  it.each(["projects-doctor", "taskflow-restoration"])(
+  it.each(["projects-doctor"])(
     "isolates each %s run from retained evidence and preserves a failed runtime",
     (scenario) => {
       const artifacts = tempDirs.make("worker-cell-retained-artifacts-");
@@ -442,7 +452,7 @@ on_exit 0
   it("fails and retains state when container-owned cleanup fails", () => {
     const { captureDir, result } = runSurvivor({
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.9.4",
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "taskflow-restoration",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "projects-doctor",
       FIXTURE_CLEANUP_EXIT: "43",
     });
     expect(result.status, result.stderr).toBe(1);
@@ -550,7 +560,6 @@ run_live_models
       "mobile-pairing-reconnect",
       "projects-doctor",
       "projects-startup-migration",
-      "taskflow-restoration",
       "dreaming-cron-doctor",
     ].map((scenario) => ({ scenario, liveEnv: {}, expectedModels: [] })),
   ])(

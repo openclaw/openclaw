@@ -156,6 +156,11 @@ Chat model menus, the Control UI, and `models list` display the catalog's refres
 warning. The CLI writes the warning to stderr, keeping JSON and plain stdout
 machine-readable.
 
+A provider that rejects authentication keeps its sign-in status without causing
+a catalog refresh warning. For an installed agent app, open **Models** in the
+Control UI and follow its sign-in guidance. Timeouts and other discovery failures
+still produce the refresh warning, even when another provider needs sign-in.
+
 A selected Gateway must advertise `published-model-catalog`. If it does not,
 update or restart it and retry. Connection, authorization and capability errors
 are reported directly; they do not switch the command to a different local list.
@@ -186,6 +191,7 @@ Notes:
 - `Input` and `Ctx` use the selected physical route plus explicit configured logical overrides. Unresolved route metadata stays unknown instead of borrowing another route's capabilities.
 - Configured model IDs retain case. For example, `Reader` and `reader` remain distinct. Provider-owned aliases still apply, and configured aliases remain in the table tags and JSON output.
 - `--provider` takes a provider ID, such as `moonshot`, rather than a picker label such as `Moonshot AI`.
+- Unknown provider IDs fail with a non-zero exit and name the rejected provider. Run `openclaw models list --all` to list models and their provider IDs.
 - Model refs split on the first `/`. Include the provider prefix when the model ID contains `/`, for example `openrouter/moonshotai/kimi-k2`.
 
 Provider discovery through `models list --refresh` is separate from the hosted
@@ -199,9 +205,11 @@ for the wire controls.
 not sign in to providers, test credentials, or activate downloaded rows in a
 running Gateway. It rejects `--agent` because the hosted catalog is global.
 
-Restart the Gateway to use downloaded updates. The Gateway reports when a
-checked catalog needs a restart, including an update downloaded by another
-process. A successful refresh result describes the download, not live activation.
+The Gateway applies compatible downloads at its next background catalog check
+or after an explicit model-list refresh, without restarting. Refresh requests
+return current rows without waiting for the replacement generation.
+A failed preparation leaves the previous generation active. A successful CLI
+refresh result describes the download, not live activation.
 If `models.catalogRefresh.enabled` is `false`, the command reports that refresh
 is disabled.
 
@@ -367,7 +375,7 @@ Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 
 See [OpenAI authentication](/providers/openai/authentication) to compare Codex
-OAuth, device code, API keys, and Sign in with ChatGPT (`--method siwc`),
+OAuth, device code, API keys, and Sign in with ChatGPT (Beta) (`--method siwc`),
 including model access, hosted plugins, and shared versus personal setup.
 
 Examples:

@@ -18,7 +18,7 @@ type ToolFactory = Parameters<OpenClawPluginApi["registerTool"]>[0];
 describe("google-meet lazy imports", () => {
   afterEach(() => {
     for (const moduleId of [
-      "./src/plugin-helpers.js",
+      "./src/create.js",
       "./src/runtime.js",
       "./src/node-host.js",
       "./src/node-invoke-policy.js",
@@ -34,7 +34,7 @@ describe("google-meet lazy imports", () => {
   });
 
   it("loads each runtime owner only on first use", async () => {
-    let helperImports = 0;
+    let createImports = 0;
     let runtimeImports = 0;
     let nodeHostImports = 0;
     let nodeHostBusy = false;
@@ -45,8 +45,8 @@ describe("google-meet lazy imports", () => {
     let routingImports = 0;
     let transcriptSdkImports = 0;
 
-    vi.doMock("./src/plugin-helpers.js", () => {
-      helperImports += 1;
+    vi.doMock("./src/create.js", () => {
+      createImports += 1;
       return {
         createMeetFromParams: async () => ({ meetingUri: "https://meet.google.com/abc-defg-hij" }),
       };
@@ -153,7 +153,7 @@ describe("google-meet lazy imports", () => {
 
     expect(nodeCommands[0]?.hasActiveWork?.()).toBe(false);
     expect({
-      helperImports,
+      createImports,
       runtimeImports,
       nodeHostImports,
       nodePolicyImports,
@@ -163,7 +163,7 @@ describe("google-meet lazy imports", () => {
       routingImports,
       transcriptSdkImports,
     }).toEqual({
-      helperImports: 0,
+      createImports: 0,
       runtimeImports: 0,
       nodeHostImports: 0,
       nodePolicyImports: 0,
@@ -221,7 +221,7 @@ describe("google-meet lazy imports", () => {
     await cliRegistrars[0]?.({ program: {} } as never);
 
     expect({
-      helperImports,
+      createImports,
       runtimeImports,
       nodeHostImports,
       nodePolicyImports,
@@ -231,7 +231,7 @@ describe("google-meet lazy imports", () => {
       routingImports,
       transcriptSdkImports,
     }).toEqual({
-      helperImports: 1,
+      createImports: 1,
       runtimeImports: 1,
       nodeHostImports: 1,
       nodePolicyImports: 1,

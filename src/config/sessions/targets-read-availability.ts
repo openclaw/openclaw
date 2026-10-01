@@ -3,7 +3,7 @@ import path from "node:path";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
+import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-inventory.js";
 import {
   resolveSqliteTargetFromSessionStorePath,
   SessionStoreRegistryReadRequired,
@@ -22,7 +22,7 @@ import {
 } from "./targets-collision.js";
 import {
   isPerAgentSessionStoreConfig,
-  listConfiguredSessionStoreAgentIds,
+  resolveConfiguredSessionStoreTargets,
   resolveExistingAgentSessionStoreTargetsSync,
 } from "./targets.js";
 
@@ -130,15 +130,7 @@ function resolveFixedSessionStoreTargetsReadOnly(
     storePath: resolveCapturedSessionStorePath(storeConfig, requested, env, params.readPaths),
   };
   try {
-    const configuredTargets = listConfiguredSessionStoreAgentIds(cfg).map((configuredAgentId) => ({
-      agentId: configuredAgentId,
-      storePath: resolveCapturedSessionStorePath(
-        storeConfig,
-        configuredAgentId,
-        env,
-        params.readPaths,
-      ),
-    }));
+    const configuredTargets = resolveConfiguredSessionStoreTargets(cfg, env, params.readPaths);
     if (!configuredTargets.some((target) => normalizeAgentId(target.agentId) === requested)) {
       configuredTargets.push(fixedTarget);
     }
@@ -240,13 +232,8 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
       readCandidates: params.readCandidates,
     });
     if (!snapshot.available) {
-      // The configured template may point at a store that has not been
-      // created yet (fresh config, store migration window) while the agent's
-      // real sessions live in a discovered store. A missing candidate must
-      // not poison the readable siblings — treating it as whole-agent
-      // unavailability made session-evidence consumers report "absent" and
-      // destroy live worker placements. Broken-but-present stores still fail
-      // the whole agent: partial visibility must never prove absence.
+      // A missing configured store can have readable siblings during migration.
+      // Present but unreadable stores must not let partial visibility prove absence.
       if (snapshot.reason === "database-missing") {
         continue;
       }

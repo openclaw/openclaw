@@ -110,6 +110,28 @@ describe("Plugin link reader panel", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    ["Merged", "accent", "2026-09-23T12:31:58Z"],
+    ["Closed", "negative", "2026-09-24T09:15:00Z"],
+    ["Open", "positive", undefined],
+    ["Draft", "neutral", undefined],
+  ] as const)("shows the %s event date beside its badge", async (label, tone, timestamp) => {
+    const document = {
+      ...item(),
+      createdAt: "2026-09-23T11:08:47Z",
+      updatedAt: "2026-09-25T01:00:00Z",
+      badge: { label, tone, timestamp },
+    };
+    const panel = await mount(vi.fn().mockResolvedValue(document));
+    open(panel);
+    await expectTitle(panel, document.title);
+    const time = panel.renderRoot.querySelector(".lr-content:not([hidden]) time");
+    const expected = timestamp ?? document.createdAt;
+    expect(time?.getAttribute("datetime")).toBe(expected);
+    expect(time?.textContent?.trim()).toBe(new Date(expected).toLocaleString());
+    expect(panel.renderRoot.querySelector(".lr-state")?.textContent?.trim()).toBe(label);
+  });
+
   it("resolves document images through the reader, deduplicates attachments, and preserves source links", async () => {
     const url = "https://images.example/attachment.png";
     const dataUrl = "data:image/png;base64,aW1hZ2U=";

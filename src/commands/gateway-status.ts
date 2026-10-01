@@ -3,8 +3,9 @@ import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 import { withProgress } from "../cli/progress.js";
-import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
+import { readBestEffortConfig } from "../config/config.js";
 import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
+import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
@@ -56,7 +57,7 @@ export async function gatewayStatusCommand(
   });
   const baseTargets = resolveTargets(cfg, opts.url, portOverride);
   const network = buildNetworkHints(cfg, portOverride);
-  const remotePort = portOverride ?? resolveGatewayPort(cfg);
+  const remotePort = portOverride ?? resolveGatewaySshRemotePort(cfg);
   const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
   const hasExplicitUrl = typeof opts.url === "string" && opts.url.trim().length > 0;
   const useConfiguredRemoteTargets = portOverride === undefined || hasExplicitUrl;
@@ -74,6 +75,7 @@ export async function gatewayStatusCommand(
     sshTarget = inferSshTargetFromRemoteUrl(cfg.gateway?.remote?.url);
   }
 
+  const sshRouteTarget = sshTarget;
   if (sshTarget) {
     const resolved = await resolveSshTarget({
       rawTarget: sshTarget,
@@ -131,6 +133,7 @@ export async function gatewayStatusCommand(
             baseTargets,
             remotePort,
             sshTarget,
+            sshRouteTarget,
             sshIdentity,
             loadSshTunnelModule,
             localTlsFingerprint: localCertificate?.ok

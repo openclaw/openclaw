@@ -34,6 +34,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // Keep rejection ownership in the snapshot so a handler attached after wait
   // can clear it; an unawaited failure must not become a successful cell.
   const unhandledRejections = new Set();
+  const bridgeErrors = new WeakSet();
+  // Guest prototype changes must not replace the operations that own error provenance.
+  const rememberBridgeError = bridgeErrors.add.bind(bridgeErrors);
+  const isBridgeError = bridgeErrors.has.bind(bridgeErrors);
   let nextTimerId = 0;
   const GuestPromise = Promise;
   const GuestError = Error;
@@ -213,6 +217,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
         error.code = parsed.code;
         error.effectStatus = "unknown";
       }
+      rememberBridgeError(error);
       entry.reject(error);
     }
     return true;
@@ -243,7 +248,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   });
 
   const skills = Object.freeze({
-    list: () => request("skillsList", []),
+    list: (offset = 0) => request("skillsList", [offset]),
+    search: (query, limit) => request("skillsSearch", limit === undefined ? [query] : [query, limit]),
     read: (name) => request("skillsRead", [name]),
   });
 
@@ -479,6 +485,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     json: { value: (value) => emitOutput({ type: "json", value: safe(value, true) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
+    __openclawIsBridgeError: { value: isBridgeError },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
     __openclawAdmissionError: { value: () => admissionError },
     // Final getters must run before the worker drains output and settles host work.

@@ -43,6 +43,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   MIGRATED_FIXTURE_NO_SERVICE,
@@ -169,13 +170,42 @@ it.each([
   },
 );
 
-it.each([
-  { pending: true, status: "skipped" },
-  { pending: false, status: "error" },
-  { pending: true, status: "error" },
-] as const)(
-  "retains the backup across migrated finalization (readiness pending=$pending, status=$status)",
-  async ({ pending, status }) => {
+it.each<{
+  pending: boolean;
+  status: "error" | "skipped";
+  candidateStartAttempted?: boolean;
+  backup?: boolean;
+  windows?: boolean;
+  handback?: boolean;
+  recovered?: boolean;
+}>([
+  { pending: true, status: "skipped", windows: true },
+  { pending: false, status: "error", windows: true },
+  { pending: true, status: "error", windows: true },
+  { pending: false, status: "error", candidateStartAttempted: false, backup: true, handback: true },
+  { pending: false, status: "error", candidateStartAttempted: true, backup: true },
+  { pending: false, status: "error", backup: true },
+  { pending: false, status: "error", candidateStartAttempted: false },
+  { pending: false, status: "error", candidateStartAttempted: false, backup: true, windows: true },
+  {
+    pending: false,
+    status: "error",
+    candidateStartAttempted: true,
+    backup: true,
+    windows: true,
+    recovered: true,
+  },
+])(
+  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows, recovered=$recovered)",
+  async ({
+    pending,
+    status,
+    candidateStartAttempted,
+    backup,
+    windows = false,
+    handback = false,
+    recovered = false,
+  }) => {
     const exitCode = status === "skipped" ? 0 : 1;
     const reason = status === "skipped" ? "gateway-readiness-unverified" : "doctor-failed";
     const base = dirs.make("migrated-readiness-pending-");
@@ -191,6 +221,7 @@ it.each([
     const complete = vi.spyOn(transaction, "complete");
     const rollback = vi.spyOn(transaction, "rollback");
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     // Keep the real parent and package owner; model only the completed candidate's JSON reply.
     vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
       async (_argv, options) => {
@@ -198,11 +229,15 @@ it.each([
           throw new Error("Expected serialized finalization input");
         }
         const input: MigratedUpdateFinalizationInput = JSON.parse(options.input);
+        expect(input.params).not.toHaveProperty("databaseBackup");
         const result = {
           ...input.params.result,
           status,
           reason,
           runId: run.runId,
+          ...(recovered
+            ? { recovery: { serviceRestartSafe: true, version: "2.0.0", service: "healthy" } }
+            : {}),
           steps: pending
             ? [
                 {
@@ -228,10 +263,10 @@ it.each([
         );
         await fs.writeFile(
           input.resultPath,
-          JSON.stringify({ result, exitCode, terminalRunId: run.runId }),
+          JSON.stringify({ result, exitCode, terminalRunId: run.runId, candidateStartAttempted }),
         );
         return {
-          stdout: "",
+          stdout: "candidate finalization result\n",
           stderr: "",
           code: 0,
           signal: null,
@@ -261,9 +296,21 @@ it.each([
           runtimeInspected: true,
           running: true,
           serviceEnv: env,
-          windowsTaskAutoStartRecovery: windowsRecovery,
+          ...(windows ? { windowsTaskAutoStartRecovery: windowsRecovery } : {}),
         },
         packageTransaction: transaction,
+        ...(backup
+          ? {
+              databaseBackup: {
+                directory: path.join(transaction.backupRoot, "databases"),
+                databases: [],
+                missingPaths: [],
+                sourcePaths: [],
+                sourceGenerations: {},
+                warnings: [],
+              },
+            }
+          : {}),
         controlPlaneUpdateSentinelMeta: null,
         preUpdatePluginInstallRecords: {},
         startedAt: Date.now(),
@@ -278,7 +325,14 @@ it.each([
       result: { status },
     });
     expect(outcome.result.reason).toBe(reason);
-    if (pending) {
+    expect(outcome.candidateStartAttempted).toBe(candidateStartAttempted);
+    expect(outcome.databaseRollbackAvailable).toBe(handback ? true : undefined);
+    if (handback) {
+      expect(stdout).not.toHaveBeenCalled();
+    } else {
+      expect(stdout).toHaveBeenCalledWith("candidate finalization result\n");
+    }
+    if (pending || handback) {
       expect(complete).not.toHaveBeenCalled();
     } else {
       expect(complete).toHaveBeenCalledExactlyOnceWith(
@@ -287,14 +341,24 @@ it.each([
       );
     }
     expect(rollback).not.toHaveBeenCalled();
-    expect(windowsRecovery.complete).toHaveBeenCalledWith(pending);
-    expect(windowsRecovery.complete).not.toHaveBeenCalledWith(!pending);
+    if (windows) {
+      expect(windowsRecovery.complete).toHaveBeenCalledWith(pending || recovered);
+      expect(windowsRecovery.complete).not.toHaveBeenCalledWith(!(pending || recovered));
+    } else {
+      expect(windowsRecovery.complete).not.toHaveBeenCalled();
+    }
     await expect(
       fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
     ).resolves.toContain('"version":"1.0.0"');
     await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
       '"version":"2.0.0"',
     );
+    if (handback) {
+      await expect(transaction.rollback(() => {})).resolves.toMatchObject({ exitCode: 0 });
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        '"version":"1.0.0"',
+      );
+    }
   },
 );
 
@@ -432,11 +496,12 @@ it.each([
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.useFakeTimers();
     presentation = createUpdateProgress(!json, run);
-    const progress = createUpdateRunProgress(run, presentation.progress);
+    const guards = createUpdateCommandExecutionGuards({ run }, root);
+    const progress = createUpdateRunProgress(run, presentation.progress, guards.recordStep);
     presentation.suspend();
     progress.deferLedgerWrites();
     const migrationStep = { name: "core migrations", command: "doctor --fix", index: 0, total: 1 };
-    progress.onStepStart?.(migrationStep);
+    await progress.onStepStart?.(migrationStep);
     const database = openOpenClawStateDatabase({ env });
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -465,9 +530,9 @@ it.each([
       reason: "state-migrated-no-rollback",
     };
     expect(() => progress.onRollbackOutcome?.(rollbackOutcome)).not.toThrow();
-    expect(() =>
+    await expect(
       progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     expect(() => vi.advanceTimersByTime(500)).not.toThrow();
     expect(() => presentation?.dispose()).not.toThrow();
     presentation = undefined;
@@ -648,6 +713,7 @@ it.each([
       return;
     }
     const result = await work;
+    expect(result.candidateStartAttempted).toBe(false);
     expect(result.automaticTriage).toMatchObject({
       kind: "update",
       phase: "state-migrated-no-rollback",

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentSelectionRequiredError,
-  listAgentEntries,
   resolveDefaultAgentId,
   resolveAmbientOwnerAgentId,
 } from "../../../agents/agent-scope-config.js";
@@ -13,9 +12,6 @@ import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveTalkSessionAgentId } from "../../../talk/agent-target.js";
 
 function materializeDefaultAgentRoles(cfg: OpenClawConfig) {
-  if (listAgentEntries(cfg).length < 2) {
-    return { config: cfg, changes: [] };
-  }
   const result = materializeLegacyDefaultAgentRoles(cfg, resolveDefaultAgentId(cfg));
   return { config: result.config, changes: result.insertedPaths.map((path) => path.join(".")) };
 }
@@ -57,16 +53,6 @@ function snapshotSurfaces(cfg: OpenClawConfig): SurfaceSnapshot {
 }
 
 const fixtures: Array<{ name: string; config: OpenClawConfig; materializes: boolean }> = [
-  { name: "legacy single-agent", config: {}, materializes: false },
-  {
-    name: "explicit single-agent",
-    config: {
-      agents: { entries: { solo: { default: true } } },
-      channels: { telegram: { enabled: true } },
-      talk: { provider: "test" },
-    },
-    materializes: false,
-  },
   {
     name: "multi-agent default with an unbound channel",
     config: {
@@ -95,22 +81,21 @@ const fixtures: Array<{ name: string; config: OpenClawConfig; materializes: bool
 ];
 
 describe("default agent role materialization", () => {
-  it.each(fixtures)("preserves all ambient surface routing for $name", ({ config }) => {
-    const before = snapshotSurfaces(config);
-    const result = materializeDefaultAgentRoles(config);
-    expect(snapshotSurfaces(result.config)).toEqual(
-      before.consult === null ? { ...before, consult: resolveDefaultAgentId(config) } : before,
-    );
+  it.each(fixtures)(
+    "preserves all ambient surface routing for $name",
+    ({ config, materializes }) => {
+      const before = snapshotSurfaces(config);
+      const result = materializeDefaultAgentRoles(config);
+      expect(result.changes.length > 0).toBe(materializes);
+      expect(snapshotSurfaces(result.config)).toEqual(
+        before.consult === null ? { ...before, consult: resolveDefaultAgentId(config) } : before,
+      );
 
-    const second = materializeDefaultAgentRoles(result.config);
-    expect(second.changes).toEqual([]);
-    expect(second.config).toBe(result.config);
-  });
-
-  it.each(fixtures)("materializes only the expected $name fixture", ({ config, materializes }) => {
-    const result = materializeDefaultAgentRoles(config);
-    expect(result.changes.length > 0).toBe(materializes);
-  });
+      const second = materializeDefaultAgentRoles(result.config);
+      expect(second.changes).toEqual([]);
+      expect(second.config).toBe(result.config);
+    },
+  );
 
   it("adds only uncovered channel-wide bindings and preserves narrower routes", () => {
     const config: OpenClawConfig = {

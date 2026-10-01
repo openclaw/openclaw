@@ -129,7 +129,7 @@ async function loadAllAgentCostUsageSummary(params: {
 }): Promise<CostUsageSummary> {
   // Same agent universe as discoverAllSessionsForUsage: enumerating configured
   // ids only would list system-agent sessions whose cost never reaches totals.
-  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
+  const agentIds = (await listGatewayAgentsBasic(params.config)).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
   const summaries = await runUsageAgentTasks(

@@ -32,7 +32,8 @@ import { invokeNodeWorkerPortalStream } from "../node-host/portal-stream-command
 import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { adoptPluginRegistryRecords } from "../plugins/registry-lifecycle.js";
 import * as stateWorkerStore from "../state/openclaw-state-worker-store.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import * as workerStartup from "./server-worker-environment-startup.js";

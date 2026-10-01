@@ -1,19 +1,11 @@
-/**
- * SharePoint upload utilities for MS Teams file sending.
- *
- * For group chats and channels, files are uploaded to SharePoint and shared via a link.
- * This module provides utilities for:
- * - Uploading files to SharePoint (group/channel scope)
- * - Creating sharing links (organization-wide or per-user)
- * - Getting chat members for per-user sharing
- */
-
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  createProviderHttpError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
-import { createMSTeamsHttpError } from "./http-error.js";
 import {
   resolveMSTeamsSharePointUploadTimeoutMs,
   withMSTeamsAbortableRequestTimeout,
@@ -40,10 +32,6 @@ interface DriveUploadResult {
   id: string;
   webUrl: string;
   name: string;
-}
-
-interface SharingLinkResult {
-  webUrl: string;
 }
 
 const SHAREPOINT_REQUEST_TIMEOUT_LABEL = "MS Teams SharePoint request";
@@ -99,7 +87,7 @@ async function requestSharePointJson<T>(
       });
       const res = responseWithRelease(response, release);
       if (!res.ok) {
-        throw await createMSTeamsHttpError(
+        throw await createProviderHttpError(
           res,
           typeof request.error === "string" ? request.error : request.error(res),
         );
@@ -111,16 +99,6 @@ async function requestSharePointJson<T>(
   });
 }
 
-// ============================================================================
-// SharePoint upload functions for group chats and channels
-// ============================================================================
-
-/**
- * Upload a file to a SharePoint site.
- * This is used for group chats and channels where /me/drive doesn't work for bots.
- *
- * @param params.siteId - SharePoint site ID (e.g., "contoso.sharepoint.com,guid1,guid2")
- */
 async function uploadToSharePoint(
   params: {
     buffer: Buffer;
@@ -131,7 +109,6 @@ async function uploadToSharePoint(
     fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
 ): Promise<DriveUploadResult> {
-  // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
   // Graph's default conflictBehavior=replace overwrites a same-named file in place. Bot assets
   // reuse names (image-1.png each generation) and Teams caches file cards by driveItem URL, so
@@ -162,30 +139,16 @@ async function uploadToSharePoint(
   };
 }
 
-interface ChatMember {
-  aadObjectId: string;
-}
-
 /**
  * Properties needed for native Teams file card attachments.
  * The eTag is used as the attachment ID and webDavUrl as the contentUrl.
  */
 export interface DriveItemProperties {
-  /** The eTag of the driveItem (used as attachment ID) */
   eTag: string;
-  /** The WebDAV URL of the driveItem (used as contentUrl for reference attachment) */
   webDavUrl: string;
-  /** The filename */
   name: string;
 }
 
-/**
- * Get driveItem properties needed for native Teams file card attachments.
- * This fetches the eTag and webDavUrl which are required for "reference" type attachments.
- *
- * @param params.siteId - SharePoint site ID
- * @param params.itemId - The driveItem ID (returned from upload)
- */
 export async function getDriveItemProperties(
   params: {
     siteId: string;
@@ -211,17 +174,13 @@ export async function getDriveItemProperties(
   };
 }
 
-/**
- * Get members of a Teams chat for per-user sharing.
- * Used to create sharing links scoped to only the chat participants.
- */
-async function getChatMembers(
+async function getChatMemberIds(
   params: {
     chatId: string;
     tokenProvider: MSTeamsAccessTokenProvider;
     fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
-): Promise<ChatMember[]> {
+): Promise<string[]> {
   const data = await requestSharePointJson<{ value?: Array<{ userId?: string }> }>(params, {
     url: `${GRAPH_ROOT}/chats/${params.chatId}/members`,
     // Graph 403 covers permissions, licensing, and conditional access. RSC
@@ -232,9 +191,7 @@ async function getChatMembers(
         : "Get chat members failed",
     label: "msteams.graph-upload.getChatMembers",
   });
-  return (data.value ?? [])
-    .map((member) => ({ aadObjectId: member.userId ?? "" }))
-    .filter((member) => member.aadObjectId);
+  return (data.value ?? []).flatMap((member) => (member.userId ? [member.userId] : []));
 }
 
 /**
@@ -253,10 +210,9 @@ async function createSharePointSharingLink(
     recipientObjectIds?: string[];
     fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
-): Promise<SharingLinkResult> {
+): Promise<string> {
   const scope = params.scope ?? "organization";
 
-  // Per-user sharing requires beta API
   const apiRoot = scope === "users" ? GRAPH_BETA : GRAPH_ROOT;
 
   const body: Record<string, unknown> = {
@@ -264,7 +220,6 @@ async function createSharePointSharingLink(
     scope: scope === "users" ? "users" : "organization",
   };
 
-  // Add recipients for per-user sharing
   if (scope === "users" && params.recipientObjectIds?.length) {
     body.recipients = params.recipientObjectIds.map((id) => ({ objectId: id }));
   }
@@ -284,9 +239,7 @@ async function createSharePointSharingLink(
     throw new Error("Create SharePoint sharing link response missing webUrl");
   }
 
-  return {
-    webUrl: data.link.webUrl,
-  };
+  return data.link.webUrl;
 }
 
 /**
@@ -294,10 +247,6 @@ async function createSharePointSharingLink(
  *
  * For group chats, this creates a per-user sharing link scoped to chat members.
  * For channels, this creates an organization-wide sharing link.
- *
- * @param params.siteId - SharePoint site ID
- * @param params.chatId - Optional chat ID for per-user sharing (group chats)
- * @param params.usePerUserSharing - Whether to use per-user sharing (requires beta API + chat-member read access)
  */
 export async function uploadAndShareSharePoint(
   params: {
@@ -316,37 +265,25 @@ export async function uploadAndShareSharePoint(
   shareUrl: string;
   name: string;
 }> {
-  // 1. Upload file to SharePoint
-  const uploaded = await uploadToSharePoint({
-    buffer: params.buffer,
-    filename: params.filename,
-    contentType: params.contentType,
-    tokenProvider: params.tokenProvider,
-    siteId: params.siteId,
-    fetchFn: params.fetchFn,
-    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-  });
+  const uploaded = await uploadToSharePoint(params);
 
-  // 2. Determine sharing scope
   let scope: "organization" | "users" = "organization";
   let recipientObjectIds: string[] | undefined;
 
   if (params.usePerUserSharing && params.chatId) {
-    const members = await getChatMembers({
+    recipientObjectIds = await getChatMemberIds({
       chatId: params.chatId,
       tokenProvider: params.tokenProvider,
       fetchFn: params.fetchFn,
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
-    if (members.length === 0) {
+    if (recipientObjectIds.length === 0) {
       throw new Error("MS Teams chat member lookup returned no recipients");
     }
     scope = "users";
-    recipientObjectIds = members.map((member) => member.aadObjectId);
   }
 
-  // 3. Create sharing link
-  const shareLink = await createSharePointSharingLink({
+  const shareUrl = await createSharePointSharingLink({
     siteId: params.siteId,
     itemId: uploaded.id,
     tokenProvider: params.tokenProvider,
@@ -359,7 +296,7 @@ export async function uploadAndShareSharePoint(
   return {
     itemId: uploaded.id,
     webUrl: uploaded.webUrl,
-    shareUrl: shareLink.webUrl,
+    shareUrl,
     name: uploaded.name,
   };
 }

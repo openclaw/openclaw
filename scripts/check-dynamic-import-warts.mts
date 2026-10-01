@@ -6,7 +6,12 @@ import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { collectTypeScriptFilesFromRoots, runAsScript, toLine } from "./lib/ts-guard-utils.mts";
+import {
+  collectTypeScriptFilesFromRoots,
+  runAsScript,
+  toLine,
+  visitModuleSpecifiers,
+} from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const defaultRoots = [path.join(repoRoot, "src"), path.join(repoRoot, "extensions")];
@@ -72,9 +77,6 @@ function isIgnoredTestHelperPath(filePath: string) {
   );
 }
 
-/**
- * Finds dynamic import advisories in a single source file.
- */
 export function findDynamicImportAdvisories(
   _content: string,
   _fileName: string,
@@ -93,51 +95,29 @@ export function findDynamicImportAdvisories(
     }
   };
 
-  const visit = (node: ts.Node) => {
+  visitModuleSpecifiers(sourceFile, ({ kind, node, specifier }) => {
     if (
-      ts.isImportDeclaration(node) &&
-      ts.isStringLiteral(node.moduleSpecifier) &&
-      !isTypeOnlyImportDeclaration(node)
+      (ts.isImportDeclaration(node) && !isTypeOnlyImportDeclaration(node)) ||
+      (ts.isExportDeclaration(node) && !isTypeOnlyExportDeclaration(node))
     ) {
-      addLine(staticRuntimeImports, node.moduleSpecifier.text, toLine(sourceFile, node));
+      addLine(staticRuntimeImports, specifier, toLine(sourceFile, node));
     }
 
-    if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier) &&
-      !isTypeOnlyExportDeclaration(node)
-    ) {
-      addLine(staticRuntimeImports, node.moduleSpecifier.text, toLine(sourceFile, node));
-    }
-
-    if (
-      ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      node.arguments.length > 0
-    ) {
-      const argument = node.arguments[0];
-      const specifier = argument && ts.isStringLiteralLikeNode(argument) ? argument.text : null;
-      if (specifier) {
-        const line = toLine(sourceFile, node);
-        addLine(dynamicImports, specifier, line);
-        let ancestor: ts.Node | undefined = node;
-        while (ancestor && !isExecuteDeclaration(ancestor)) {
-          ancestor = ancestor.parent;
-        }
-        if (ancestor) {
-          directExecuteImports.push({
-            line,
-            reason: `direct dynamic import of "${specifier}" inside execute path; move it behind a cached loader`,
-          });
-        }
+    if (kind === "dynamic-import" && specifier) {
+      const line = toLine(sourceFile, node);
+      addLine(dynamicImports, specifier, line);
+      let ancestor: ts.Node | undefined = node;
+      while (ancestor && !isExecuteDeclaration(ancestor)) {
+        ancestor = ancestor.parent;
+      }
+      if (ancestor) {
+        directExecuteImports.push({
+          line,
+          reason: `direct dynamic import of "${specifier}" inside execute path; move it behind a cached loader`,
+        });
       }
     }
-
-    node.forEachChild(visit);
-  };
-
-  visit(sourceFile);
+  });
 
   const advisories = [...directExecuteImports];
   for (const [specifier, dynamicLines] of dynamicImports) {
@@ -158,13 +138,9 @@ export function findDynamicImportAdvisories(
   return advisories;
 }
 
-/**
- * Collects dynamic import advisories across configured source roots.
- */
-async function collectDynamicImportAdvisories(options: { roots?: string[] } = {}) {
+async function collectDynamicImportAdvisories() {
   using parser = createNativeTypeScriptParser({ cwd: repoRoot });
-  const roots = options.roots ?? defaultRoots;
-  const files = await collectTypeScriptFilesFromRoots(roots, {
+  const files = await collectTypeScriptFilesFromRoots(defaultRoots, {
     extraTestSuffixes: [".suite.ts"],
   });
   const advisories: Array<DynamicImportAdvisory & { path: string }> = [];
@@ -190,9 +166,6 @@ async function collectDynamicImportAdvisories(options: { roots?: string[] } = {}
   return advisories;
 }
 
-/**
- * Runs the dynamic import advisory check.
- */
 export async function main(argv = process.argv.slice(2)) {
   const fail = argv.includes("--fail");
   const json = argv.includes("--json");

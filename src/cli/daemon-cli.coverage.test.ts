@@ -24,7 +24,10 @@ const serviceReadRuntime = vi.fn().mockResolvedValue({ status: "running" });
 const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn(async (_opts?: unknown) => ({
   auth: {},
 }));
-const findExtraGatewayServices = vi.fn(async (_env: unknown, _opts?: unknown) => []);
+const findExtraGatewayServices = vi.fn(async (_env: unknown, _opts?: unknown) => ({
+  services: [],
+  errors: [],
+}));
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
   status: "free",

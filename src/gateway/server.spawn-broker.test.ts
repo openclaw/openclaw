@@ -157,7 +157,6 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
           source: "canonical",
           expectedIdentity: readDatabasePathIdentitySync(source).key,
           env: { ...process.env },
-          coordinatorRuntime: { directory: path.join(root, "coordinator"), keepAlive: false },
         });
       const resume = createDeferredCore();
       let runtimeRead: Promise<unknown> | undefined;

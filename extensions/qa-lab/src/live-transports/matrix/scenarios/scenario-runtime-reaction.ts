@@ -24,17 +24,6 @@ export function buildMatrixQaReactionDetailLines(params: {
   ];
 }
 
-function requireMatrixQaReactionTargetEventId(
-  reactionTargetEventId: string | undefined,
-  scenarioLabel: string,
-) {
-  const normalizedReactionTargetEventId = reactionTargetEventId?.trim();
-  if (!normalizedReactionTargetEventId) {
-    throw new Error(`${scenarioLabel} requires a canary reply event id`);
-  }
-  return normalizedReactionTargetEventId;
-}
-
 export async function observeReactionScenario(params: {
   actorId: MatrixQaActorId;
   actorUserId: string;
@@ -107,12 +96,12 @@ export function buildMatrixQaReactionArtifacts(params: {
   };
 }
 
-export async function runReactionNotificationScenario(context: MatrixQaScenarioContext) {
-  const reactionTargetEventId = requireMatrixQaReactionTargetEventId(
-    context.canary?.reply.eventId,
-    "Matrix reaction scenario",
-  );
-  const result = await observeReactionScenario({
+function observeCanaryReaction(context: MatrixQaScenarioContext, scenarioLabel: string) {
+  const reactionTargetEventId = context.canary?.reply.eventId?.trim();
+  if (!reactionTargetEventId) {
+    throw new Error(`${scenarioLabel} requires a canary reply event id`);
+  }
+  return observeReactionScenario({
     actorId: "driver",
     actorUserId: context.driverUserId,
     accessToken: context.driverAccessToken,
@@ -122,6 +111,10 @@ export async function runReactionNotificationScenario(context: MatrixQaScenarioC
     roomId: context.roomId,
     timeoutMs: context.timeoutMs,
   });
+}
+
+export async function runReactionNotificationScenario(context: MatrixQaScenarioContext) {
+  const result = await observeCanaryReaction(context, "Matrix reaction scenario");
   return {
     artifacts: buildMatrixQaReactionArtifacts({ reaction: result }),
     details: buildMatrixQaReactionDetailLines({
@@ -135,20 +128,7 @@ export async function runReactionNotificationScenario(context: MatrixQaScenarioC
 }
 
 export async function runReactionNotAReplyScenario(context: MatrixQaScenarioContext) {
-  const reactionTargetEventId = requireMatrixQaReactionTargetEventId(
-    context.canary?.reply.eventId,
-    "Matrix reaction no-reply scenario",
-  );
-  const reaction = await observeReactionScenario({
-    actorId: "driver",
-    actorUserId: context.driverUserId,
-    accessToken: context.driverAccessToken,
-    baseUrl: context.baseUrl,
-    observedEvents: context.observedEvents,
-    reactionTargetEventId,
-    roomId: context.roomId,
-    timeoutMs: context.timeoutMs,
-  });
+  const reaction = await observeCanaryReaction(context, "Matrix reaction no-reply scenario");
   const { noReplyWindowMs } = await assertNoSutReplyWindow({
     actorId: reaction.actorId,
     client: reaction.client,
@@ -180,20 +160,7 @@ export async function runReactionNotAReplyScenario(context: MatrixQaScenarioCont
 }
 
 export async function runReactionRedactionObservedScenario(context: MatrixQaScenarioContext) {
-  const reactionTargetEventId = requireMatrixQaReactionTargetEventId(
-    context.canary?.reply.eventId,
-    "Matrix reaction redaction scenario",
-  );
-  const reaction = await observeReactionScenario({
-    actorId: "driver",
-    actorUserId: context.driverUserId,
-    accessToken: context.driverAccessToken,
-    baseUrl: context.baseUrl,
-    observedEvents: context.observedEvents,
-    reactionTargetEventId,
-    roomId: context.roomId,
-    timeoutMs: context.timeoutMs,
-  });
+  const reaction = await observeCanaryReaction(context, "Matrix reaction redaction scenario");
   const redactionEventId = await reaction.client.redactEvent({
     eventId: reaction.reactionEventId,
     reason: "matrix qa reaction removal",

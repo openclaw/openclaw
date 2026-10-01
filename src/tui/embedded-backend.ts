@@ -64,21 +64,17 @@ import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
 import {
   capLiveAssistantText,
-  normalizeLiveAssistantBufferedText,
-  projectLiveAssistantBufferedText,
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
 import {
+  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   createChatHistoryActivityProjection,
   createChatHistoryByteCounter,
+  replaceOversizedChatHistoryMessages,
 } from "../gateway/server-methods/chat-history-budget.js";
 import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-page-kernel.js";
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
-import {
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  replaceOversizedChatHistoryMessages,
-} from "../gateway/server-methods/chat.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
@@ -113,6 +109,7 @@ import {
   EmbeddedQuestionBroker,
   setEmbeddedQuestionBroker,
 } from "../infra/embedded-question-broker.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { logInfo, logWarn } from "../logger.js";
 import {
   agentSessionKeysMatchByRequestKey,
@@ -126,6 +123,7 @@ import { applyQueueDropPolicy, waitForQueueDebounce } from "../utils/queue-helpe
 import {
   assistantChatMessage,
   payloadText,
+  projectLocalRunText,
   resolveDeltaPayload,
   resolveTerminalChatState,
 } from "./embedded-chat-projection.js";
@@ -191,12 +189,6 @@ function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
   }
 }
 
-function resolveBtwQuestion(message: string): string | undefined {
-  const match = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(message.trim());
-  const question = match?.[1]?.trim();
-  return question ? question : undefined;
-}
-
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
 
@@ -214,7 +206,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker();
-  private readonly questionBroker = new EmbeddedQuestionBroker();
+  private readonly scheduler = new GatewayScheduler();
+  private readonly questionBroker = new EmbeddedQuestionBroker(this.scheduler);
   private readonly preparedModelRuntime = new EmbeddedPreparedModelRuntimeHost();
   private unsubscribePluginApprovals?: () => void;
   private unsubscribeQuestions?: () => void;
@@ -274,6 +267,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async stop() {
+    this.scheduler.beginClose();
     this.unsubscribeConfigWrites?.();
     this.unsubscribeConfigWrites = undefined;
     clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
@@ -295,6 +289,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     this.pluginApprovalBroker.stop();
     this.questionBroker.stop();
+    await this.scheduler.stop();
     const maintenanceCompleted = await waitForLocalRunShutdown(maintenancePromises);
     if (!maintenanceCompleted) {
       for (const run of this.runs.values()) {
@@ -329,7 +324,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
     const runId = opts.runId ?? randomUUID();
-    const question = resolveBtwQuestion(opts.message);
+    const sideCommand = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(opts.message.trim());
+    const question = sideCommand?.[1]?.trim() || undefined;
     const isQueueCommand = resolveTextCommand(opts.message)?.command.key === "queue";
     const agentId = resolveSessionAgentId({
       sessionKey: opts.sessionKey,
@@ -547,12 +543,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const inFlightRun = newestInFlightRun
       ? {
           runId: newestInFlightRun[0],
-          text: projectLiveAssistantBufferedText(
-            normalizeLiveAssistantBufferedText(newestInFlightRun[1].buffer, {
-              managedMediaUrls: [...newestInFlightRun[1].managedMediaUrls],
-            }).trim(),
-            { suppressLeadFragments: true },
-          ).text.trim(),
+          text: projectLocalRunText(newestInFlightRun[1]).text.trim(),
         }
       : undefined;
 
@@ -1056,12 +1047,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatDelta(runId: string, run: LocalRunState) {
-    const normalizedText = normalizeLiveAssistantBufferedText(run.buffer, {
-      managedMediaUrls: [...run.managedMediaUrls],
-    }).trim();
-    const projected = projectLiveAssistantBufferedText(normalizedText, {
-      suppressLeadFragments: true,
-    });
+    const projected = projectLocalRunText(run);
     const text = projected.text.trim();
     if (run.buffer && (!text || projected.suppress)) {
       return;
@@ -1101,13 +1087,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.registered = true;
     run.lastBroadcastText = undefined;
-    const projected = projectLiveAssistantBufferedText(
-      normalizeLiveAssistantBufferedText(run.buffer, {
-        final: true,
-        managedMediaUrls: [...run.managedMediaUrls],
-      }).trim(),
-      { suppressLeadFragments: false },
-    );
+    const projected = projectLocalRunText(run, true);
     const text = state === "final" && !projected.suppress ? projected.text.trim() : "";
     this.emit("chat", {
       runId,

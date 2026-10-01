@@ -9,34 +9,29 @@ enum GatewayDiscoveryPreferences {
         let defaults = AppDefaults.standard
         let raw = defaults.string(forKey: self.preferredStableIDKey)
             ?? defaults.string(forKey: self.legacyPreferredStableIDKey)
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
+        return raw?.nonEmpty
     }
 
     static func setPreferredStableID(_ stableID: String?) {
         // A caller without an endpoint binding cannot prove that a prior binding
         // belongs to this id. The bound overload installs a fresh one below.
         AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
-        let trimmed = stableID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmed, !trimmed.isEmpty {
+        if let trimmed = stableID?.nonEmpty {
             AppDefaults.standard.set(trimmed, forKey: self.preferredStableIDKey)
-            AppDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
         } else {
             AppDefaults.standard.removeObject(forKey: self.preferredStableIDKey)
-            AppDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
         }
+        AppDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
     }
 
     static func preferredRouteBinding() -> String? {
-        let raw = AppDefaults.standard.string(forKey: self.preferredRouteBindingKey)
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
+        AppDefaults.standard.string(forKey: self.preferredRouteBindingKey)?.nonEmpty
     }
 
     static func setPreferredStableID(_ stableID: String?, routeBinding: String?) {
         self.setPreferredStableID(stableID)
         guard self.preferredStableID() != nil,
-              let routeBinding = self.normalized(routeBinding)
+              let routeBinding = routeBinding?.nonEmpty
         else {
             AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
             return
@@ -118,17 +113,12 @@ enum GatewayDiscoveryPreferences {
             return false
         }
         guard let stored = self.preferredRouteBinding(),
-              let current = self.normalized(currentRouteBinding),
+              let current = currentRouteBinding?.nonEmpty,
               stored == current
         else {
             self.setPreferredStableID(nil, routeBinding: nil)
             return true
         }
         return false
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
     }
 }

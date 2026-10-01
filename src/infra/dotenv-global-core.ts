@@ -176,9 +176,6 @@ function loadParsedDotEnvFiles(
 
   for (const conflict of conflicts.values()) {
     const keys = [...conflict.keys].toSorted();
-    if (keys.length === 0) {
-      continue;
-    }
     onWarning?.(
       `Conflicting values in ${conflict.keptPath} and ${conflict.ignoredPath} for ${keys.join(", ")}; keeping ${conflict.keptPath}.`,
       { keptPath: conflict.keptPath, ignoredPath: conflict.ignoredPath, keys },

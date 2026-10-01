@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -50,7 +51,7 @@ vi.mock("./restart.js", async (importOriginal) => ({
 }));
 
 function createApplyingCampaign() {
-  const campaign = new UpdateCampaignController();
+  const campaign = new UpdateCampaignController(createTestGatewayScheduler());
   campaign.announce({
     target: { kind: "package", version: "2.0.0-beta.1" },
     inspect: { getQueueSize: () => 1 },

@@ -189,7 +189,7 @@ test("Docker confines subagent attachments to the authorized session", async () 
       { resolveSandboxContext },
       { removeSandboxContainer },
       { cleanupMaterializedSubagentAttachments, materializeSubagentAttachments },
-      { resolveSubagentAttachmentDir },
+      { resolveSubagentSessionAttachmentRootDir },
     ] = await Promise.all([
       import("../../../../src/agents/sandbox/context.js"),
       import("../../../../src/agents/sandbox/manage.js"),
@@ -261,7 +261,11 @@ test("Docker confines subagent attachments to the authorized session", async () 
     await expect(
       fs.readFile(
         path.join(
-          resolveSubagentAttachmentDir("main", attachedSessionKey, attachmentId),
+          resolveSubagentSessionAttachmentRootDir({
+            agentId: "main",
+            childSessionKey: attachedSessionKey,
+          }),
+          attachmentId,
           "proof.txt",
         ),
         "utf8",

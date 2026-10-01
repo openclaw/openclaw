@@ -1,10 +1,12 @@
-// Diffs plugin module implements http behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createAuthRateLimiter, type AuthRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
-import type { PluginLogger } from "../api.js";
-import { resolveRequestClientIp } from "../runtime-api.js";
+import {
+  createAuthRateLimiter,
+  resolveRequestClientIp,
+  type AuthRateLimiter,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import type { DiffArtifactStore } from "./store.js";
 import { DIFF_ARTIFACT_ID_PATTERN, DIFF_ARTIFACT_TOKEN_PATTERN } from "./types.js";
 import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
@@ -210,10 +212,6 @@ function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
   return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
 }
 
-function isLoopbackClientIp(clientIp: string): boolean {
-  return isLoopbackHost(clientIp);
-}
-
 function hasProxyForwardingHints(req: IncomingMessage): boolean {
   const headers = req.headers ?? {};
   return Boolean(
@@ -248,7 +246,7 @@ function resolveViewerAccess(
       : req.socket?.remoteAddress;
   const remoteKey = normalizeRemoteClientKey(clientIp ?? req.socket?.remoteAddress);
   const localRequest =
-    !proxyHintsPresent && typeof clientIp === "string" && isLoopbackClientIp(remoteKey);
+    !proxyHintsPresent && typeof clientIp === "string" && isLoopbackHost(remoteKey);
   return { remoteKey, localRequest };
 }
 

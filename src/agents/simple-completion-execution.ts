@@ -76,14 +76,14 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
   }
   const { reasoning: rawReasoning, strictReasoningTags, ...options } = params.options ?? {};
   const providerReasoning = resolveProviderThinkingLevel({
-    provider: completionModel.provider,
-    model: completionModel.id,
-    catalog: [completionModel],
+    provider: params.model.provider,
+    model: params.model.id,
+    catalog: [params.model],
     agentRuntime: "openclaw",
     level: rawReasoning,
   });
   const reasoning = providerReasoning === "adaptive" ? "medium" : providerReasoning;
-  const headers = prepareHeadersForSimpleCompletion(completionModel, options);
+  const headers = prepareHeadersForSimpleCompletion(params.model, options);
   const completionOptions: SimpleStreamOptions = {
     ...options,
     ...(reasoning ? { reasoning } : {}),
