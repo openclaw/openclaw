@@ -2787,6 +2787,30 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           expect(authority).toContain("github.event_name == 'workflow_dispatch'");
           continue;
         }
+        if (step.with?.path === ".artifacts/ci-sdk-declarations/sdk.json.gz") {
+          expect(file).toBe(".github/actions/sdk-declarations/action.yml");
+          const action = parse(readFileSync(file, "utf8"));
+          const pack = action.runs.steps.find(
+            (candidate: WorkflowStep) => candidate.id === "main-pack",
+          );
+          expect(step.if).toBe(pack.if);
+          for (const requirement of [
+            "success()",
+            "inputs.mode == 'save-main'",
+            "steps.identity.outputs.enabled == 'true'",
+            "github.repository == 'openclaw/openclaw'",
+            "github.ref == 'refs/heads/main'",
+            "inputs.candidate-trust == 'main'",
+            "inputs.cache-write-allowed == 'true'",
+            "inputs.cache-mode != 'off'",
+            "inputs.frozen-target != 'true'",
+            "inputs.compatibility-target != 'true'",
+            "inputs.release-gate != 'true'",
+          ]) {
+            expect(step.if).toContain(requirement);
+          }
+          continue;
+        }
         const condition = String(step.if);
         expect(
           condition.includes(".outputs.cache-mode == 'read-write'") ||
@@ -5989,18 +6013,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(buildChecks.run).toContain(
       "startup_builder=(node scripts/ensure-cli-startup-build.mjs)",
     );
+    expect(additionalChecks.run).toBe("bash .ci-harness/scripts/ci-additional-checks.sh");
     expect(qaBuild.run.match(/pnpm build qaRuntime/gu)).toHaveLength(1);
     expect(qaBuild.run).not.toContain("package-openclaw-for-docker");
-    expect(additionalChecks.run).toContain(
+    expect(readTrackedText("scripts/ci-additional-checks.sh")).toContain(
       "boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)",
     );
-    expect(additionalChecks.run).toContain(
+    expect(readTrackedText("scripts/ci-additional-checks.sh")).toContain(
       "boundary_runner=(node scripts/run-additional-boundary-checks.mjs)",
     );
-    expect(additionalChecks.run).not.toContain(
+    expect(readTrackedText("scripts/ci-additional-checks.sh")).not.toContain(
       "if [ ! -f scripts/check-session-accessor-boundary.mts ]",
     );
-    expect(additionalChecks.run).not.toContain(
+    expect(readTrackedText("scripts/ci-additional-checks.sh")).not.toContain(
       "if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]",
     );
     const checkLint = workflow.jobs["check-shard"].steps.find(
