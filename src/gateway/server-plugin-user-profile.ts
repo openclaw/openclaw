@@ -1,7 +1,7 @@
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import { withInProcessGatewayDispatch } from "./server-plugin-in-process-dispatch.js";
+import { withInProcessGatewayRead } from "./server-plugin-in-process-dispatch.js";
 import { canTrustedOfficialPluginRequestScopes } from "./server-plugin-subagent-runtime.js";
 
 export async function withTrustedPluginUserProfileIdentity<T>(
@@ -25,63 +25,26 @@ export async function withTrustedPluginUserProfileIdentity<T>(
   }
   const profileId = params.profileId;
   const emails = [...new Set(params.emails)];
-  return await withInProcessGatewayDispatch(
-    "users.list",
-    {},
+  return await withInProcessGatewayRead(
     {
-      forceSyntheticClient: true,
-      pluginRuntimeOwnerId: scope?.pluginId,
+      method: "users.list",
+      scope,
       resolveGatewayContext,
-      syntheticScopes: ["operator.read"],
-      ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
+      callerAuthorityError: "Profile identity caller authority is no longer active",
     },
-    async (resolved) => {
-      const assertLifetime = () => {
-        resolved.assertContextCurrent();
-        resolved.assertInvocationCurrent();
-        scope?.signal?.throwIfAborted();
-        if (resolved.hasCurrentClientAuthority?.() === false) {
-          throw new Error("Profile identity caller authority is no longer active");
-        }
-      };
-      const { authorizeGatewayRequestPreDispatch, createRequestGatewayMethodRegistry } =
-        await import("./server-methods.js");
-      assertLifetime();
-      const authorization = await authorizeGatewayRequestPreDispatch({
-        method: "users.list",
-        requestParams: {},
-        client: resolved.client,
-        context: resolved.context,
-        methodRegistry:
-          resolved.context.getGatewayMethodRegistry?.() ?? createRequestGatewayMethodRegistry(),
-        hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
-        assertInvocationCurrent: assertLifetime,
-      });
+    async (_resolved, assertCaller) => {
+      const profile = await prepareUserProfileIdentity(profileId, {}, emails);
       try {
-        const assertCaller = () => {
-          assertLifetime();
-          if (authorization.error) {
-            throw new Error(authorization.error.message);
-          }
-          authorization.sessionAccessAuthority?.assertCurrent();
-          authorization.sessionMutationAuthorization?.assertCurrent();
-        };
         assertCaller();
-        const profile = await prepareUserProfileIdentity(profileId, {}, emails);
-        try {
+        const bindings = profile.emailBindingIds;
+        const assertCurrent = () => {
           assertCaller();
-          const bindings = profile.emailBindingIds;
-          const assertCurrent = () => {
-            assertCaller();
-            profile.readCurrentProfile(bindings);
-          };
-          assertCurrent();
-          return await run(assertCurrent);
-        } finally {
-          profile.release();
-        }
+          profile.readCurrentProfile(bindings);
+        };
+        assertCurrent();
+        return await run(assertCurrent);
       } finally {
-        authorization.sessionAccessAuthority?.release();
+        profile.release();
       }
     },
   );
