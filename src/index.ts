@@ -6,7 +6,6 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
-import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isMainModule } from "./infra/is-main.js";
 
 const isMain = isMainModule({
@@ -32,9 +31,6 @@ if (
   }
 }
 
-const handledRootVersion =
-  isMain && !handledAdmission && tryHandleRootVersionFastPath(process.argv);
-
 type LegacyCliDeps = {
   runCli: (
     argv: string[],
@@ -57,6 +53,7 @@ export let ensurePortAvailable: LibraryExports["ensurePortAvailable"];
 export let getReplyFromConfig: LibraryExports["getReplyFromConfig"];
 export let handlePortError: LibraryExports["handlePortError"];
 export let loadConfig: LibraryExports["loadConfig"];
+export let loadSessionStore: LibraryExports["loadSessionStore"];
 export let monitorWebChannel: LibraryExports["monitorWebChannel"];
 export let normalizeE164: LibraryExports["normalizeE164"];
 export let PortInUseError: LibraryExports["PortInUseError"];
@@ -65,6 +62,7 @@ export let resolveSessionKey: LibraryExports["resolveSessionKey"];
 export let resolveStorePath: LibraryExports["resolveStorePath"];
 export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
 export let runExec: LibraryExports["runExec"];
+export let saveSessionStore: LibraryExports["saveSessionStore"];
 export let waitForever: LibraryExports["waitForever"];
 
 async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
@@ -84,6 +82,10 @@ export async function runLegacyCliEntry(
   await runCli(argv, options);
 }
 
+const handledRootVersion =
+  isMain &&
+  !handledAdmission &&
+  (await import("./entry.version-fast-path.js")).tryHandleRootVersionFastPath(process.argv);
 if (!isMain) {
   ({
     applyTemplate,
@@ -95,6 +97,7 @@ if (!isMain) {
     getReplyFromConfig,
     handlePortError,
     loadConfig,
+    loadSessionStore,
     monitorWebChannel,
     normalizeE164,
     PortInUseError,
@@ -103,6 +106,7 @@ if (!isMain) {
     resolveStorePath,
     runCommandWithTimeout,
     runExec,
+    saveSessionStore,
     waitForever,
   } = await import("./library.js"));
 }
@@ -113,7 +117,7 @@ if (isMain && !handledRootVersion && !handledAdmission) {
     { isJsonOutputModeActive },
     { runCliWithExitFinalization },
     { withCliProcessScope },
-    { installDistEsmResolveFastPath: installFastPath },
+    { installDistEsmResolveFastPath },
     { formatUncaughtError },
     { runFatalErrorHooks },
     {
@@ -131,7 +135,7 @@ if (isMain && !handledRootVersion && !handledAdmission) {
     import("./infra/fatal-error-hooks.js"),
     import("./infra/unhandled-rejections.js"),
   ]);
-  installFastPath(import.meta.url);
+  installDistEsmResolveFastPath(import.meta.url);
 
   const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
 
