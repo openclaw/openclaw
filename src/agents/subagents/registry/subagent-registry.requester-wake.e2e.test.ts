@@ -314,7 +314,7 @@ describe("requester settle wake product flow", () => {
       subagentAnnounceDeliveryTesting.setDepsForTest();
       subagentAnnounceOutputTesting.setDepsForTest();
       subagentAnnounceTesting.setDepsForTest();
-      registry.resetSubagentRegistryForTests({ persist: false });
+      await registry.resetSubagentRegistryForTests({ persist: false });
       vi.useRealTimers();
       vi.restoreAllMocks();
       if (previousFastTestEnv === undefined) {

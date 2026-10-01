@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as controlScope from "../../agents/subagents/registry/subagent-control-scope.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
 import { captureSubagentListReadContext } from "../../agents/subagents/registry/subagent-list.js";
-import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { buildSubagentRunReadIndexFromRuns } from "../../agents/subagents/registry/subagent-registry-queries.js";
 import {
   addSubagentRunForTests,
@@ -50,8 +50,8 @@ function commandReadContext(runs: SubagentRunRecord[]) {
 }
 
 describe("subagents status", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
   });
 
   it("does not count stale unended runs as active or completed", async () => {
@@ -61,7 +61,7 @@ describe("subagents status", () => {
       ["live", 60_000, undefined],
       ["completed", 120_000, now - 60_000],
     ] as const) {
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId: name,
         childSessionKey: `agent:main:subagent:${name}`,
         requesterSessionKey: "agent:main:main",
@@ -95,8 +95,8 @@ describe("subagents status", () => {
     },
     {
       name: "includes subagent count and active detail in /status when active",
-      seedRuns: () => {
-        addSubagentRunForTests({
+      seedRuns: async () => {
+        await addSubagentRunForTests({
           runId: "run-1",
           childSessionKey: "agent:main:subagent:abc",
           requesterSessionKey: "agent:main:main",
@@ -114,8 +114,8 @@ describe("subagents status", () => {
     },
     {
       name: "preserves verbose done-only summary",
-      seedRuns: () => {
-        addSubagentRunForTests({
+      seedRuns: async () => {
+        await addSubagentRunForTests({
           runId: "run-1",
           childSessionKey: "agent:main:subagent:done-a",
           requesterSessionKey: "agent:main:main",
@@ -133,7 +133,7 @@ describe("subagents status", () => {
       unexpectedText: ["  • finished task"],
     },
   ])("$name", async ({ seedRuns, verboseLevel, expectedText, unexpectedText }) => {
-    seedRuns();
+    await seedRuns();
     const text =
       buildSubagentsStatusLine({
         context: await controlScope.buildControlledSubagentRunsReadContext("agent:main:main"),
@@ -161,7 +161,7 @@ describe("subagents status", () => {
         ["tie-a", 2_000, true],
         ["stale", 3 * 60 * 60_000, false],
       ] as const) {
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: name,
           childSessionKey: `agent:main:subagent:${name}`,
           requesterSessionKey: "agent:main:main",
@@ -174,7 +174,7 @@ describe("subagents status", () => {
         });
       }
       for (let index = 0; index < children; index++) {
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: `child-${index}`,
           childSessionKey: `${parentKey}:subagent:${index}`,
           requesterSessionKey: parentKey,
@@ -221,7 +221,7 @@ describe("subagents status", () => {
       createdAt: 1_000,
       execution: { status: "running", startedAt: 1_000, endedAt },
     };
-    addSubagentRunForTests(run);
+    await addSubagentRunForTests(run);
     const text = buildSubagentsStatusLine({
       context: await controlScope.buildControlledSubagentRunsReadContext("agent:main:main"),
       verboseEnabled: false,
@@ -233,12 +233,12 @@ describe("subagents status", () => {
 });
 
 describe("subagents command snapshots", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests({ persist: false });
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
-  afterEach(() => {
-    resetSubagentRegistryForTests({ persist: false });
+  afterEach(async () => {
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   it("renders the captured controlled run and descendant facts after a concurrent settlement", async () => {
@@ -259,20 +259,33 @@ describe("subagents command snapshots", () => {
       requesterSessionKey: parent.childSessionKey,
       execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(parent);
-    addSubagentRunForTests(child);
+    await addSubagentRunForTests(parent);
+    await addSubagentRunForTests(child);
     const prepare = controlScope.buildControlledSubagentRunsReadContext;
     const snapshot = vi
       .spyOn(controlScope, "buildControlledSubagentRunsReadContext")
       .mockImplementation(async (...args) => {
         const context = await prepare(...args);
-        queueMicrotask(() => {
-          subagentRuns.get(parent.runId)!.task = "changed after preparation";
-          addSubagentRunForTests({
-            ...child,
-            execution: { status: "terminal", endedAt: Date.now() },
-            cleanupCompletedAt: Date.now(),
-          });
+        await mutateSubagentRuns([parent.runId, child.runId], (rows) => {
+          const currentParent = rows.get(parent.runId);
+          const currentChild = rows.get(child.runId);
+          if (!currentParent || !currentChild) {
+            throw new Error("Expected both captured subagent rows");
+          }
+          return {
+            value: undefined,
+            postimages: new Map([
+              [parent.runId, { ...currentParent, task: "changed after preparation" }],
+              [
+                child.runId,
+                {
+                  ...currentChild,
+                  execution: { status: "terminal" as const, endedAt: Date.now() },
+                  cleanupCompletedAt: Date.now(),
+                },
+              ],
+            ]),
+          };
         });
         return context;
       });
@@ -299,7 +312,7 @@ describe("subagents command snapshots", () => {
       buildCommandTestParams("/subagents list", baseCommandTestConfig),
       true,
     );
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: parentRunId,
       childSessionKey: parentSessionKey,
       controllerSessionKey,
@@ -313,38 +326,45 @@ describe("subagents command snapshots", () => {
       outcome: { status: "ok" },
     });
 
-    const pendingReply = handleSubagentsCommand(
-      buildCommandTestParams("/agents", baseCommandTestConfig),
-      true,
-    );
-    queueMicrotask(() => {
-      releaseSubagentRun(parentRunId);
-      addSubagentRunForTests({
-        runId: "snapshot-child-run",
-        childSessionKey: `${parentSessionKey}:subagent:child`,
-        controllerSessionKey: parentSessionKey,
-        requesterSessionKey: parentSessionKey,
-        requesterDisplayKey: parentSessionKey,
-        task: "new child",
-        cleanup: "keep",
-        createdAt: Date.now(),
-        startedAt: Date.now(),
+    const prepare = controlScope.buildControlledSubagentRunsReadContext;
+    const snapshot = vi
+      .spyOn(controlScope, "buildControlledSubagentRunsReadContext")
+      .mockImplementationOnce(async (...args) => {
+        await releaseSubagentRun(parentRunId);
+        await addSubagentRunForTests({
+          runId: "snapshot-child-run",
+          childSessionKey: `${parentSessionKey}:subagent:child`,
+          controllerSessionKey: parentSessionKey,
+          requesterSessionKey: parentSessionKey,
+          requesterDisplayKey: parentSessionKey,
+          task: "new child",
+          cleanup: "keep",
+          createdAt: Date.now(),
+          startedAt: Date.now(),
+        });
+        return prepare(...args);
       });
-    });
-
-    const text = requireReplyText((await pendingReply)?.reply);
-    expect(text).toContain("(none)");
-    expect(text).not.toContain("removed parent");
-    expect(text).not.toContain("waiting on 1 child");
+    try {
+      const reply = await handleSubagentsCommand(
+        buildCommandTestParams("/agents", baseCommandTestConfig),
+        true,
+      );
+      const text = requireReplyText(reply?.reply);
+      expect(text).toContain("(none)");
+      expect(text).not.toContain("removed parent");
+      expect(text).not.toContain("waiting on 1 child");
+    } finally {
+      snapshot.mockRestore();
+    }
   });
 });
 
 describe("subagents global-session inspection", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests({ persist: false });
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests({ persist: false });
     callGatewayMock.mockReset().mockResolvedValue({ messages: [] });
     for (const agentId of ["research", "ops"]) {
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId: `global-${agentId}`,
         childSessionKey: `agent:${agentId}:subagent:worker`,
         controllerSessionKey: "global",
@@ -417,8 +437,8 @@ describe("subagents info", () => {
     };
   }
 
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
   });
 
   it("returns usage for missing targets", () => {
@@ -431,52 +451,55 @@ describe("subagents info", () => {
     expect(result.reply?.text).toContain("/subagents info <id|#>");
   });
 
-  it.each([false, true])("returns info for a subagent with task missing=%s", (taskMissing) => {
-    const now = Date.now();
-    const runId = "commands-subagents-info-run";
-    const childSessionKey = "agent:main:subagent:commands-info";
-    const run: SubagentRunRecord = {
-      runId,
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "do thing",
-      completion: { required: true, resultText: "Completed the requested task" },
-      cleanup: "keep",
-      createdAt: now - 20_000,
-      execution: {
-        status: "terminal",
-        startedAt: now - 20_000,
-        endedAt: now - 1_000,
-        outcome: { status: "ok" },
-      },
-    } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
-    if (taskMissing) {
-      run.delivery = {
-        status: "discarded",
-        disposition: "permanent_failure",
-        discardReason: "task-missing",
-        discardedAt: now,
-      };
-    }
-    const cfg = buildCommandTestConfig();
-    const result = handleSubagentsInfoAction(
-      buildInfoContext({ cfg, runs: [run], restTokens: [runId] }),
-    );
-    const text = requireReplyText(result.reply);
-    expect(result.shouldContinue).toBe(false);
-    expect(text).toContain("Subagent info");
-    expect(text).toContain(`Run: ${runId}`);
-    expect(text).toContain("Status: done");
-    expect(text).toContain("Outcome: ok");
-    expect(text).toContain("Progress: Completed the requested task");
-    if (taskMissing) {
-      expect(text).toContain("Delivery: discarded");
-      expect(text).toContain("Delivery disposition: task-missing");
-      expect(text).toContain(`Delivery retired: ${new Date(now).toISOString()}`);
-    }
-  });
+  it.each([false, true])(
+    "returns info for a subagent with task missing=%s",
+    async (taskMissing) => {
+      const now = Date.now();
+      const runId = "commands-subagents-info-run";
+      const childSessionKey = "agent:main:subagent:commands-info";
+      const run: SubagentRunRecord = {
+        runId,
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "do thing",
+        completion: { required: true, resultText: "Completed the requested task" },
+        cleanup: "keep",
+        createdAt: now - 20_000,
+        execution: {
+          status: "terminal",
+          startedAt: now - 20_000,
+          endedAt: now - 1_000,
+          outcome: { status: "ok" },
+        },
+      } satisfies SubagentRunRecord;
+      if (taskMissing) {
+        run.delivery = {
+          status: "discarded",
+          disposition: "permanent_failure",
+          discardReason: "task-missing",
+          discardedAt: now,
+        };
+      }
+      await addSubagentRunForTests(run);
+      const cfg = buildCommandTestConfig();
+      const result = handleSubagentsInfoAction(
+        buildInfoContext({ cfg, runs: [run], restTokens: [runId] }),
+      );
+      const text = requireReplyText(result.reply);
+      expect(result.shouldContinue).toBe(false);
+      expect(text).toContain("Subagent info");
+      expect(text).toContain(`Run: ${runId}`);
+      expect(text).toContain("Status: done");
+      expect(text).toContain("Outcome: ok");
+      expect(text).toContain("Progress: Completed the requested task");
+      if (taskMissing) {
+        expect(text).toContain("Delivery: discarded");
+        expect(text).toContain("Delivery disposition: task-missing");
+        expect(text).toContain(`Delivery retired: ${new Date(now).toISOString()}`);
+      }
+    },
+  );
 
   it("uses displayed indices for info and log when stale unended runs exist", async () => {
     const now = Date.now();
@@ -508,7 +531,7 @@ describe("subagents info", () => {
       },
     ];
     for (const run of runs) {
-      addSubagentRunForTests(run);
+      await addSubagentRunForTests(run);
     }
     const context = buildInfoContext({ cfg: buildCommandTestConfig(), runs, restTokens: ["1"] });
     const listing = requireReplyText((await handleSubagentsListAction(context)).reply);
@@ -568,7 +591,7 @@ describe("subagents info", () => {
           outcome,
         },
       } satisfies SubagentRunRecord;
-      addSubagentRunForTests(run);
+      await addSubagentRunForTests(run);
       const context = buildInfoContext({
         cfg: buildCommandTestConfig(),
         runs: [run],
@@ -584,7 +607,7 @@ describe("subagents info", () => {
     },
   );
 
-  it("omits Date-invalid subagent timestamps", () => {
+  it("omits Date-invalid subagent timestamps", async () => {
     const runId = "commands-subagents-info-invalid-date-run";
     const childSessionKey = "agent:main:subagent:commands-info-invalid-date";
     const run = {
@@ -603,7 +626,7 @@ describe("subagents info", () => {
         outcome: { status: "ok" },
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    await addSubagentRunForTests(run);
     const cfg = buildCommandTestConfig();
 
     const result = handleSubagentsInfoAction(
@@ -620,7 +643,7 @@ describe("subagents info", () => {
     expect(text).not.toContain("Invalid Date");
   });
 
-  it("sanitizes leaked task details in /subagents info", () => {
+  it("sanitizes leaked task details in /subagents info", async () => {
     const now = Date.now();
     const runId = "commands-subagents-info-leak-run";
     const childSessionKey = "agent:main:subagent:commands-info-leak";
@@ -649,7 +672,7 @@ describe("subagents info", () => {
         },
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    await addSubagentRunForTests(run);
     const cfg = buildCommandTestConfig();
     const result = handleSubagentsInfoAction(
       buildInfoContext({ cfg, runs: [run], restTokens: ["1"] }),
@@ -664,7 +687,7 @@ describe("subagents info", () => {
     expect(text).not.toContain("Internal task completion event");
   });
 
-  it("shows the selected routed requester completion", () => {
+  it("shows the selected routed requester completion", async () => {
     const now = Date.now();
     const runId = "commands-subagents-info-routed-run";
     const childSessionKey = "agent:main:subagent:commands-info-routed";
@@ -684,7 +707,7 @@ describe("subagents info", () => {
         outcome: { status: "ok" },
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    await addSubagentRunForTests(run);
     const cfg = {
       commands: { text: true },
       channels: { quietchat: { allowFrom: ["*"] } },

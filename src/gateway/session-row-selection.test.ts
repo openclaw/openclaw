@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -507,7 +509,7 @@ it("lists indexed children without inspecting unrelated resident ownership", asy
           0,
         );
         runs.set(runtime.runId, { ...runtime, controllerSessionKey: other });
-        persistSubagentRunsToDiskOrThrow(runs, [runtime.runId]);
+        persistRegistryFixture(runs, [runtime.runId]);
         const moved = await list();
         expect(moved.sessions.map((row) => row.key)).toEqual([
           key("dashboard:persistent"),
@@ -519,7 +521,7 @@ it("lists indexed children without inspecting unrelated resident ownership", asy
           controllerSessionKey: undefined,
           requesterSessionKey: parent,
         });
-        persistSubagentRunsToDiskOrThrow(runs, [runtime.runId]);
+        persistRegistryFixture(runs, [runtime.runId]);
         expect((await list()).totalCount).toBe(4);
       } finally {
         ownership.mockRestore();

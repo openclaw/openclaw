@@ -43,7 +43,7 @@ export function registerAdmissionDrainControlTests({
           ? { status: "queued" }
           : { status: "running", startedAt: Date.now() - 1_000 },
       });
-      addSubagentRunForTests(entry);
+      await addSubagentRunForTests(entry);
       const storePath = await writeSessionStoreFixture("kill-admission-timeout", {
         [childSessionKey]: { sessionId, updatedAt: Date.now() },
       });

@@ -11,6 +11,7 @@ import type {
 } from "./subagent-registry-lifecycle.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT = 25;
@@ -52,7 +53,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   entry: SubagentRunRecord;
   now: number;
   reason: "expired";
-  resumedRuns: Set<string>;
+  resumedRuns: Set<object>;
   clearPendingLifecycleError: (runId: string) => void;
   clearPendingLifecycleTimeout: (runId: string) => void;
   discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
@@ -70,6 +71,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   const { runId, entry, now, reason, resumedRuns } = params;
   const stateContext = captureOpenClawStateWorkerContext();
   const generation = entry.generation;
+  const resumeKey = getSubagentRunRuntimeKey(entry);
   const isCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     return entry.generation === generation && params.isCurrent();
@@ -92,10 +94,10 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     skipRequesterSettleWake: true,
     stateContext,
     isCurrent,
-    discardDelivery: () => params.discardTerminalDelivery(entry, now, reason),
+    discardDelivery: (draft) => params.discardTerminalDelivery(draft, now, reason),
   });
   assertCurrent();
-  resumedRuns.delete(runId);
+  resumedRuns.delete(resumeKey);
   params.clearPendingLifecycleError(runId);
   params.clearPendingLifecycleTimeout(runId);
   params.warn("subagent suspended delivery discarded", {

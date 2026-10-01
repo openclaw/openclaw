@@ -82,7 +82,7 @@ describe("subagent facts through full attempt history preparation", () => {
   });
   beforeEach(() => registry.resetSubagentRegistryForTests());
   afterEach(async () => {
-    registry.resetSubagentRegistryForTests();
+    await registry.resetSubagentRegistryForTests();
     await cleanupTempPaths(tempPaths);
   });
 
@@ -107,14 +107,14 @@ describe("subagent facts through full attempt history preparation", () => {
       createdAt: Date.now(),
       execution: { status: "queued" },
     } satisfies SubagentRunRecord;
-    registry.addSubagentRunForTests(run);
+    await registry.addSubagentRunForTests(run);
     const queued = await captureAttempt(codeModeOverride, sessionStore);
-    registry.addSubagentRunForTests({
+    await registry.addSubagentRunForTests({
       ...run,
       execution: { status: "running", startedAt: Date.now() },
     });
     const running = await captureAttempt(codeModeOverride, sessionStore);
-    registry.resetSubagentRegistryForTests();
+    await registry.resetSubagentRegistryForTests();
     const empty = await captureAttempt(codeModeOverride, sessionStore);
 
     expect(queued.systemPrompt).toContain("system prompt");

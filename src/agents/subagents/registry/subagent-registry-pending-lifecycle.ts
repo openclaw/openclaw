@@ -4,6 +4,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000;
@@ -22,6 +23,7 @@ type PendingLifecycleParams = {
 type PendingLifecycleTerminal = PendingLifecycleParams & {
   kind: PendingLifecycleKind;
   timer: NodeJS.Timeout;
+  entry: SubagentRunRecord;
 };
 
 export function createPendingLifecycleScheduler(params: {
@@ -45,6 +47,10 @@ export function createPendingLifecycleScheduler(params: {
   }
 
   function schedule(kind: PendingLifecycleKind, scheduleParams: PendingLifecycleParams) {
+    const selected = params.runs.get(scheduleParams.runId);
+    if (!selected) {
+      return;
+    }
     clearKind(scheduleParams.runId);
     const timer = setTimeout(() => {
       const pending = pendingByRunId.get(scheduleParams.runId);
@@ -52,7 +58,7 @@ export function createPendingLifecycleScheduler(params: {
         return;
       }
       pendingByRunId.delete(scheduleParams.runId);
-      const entry = params.runs.get(scheduleParams.runId);
+      const entry = getCurrentSubagentRunOwner(params.runs, pending.entry);
       if (!entry) {
         return;
       }
@@ -66,7 +72,8 @@ export function createPendingLifecycleScheduler(params: {
       }
       params.completeInBackground(
         {
-          runId: scheduleParams.runId,
+          runId: entry.runId,
+          expectedEntry: entry,
           endedAt: pending.endedAt,
           outcome:
             kind === "timeout"
@@ -90,7 +97,7 @@ export function createPendingLifecycleScheduler(params: {
       );
     }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
     timer.unref?.();
-    pendingByRunId.set(scheduleParams.runId, { ...scheduleParams, kind, timer });
+    pendingByRunId.set(scheduleParams.runId, { ...scheduleParams, kind, timer, entry: selected });
   }
 
   return {

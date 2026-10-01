@@ -14,7 +14,6 @@ vi.mock("../../runtime-plugins.js", async () => {
     ),
   };
 });
-vi.mock("./subagent-registry-state.js", { spy: true });
 
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", {
   spy: true,

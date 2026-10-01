@@ -18,6 +18,7 @@ import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../
 import "./subagent-registry.mocks.shared.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentDismissedRetentionCases } from "./subagent-registry.persistence.retention.test-support.js";
 import {
   gateSubagentRequesterSettlement,
@@ -30,10 +31,7 @@ import {
   writeChildSession,
 } from "./subagent-registry.persistence.test-support.js";
 import { registerStaleRequesterWakeBatchTests } from "./subagent-registry.persistence.wake.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "./subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type WakeRequester = typeof maybeWakeRequesterAfterAllChildrenSettled;
@@ -75,13 +73,13 @@ describe("subagent registry persistence resume", () => {
     ({ observeRootWork } = await import("./subagent-registry.browser-cleanup.test-support.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     settleOwnedWork = observeRootWork();
     setRuntimeConfigSnapshot({});
     registryConfigModule.setRuntimeConfigSnapshot({});
     announceSpy.mockClear();
     resetSubagentPersistenceGatewayCalls(callGatewayModule.callGateway);
-    mod.resetSubagentRegistryForTests({ persist: false });
+    await mod.resetSubagentRegistryForTests({ persist: false });
     vi.mocked(agentEventsModule.onAgentEvent)
       .mockReset()
       .mockReturnValue(() => undefined);
@@ -206,7 +204,7 @@ describe("subagent registry persistence resume", () => {
         ).toBe(false);
         await settleSubagentRegistryPersistenceWork(() => settleOwnedWork?.(true));
 
-        mod.resetSubagentRegistryForTests({ persist: false });
+        await mod.resetSubagentRegistryForTests({ persist: false });
         await mod.initSubagentRegistry();
         await activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
         await settleSubagentRegistryPersistenceWork(() => settleOwnedWork?.(true));
@@ -317,7 +315,7 @@ describe("subagent registry persistence resume", () => {
           const retiredResolver = getGatewayContextResolver(retiredRun);
           firstGatewayOpen = false;
           if (failure === "restart admission") {
-            mod.resetSubagentRegistryForTests({ persist: false });
+            await mod.resetSubagentRegistryForTests({ persist: false });
           }
           admission.resetGatewayWorkAdmission();
           settleOwnedWork = observeRootWork();

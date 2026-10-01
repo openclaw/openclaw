@@ -30,6 +30,7 @@ import {
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
+import { isSameSubagentRun, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 /** Recent-run default window used by subagent control UI/tools. */
 export const DEFAULT_RECENT_MINUTES = 30;
@@ -109,7 +110,9 @@ export function listControlledSubagentRunsForTurn(
   });
   const runsById = new Map(
     requesterRuns
-      .filter((entry) => getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey) === entry)
+      .filter((entry) =>
+        isSameSubagentRun(getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey), entry),
+      )
       .map((entry) => [entry.runId, entry]),
   );
   return controlledRuns.filter(
@@ -287,25 +290,13 @@ export function getLatestOwnedSubagentRun(
 
 export function isCurrentSubagentRun(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
   if (!cfg) {
-    return getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey) === entry;
+    return isSameSubagentRunOwner(
+      getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey),
+      entry,
+    );
   }
-  return (
-    getLatestOwnedSubagentRun(
-      entry.childSessionKey,
-      resolveRunRequesterAgentId(entry, cfg),
-      cfg,
-    ) === entry
-  );
-}
-
-export function isSameSubagentRunGeneration(
-  live: SubagentRunRecord,
-  snapshot: SubagentRunRecord,
-): boolean {
-  return (
-    live.childSessionKey === snapshot.childSessionKey &&
-    live.runId === snapshot.runId &&
-    live.generation === snapshot.generation &&
-    live.createdAt === snapshot.createdAt
+  return isSameSubagentRunOwner(
+    getLatestOwnedSubagentRun(entry.childSessionKey, resolveRunRequesterAgentId(entry, cfg), cfg),
+    entry,
   );
 }

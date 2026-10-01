@@ -1,7 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  persistSubagentRunsToDiskOrThrow,
+  runSubagentStateWorkerOperation,
   useSubagentControlFixture,
 } from "./subagent-control.test-support.js";
 /** Cancellation retains selected descendants across committed ancestor retirement. */
@@ -17,12 +17,14 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createSubagentRunRecord,
+  isSubagentRegistryWriteCommand,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import {
   records,
   requesterWakeDriver,
@@ -33,7 +35,7 @@ import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskAsyncOrThrow } from "./subagent-registry-state.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   activateSubagentRegistry,
@@ -50,7 +52,7 @@ import { releaseSubagentRun, testing } from "./subagent-registry.test-helpers.js
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
-const { persist, gateway } = fixture;
+const { worker, gateway } = fixture;
 
 it.each([
   { transition: "normal retirement", cancel: true },
@@ -116,11 +118,11 @@ it.each([
         queued: collect,
       });
     }
-    const ancestor = subagentRuns.get("ancestor")!;
     const child = subagentRuns.get("child")!;
     expect(await markSubagentRunTerminated({ runId: "ancestor", suppressTaskDelivery: true })).toBe(
       1,
     );
+    const ancestor = subagentRuns.get("ancestor")!;
     expect(ancestor.killReconciliation).toMatchObject({
       killedAt: now,
       suppressTaskDelivery: true,
@@ -152,41 +154,64 @@ it.each([
           // now retires the aged keep-mode ancestor while partial persistence awaits.
           clock.mockReturnValue(now + PROVISIONAL_KILL_RECONCILIATION_MS);
           if (transition === "explicit release without retirement") {
-            releaseSubagentRun("ancestor");
+            await releaseSubagentRun("ancestor");
           } else if (transition === "accepted successor released without retirement") {
             expect(subagentRuns.get("ancestor")).toBe(ancestor);
           } else {
             let retirementRejected = false;
             if (transition === "retirement write rollback") {
-              persist.mockImplementation((runs, ids) => {
-                if (!runs.has("ancestor")) {
-                  retirementRejected = true;
-                  throw new Error("retirement write rejected");
-                }
-                persistSubagentRunsToDiskOrThrow(runs, ids);
-              });
+              worker.mockImplementation((context, operation, options) =>
+                runSubagentStateWorkerOperation(
+                  context,
+                  (scope) =>
+                    operation({
+                      ...scope,
+                      execute: async (command) => {
+                        if (
+                          isSubagentRegistryWriteCommand(command) &&
+                          command.input.deleteRunIds.includes("ancestor")
+                        ) {
+                          retirementRejected = true;
+                          throw new Error("retirement write rejected");
+                        }
+                        return scope.execute(command);
+                      },
+                    }),
+                  options,
+                ),
+              );
             }
             await testing.sweepOnceForTests();
             if (transition === "retirement write rollback") {
               await vi.waitFor(() => expect(retirementRejected).toBe(true));
               await fixture.settle();
               expect(subagentRuns.get("ancestor")).toBe(ancestor);
-              persist.mockImplementation(persistSubagentRunsToDiskOrThrow);
+              worker.mockImplementation(runSubagentStateWorkerOperation);
             } else {
               await vi.waitFor(() => expect(subagentRuns.has("ancestor")).toBe(false));
             }
           }
           if (transition.includes("successor")) {
-            persist.mockImplementation((runs, ids) => {
-              if (
-                transition === "successor registration write rollback" ||
-                (transition === "retained successor after failed rollback" &&
-                  !runs.has("successor"))
-              ) {
-                throw new Error("registration write rejected");
-              }
-              persistSubagentRunsToDiskOrThrow(runs, ids);
-            });
+            worker.mockImplementation((context, operation, options) =>
+              runSubagentStateWorkerOperation(
+                context,
+                (scope) =>
+                  operation({
+                    ...scope,
+                    execute: async (command) => {
+                      if (
+                        transition === "successor registration write rollback" &&
+                        isSubagentRegistryWriteCommand(command) &&
+                        command.input.values.some((row) => row.run_id === "successor")
+                      ) {
+                        throw new Error("registration write rejected");
+                      }
+                      return scope.execute(command);
+                    },
+                  }),
+                options,
+              ),
+            );
             const register = () =>
               registerSubagentRun({
                 runId: "successor",
@@ -212,11 +237,11 @@ it.each([
                 expect(loadSubagentRegistryFromSqlite().has("successor")).toBe(false);
               } else {
                 expect(subagentRuns.get("successor")?.childSessionKey).toBe(ancestorKey);
-                persist.mockImplementation(persistSubagentRunsToDiskOrThrow);
-                releaseSubagentRun("successor");
+                worker.mockImplementation(runSubagentStateWorkerOperation);
+                await releaseSubagentRun("successor");
               }
             } finally {
-              persist.mockImplementation(persistSubagentRunsToDiskOrThrow);
+              worker.mockImplementation(runSubagentStateWorkerOperation);
             }
           } else if (transition === "session replacement") {
             await replaceSessionEntry(
@@ -229,7 +254,12 @@ it.each([
           } else if (transition === "lifecycle rotation") {
             rotateAgentEventLifecycleGeneration();
           } else if (transition === "controller replacement") {
-            ancestor.controllerSessionKey = "agent:other:main";
+            await mutateSubagentRuns([ancestor.runId], () => ({
+              value: undefined,
+              postimages: new Map([
+                [ancestor.runId, { ...ancestor, controllerSessionKey: "agent:other:main" }],
+              ]),
+            }));
           } else if (transition === "new direct child after retirement") {
             await registerSubagentRun({
               runId: "late",
@@ -264,11 +294,11 @@ it.each([
       });
       expect(result).toMatchObject({ status: "ok", killed: cancel ? 1 : 0 });
       if (cancel) {
-        expect(child.collectorCompletion?.status).toBe("killed");
+        expect(subagentRuns.get(child.runId)?.collectorCompletion?.status).toBe("killed");
         expect(dispatch).not.toHaveBeenCalled();
       } else {
-        expect(child.killIntent).toBeUndefined();
-        expect(child.collectorCompletion).toBeUndefined();
+        expect(subagentRuns.get(child.runId)?.killIntent).toBeUndefined();
+        expect(subagentRuns.get(child.runId)?.collectorCompletion).toBeUndefined();
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
       }
       if (transition === "retirement with retained predecessor") {
@@ -372,8 +402,7 @@ it.each(
     expect(
       await markSubagentRunTerminated({ runId: ancestor.runId, suppressTaskDelivery: true }),
     ).toBe(1);
-    expect(subagentRuns.get(ancestor.runId)).toBe(ancestor);
-    expect(ancestor.killReconciliation?.killedAt).toBe(now);
+    expect(subagentRuns.get(ancestor.runId)?.killReconciliation?.killedAt).toBe(now);
     clock.mockReturnValue(now + PROVISIONAL_KILL_RECONCILIATION_MS);
     await testing.sweepOnceForTests();
     await vi.waitFor(() => expect(subagentRuns.has(ancestor.runId)).toBe(false));
@@ -388,23 +417,36 @@ it.each(
     } else if (transition === "lifecycle rotation") {
       rotateAgentEventLifecycleGeneration();
     } else if (transition === "owner replacement") {
-      ancestor.controllerSessionKey = "agent:other:main";
-      ancestor.requesterSessionKey = "agent:other:main";
+      await mutateSubagentRuns([ancestor.runId], () => ({
+        value: undefined,
+        postimages: new Map([
+          [
+            ancestor.runId,
+            {
+              ...ancestor,
+              controllerSessionKey: "agent:other:main",
+              requesterSessionKey: "agent:other:main",
+            },
+          ],
+        ]),
+      }));
     }
     expect(releaseSwarmRun("draining-blocker")).toBe(true);
     await Promise.resolve();
     expect(dispatch).not.toHaveBeenCalled();
     admission.release();
     const result = await pending;
-    expect(subagentRuns.has(ancestor.runId)).toBe(false);
+    expect(subagentRuns.has(ancestor.runId)).toBe(transition === "owner replacement");
     if (transition !== "ordinary retirement") {
-      expect(child.killIntent).toBeUndefined();
-      expect(child.collectorCompletion).toBeUndefined();
+      expect(subagentRuns.get(child.runId)?.killIntent).toBeUndefined();
+      expect(subagentRuns.get(child.runId)?.collectorCompletion).toBeUndefined();
       expect(resolveSubagentSessionStatus(subagentRuns.get(child.runId))).toBe("queued");
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
       return;
     }
-    expect(child.collectorCompletion?.status, JSON.stringify(result)).toBe("killed");
+    expect(subagentRuns.get(child.runId)?.collectorCompletion?.status, JSON.stringify(result)).toBe(
+      "killed",
+    );
     expect(resolveSubagentSessionStatus(subagentRuns.get(child.runId))).toBe("killed");
     expect(dispatch).not.toHaveBeenCalled();
     expect(result).toMatchObject(
@@ -546,7 +588,6 @@ describe("restored historical cancellation ownership", () => {
 
   beforeEach(() => {
     settleRootWork = observeRootWork();
-    vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockReset();
     vi.mocked(resolveContextEngine).mockReset();
     wake.mockReset().mockImplementation(async (params) => {
       await params.completeBatch([params.settledEntry], 1, {
@@ -724,7 +765,7 @@ describe("restored historical cancellation ownership", () => {
     expectNoExecutionReplay();
   });
 
-  it.each(["before restore", "transaction", "commit"] as const)(
+  it.each(["before restore", "before reconciliation"] as const)(
     "preserves a newer child generation instead of waking the retired cancellation (%s)",
     async (stage) => {
       const input = historicalCancellation();
@@ -748,19 +789,14 @@ describe("restored historical cancellation ownership", () => {
           openOpenClawStateDatabase(),
           bindSubagentRunRecord(successor),
         );
-      } else {
-        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-        vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-          (grantOwner, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === stage) {
-                subagentRuns.set(successor.runId, successor);
-              }
-              grantOwner(request, grant);
-            }, attachment),
-        );
       }
       await restore();
+      if (stage === "before reconciliation") {
+        await mutateSubagentRuns([successor.runId], () => ({
+          value: undefined,
+          postimages: new Map([[successor.runId, successor]]),
+        }));
+      }
       const originalBefore = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
       const successorBefore = structuredClone(
         stage === "before restore" ? subagentRuns.get(successor.runId) : successor,
@@ -809,7 +845,10 @@ describe("restored historical cancellation ownership", () => {
       const input = historicalCancellation();
       input.subagent.killReconciliation = undefined;
       persistRetiredOwner(input);
-      subagentRuns.set(input.subagent.runId, input.subagent);
+      await mutateSubagentRuns([input.subagent.runId], () => ({
+        value: undefined,
+        postimages: new Map([[input.subagent.runId, input.subagent]]),
+      }));
       const driver = requesterWakeDriver([input]);
       const before = structuredClone(input.subagent);
       try {

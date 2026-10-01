@@ -2,6 +2,7 @@ import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
+import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
@@ -72,25 +73,20 @@ export function readSharedBatchState(
 }
 
 export function captureRequesterRunOwner(requesterRun: SubagentRunRecord | null | undefined) {
-  const requesterGeneration = requesterRun?.generation;
-  const requesterCreatedAt = requesterRun?.createdAt;
   const requesterTaskRunId = requesterRun?.taskRunId ?? requesterRun?.runId;
   return (currentRequester: SubagentRunRecord | null | undefined, continuationRunId: string) => {
-    // Normal admission adopts a paused requester before execution starts.
-    // Only this admitted continuation may replace its captured task owner.
-    if (
-      (currentRequester !== requesterRun ||
-        currentRequester?.generation !== requesterGeneration ||
-        currentRequester?.createdAt !== requesterCreatedAt) &&
-      (!requesterRun ||
-        !currentRequester ||
-        currentRequester.runId !== continuationRunId ||
-        currentRequester.taskRunId !== requesterTaskRunId ||
-        currentRequester.requesterSessionKey !== requesterRun.requesterSessionKey ||
-        currentRequester.requesterAgentId !== requesterRun.requesterAgentId)
-    ) {
-      return false;
+    if (!currentRequester || !requesterRun) {
+      return !currentRequester && !requesterRun;
     }
-    return true;
+    if (isSameSubagentRun(currentRequester, requesterRun)) {
+      return isSameSubagentRunOwner(currentRequester, requesterRun);
+    }
+    // Only the admitted continuation may replace its captured task owner.
+    return (
+      currentRequester.runId === continuationRunId &&
+      currentRequester.taskRunId === requesterTaskRunId &&
+      currentRequester.requesterSessionKey === requesterRun.requesterSessionKey &&
+      currentRequester.requesterAgentId === requesterRun.requesterAgentId
+    );
   };
 }

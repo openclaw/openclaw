@@ -180,6 +180,47 @@ export function consumeRequesterFinalAttachment(params: {
   }
 }
 
+/** A settled yield batch either attaches its visible final or releases the attachment. */
+export function finalizeRequesterFinalAttachment(params: {
+  requesterAgentId?: string;
+  requesterSessionKey: string;
+  requesterSessionId?: string;
+  batchRunIds: readonly string[];
+  rearmGeneration?: number;
+  requesterYieldBatch?: boolean;
+  pause: boolean;
+  delivered?: boolean;
+  finalAssistantVisibleText?: string;
+}): void {
+  const { requesterAgentId, rearmGeneration } = params;
+  if (
+    params.pause ||
+    !requesterAgentId ||
+    params.requesterYieldBatch !== true ||
+    rearmGeneration === undefined
+  ) {
+    return;
+  }
+  const text = params.finalAssistantVisibleText?.trim();
+  if (params.delivered && params.requesterSessionId && text) {
+    consumeRequesterFinalAttachment({
+      requesterAgentId,
+      requesterSessionKey: params.requesterSessionKey,
+      requesterSessionId: params.requesterSessionId,
+      batchRunIds: params.batchRunIds,
+      rearmGeneration,
+      text,
+    });
+  } else {
+    revokeRequesterFinalAttachment({
+      requesterAgentId,
+      requesterSessionKey: params.requesterSessionKey,
+      batchRunIds: params.batchRunIds,
+      rearmGeneration,
+    });
+  }
+}
+
 registerAgentEventLifecycleRotationHandler("requester-final-attachments", () => {
   state.byOwner.clear();
 });

@@ -622,7 +622,7 @@ describe("resident sessions.list", () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const config = await seedSessions();
       const runId = "sessions-list-cache-live-subagent";
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId,
         childSessionKey: "agent:main:active",
         controllerSessionKey: "agent:main:draft",
@@ -680,7 +680,7 @@ describe("resident sessions.list", () => {
         });
       } finally {
         clearAgentRunContext(runId);
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });

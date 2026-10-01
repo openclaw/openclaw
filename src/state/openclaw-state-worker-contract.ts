@@ -8,7 +8,10 @@ import type {
   SandboxRegistryInsert,
   SandboxRegistryWrite,
 } from "../agents/sandbox/registry.kernel.js";
-import type { SubagentRegistryWrite } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import type {
+  SubagentRegistryWrite,
+  SubagentRegistryWriteReceipt,
+} from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,
@@ -259,7 +262,10 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
       input: undefined;
       output: ReturnType<typeof readSqliteDatabaseBloat>;
     };
-    "subagents.persistChanges": { input: SubagentRegistryWrite; output: { writeId: string } };
+    "subagents.persistChanges": {
+      input: SubagentRegistryWrite;
+      output: SubagentRegistryWriteReceipt;
+    };
     "sessionUpstream.listWatched": { input: undefined; output: SessionUpstreamLink[] };
     "backup.recordOutcome": { input: PreparedBackupRunRecord; output: void };
     "sessionGroups.mutate": {

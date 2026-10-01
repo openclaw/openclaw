@@ -90,7 +90,7 @@ describe("scoped session archive tools", () => {
       }
       const client = roleClient("write");
       const runId = "collector-session-controls";
-      addSubagentRunForTests({ runId, childSessionKey: TARGET, collect: true });
+      await addSubagentRunForTests({ runId, childSessionKey: TARGET, collect: true });
       try {
         await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
           withOperatorToolGatewayAuthority(
@@ -131,7 +131,7 @@ describe("scoped session archive tools", () => {
           ),
         );
       } finally {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });

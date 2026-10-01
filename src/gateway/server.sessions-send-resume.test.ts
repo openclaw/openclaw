@@ -8,8 +8,8 @@ import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.
 import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   markSubagentRunTerminated,
   registerSubagentRun,
@@ -67,11 +67,20 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   // Stop registry timers before the Gateway releases their database lifecycle.
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   await server.close();
 });
 
 // Each case owns distinct durable identities while sharing the isolated Gateway.
+async function pauseRun(runId: string) {
+  await mutateSubagentRuns([runId], (rows) => {
+    const entry = structuredClone(expectDefined(rows.get(runId), "child to pause"));
+    expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
+    return { value: undefined, postimages: new Map([[runId, entry]]) };
+  });
+  return expectDefined(subagentRuns.get(runId), "paused child");
+}
+
 async function arrangeAuthorityProof(name: string) {
   const root = tempDirs.make(`openclaw-resume-${name}-`);
   const parent = "agent:main:main";
@@ -102,9 +111,7 @@ async function arrangeAuthorityProof(name: string) {
     expectsCompletionMessage: true,
     queued: true,
   });
-  const previous = expectDefined(subagentRuns.get(previousRunId), "paused child");
-  expect(markSubagentRunPausedAfterYield({ entry: previous })).toBe(true);
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+  const previous = await pauseRun(previousRunId);
   const scope = { agentId: "main", sessionKey: child, sessionId, storePath };
   const finalEffect = vi.fn();
   // The provider can publish success only after real input custody is consumed.
@@ -152,8 +159,13 @@ async function arrangeAuthorityProof(name: string) {
     );
   };
   const expectUnadopted = () => {
-    expect(subagentRuns.get(previousRunId)).toBe(previous);
-    expect(previous.pauseReason).toBe("sessions_yield");
+    expect(subagentRuns.get(previousRunId)).toMatchObject({
+      runId: previousRunId,
+      childSessionKey: child,
+      createdAt: previous.createdAt,
+      generation: previous.generation,
+      pauseReason: "sessions_yield",
+    });
     expect(subagentRuns.has(runId)).toBe(false);
   };
   return {
@@ -203,9 +215,18 @@ it("rejects a child without task-owned completion before input or execution", as
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("completion-disabled");
-    const previous = expectDefined(subagentRuns.get(proof.previousRunId), "paused child");
-    previous.expectsCompletionMessage = false;
-    persistSubagentRunsToDiskOrThrow(subagentRuns, [proof.previousRunId]);
+    await mutateSubagentRuns([proof.previousRunId], (rows) => ({
+      value: undefined,
+      postimages: new Map([
+        [
+          proof.previousRunId,
+          {
+            ...expectDefined(rows.get(proof.previousRunId), "paused child"),
+            expectsCompletionMessage: false,
+          },
+        ],
+      ]),
+    }));
     const result = await proof.send(undefined, undefined, "resume");
     expect(result.details).toMatchObject({
       status: "error",
@@ -420,9 +441,7 @@ it.each(["explicit", "automatic"] as const)(
         expectsCompletionMessage: true,
         queued: true,
       });
-      const previous = subagentRuns.get(previousRunId)!;
-      markSubagentRunPausedAfterYield({ entry: previous });
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+      await pauseRun(previousRunId);
       agentCommandMock.mockImplementation(async (opts) => {
         const command = opts as AgentCommandGatewayIngressOpts;
         const runId = expectDefined(command.runId, "resume execution run id");

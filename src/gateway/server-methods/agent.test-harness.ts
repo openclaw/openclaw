@@ -520,7 +520,7 @@ export const describe0AfterEach0 = async () => {
   await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
   resetDiagnosticEventsForTest();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetSubagentRegistryMocks();
   mocks.agentCommand.mockReset();
   mocks.updateSessionStore.mockReset().mockResolvedValue(undefined);
@@ -551,7 +551,7 @@ export const describe0AfterEach0 = async () => {
 async function resetIntegrationState() {
   await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetSubagentRegistryMocks();
   mocks.agentCommand.mockReset();
   mocks.loadConfigReturn = {};

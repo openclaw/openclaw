@@ -102,7 +102,7 @@ describe("updateSubagentArchiveAtMs", () => {
       completion: { required: false, resultText: "done", capturedAt: 2_000 },
     });
 
-    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
+    expect(updateSwarmCollectorCompletion(entry, cfg, { entry: undefined })).toBe(true);
     expect(entry.collectorCompletion).toEqual({ status: "done" });
     expect(entry.archiveAtMs).toBe(302_000);
   });
@@ -121,7 +121,7 @@ describe("updateSubagentArchiveAtMs", () => {
       completion: { required: false, resultText: "done" },
     });
 
-    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
+    expect(updateSwarmCollectorCompletion(entry, cfg, { entry: undefined })).toBe(true);
     expect(entry.completion?.capturedAt).toBe(10_000);
     expect(entry.archiveAtMs).toBe(310_000);
     vi.useRealTimers();

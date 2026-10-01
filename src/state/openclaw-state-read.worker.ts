@@ -12,8 +12,7 @@ import {
 } from "../agents/mcp-oauth-store.kernel.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
-  loadSubagentRegistryFromSqlite,
-  loadSubagentRunsByRunIdsFromSqlite,
+  loadVersionedSubagentRunsInDatabase,
   loadSubagentRunsForSessionsInDatabase,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
@@ -259,7 +258,7 @@ serveOwnedWorkerTasks(
             }
             if (command.type === "subagents.runs") {
               if (command.scope.kind === "all") {
-                return { type: command.type, runs: loadSubagentRegistryFromSqlite({ db }) };
+                return { type: command.type, ...loadVersionedSubagentRunsInDatabase({ db }) };
               }
               if (command.scope.kind === "maintenance") {
                 const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
@@ -286,10 +285,13 @@ serveOwnedWorkerTasks(
                   },
                 };
               }
-              const rows =
-                command.scope.kind === "session"
-                  ? loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db })
-                  : loadSubagentRunsByRunIdsFromSqlite(command.scope.runIds, { db });
+              if (command.scope.kind === "ids") {
+                return {
+                  type: command.type,
+                  ...loadVersionedSubagentRunsInDatabase({ db }, command.scope.runIds),
+                };
+              }
+              const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db });
               return {
                 type: command.type,
                 runs: new Map(rows.map((entry) => [entry.runId, entry])),

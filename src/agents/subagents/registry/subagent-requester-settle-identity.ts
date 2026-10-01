@@ -1,6 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  isSameSubagentRun,
+  isSameSubagentRunOwner,
+} from "./subagent-run-generation.js";
 
 export function buildRequesterSettleWakeIdentity(params: {
   requesterSessionKey: string;
@@ -45,7 +50,7 @@ export function isRequesterSettleWakeForRun(params: {
     (entry.requesterAgentId && entry.requesterAgentId !== requesterAgentId) ||
     !wake ||
     wake.attemptCount < 1 ||
-    params.runsById.get(entry.runId) !== entry ||
+    !isSameSubagentRun(params.runsById.get(entry.runId), entry) ||
     !batchRunIds?.includes(entry.runId)
   ) {
     return false;
@@ -137,5 +142,82 @@ export function isRequesterCompletionCohortCurrent(
         candidate.requesterTurnRunId === entry.requesterTurnRunId &&
         (candidate.taskRunId ?? candidate.runId) !== taskRunId,
     )
+  );
+}
+
+const requesterRetirementCustody = (current: SubagentRunRecord) => ({
+  requester: captureRequesterSettleRunIdentity(current),
+  expectsCompletionMessage: current.expectsCompletionMessage === true,
+  suppressCompletionDelivery: current.suppressCompletionDelivery === true,
+  retireAfterRequesterTurn: current.retireAfterRequesterTurn === true,
+  hasRequesterSettleWake: current.requesterSettleWake !== undefined,
+  killIntent: current.killIntent && {
+    requestedAt: current.killIntent.requestedAt,
+    reason: current.killIntent.reason,
+    lifecycleGeneration: current.killIntent.lifecycleGeneration,
+    sessionId: current.killIntent.sessionId,
+    sessionLifecycleRevision: current.killIntent.sessionLifecycleRevision,
+    suppressTaskDelivery: current.killIntent.suppressTaskDelivery === true,
+  },
+  killReconciliation: current.killReconciliation && {
+    killedAt: current.killReconciliation.killedAt,
+    supersededAt: current.killReconciliation.supersededAt,
+    taskCancellationAccepted: current.killReconciliation.taskCancellationAccepted === true,
+    suppressTaskDelivery: current.killReconciliation.suppressTaskDelivery === true,
+  },
+  batchRunIds: current.requesterSettleWake?.batchRunIds?.toSorted(),
+  rearmGeneration: current.requesterSettleWake?.rearmGeneration,
+  requesterYieldBatch: current.requesterSettleWake?.requesterYieldBatch === true,
+});
+
+/** Async retirement cannot consume a newly rebound requester or cancellation obligation. */
+export function isRequesterRetirementCustodyCurrent(
+  current: SubagentRunRecord,
+  expected: SubagentRunRecord,
+): boolean {
+  return isDeepStrictEqual(
+    requesterRetirementCustody(current),
+    requesterRetirementCustody(expected),
+  );
+}
+
+/** Runtime cohort custody survives only its own immutable row publications. */
+export function sameRequesterSettleBatch(
+  left: readonly SubagentRunRecord[],
+  right: readonly SubagentRunRecord[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((entry) => right.some((candidate) => isSameSubagentRunOwner(candidate, entry)))
+  );
+}
+
+export function resolveCurrentRequesterSettleBatch(
+  observed: readonly SubagentRunRecord[],
+  runs: ReadonlyMap<string, SubagentRunRecord>,
+): SubagentRunRecord[] | undefined {
+  const batch: SubagentRunRecord[] = [];
+  for (const entry of observed) {
+    const current = runs.get(entry.runId);
+    if (!current || !isSameSubagentRunOwner(current, entry)) {
+      return undefined;
+    }
+    batch.push(current);
+  }
+  return batch;
+}
+
+/** A yielded cohort owns exactly one rearm generation and its recorded membership. */
+export function isRequesterYieldCohortMember(
+  entry: SubagentRunRecord,
+  batchRunIds: readonly string[],
+  rearmGeneration: number | undefined,
+): boolean {
+  const wake = entry.requesterSettleWake;
+  return (
+    wake?.requesterYieldBatch === true &&
+    wake.rearmGeneration === rearmGeneration &&
+    wake.batchRunIds?.length === batchRunIds.length &&
+    wake.batchRunIds.every((runId, index) => runId === batchRunIds[index])
   );
 }

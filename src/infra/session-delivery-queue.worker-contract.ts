@@ -16,25 +16,32 @@ export type SessionDeliveryAgentRunUpdate = {
 };
 
 type PreparedEntry = ReturnType<typeof bindDeliveryQueueEntry>;
+type SubagentVersions = Array<{ runId: string; version: string | null }>;
+export type SubagentCompletionVersionConflict = { writeId: string; conflictRunIds: string[] };
 
 export type SessionDeliveryWorkerOperations = {
   "sessionDelivery.mutateSubagentCompletion": {
-    input: { writeId: string; mutation: SubagentCompletionMutation };
-    output: SubagentCompletionMutationResult & { writeId: string };
+    input: { writeId: string; mutation: SubagentCompletionMutation; versions: SubagentVersions };
+    output:
+      | (SubagentCompletionMutationResult & { writeId: string })
+      | SubagentCompletionVersionConflict;
   };
   "sessionDelivery.admitSubagentCompletion": {
     input: {
       writeId: string;
+      versions: SubagentVersions;
       queueEntry: QueuedSessionDelivery;
       expected: SubagentRunRecord;
       subagent: SubagentRunRecord;
     };
-    output: {
-      writeId: string;
-      claimed: boolean;
-      status: DeliveryQueueStoredStatus;
-      row: SubagentRunSqliteRow;
-    };
+    output:
+      | SubagentCompletionVersionConflict
+      | {
+          writeId: string;
+          claimed: boolean;
+          status: DeliveryQueueStoredStatus;
+          row: SubagentRunSqliteRow;
+        };
   };
   "sessionDelivery.enqueue": { input: PreparedEntry; output: void };
   "sessionDelivery.enqueueClaimed": {

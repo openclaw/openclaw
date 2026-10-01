@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { loadSubagentRunsByRunIdsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   listSubagentRunsForRequester,
@@ -48,13 +48,13 @@ const CHILD_SESSION_KEY = "agent:main:subagent:gw-prompt-recent";
 const PARENT_SESSION_KEY = "agent:main:main";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function resetGatewayState(): void {
+async function resetGatewayState(): Promise<void> {
   resetConfigOverrides();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest({ preserveListeners: true });
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
 }
 
 afterEach(resetGatewayState);
@@ -121,7 +121,7 @@ describe("Completed child results on a real parent-agent turn", () => {
       }
       deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
       deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
-      resetGatewayState();
+      await resetGatewayState();
 
       const requests: string[] = [];
       const providerServer = createServer((request, response) => {
@@ -230,7 +230,7 @@ describe("Completed child results on a real parent-agent turn", () => {
             delivery: { status: "failed" },
           };
           // Publish retained custody through the owner without registering an active child.
-          persistSubagentRunsToDiskOrThrow(new Map([[retained.runId, retained]]), [retained.runId]);
+          persistRegistryFixture(new Map([[retained.runId, retained]]), [retained.runId]);
           const before = loadSubagentRunsByRunIdsFromSqlite([retained.runId]);
           const cursor = requests.length;
           await runParentAgentTurn(gateway.client, "Continue using any outstanding child result.");

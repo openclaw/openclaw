@@ -12,7 +12,10 @@ import {
 } from "../code-mode.test-support.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import type { PreparedSubagentRunsRead } from "../subagents/registry/subagent-registry-read-snapshot.js";
-import { saveSubagentRegistryToSqlite } from "../subagents/registry/subagent-registry.store.sqlite.js";
+import {
+  saveSubagentRegistryChangesToSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 
 const records = new Map<string, SubagentRunRecord>();
@@ -73,6 +76,21 @@ function preparedRuns(
   return {
     consume: (consume) => ({ ready: true, value: consume(read()) }),
   };
+}
+
+// These read cases retain the actual publisher while the tool's subscription stays mocked.
+function persistCollectorReadFixture(
+  state: Pick<
+    typeof import("../subagents/registry/subagent-registry-state.js"),
+    "publishSubagentRunsAfterAtomicStore"
+  >,
+  rows: Map<string, SubagentRunRecord>,
+  runIds: readonly string[],
+) {
+  saveSubagentRegistryChangesToSqlite(rows, runIds);
+  const events: Array<() => void> = [];
+  state.publishSubagentRunsAfterAtomicStore(rows, runIds, events);
+  events.forEach((publish) => publish());
 }
 
 describe("agents_wait", () => {
@@ -500,7 +518,7 @@ describe("agents_wait", () => {
           registryEvents.read.mockImplementation(async (runIds) => {
             const prepared = await state.prepareSubagentRunsSnapshotForRunIds(new Map(), runIds);
             publication ??= Promise.resolve().then(() => {
-              state.persistSubagentRunsToDiskOrThrow(new Map([[replacement.runId, replacement]]), [
+              persistCollectorReadFixture(state, new Map([[replacement.runId, replacement]]), [
                 replacement.runId,
               ]);
             });
@@ -793,7 +811,8 @@ describe("agents_wait", () => {
           }
           const publication = Promise.resolve().then(() => {
             elapsed += 5;
-            state.persistSubagentRunsToDiskOrThrow(
+            persistCollectorReadFixture(
+              state,
               new Map([[unrelated.runId, { ...unrelated, model: `publication-${elapsed}` }]]),
               [unrelated.runId],
             );

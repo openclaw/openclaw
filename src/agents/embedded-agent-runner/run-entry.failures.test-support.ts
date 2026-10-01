@@ -29,7 +29,9 @@ export function registerRunEntryFailureTests(state: {
       const { mergeAcceptedSessionSpawnsForRun } = await import("../accepted-session-spawn.js");
       const { createSubagentRunRecord } = await import("../subagent-test-fixtures.test-helpers.js");
       const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
-      const { saveSubagentRegistryChangesToSqlite, loadSubagentRunsByRunIdsFromSqlite } =
+      const { saveSubagentRegistryChangesToSqlite } =
+        await import("../subagents/registry/subagent-registry-state.fixture.test-support.js");
+      const { loadSubagentRunsByRunIdsFromSqlite } =
         await import("../subagents/registry/subagent-registry.store.sqlite.js");
       const { withLocalSessionPlacementTurnSettlement } =
         await import("../session-placement-admission.js");
@@ -215,7 +217,9 @@ export function registerRunEntryFailureTests(state: {
       const { mergeAcceptedSessionSpawnsForRun } = await import("../accepted-session-spawn.js");
       const { createSubagentRunRecord } = await import("../subagent-test-fixtures.test-helpers.js");
       const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
-      const { saveSubagentRegistryChangesToSqlite, loadSubagentRunsByRunIdsFromSqlite } =
+      const { saveSubagentRegistryChangesToSqlite } =
+        await import("../subagents/registry/subagent-registry-state.fixture.test-support.js");
+      const { loadSubagentRunsByRunIdsFromSqlite } =
         await import("../subagents/registry/subagent-registry.store.sqlite.js");
       const fixture = await createOpenClawTestState({ label: "entry-failure-settlement" });
       const identity = {

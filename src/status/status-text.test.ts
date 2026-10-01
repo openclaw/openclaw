@@ -145,7 +145,7 @@ describe("buildStatusText global subagent scope", () => {
 
   it("shows the selected global agent's children instead of the default agent's", async () => {
     for (const agentId of ["research", "ops"]) {
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId: `status-global-${agentId}`,
         childSessionKey: `agent:${agentId}:subagent:status-worker`,
         controllerSessionKey: "global",

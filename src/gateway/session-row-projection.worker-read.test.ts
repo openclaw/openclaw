@@ -8,7 +8,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   assignSessionOwner,
@@ -490,7 +490,7 @@ it.each([
           };
           subagentRuns.set(runId, collector);
           subagentRuns.commitOwnership(collector);
-          persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+          persistRegistryFixture(subagentRuns, [runId]);
         } else if (changesOwner) {
           const emit = sessionChanges.emit.bind(sessionChanges);
           let publicationObserved = false;
@@ -576,7 +576,7 @@ it.each([
         clearAgentRunContext(runId);
         if (collector && subagentRuns.get(runId) === collector) {
           subagentRuns.delete(runId);
-          persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+          persistRegistryFixture(subagentRuns, [runId]);
         }
       }
     } finally {

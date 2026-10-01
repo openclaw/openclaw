@@ -207,22 +207,23 @@ export function registerNativeCancellationCases<
       pendingSettled = Promise.allSettled([pending]);
       await entered.promise;
       if (transition === "already interrupted") {
-        let cancellationSettled = false;
-        void pending.then(
-          () => {
-            cancellationSettled = true;
-          },
-          () => {
-            cancellationSettled = true;
-          },
-        );
-        while (!subagentRuns.get(targetRunId)?.killIntent) {
-          if (cancellationSettled) {
-            throw new Error("Cancellation returned before admission interruption");
+        const claimed = createDeferred();
+        const inspectClaim = () => {
+          if (subagentRuns.get(targetRunId)?.killIntent) {
+            claimed.resolve();
           }
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+        };
+        const stopObservingClaim = onSubagentRegistryPersisted(inspectClaim);
+        try {
+          inspectClaim();
+          await Promise.race([
+            claimed.promise,
+            pending.then(() => {
+              throw new Error("Cancellation returned before admission interruption");
+            }),
+          ]);
+        } finally {
+          stopObservingClaim();
         }
       }
       await vi.advanceTimersByTimeAsync(1);
@@ -259,7 +260,7 @@ export function registerNativeCancellationCases<
         expect(onAbort).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
         const cancellation = await pending;
-        expect(subagentRuns.get(targetRunId)?.killIntent).toBe(originalClaim);
+        expect(subagentRuns.get(targetRunId)?.killIntent).toEqual(originalClaim);
         expect(cancellation.details).toMatchObject({
           killed: false,
           error: expect.stringContaining("cleanup is pending"),

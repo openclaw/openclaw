@@ -1,12 +1,14 @@
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import type { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
-import * as registryState from "./subagent-registry-state.js";
+import { runSubagentStateWorkerOperation } from "./subagent-control.test-support.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunTerminated } from "./subagent-registry.js";
 import {
   addSubagentRunForTests,
@@ -46,7 +48,7 @@ export function registerQueuedReservationFailureTests({
       swarmLaunchPending: true,
       execution: { status: "queued" },
     });
-    addSubagentRunForTests(entry);
+    await addSubagentRunForTests(entry);
     const storePath = await writeSessionStoreFixture("queue-failure", {
       [entry.childSessionKey]: { sessionId: "queued-session", updatedAt: 1 },
     });
@@ -63,25 +65,42 @@ export function registerQueuedReservationFailureTests({
     reserve();
     let writes = 0;
     resetRegistryLeafMocks();
-    vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
-      writes += 1;
-      if (
-        ["session replacement at intent", "session replacement release"].includes(failure) &&
-        writes === 1
-      ) {
-        replaceSessionEntrySync(
-          { storePath, sessionKey: entry.childSessionKey },
-          { sessionId: "new-session", updatedAt: 2 },
-        );
-      }
-      if (
-        (failure === "intent write" && writes === 1) ||
-        (["tombstone write", "claim release", "session replacement release"].includes(failure) &&
-          writes === 2)
-      ) {
-        throw new Error("sqlite busy");
-      }
-    });
+    vi.mocked(runOpenClawStateWorkerOperation).mockImplementation((context, operation, options) =>
+      runSubagentStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            ...scope,
+            execute: async (command) => {
+              if (command.type === "subagents.persistChanges") {
+                writes += 1;
+                if (
+                  ["session replacement at intent", "session replacement release"].includes(
+                    failure,
+                  ) &&
+                  writes === 1
+                ) {
+                  replaceSessionEntrySync(
+                    { storePath, sessionKey: entry.childSessionKey },
+                    { sessionId: "new-session", updatedAt: 2 },
+                  );
+                }
+                if (
+                  (failure === "intent write" && writes === 1) ||
+                  (["tombstone write", "claim release", "session replacement release"].includes(
+                    failure,
+                  ) &&
+                    writes === 2)
+                ) {
+                  throw new Error("sqlite busy");
+                }
+              }
+              return scope.execute(command);
+            },
+          }),
+        options,
+      ),
+    );
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => {
         if (failure === "session replacement") {
@@ -120,7 +139,7 @@ export function registerQueuedReservationFailureTests({
               reservationReleases.push(hold.release());
             }
             expect(withdrawn).toBe(true);
-            addSubagentRunForTests({ ...entry, generation: 2, createdAt: 2 });
+            await addSubagentRunForTests({ ...entry, generation: 2, createdAt: 2 });
             reserve();
           }
           if (failure === "lifecycle rotation") {
@@ -142,7 +161,7 @@ export function registerQueuedReservationFailureTests({
         );
       }
       if (["tombstone write", "claim release", "session replacement release"].includes(failure)) {
-        expect(entry.killIntent).toMatchObject({ reason: "killed" });
+        expect(subagentRuns.get(entry.runId)?.killIntent).toMatchObject({ reason: "killed" });
         const survivor = vi.fn(async () => {});
         enqueueSwarmRun({
           groupId: "failure-lane",
@@ -155,10 +174,12 @@ export function registerQueuedReservationFailureTests({
         await vi.waitFor(() => expect(survivor).toHaveBeenCalledOnce());
         expect(dispatch).not.toHaveBeenCalled();
         expect(await markSubagentRunTerminated({ runId: entry.runId })).toBe(1);
-        expect(entry.collectorCompletion).toMatchObject({ status: "killed" });
+        expect(subagentRuns.get(entry.runId)?.collectorCompletion).toMatchObject({
+          status: "killed",
+        });
         expect(dispatch).not.toHaveBeenCalled();
       } else {
-        expect(entry.killIntent).toBeUndefined();
+        expect(subagentRuns.get(entry.runId)?.killIntent).toBeUndefined();
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
         expect(
           getSubagentRunByChildSessionKey(entry.childSessionKey)?.execution.endedAt,

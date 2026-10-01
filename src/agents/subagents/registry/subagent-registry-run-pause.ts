@@ -3,11 +3,7 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
-import {
-  captureSubagentRunMutationSnapshot,
-  publishSubagentRunPostimages,
-  SubagentRegistryWriteError,
-} from "./subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function resetRequesterSettleWakeRetry(
@@ -32,50 +28,39 @@ export async function markSubagentMessageWaitInRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   context: OpenClawStateWorkerContext;
   assertCurrent: () => void;
-  persist: Parameters<typeof publishSubagentRunPostimages>[0]["persist"];
 }): Promise<void> {
-  params.assertCurrent();
-  const entry = params.runs.get(params.runId);
-  if (
-    !entry ||
-    entry.childSessionKey !== params.sessionKey ||
-    entry.expectsCompletionMessage !== true ||
-    entry.collect ||
-    entry.execution.status !== "running" ||
-    entry.killIntent ||
-    entry.killReconciliation ||
-    entry.suppressCompletionDelivery ||
-    entry.requesterSettleWake?.pauseNotice
-  ) {
-    return;
-  }
-  const previous = captureSubagentRunMutationSnapshot(entry);
-  entry.requesterSettleWake = {
-    ...resetRequesterSettleWakeRetry(previous.requesterSettleWake),
-    batchRunIds: previous.requesterSettleWake?.batchRunIds ?? [entry.runId],
-    pauseNotice: {
-      // Match the announce completion delivery's retained-text bound.
-      acknowledgment: truncateUtf16Safe(
-        params.acknowledgment?.trim() || "Paused awaiting continuation.",
-        12_000,
-      ),
+  await mutateSubagentRuns(
+    [params.runId],
+    (rows) => {
+      const entry = rows.get(params.runId);
+      if (
+        !entry ||
+        entry.childSessionKey !== params.sessionKey ||
+        entry.expectsCompletionMessage !== true ||
+        entry.collect ||
+        entry.execution.status !== "running" ||
+        entry.killIntent ||
+        entry.killReconciliation ||
+        entry.suppressCompletionDelivery ||
+        entry.requesterSettleWake?.pauseNotice
+      ) {
+        return { value: undefined };
+      }
+      const next = structuredClone(entry);
+      next.requesterSettleWake = {
+        ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
+        batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],
+        pauseNotice: {
+          acknowledgment: truncateUtf16Safe(
+            params.acknowledgment?.trim() || "Paused awaiting continuation.",
+            12_000,
+          ),
+        },
+      };
+      return { value: undefined, postimages: new Map([[entry.runId, next]]) };
     },
-  };
-  const result = await publishSubagentRunPostimages({
-    runs: params.runs,
-    previous: new Map([[entry, previous]]),
-    persist: params.persist,
-    context: params.context,
-    assertCurrent: params.assertCurrent,
-  });
-  try {
-    params.assertCurrent();
-    if (result.publication !== "published") {
-      throw new Error("Subagent message wait lost its original run");
-    }
-  } catch (error) {
-    throw new SubagentRegistryWriteError("committed", error, result.publication);
-  }
+    { runs: params.runs, context: params.context, assertCurrent: params.assertCurrent },
+  );
 }
 
 /** A pause uses the existing retry owner, but never consumes the completion cohort. */

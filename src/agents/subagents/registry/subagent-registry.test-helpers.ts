@@ -26,7 +26,7 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type RegistryTestApi = {
-  addSubagentRunForTests(entry: SubagentRunRecord): void;
+  addSubagentRunForTests(entry: SubagentRunRecord): Promise<void>;
   finalizeInterruptedSubagentRun(params: {
     runId: string;
     expectedEntry?: SubagentRunRecord;
@@ -34,10 +34,10 @@ type RegistryTestApi = {
     endedAt?: number;
     suppressSessionEffects?: boolean;
   }): Promise<number>;
-  releaseSubagentRun(runId: string): void;
+  releaseSubagentRun(runId: string): Promise<void>;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): Promise<void>;
   testing: {
-    failQueuedSubagentRun(runId: string, error: string): boolean;
+    failQueuedSubagentRun(runId: string, error: string): Promise<boolean>;
     sweepOnceForTests(): Promise<void>;
     runSweeperTickForTests(): Promise<void>;
   };
@@ -50,8 +50,7 @@ function getRegistryTestApi(): RegistryTestApi {
 }
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
-  // Fixture state resets synchronously; the file runner joins accepted sweeps before retirement.
-  void getRegistryTestApi().resetSubagentRegistryForTests(opts);
+  return getRegistryTestApi().resetSubagentRegistryForTests(opts);
 }
 
 export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
@@ -72,16 +71,11 @@ export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
       agentId: controllerAgentId,
     });
   }
-  const target = entry as Record<string, unknown>;
-  for (const key of Object.keys(target)) {
-    delete target[key];
-  }
-  Object.assign(target, canonical);
-  getRegistryTestApi().addSubagentRunForTests(entry as SubagentRunRecord);
+  return getRegistryTestApi().addSubagentRunForTests(canonical);
 }
 
 export function releaseSubagentRun(runId: string) {
-  getRegistryTestApi().releaseSubagentRun(runId);
+  return getRegistryTestApi().releaseSubagentRun(runId);
 }
 
 export async function finalizeInterruptedSubagentRun(params: {

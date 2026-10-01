@@ -46,8 +46,7 @@ describe("sessions_yield orchestration", () => {
       const gateway = await import("../../gateway/call.js");
       const requesterSettlement =
         await import("../subagents/announce/subagent-announce.requester-settle-wake.js");
-      const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
-      const { onSubagentRegistryPersisted, persistSubagentRunsToDiskOrThrow } =
+      const { onSubagentRegistryPersisted } =
         await import("../subagents/registry/subagent-registry-state.js");
       const { loadSubagentRegistryFromSqlite } =
         await import("../subagents/registry/subagent-registry.store.sqlite.js");
@@ -88,7 +87,7 @@ describe("sessions_yield orchestration", () => {
           settlementEntered.resolve();
           return pending;
         });
-      registry.resetSubagentRegistryForTests({ persist: false });
+      await registry.resetSubagentRegistryForTests({ persist: false });
       await registry.initSubagentRegistry();
       const child = createSubagentRunRecord({
         runId: `cleanup-child-${owner}`,
@@ -112,8 +111,7 @@ describe("sessions_yield orchestration", () => {
         agentId: params.agentId,
         defaultSessionId: params.sessionId,
       });
-      registry.addSubagentRunForTests(child);
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [child.runId]);
+      await registry.addSubagentRunForTests(child);
       const persisted = vi.fn(() => loadSubagentRegistryFromSqlite().get(child.runId));
       const unsubscribe = onSubagentRegistryPersisted(persisted);
       const createTranscript = transcriptOwner.createAssistantErrorTranscript;
@@ -210,7 +208,7 @@ describe("sessions_yield orchestration", () => {
           factorySpy.mockRestore();
           admission.close();
           replacement.close();
-          registry.resetSubagentRegistryForTests({ persist: false });
+          await registry.resetSubagentRegistryForTests({ persist: false });
           settlementSpy.mockRestore();
           gatewaySpy.mockRestore();
           deliveryTesting.setDepsForTest();

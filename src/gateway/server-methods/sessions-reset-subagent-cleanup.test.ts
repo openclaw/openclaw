@@ -98,7 +98,7 @@ beforeEach(async () => {
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   cfg = { agents: { list: [{ id: "main", default: true, workspace: stateDir }] } };
   setRuntimeConfigSnapshot(cfg);
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   attempts = 0;
   harnesses = listRegisteredAgentHarnesses();
   registryGateway.mockReset().mockImplementation(async (options) => {
@@ -183,7 +183,7 @@ test.each(["unchanged", "reset", "reset-reopen", "reopen-reset-reopen"])(
 );
 
 async function reopen() {
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await initSubagentRegistry();
@@ -413,20 +413,26 @@ test("revocation rechecks terminal owners after awaited entry planning", async (
   const id = "late-terminal-owner";
   await registerCollector(id);
   let settled = false;
+  let settlement: Promise<{ value: boolean } | { error: unknown }> | undefined;
   const unsubscribe = onSubagentRegistryPersisted(() => {
     if (!settled && subagentRuns.get(runId)?.execution.suppressSessionEffects) {
       settled = true;
       queueMicrotask(() => {
-        settleFailedQueuedSubagentLaunch(id, "late launch failed");
+        settlement = settleFailedQueuedSubagentLaunch(id, "late launch failed").then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
       });
     }
   });
   try {
     await request("sessions.reset", { key });
     expect(settled).toBe(true);
+    expect(await settlement).toEqual({ value: true });
     expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).toBe(true);
   } finally {
     unsubscribe();
+    await settlement;
   }
 });
 

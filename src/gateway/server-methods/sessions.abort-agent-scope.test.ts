@@ -142,12 +142,12 @@ vi.mock("../call.js", () => ({
 }));
 
 describe("sessions.abort agent scope", () => {
-  afterEach(() => {
+  afterEach(async () => {
     for (const projection of projections) {
       projection.dispose();
     }
     projections.clear();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   beforeEach(() => {
@@ -327,7 +327,7 @@ describe("sessions.abort agent scope", () => {
           killReconciliation: { suppressTaskDelivery: true },
         });
       } finally {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });

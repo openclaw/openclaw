@@ -1,8 +1,12 @@
 import { onTestFinished, vi } from "vitest";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
+import { subagentRunRowVersion } from "./subagent-registry.store.codec.js";
+import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSameSubagentRun } from "./subagent-run-generation.js";
 
 export function createSubagentSweeperRun(): SubagentRunRecord {
   return createSubagentRunRecord({
@@ -38,6 +42,29 @@ export function createSubagentSweeperHarness(
   entry = createSubagentSweeperRun(),
 ) {
   const runs = new Map([[entry.runId, entry]]);
+  const execute = stateWorker.runOpenClawStateWorkerOperation;
+  const worker = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation(async (owner, run, options) => {
+      options?.assertCurrent?.();
+      return run({
+        execute: async (command, executeOptions) => {
+          if (command.type !== "subagents.persistChanges") {
+            return execute(owner, (scope) => scope.execute(command, executeOptions), options);
+          }
+          // Scheduling tests exercise publication through the real owner; native CAS has worker coverage.
+          const write = command.input as SubagentRegistryWrite;
+          return {
+            writeId: write.writeId,
+            notices: [],
+            versions: new Map([
+              ...write.values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
+              ...write.deleteRunIds.map((id) => [id, null] as const),
+            ]),
+          } as never;
+        },
+      });
+    });
   const finalizeInterruptedSubagentRun = vi.fn(
     async (_params: {
       runId: string;
@@ -53,7 +80,7 @@ export function createSubagentSweeperHarness(
     if (params.isCurrent && !params.isCurrent()) {
       return;
     }
-    params.discardDelivery?.();
+    params.discardDelivery?.(structuredClone(params.entry));
   });
   const discardTerminalDelivery =
     vi.fn<Parameters<typeof createSubagentRegistrySweeper>[0]["discardTerminalDelivery"]>();
@@ -65,7 +92,6 @@ export function createSubagentSweeperHarness(
   const sweeper = createSubagentRegistrySweeper({
     runs,
     resumedRuns: new Set(),
-    persist: vi.fn(),
     clearPendingLifecycleError: vi.fn(),
     clearPendingLifecycleTimeout: vi.fn(),
     sweepPendingLifecycle: vi.fn(),
@@ -75,7 +101,8 @@ export function createSubagentSweeperHarness(
     resumeRequesterSettleWake,
     startSubagentAnnounceCleanupFlow: vi.fn(() => true),
     completeCleanupBookkeeping,
-    isEndedHookOwnerCurrent: (runId, selected) => runs.get(runId) === selected || !runs.has(runId),
+    isEndedHookOwnerCurrent: (runId, selected) =>
+      isSameSubagentRun(runs.get(runId), selected) || !runs.has(runId),
     sessionEffectsHostCurrent: (selected) => selected.execution.suppressSessionEffects !== true,
     shouldSuppressSessionEffects: async (selected) =>
       selected.execution.suppressSessionEffects === true,
@@ -98,7 +125,10 @@ export function createSubagentSweeperHarness(
       ),
     warn,
   });
-  onTestFinished(() => sweeper.reset());
+  onTestFinished(async () => {
+    await sweeper.reset();
+    worker.mockRestore();
+  });
   return {
     entry,
     runs,

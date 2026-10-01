@@ -73,7 +73,7 @@ export function useQueuedCollectorFixture() {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     schedulerTesting.reset();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     resetAgentEventsForTest({ preserveListeners: true });
     state = await createOpenClawTestState({ label: "queued-collector-projection" });
     state.applyEnv();
@@ -144,7 +144,7 @@ export function useQueuedCollectorFixture() {
       clearAgentRunContext(runId);
     }
     launchSignals.clear();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     spawnTesting.setDepsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
     resetGatewayWorkAdmission();

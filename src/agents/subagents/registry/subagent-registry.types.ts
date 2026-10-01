@@ -26,6 +26,7 @@ export type SubagentSessionEffects = {
 export type SubagentRecoveryCurrent = {
   prepare(): Promise<boolean>;
   isHostCurrent(): boolean;
+  onPublished?(entry: SubagentRunRecord): void;
 };
 
 export type SubagentCompletionRequest = {
@@ -267,7 +268,8 @@ export type SubagentRegistrationScope = {
 };
 
 export type RegisterSubagentRunOptions = {
-  persistence?: "worker";
+  /** An accepted dispatch replay retains its original completion owner and waiter. */
+  acceptedRunReplay?: true;
   assertCurrent?: () => void;
   assertPublicationCurrent?: () => void;
   retainOwnership?: (scope: SubagentRegistrationScope) => void;

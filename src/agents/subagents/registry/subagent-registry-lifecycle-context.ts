@@ -6,7 +6,6 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 // Keeping the controller out of their dependency graph satisfies the architecture cycle gate.
 import type { RequesterWakeCommittedWrite } from "../completion/subagent-completion-mutation.types.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
-import type { SubagentRegistryWriteOptions } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord, SubagentSessionEffects } from "./subagent-registry.types.js";
 
 type CaptureSubagentCompletionReply =
@@ -19,16 +18,9 @@ type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
 
 export type SubagentLifecycleOptions = {
   runs: Map<string, SubagentRunRecord>;
-  resumedRuns: Set<string>;
+  resumedRuns: Set<object>;
   subagentAnnounceTimeoutMs: number;
   getRuntimeConfig(): OpenClawConfig;
-  persist(...runIds: string[]): void;
-  persistOrThrow(...runIds: string[]): void;
-  persistAsyncOrThrow: (
-    context: OpenClawStateWorkerContext,
-    callbacks: Omit<SubagentRegistryWriteOptions, "context"> & { assertCurrent: () => void },
-    ...runIds: string[]
-  ) => Promise<void>;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string, assertCurrent: () => void): Promise<number>;
   getLatestRunForChildSession(
@@ -81,18 +73,21 @@ export interface SubagentLifecycleCommonContext {
 }
 
 export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCommonContext {
-  readonly progressEndedEntries: WeakSet<SubagentRunRecord>;
+  readonly progressEndedEntries: WeakSet<object>;
   acquireTerminalCompletionLock(runId: string): Promise<() => void>;
   bindTerminalSessionEffects(entry: SubagentRunRecord, effects?: SubagentSessionEffects): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
-  bumpTerminalGeneration(entry: SubagentRunRecord): number;
+  bumpTerminalGeneration(entry: SubagentRunRecord, bindingChanged?: boolean): number;
   isTerminalCallbackCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
   startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecord): boolean;
 }
 
 export interface SubagentLifecycleCleanupContext extends SubagentLifecycleCommonContext {
   readonly scheduledResumeTimers: Set<ReturnType<typeof setTimeout>>;
-  readonly cleanupFailureCounts: WeakMap<SubagentRunRecord, number>;
+  readonly cleanupFailureCounts: WeakMap<object, number>;
+  readonly cleanupReservations: Set<object>;
+  readonly activeCleanupAttempts: Map<object, number>;
+  pruneRetiredRuns(runIds?: readonly string[]): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
   incrementCleanupFailureCount(entry: SubagentRunRecord): number;
   isCleanupAttemptCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
@@ -145,12 +140,10 @@ export type PendingRequesterSettleWakeCommit = {
 
 export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonContext {
   readonly scheduledRequesterSettleWakeTimers: Map<string, ScheduledRequesterSettleWake>;
-  readonly scheduledRequesterSettleWakeRuns: WeakSet<SubagentRunRecord>;
-  readonly pendingRequesterSettleWakeRearms: WeakSet<SubagentRunRecord>;
-  readonly pendingRequesterSettleWakeCommits: WeakMap<
-    SubagentRunRecord,
-    PendingRequesterSettleWakeCommit
-  >;
+  readonly scheduledRequesterSettleWakeRuns: Set<object>;
+  readonly pendingRequesterSettleWakeRearms: Set<object>;
+  readonly cancelledRequesterSettleWakeRuns: Set<object>;
+  readonly pendingRequesterSettleWakeCommits: Map<object, PendingRequesterSettleWakeCommit>;
   resumeAncestorCleanup(settledEntry: SubagentRunRecord): void;
   runRequesterSettleWake(
     entry: SubagentRunRecord,
@@ -170,7 +163,7 @@ export type CleanupBookkeepingParams = {
   provisionalKill?: boolean;
   skipRequesterSettleWake?: boolean;
   isCurrent?: () => boolean;
-  discardDelivery?: () => void;
+  discardDelivery?: (draft: SubagentRunRecord) => void;
 };
 
 export type ScheduledRequesterSettleWake = {

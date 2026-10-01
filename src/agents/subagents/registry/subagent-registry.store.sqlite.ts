@@ -15,7 +15,6 @@ import { runSqliteDeferredTransactionSync } from "../../../infra/sqlite-transact
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { projectSubagentRunForMaintenance } from "./subagent-delivery-state.js";
@@ -25,16 +24,12 @@ import type {
   SubagentRunsDurableBasis,
 } from "./subagent-registry-read.types.js";
 import {
-  bindSubagentRunRecord,
   DELIVERY_STATUSES,
   rowToSubagentRunRecord,
+  subagentRunRowVersion,
   type SubagentRunSqliteRow,
 } from "./subagent-registry.store.codec.js";
-import {
-  hasParentStoreColumns,
-  writeSubagentRunValuesInDatabase,
-  type BoundSubagentRunRecord,
-} from "./subagent-registry.store.kernel.js";
+import { hasParentStoreColumns } from "./subagent-registry.store.kernel.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
@@ -100,19 +95,6 @@ export function readSubagentRun(
 ): SubagentRunRecord | null {
   const row = readSubagentRunRow(database, runId);
   return row ? rowToSubagentRunRecord(row) : null;
-}
-
-function writeSubagentRunValues(
-  values: readonly BoundSubagentRunRecord[],
-  deleteRunIds?: readonly string[],
-  retainedRunIds?: readonly string[],
-): void {
-  if (values.length === 0 && deleteRunIds?.length === 0 && retainedRunIds === undefined) {
-    return;
-  }
-  runOpenClawStateWriteTransaction((database) =>
-    writeSubagentRunValuesInDatabase(database, values, deleteRunIds, retainedRunIds),
-  );
 }
 
 type SubagentRegistryReadScope =
@@ -426,6 +408,29 @@ export function loadSubagentRunsByRunIdsFromSqlite(
   return loadScopedSubagentRuns({ kind: "runs", runIds }, database);
 }
 
+/** Raw versions accompany decoded values, so normalization cannot hide a foreign write. */
+export function loadVersionedSubagentRunsInDatabase(
+  database: Pick<OpenClawStateDatabase, "db">,
+  runIds?: readonly string[],
+): { runs: Map<string, SubagentRunRecord>; versions: Map<string, string | null> } {
+  const runs = new Map<string, SubagentRunRecord>();
+  const versions = new Map<string, string | null>(runIds?.map((runId) => [runId, null]));
+  if (runIds?.length === 0) {
+    return { runs, versions };
+  }
+  for (const row of readSubagentRegistryRows(
+    runIds ? { kind: "runs", runIds } : undefined,
+    database,
+  )) {
+    versions.set(row.run_id, subagentRunRowVersion(row));
+    const entry = rowToSubagentRunRecord(row);
+    if (entry) {
+      runs.set(entry.runId, entry);
+    }
+  }
+  return { runs, versions };
+}
+
 /** Loads the canonical subagent registry from shared SQLite state. */
 export function loadSubagentRegistryFromSqlite(
   database?: Pick<OpenClawStateDatabase, "db">,
@@ -590,35 +595,6 @@ export function subagentRunsDurableBasisMatches(
     loadSubagentRunsForSessionsInDatabase(database, basis.sessionKeys, basis.liveTopology)
       .digest === basis.digest
   );
-}
-
-/** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */
-export function saveSubagentRegistryToSqlite(runs: Map<string, SubagentRunRecord>): void {
-  const values = [...runs.values()].map(bindSubagentRunRecord);
-  writeSubagentRunValues(
-    values,
-    undefined,
-    values.map((row) => row.run_id),
-  );
-}
-
-/** Persists only named run mutations, deleting names absent from the current registry. */
-export function saveSubagentRegistryChangesToSqlite(
-  runs: Map<string, SubagentRunRecord>,
-  changedRunIds: readonly string[],
-): void {
-  const runIds = [...new Set(changedRunIds.map((runId) => runId.trim()).filter(Boolean))];
-  const values: BoundSubagentRunRecord[] = [];
-  const deleteRunIds: string[] = [];
-  for (const runId of runIds) {
-    const entry = runs.get(runId);
-    if (entry) {
-      values.push(bindSubagentRunRecord(entry));
-    } else {
-      deleteRunIds.push(runId);
-    }
-  }
-  writeSubagentRunValues(values, deleteRunIds);
 }
 
 /** Mutation ownership cannot discard undecodable retained rows as presentation readers do. */

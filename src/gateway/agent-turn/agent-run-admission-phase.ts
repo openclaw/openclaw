@@ -23,10 +23,13 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import { resolveExactSubagentCompletionEvent } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { FollowupCompletionOwner } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/subagents/requester-cron-authority.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
@@ -250,6 +253,7 @@ export async function prepareAgentRunDispatch(
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   let capturedOperator: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
   let followupCompletion: FollowupCompletionOwner | undefined;
+  let adoptedParentResume: SubagentRunRecord | undefined;
   let restoreAdmittedRestartRecoveryInterrupted:
     | (() => Promise<MainSessionRecoveryPendingTarget | undefined>)
     | undefined;
@@ -260,6 +264,33 @@ export async function prepareAgentRunDispatch(
     followupCompletion = undefined;
     let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
     try {
+      const adopted = adoptedParentResume;
+      adoptedParentResume = undefined;
+      if (adopted) {
+        await runWithGatewayDetachedWorkContinuation(async () => {
+          const runtime =
+            await import("../../agents/subagents/registry/subagent-registry-runtime.js");
+          const ownsAdoption = () =>
+            isSameSubagentRunOwner(
+              getLatestLiveSubagentRunByChildSessionKey(adopted.childSessionKey),
+              adopted,
+            );
+          if (!ownsAdoption()) {
+            return;
+          }
+          const settled = await runtime.finalizeInterruptedSubagentRun({
+            runId: adopted.runId,
+            expectedEntry: adopted,
+            error: failure ?? "Parent resume admission ended before acceptance.",
+            suppressSessionEffects: true,
+          });
+          if (!settled && ownsAdoption()) {
+            throw new Error(
+              "Adopted parent resume could not be durably settled after admission rejection",
+            );
+          }
+        }, "subagents:unstarted-resume");
+      }
       if (completion) {
         await settleUnstartedGatewayFollowup({
           completion,
@@ -379,6 +410,9 @@ export async function prepareAgentRunDispatch(
   try {
     subagentAdmission = await prepareGatewaySubagentRun({
       ...params,
+      onParentResumeAdopted: (entry) => {
+        adoptedParentResume = entry;
+      },
       assertResumeAdmissionCurrent: () => {
         params.assertAdmissionCurrent?.();
         const sessionEntry = params.assertGatewayWorkAdmissionAllowed();
@@ -573,8 +607,12 @@ export async function prepareAgentRunDispatch(
       try {
         // All awaited preparation has succeeded. Transfer task ownership before
         // acceptance or dispatch; failed preparation must leave the paused owner intact.
-        adoptParentResume();
+        await adoptParentResume();
         resumedTaskAdopted = true;
+        assertInputOwnerCurrent();
+        params.assertGatewayWorkAdmissionAllowed();
+        activeRunAbort.controller.signal.throwIfAborted();
+        capturedOperator.authority?.assertCurrent();
       } catch (err) {
         const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, err);
         return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
@@ -582,6 +620,7 @@ export async function prepareAgentRunDispatch(
     }
     followupCompletion?.markAccepted(params.runId);
     params.markAgentRunAccepted(true);
+    adoptedParentResume = undefined;
     setGatewayDedupeEntries({
       dedupe: params.context.dedupe,
       keys: params.agentDedupeKeys,

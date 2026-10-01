@@ -1,10 +1,6 @@
 import { expect, it } from "vitest";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import {
-  bindCapturedSubagentRunRecord,
-  bindSubagentRunRecord,
-  rowToSubagentRunRecord,
-} from "./subagent-registry.store.codec.js";
+import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createRun(): SubagentRunRecord {
@@ -47,7 +43,7 @@ it("persists the child identity independently of a redirected transcript", () =>
 });
 
 it.each([false, true])(
-  "restores captured completion after encoding fails (reply present=%s)",
+  "does not mutate completion when canonical encoding fails (reply present=%s)",
   (hasReply) => {
     const timestamp = "[Mon 2026-09-21 12:00 UTC] ";
     const captured = normalizeSubagentRunState({
@@ -67,17 +63,17 @@ it.each([false, true])(
       maxConcurrent: 1,
     };
     const before = structuredClone(captured);
-    expect(() => bindCapturedSubagentRunRecord(captured)).toThrow(TypeError);
+    expect(() => bindSubagentRunRecord(captured)).toThrow(TypeError);
     expect(captured).toStrictEqual(before);
   },
 );
 
-it.each(["root", "completion"] as const)("rejects a captured array %s", (location) => {
+it.each(["root", "completion"] as const)("rejects a noncanonical array %s", (location) => {
   const entry =
     location === "root"
       ? Object.assign([], createRun())
       : { ...createRun(), completion: Object.assign([], { required: true }) };
-  for (const bind of [bindSubagentRunRecord, bindCapturedSubagentRunRecord]) {
-    expect(() => bind(entry)).toThrow("subagent run is missing canonical nested state");
-  }
+  expect(() => bindSubagentRunRecord(entry)).toThrow(
+    "subagent run is missing canonical nested state",
+  );
 });

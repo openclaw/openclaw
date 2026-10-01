@@ -10,8 +10,9 @@ import {
   retryPendingWakeCommit,
   shouldReportRequesterSettleWakeFailure,
 } from "./subagent-registry-requester-wake-commit.js";
+import { createRequesterWakeContextFixture } from "./subagent-registry-requester-yield.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { latestSubagentRun } from "./subagent-run-generation.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 function makeRetainedChild(runId = "run-a"): SubagentRunRecord {
   return {
@@ -35,25 +36,7 @@ function makeContext(entries: readonly SubagentRunRecord[]): {
 } {
   const warn = vi.fn();
   const runs = new Map(entries.map((entry) => [entry.runId, entry]));
-  const context = {
-    options: {
-      runs,
-      warn,
-      getLatestRunForChildSession: (
-        sessionKey: string,
-        matches?: (entry: SubagentRunRecord) => boolean,
-      ) =>
-        latestSubagentRun(
-          [...runs.values()].filter((entry) => entry.childSessionKey === sessionKey),
-          matches,
-        ) ?? null,
-    },
-    pendingRequesterSettleWakeCommits: new WeakMap<
-      SubagentRunRecord,
-      PendingRequesterSettleWakeCommit
-    >(),
-    newerGenerationOwnsSession: () => false,
-  } as unknown as SubagentLifecycleWakeContext;
+  const context = createRequesterWakeContextFixture(runs, warn);
   return { context, warn };
 }
 
@@ -129,6 +112,80 @@ describe("requester settle wake commit retry", () => {
       expect(commit).not.toHaveBeenCalled();
     },
   );
+
+  it.each([true, false])(
+    "serializes overlapping wake episodes (first published: %s)",
+    async (published) => {
+      const entry = makeRetainedChild();
+      const { context } = makeContext([entry]);
+      const admitted = createDeferredCore();
+      const released = createDeferredCore<boolean>();
+      const firstCommit = vi.fn(async () => {
+        admitted.resolve();
+        return released.promise;
+      });
+      const secondCommit = vi.fn(() => true);
+      const first = commitRequesterWake(context, [entry], undefined, firstCommit, true);
+      await admitted.promise;
+      const original = getPendingWakeCommit(context, entry);
+      const second = commitRequesterWake(context, [entry], undefined, secondCommit, true);
+      expect(getPendingWakeCommit(context, entry)).toBe(original);
+      expect(secondCommit).not.toHaveBeenCalled();
+      released.resolve(published);
+      await Promise.all([first, second]);
+      expect(firstCommit).toHaveBeenCalledOnce();
+      expect(secondCommit).toHaveBeenCalledTimes(published ? 1 : 0);
+      expect(getPendingWakeCommit(context, entry)).toBe(published ? undefined : original);
+    },
+  );
+
+  it("keeps a recovered Gateway wake separate from the retired callback", async () => {
+    const entry = makeRetainedChild();
+    const { context } = makeContext([entry]);
+    const firstStarted = createDeferredCore();
+    const releaseFirst = createDeferredCore<boolean>();
+    const oldWake = commitRequesterWake(
+      context,
+      [entry],
+      undefined,
+      async () => {
+        firstStarted.resolve();
+        return releaseFirst.promise;
+      },
+      true,
+    );
+    await firstStarted.promise;
+    const recovered = structuredClone(entry);
+    context.options.runs.set(entry.runId, recovered);
+    const secondStarted = createDeferredCore();
+    const releaseSecond = createDeferredCore<boolean>();
+    const newWake = commitRequesterWake(
+      context,
+      [recovered],
+      undefined,
+      async () => {
+        secondStarted.resolve();
+        return releaseSecond.promise;
+      },
+      true,
+    );
+    try {
+      await secondStarted.promise;
+      const successor = getPendingWakeCommit(context, recovered);
+      expect(successor).toBeDefined();
+      expect(getPendingWakeCommit(context, entry)).toBeUndefined();
+      releaseFirst.resolve(true);
+      await oldWake;
+      expect(getPendingWakeCommit(context, recovered)).toBe(successor);
+      releaseSecond.resolve(true);
+      await newWake;
+      expect(getPendingWakeCommit(context, recovered)).toBeUndefined();
+    } finally {
+      releaseFirst.resolve(true);
+      releaseSecond.resolve(true);
+      await Promise.allSettled([oldWake, newWake]);
+    }
+  });
 
   it("holds one settlement fence until the async write and its retry settle", async () => {
     const entry = makeRetainedChild();
@@ -303,11 +360,17 @@ describe("requester settle wake commit retry", () => {
     await sweep(context, entry, 50);
 
     // A re-armed wake is a different obligation, so the old one releases.
-    entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+    context.options.runs.set(
+      entry.runId,
+      copySubagentRunRuntimeOwner(entry, {
+        ...entry,
+        requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+      }),
+    );
     expect(getPendingWakeCommit(context, entry)).toBeUndefined();
 
     const nextCommit = vi.fn(() => true);
-    await commitRequesterWake(context, [entry], undefined, nextCommit, true);
+    await commitRequesterWake(context, [entry], 1, nextCommit, true);
     expect(nextCommit).toHaveBeenCalledOnce();
     expect(getPendingWakeCommit(context, entry)).toBeUndefined();
   });

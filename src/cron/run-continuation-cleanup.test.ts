@@ -3,10 +3,8 @@ import { deliverSubagentAnnouncement } from "../agents/subagents/announce/subage
 import { seedSubagentCompletionDelivery } from "../agents/subagents/completion/subagent-completion-admission.test-helpers.js";
 import { admitCorrelatedSubagentSessionDelivery } from "../agents/subagents/completion/subagent-completion-delivery.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import {
-  readSubagentRun,
-  saveSubagentRegistryChangesToSqlite,
-} from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryChangesToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
 import { SessionDeliveryDeadLetteredError } from "../infra/session-delivery-queue.records.js";

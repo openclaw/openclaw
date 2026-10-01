@@ -647,7 +647,7 @@ describe("spawnAcpDirect", () => {
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
-    hoisted.registerSubagentRunMock.mockReset();
+    hoisted.registerSubagentRunMock.mockReset().mockResolvedValue(undefined);
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
     hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
     hoisted.upsertSessionEntryMock
@@ -1790,9 +1790,7 @@ describe("spawnAcpDirect", () => {
 
   it("returns ACP child capacity after run registration fails", async () => {
     configureSubagentDefaults({ maxChildrenPerAgent: 1 });
-    hoisted.registerSubagentRunMock.mockImplementationOnce(() => {
-      throw new Error("registry unavailable");
-    });
+    hoisted.registerSubagentRunMock.mockRejectedValueOnce(new Error("registry unavailable"));
     const context = {
       ...createRequesterContext(),
       agentSessionKey: "agent:main:subagent:parent",
@@ -3038,9 +3036,7 @@ describe("spawnAcpDirect", () => {
   });
 
   it("preserves the ACP failure code when run registration fails", async () => {
-    hoisted.registerSubagentRunMock.mockImplementationOnce(() => {
-      throw new Error("registry unavailable");
-    });
+    hoisted.registerSubagentRunMock.mockRejectedValueOnce(new Error("registry unavailable"));
 
     const result = await spawnAcpDirect(
       {

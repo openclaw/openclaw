@@ -9,6 +9,7 @@ import type {
 } from "./subagent-registry-lifecycle.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export function createSubagentDeliveryResumeScheduling({
   runs,
@@ -20,7 +21,7 @@ export function createSubagentDeliveryResumeScheduling({
   admissionRetryDelayMs,
 }: {
   runs: ReadonlyMap<string, SubagentRunRecord>;
-  resumedRuns: Set<string>;
+  resumedRuns: Set<object>;
   resumeRetryTimers: Set<ReturnType<typeof setTimeout>>;
   resumeSubagentRun: (runId: string) => void;
   finalizeResumedAnnounceGiveUp: SubagentLifecycleController["finalizeResumedAnnounceGiveUp"];
@@ -33,39 +34,41 @@ export function createSubagentDeliveryResumeScheduling({
     waitMs: number,
     stateContext = captureOpenClawStateWorkerContext(),
   ) {
-    const generation = scheduledEntry.generation;
+    const resumeKey = getSubagentRunRuntimeKey(scheduledEntry);
     const timer = setTimeout(() => {
       resumeRetryTimers.delete(timer);
       void runWithGatewayDetachedWorkAdmission(async () => {
         assertSubagentRegistryWriteSourceCurrent(stateContext);
-        if (
-          runs.get(runId) !== scheduledEntry ||
-          scheduledEntry.generation !== generation ||
-          scheduledEntry.cleanupHandled
-        ) {
+        const current = runs.get(runId);
+        if (!isSameSubagentRunOwner(current, scheduledEntry)) {
+          resumedRuns.delete(resumeKey);
           return;
         }
-        resumedRuns.delete(runId);
+        if (current?.cleanupHandled) {
+          return;
+        }
+        resumedRuns.delete(resumeKey);
         resumeSubagentRun(runId);
       }, "subagents:resume-retry").catch((error: unknown) => {
         warn("failed to resume subagent delivery retry", { runId, error });
-        if (
-          runs.get(runId) !== scheduledEntry ||
-          scheduledEntry.generation !== generation ||
-          scheduledEntry.cleanupHandled
-        ) {
+        const current = runs.get(runId);
+        if (!isSameSubagentRunOwner(current, scheduledEntry)) {
+          resumedRuns.delete(resumeKey);
+          return;
+        }
+        if (current?.cleanupHandled) {
           return;
         }
         try {
           assertSubagentRegistryWriteSourceCurrent(stateContext);
         } catch {
-          resumedRuns.delete(runId);
+          resumedRuns.delete(resumeKey);
           return;
         }
         if (
           isGatewayRestartDraining() &&
-          runs.get(runId) === scheduledEntry &&
-          typeof scheduledEntry.cleanupCompletedAt !== "number"
+          isSameSubagentRunOwner(runs.get(runId), scheduledEntry) &&
+          typeof runs.get(runId)?.cleanupCompletedAt !== "number"
         ) {
           scheduleSubagentDeliveryResumeRetry(
             runId,
@@ -75,7 +78,7 @@ export function createSubagentDeliveryResumeScheduling({
           );
           return;
         }
-        resumedRuns.delete(runId);
+        resumedRuns.delete(resumeKey);
       });
     }, waitMs);
     timer.unref?.();
@@ -88,13 +91,17 @@ export function createSubagentDeliveryResumeScheduling({
     reason: "expiry" | "permanent_failure",
   ) {
     const stateContext = captureOpenClawStateWorkerContext();
-    const generation = entry.generation;
+    const resumeKey = getSubagentRunRuntimeKey(entry);
     void runWithGatewayDetachedWorkAdmission(async () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
-      if (runs.get(runId) !== entry || entry.generation !== generation) {
+      if (!isSameSubagentRunOwner(runs.get(runId), entry)) {
+        resumedRuns.delete(resumeKey);
         return;
       }
-      await finalizeResumedAnnounceGiveUp({ runId, entry, reason, stateContext });
+      const current = runs.get(runId);
+      if (current) {
+        await finalizeResumedAnnounceGiveUp({ runId, entry: current, reason, stateContext });
+      }
     }, "subagents:delivery-finalize").catch((error: unknown) => {
       warn("failed to finalize exhausted subagent delivery", { runId, reason, error });
       try {
@@ -104,11 +111,11 @@ export function createSubagentDeliveryResumeScheduling({
       }
       if (
         isGatewayRestartDraining() &&
-        runs.get(runId) === entry &&
-        typeof entry.cleanupCompletedAt !== "number"
+        isSameSubagentRunOwner(runs.get(runId), entry) &&
+        typeof runs.get(runId)?.cleanupCompletedAt !== "number"
       ) {
         scheduleSubagentDeliveryResumeRetry(runId, entry, admissionRetryDelayMs, stateContext);
-        resumedRuns.add(runId);
+        resumedRuns.add(resumeKey);
       }
     });
   }

@@ -14,7 +14,10 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
+import {
+  readLifecycleRun,
+  type LifecycleControllerFixtureOptions,
+} from "./subagent-registry-lifecycle-controller.test-support.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -31,8 +34,8 @@ export function registerDetachedCleanupAuthorityTest({
   }) => SubagentRunRecord;
   createLifecycleController: (
     params: { entry: SubagentRunRecord } & Pick<
-      SubagentLifecycleOptions,
-      "runSubagentAnnounceFlow" | "persistOrThrow"
+      LifecycleControllerFixtureOptions,
+      "runSubagentAnnounceFlow" | "beforeWrite"
     >,
   ) => Pick<SubagentLifecycleController, "startSubagentAnnounceCleanupFlow">;
 }) {
@@ -91,8 +94,8 @@ export function registerDetachedCleanupAuthorityTest({
     const controller = createLifecycleController({
       entry,
       runSubagentAnnounceFlow,
-      persistOrThrow: () => {
-        if (entry.cleanupCompletedAt !== undefined) {
+      beforeWrite: ({ postimages }) => {
+        if (postimages.get(entry.runId)?.cleanupCompletedAt !== undefined) {
           cleanupFinished.resolve();
         }
       },
@@ -122,7 +125,7 @@ export function registerDetachedCleanupAuthorityTest({
     await dispatchResult;
     await cleanupFinished.promise;
     expect(freshTranscriptWrite).toHaveBeenCalledOnce();
-    expect(entry.delivery?.status).toBe("delivered");
+    expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
     expect(requesterTranscriptWrite).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
   });
@@ -140,7 +143,7 @@ export function registerDirectSessionCleanupAuthorityTests({
 }: {
   createRunEntry: (overrides?: Partial<SubagentRunRecord>) => SubagentRunRecord;
   createLifecycleController: (
-    options: { entry: SubagentRunRecord } & Partial<SubagentLifecycleOptions>,
+    options: { entry: SubagentRunRecord } & Partial<LifecycleControllerFixtureOptions>,
   ) => SubagentLifecycleController;
   completeRun: (
     controller: SubagentLifecycleController,
@@ -169,8 +172,11 @@ export function registerDirectSessionCleanupAuthorityTests({
     });
     const controller = createLifecycleController({
       entry,
-      persistOrThrow: () => {
-        persisted = structuredClone(entry);
+      beforeWrite: ({ postimages }) => {
+        const postimage = postimages.get(entry.runId);
+        if (postimage) {
+          persisted = structuredClone(postimage);
+        }
       },
       cleanupBrowserSessionsForLifecycleEnd: cleanupBrowser,
     });
@@ -226,15 +232,17 @@ export function registerDirectSessionCleanupAuthorityTests({
       },
     });
     expect(prepareRecoveryCurrent).toHaveBeenCalledOnce();
-    expect(entry.execution.status).toBe("running");
+    expect(readLifecycleRun(entry).execution.status).toBe("running");
     expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
     expect(emitProgress).not.toHaveBeenCalled();
 
     await completeRun(controller, entry, { triggerCleanup: false });
 
-    expect(entry.execution.status).toBe("terminal");
+    expect(readLifecycleRun(entry).execution.status).toBe("terminal");
     expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
-    expect(emitProgress).toHaveBeenCalledExactlyOnceWith(entry);
+    expect(emitProgress).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
+    );
   });
 
   it("keeps direct delete cleanup root-admitted until the gateway call settles", async () => {
@@ -277,9 +285,16 @@ export function registerDirectSessionCleanupAuthorityTests({
         throw new Error("Child session changed");
       }
     };
+    let finalPostimage: SubagentRunRecord | undefined;
     const controller = createLifecycleController({
       entry,
       runs,
+      beforeWrite: ({ postimages }) => {
+        const postimage = postimages.get(entry.runId);
+        if (postimage) {
+          finalPostimage = postimage;
+        }
+      },
     });
 
     await completeAndJoinCleanup(controller, entry, {
@@ -292,8 +307,8 @@ export function registerDirectSessionCleanupAuthorityTests({
     });
 
     expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
-    expect(entry.execution.status).toBe("terminal");
-    expect(entry.execution.suppressSessionEffects).toBe(true);
+    expect(finalPostimage?.execution.status).toBe("terminal");
+    expect(finalPostimage?.execution.suppressSessionEffects).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
   });
 }

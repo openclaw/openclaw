@@ -536,7 +536,7 @@ describe("queued collector session projection", () => {
         const result = await kill(...args);
         // Real cancellation is complete; an awaited consumer can now observe
         // another owner before it consumes the predecessor's result.
-        releaseSubagentRun(entry.runId);
+        await releaseSubagentRun(entry.runId);
         {
           reserveSwarmRun({
             runId: entry.runId,
