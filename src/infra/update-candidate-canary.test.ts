@@ -239,12 +239,13 @@ describe("update candidate canary", () => {
         }),
       ]);
       const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
-      expect(detail).toContain("phase=checking");
+      expect(result.steps.at(-1)?.stderrTail).toContain("phase=checking");
       expect(detail).toContain(cause);
       const report = renderUpdateRunReport(
         updateRunReportInputFromResult({ ...result, mode: "git", root }),
       );
       expect(report.markdown).toContain(cause);
+      expect(report.markdown).toContain("phase=checking");
       expect(report.markdown).not.toContain("usable inference route");
     } finally {
       clock.mockRestore();
