@@ -2,6 +2,10 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
+import {
+  formatIosSimulatorSelectionSummary,
+  resolveIosSimulatorTestSelection,
+} from "./lib/ci-ios-smoke-plan.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -548,6 +552,16 @@ if (runtimePullRequest && runNodeFull) {
     onSelection: (selection) => nodeSelectionReasons.push(selection),
   });
 }
+const fullIosSimulatorPr = parseCiEnvFlag(process.env.OPENCLAW_CI_IOS_SIMULATOR_FULL);
+const iosSimulatorSelection = resolveIosSimulatorTestSelection(changedPaths, {
+  enabled: runIosBuild,
+  forceFull: !runtimePullRequest || releaseGate || compatibilityTarget || fullIosSimulatorPr,
+  fullReason: fullIosSimulatorPr
+    ? "OPENCLAW_CI_IOS_SIMULATOR_FULL"
+    : compatibilityTarget
+      ? "compatibility target"
+      : "scheduled, main, or release validation",
+});
 const uiOwnerScope = {
   unit: runUiTests,
   mocked: runControlUiE2e,
@@ -760,9 +774,21 @@ if (runtimePullRequest && runNodeFull) {
 // A Node-targeting fallback does not invalidate independently resolved
 // check families or their compiler/lint consumer graphs.
 const narrowCheckScope = proposedCheckScope?.mode === "scoped" ? proposedCheckScope : null;
-const runCheckPlan = Boolean(runCheck && narrowCheckScope);
+const extensionLintMode =
+  workflowEventName === "pull_request" &&
+  isCanonicalRepository &&
+  !releaseGate &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  changedPaths?.length &&
+  existsSync("scripts/lib/ci-extension-lint-plan.mts")
+    ? parseCiEnvFlag(process.env.OPENCLAW_CI_EXTENSION_LINT_FULL)
+      ? "full"
+      : "affected"
+    : undefined;
+const runCheckPlan = Boolean(runCheck && (narrowCheckScope || extensionLintMode));
 let typeGraphBoundaryOwner = "";
-if (runCheckPlan && narrowCheckScope.types) {
+if (runCheckPlan && proposedCheckScope?.types) {
   const { resolveChangedCiTsgoInputs } = await import(
     fromTarget("./scripts/lib/tsgo-core-test-shards.mts")
   );
@@ -770,8 +796,10 @@ if (runCheckPlan && narrowCheckScope.types) {
   typeGraphBoundaryOwner =
     runNodeFull &&
     !releaseFastLane &&
-    narrowCheckScope.additionalGroups.includes("boundaries") &&
-    (!compilerPaths || compilerPaths.every((file) => file.startsWith("extensions/")))
+    proposedCheckScope.additionalGroups.includes("boundaries") &&
+    (!narrowCheckScope ||
+      !compilerPaths ||
+      compilerPaths.every((file) => file.startsWith("extensions/")))
       ? "additional-checks"
       : "check-plan";
 }
@@ -1338,10 +1366,19 @@ const manifest = {
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
-  narrow_check_paths_json: narrowCheckScope ? JSON.stringify(changedPaths) : "",
+  narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
     ? JSON.stringify({
+        ...(extensionLintMode
+          ? {
+              extensionLintMode,
+              preserveFullChecks: !narrowCheckScope,
+              ...(process.env.OPENCLAW_CI_CHANGED_BASE
+                ? { changedBaseRef: process.env.OPENCLAW_CI_CHANGED_BASE }
+                : {}),
+            }
+          : {}),
         typeGraphBoundaryOwner,
         changedPaths,
         changedCoreTestPaths: changedCoreTestPaths ?? null,
@@ -1432,6 +1469,9 @@ const manifest = {
     (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
   run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
+  run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
+  run_ios_lifecycle_tests: iosSimulatorSelection.lifecycle.selected,
+  ios_simulator_selection: iosSimulatorSelection,
   run_android_job: runAndroid,
   run_android_access_native: runAndroidAccessNative,
   use_compatible_android_ci: useCompatibleAndroidCi,
@@ -1760,6 +1800,12 @@ if (releaseFastLane) {
   }
 }
 if (process.env.GITHUB_STEP_SUMMARY) {
+  if (runIosBuild) {
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      formatIosSimulatorSelectionSummary(iosSimulatorSelection),
+    );
+  }
   if (uiE2eSelection) {
     const escapeSummaryCell = (value) =>
       String(value)

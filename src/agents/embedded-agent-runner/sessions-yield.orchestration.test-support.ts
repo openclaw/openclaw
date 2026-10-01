@@ -406,6 +406,83 @@ describe("sessions_yield orchestration", () => {
   });
 
   describe("yield with continuation evidence", () => {
+    it.each(["accepted", "refused", "unregistered"] as const)(
+      "uses the owner's message wait registration as continuation evidence (%s)",
+      async (registration) => {
+        const registry = await import("../subagents/registry/subagent-registry.test-helpers.js");
+        const { createRequesterYieldCallback } =
+          await import("../openclaw-tools.requester-yield.js");
+        const { createSessionsYieldTool } = await import("../tools/sessions-yield-tool.js");
+        const params = {
+          ...createOverflowRunParams(state),
+          sessionKey: "agent:main:subagent:message-wait",
+          runId: "message-wait-run",
+        };
+        registry.resetSubagentRegistryForTests({ persist: false });
+        if (registration !== "unregistered") {
+          registry.addSubagentRunForTests(
+            createSubagentRunRecord({
+              runId: params.runId,
+              childSessionKey: params.sessionKey,
+              requesterSessionKey: "agent:main:parent",
+              expectsCompletionMessage: true,
+              execution: { status: "running" },
+              completion: { required: true },
+              delivery: { status: "pending" },
+              suppressCompletionDelivery: registration === "refused",
+            }),
+          );
+        }
+        mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+          let yieldMessageWaitRegistered: boolean | undefined;
+          const onYield = vi.fn(
+            (_message: string, _acknowledgment?: string, registered?: boolean) => {
+              yieldMessageWaitRegistered = registered;
+            },
+          );
+          const tool = createSessionsYieldTool({
+            sessionId: params.sessionId,
+            claimYield: createRequesterYieldCallback({
+              requesterSessionKey: params.sessionKey,
+              requesterAgentId: params.agentId,
+              requesterTurnRunId: params.runId,
+            }),
+            onYield,
+          });
+          expect((await tool.execute("yield-message", { waitFor: "message" })).details).toEqual({
+            status: "yielded",
+          });
+          expect(
+            registry.getSubagentRunByRunId(params.runId)?.requesterSettleWake?.pauseNotice,
+          ).toEqual(
+            registration === "accepted"
+              ? { acknowledgment: "Paused awaiting continuation." }
+              : undefined,
+          );
+          return makeAttemptResult({
+            yieldDetected: onYield.mock.calls.length > 0,
+            yieldMessageWaitRegistered,
+            assistantTexts: [],
+          });
+        });
+        try {
+          const result = await runEmbeddedAgent(params);
+          expect(result.meta.yielded).toBe(true);
+          expect(result.payloads ?? []).toEqual(
+            registration === "accepted"
+              ? []
+              : [
+                  {
+                    text: "⚠️ Turn yielded without a continuation source. Send a message to resume.",
+                  },
+                ],
+          );
+        } finally {
+          registry.resetSubagentRegistryForTests({ persist: false });
+        }
+      },
+    );
+
     it("rejects an unregistered accepted child instead of silently yielding", async () => {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({

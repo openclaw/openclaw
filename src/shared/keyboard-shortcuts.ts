@@ -26,28 +26,57 @@ export const COMMAND_PALETTE_SHORTCUT = {
 // keep the factory self-contained through bundling, with pristine operations
 // captured once so widget prototype changes cannot redefine a host shortcut.
 export function createKeyboardShortcutMatcher() {
-  // These calls are bound to the captured intrinsic; their first argument is
-  // its native receiver. The lint rule does not recognize this uncurry pattern.
-  /* oxlint-disable typescript/unbound-method */
-  const lower = Function.prototype.call.bind(String.prototype.toLowerCase);
-  const upper = Function.prototype.call.bind(String.prototype.toUpperCase);
-  const codePointAt = Function.prototype.call.bind(String.prototype.codePointAt);
+  // A private receiver keeps String intrinsics bound without consulting widget-
+  // mutable prototypes. Conversion is synchronous and returns only our string.
+  const text = {
+    value: "",
+    [Symbol.toPrimitive]() {
+      return this.value;
+    },
+  };
+  const lowerText = String.prototype.toLowerCase.bind(text);
+  const upperText = String.prototype.toUpperCase.bind(text);
+  const textCodePointAt = String.prototype.codePointAt.bind(text);
+  const strings = {
+    lower(value: string) {
+      text.value = value;
+      return lowerText();
+    },
+    upper(value: string) {
+      text.value = value;
+      return upperText();
+    },
+    codePointAt(value: string, position: number) {
+      text.value = value;
+      return textCodePointAt(position);
+    },
+  };
+  const patterns = {
+    apple: /Mac|iPhone|iPad|iPod/u,
+    asciiKey: /^[a-z0-9]$/,
+    letterCode: /^Key([A-Z])$/,
+    digitCode: /^Digit([0-9])$/,
+    printableAscii: /^[\x20-\x7e]$/u,
+  };
+  const apple = patterns.apple.exec.bind(patterns.apple);
+  const matchAsciiKey = patterns.asciiKey.exec.bind(patterns.asciiKey);
+  const letterCode = patterns.letterCode.exec.bind(patterns.letterCode);
+  const digitCode = patterns.digitCode.exec.bind(patterns.digitCode);
+  const printableAscii = patterns.printableAscii.exec.bind(patterns.printableAscii);
   const includes = Function.prototype.call.bind(Array.prototype.includes);
-  const exec = Function.prototype.call.bind(RegExp.prototype.exec);
-  /* oxlint-enable typescript/unbound-method */
   return {
     isApplePlatform(this: void, platform = globalThis.navigator?.platform ?? ""): boolean {
-      return exec(/Mac|iPhone|iPad|iPod/u, platform) !== null;
+      return apple(platform) !== null;
     },
     resolveAsciiShortcutKey(this: void, event: KeyboardShortcutEvent): string | null {
       if (event.isComposing || event.keyCode === 229) {
         return null;
       }
-      const key = lower(event.key);
-      if (exec(/^[a-z0-9]$/, key) !== null) {
+      const key = strings.lower(event.key);
+      if (matchAsciiKey(key) !== null) {
         return key;
       }
-      const point = codePointAt(event.key, 0);
+      const point = strings.codePointAt(event.key, 0);
       if (
         event.altKey ||
         event.key === "Dead" ||
@@ -57,11 +86,11 @@ export function createKeyboardShortcutMatcher() {
       }
       // Preserve character-based Latin shortcuts; non-Latin layouts fall back
       // to the physical key. Count code points without a mutable string iterator.
-      const letter = exec(/^Key([A-Z])$/, event.code)?.[1];
+      const letter = letterCode(event.code)?.[1];
       if (letter) {
-        return lower(letter);
+        return strings.lower(letter);
       }
-      return !event.shiftKey ? (exec(/^Digit([0-9])$/, event.code)?.[1] ?? null) : null;
+      return !event.shiftKey ? (digitCode(event.code)?.[1] ?? null) : null;
     },
     matchesKeyboardShortcut(
       this: void,
@@ -97,7 +126,7 @@ export function createKeyboardShortcutMatcher() {
         // Physical fallback only for non-Latin layouts. Latin layouts that put a
         // different printable on the Slash key (German "-") keep that chord's own
         // meaning — Cmd+"-" must stay browser zoom, not open the overview.
-        return event.code === "Slash" && exec(/^[\x20-\x7e]$/u, event.key) === null;
+        return event.code === "Slash" && printableAscii(event.key) === null;
       }
       if (combo.key === "Backquote" || combo.key === "Comma") {
         return event.code === combo.key;
@@ -116,7 +145,7 @@ export function createKeyboardShortcutMatcher() {
       if (asciiKey !== null || !event.metaKey || !event.altKey) {
         return asciiKey === combo.key;
       }
-      return event.code === `Key${upper(combo.key)}`;
+      return event.code === `Key${strings.upper(combo.key)}`;
     },
   };
 }

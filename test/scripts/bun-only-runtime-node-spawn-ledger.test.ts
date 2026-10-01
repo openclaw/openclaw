@@ -365,6 +365,23 @@ describe("Bun-only Node spawn ledger", () => {
 
 describe("Bun spawn trace preload", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  function stubSpawnRuntime(spawn: (...args: unknown[]) => unknown) {
+    const runtime = (
+      globalThis as typeof globalThis & {
+        Bun?: { spawn: typeof spawn; spawnSync: typeof spawn };
+      }
+    ).Bun;
+    if (runtime) {
+      vi.spyOn(runtime, "spawn").mockImplementation(spawn);
+      vi.spyOn(runtime, "spawnSync").mockImplementation(spawn);
+      return runtime;
+    }
+    const stub = { spawn, spawnSync: spawn };
+    vi.stubGlobal("Bun", stub);
+    return stub;
+  }
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -382,8 +399,7 @@ describe("Bun spawn trace preload", () => {
         clock.mockReturnValue(200);
         return child;
       });
-      const runtime = { spawn: original, spawnSync: original };
-      vi.stubGlobal("Bun", runtime);
+      const runtime = stubSpawnRuntime(original);
       vi.stubEnv("OPENCLAW_BUN_ONLY_SPAWN_TRACE", tracePath);
       vi.resetModules();
       await import("../../scripts/e2e/lib/bun-only-runtime/spawn-trace-preload.mjs");
@@ -410,8 +426,7 @@ describe("Bun spawn trace preload", () => {
       const original = vi.fn(() => {
         throw error;
       });
-      const runtime = { spawn: original, spawnSync: original };
-      vi.stubGlobal("Bun", runtime);
+      const runtime = stubSpawnRuntime(original);
       vi.stubEnv("OPENCLAW_BUN_ONLY_SPAWN_TRACE", tracePath);
       vi.resetModules();
       await import("../../scripts/e2e/lib/bun-only-runtime/spawn-trace-preload.mjs");
@@ -433,8 +448,7 @@ describe("Bun spawn trace preload", () => {
     ["echo nodejs-like && nodemon --help", false],
   ])("traces shell script %j: %s", async (script, traced) => {
     const tracePath = path.join(tempDirs.make("bun-spawn-trace-"), "trace.jsonl");
-    const runtime = { spawn: vi.fn((_cmd: string[]) => ({ pid: 7 })), spawnSync: vi.fn() };
-    vi.stubGlobal("Bun", runtime);
+    const runtime = stubSpawnRuntime(vi.fn(() => ({ pid: 7 })));
     vi.stubEnv("OPENCLAW_BUN_ONLY_SPAWN_TRACE", tracePath);
     vi.resetModules();
     await import("../../scripts/e2e/lib/bun-only-runtime/spawn-trace-preload.mjs");

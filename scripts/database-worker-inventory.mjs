@@ -120,16 +120,113 @@ const reviewed = new Map([
   ],
 ]);
 const workerModules = new Set([
-  "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
+  "extensions/memory-core/src/memory-entry-origin-reads.ts", // Memory search worker origin-read commands only.
+  "extensions/memory-core/src/memory-entry-origins-delete.ts", // Memory origin worker delete command only.
+  "extensions/memory-core/src/memory-forget-index-read.ts", // Memory search worker forget-index-plan command only.
+  "extensions/memory-core/src/memory-forget-kernel.ts", // Memory origin worker forget mark and purge commands only.
+  "extensions/memory-core/src/standing-intents-kernel.ts", // Standing-intent worker command dispatcher only.
+
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
-  "src/infra/device-auth-store.kernel.ts", // Shared-state worker SQL; pairing token retirement is supplied only by its worker rotation kernel.
-  "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
-  "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
+  "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
+
+  "extensions/workboard/src/sqlite-store-kernel.ts", // Workboard SQLite worker backend factory only.
+  "extensions/workboard/src/sqlite-store-sessions-board.ts", // Workboard worker kernel sessions-board store only.
+  "extensions/workboard/src/sqlite-store-write.ts", // Workboard worker kernel card writes only.
+
+  "packages/memory-host-sdk/src/memory-entry-origins.ts", // Private memory SDK origin queries serve search and origin workers only.
+
+  "src/agents/mcp-oauth-store.kernel.ts", // MCP OAuth write dispatcher and shared-state read worker only.
+
+  "src/agents/subagents/completion/subagent-completion-queue-receipt.ts", // Completion mutation kernel runs through the session-delivery worker.
+
+  "src/audit/audit-event-read.kernel.ts", // Audit event list SQL runs only in the shared-state worker dispatcher.
+  "src/audit/audit-event-store.ts", // Audit writer worker owns inserts/pruning; host listing delegates to the worker.
+  "src/audit/audit-identity.ts", // Audit writer worker alone reaches identity key reads and writes.
+  "src/audit/execution-decision-facts.ts", // Audit writer and audit read workers alone execute decision-fact SQL.
+  "src/audit/execution-identity-context.ts", // Audit writer persists contexts; audit read worker owns inspection SQL.
+  "src/audit/execution-owner-lifecycle-binding-store.ts", // Cron worker receipt binding and terminal pruning own lifecycle metadata SQL.
+  "src/audit/execution-owner-lifecycle-receipts.ts", // Audit read worker alone projects Cron lifecycle receipts.
+  "src/audit/message-delivery-audit-store.ts", // Audit read worker alone pages and counts delivery audit events.
+  "src/audit/message-delivery-progress-store.ts", // Audit writer owns progress writes; audit read worker owns progress queries.
+  "src/audit/message-execution-binding.ts", // Audit writer alone ensures and confirms outbound execution bindings.
+
   "src/channels/message/ingress-queue-health.kernel.ts",
   "src/channels/message/ingress-queue.kernel.ts",
-  "src/state/openclaw-state-worker-runtime.ts",
+
+  "src/config/sessions/session-accessor.sqlite-archive-selection.ts", // Archive worker read-page selection only.
   "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
+  "src/config/sessions/session-accessor.sqlite-summary.ts", // Only session-transcript.worker.ts dispatches the summary kernel at runtime.
+  "src/config/sessions/session-accessor.sqlite-transcript-binding.ts", // History worker transcript-binding reader only.
+  "src/config/sessions/session-cold-storage-worker.ts", // Archive worker cold-prepare and cold-mutate dispatchers only.
+  "src/config/sessions/session-membership-facts.ts", // Transcript worker session-membership-facts dispatcher only.
+
+  "src/cron/store/run-history.kernel.ts", // Cron read worker and shared-state Cron dispatch own history SQL.
+  "src/cron/store/run-receipt-delivery.ts", // Cron admission and recovery workers own delivery-attempt SQL.
+  "src/cron/store/run-receipt-trigger-state.ts", // Cron mutation, admission and recovery workers own trigger retirement SQL.
+
+  "src/fleet/registry.kernel.ts", // Fleet write dispatcher and shared-state registry read worker only.
+
+  "src/gateway/github-publication-shared-read.kernel.ts", // Shared publication queries are called only by the state read worker.
+  "src/gateway/managed-image-record-store.kernel.ts", // Shared-state worker dispatch only; host exports are row codecs.
+  "src/gateway/operator-approval-store.receipts.ts", // Audit read worker alone reaches receipt readers through the approval-store barrel.
+  "src/gateway/session-group-registration.kernel.ts", // Session-group registration runs through shared-state worker dispatch.
+
+  "src/gateway/worker-environments/inference-store.kernel.ts", // Inference worker dispatcher creates this kernel only.
+  "src/gateway/worker-environments/placement-read-projection.ts", // Shared-state read worker placement projection and recovery dispatchers only.
+  "src/gateway/worker-environments/session-attachment-store.ts", // Environment worker kernel and read-worker attachment facts only.
+  "src/gateway/worker-environments/store-mutations.ts", // Environment worker kernel, transitions, and initialization only.
+  "src/gateway/worker-environments/store-row-codec.ts", // Environment and placement workers plus shared-state read-worker facts only.
+  "src/gateway/worker-environments/store-transitions.ts", // Environment worker kernel owns transition operations only.
+  "src/gateway/worker-environments/store-write.ts", // Environment worker mutation receipt change counts only.
+  "src/gateway/worker-environments/store.kernel.ts", // Environment worker dispatcher creates this kernel only.
+  "src/gateway/worker-environments/terminal-environment-retention.ts", // Read-worker prune pages and environment worker pruning only.
+
+  "src/infra/device-auth-store.kernel.ts", // Shared-state worker SQL; pairing token retirement is supplied only by its worker rotation kernel.
+  "src/infra/device-pairing-cloud-worker.ts", // Bootstrap worker dispatcher owns binding checks and completion writes.
+  "src/infra/promotions-feed.kernel.ts", // Promotion claims execute through promotions-feed.worker.
+  "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
+  "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
   "src/infra/session-cost-usage-worker.ts",
+  "src/infra/telemetry-store.kernel.ts", // Telemetry SQL executes through the shared-state worker runtime.
+  "src/infra/update-candidate-exec-approvals.ts", // Approval projections run in the update-candidate-state worker.
+  "src/infra/update-candidate-plugins.ts", // Plugin inventory and copying run in the update-candidate-state worker.
+  "src/infra/update-run-interruption-store.ts", // Interruption writes use the shared-state worker; host imports are pure.
+  "src/infra/update-run-reconciliation.read.ts", // Reconciliation reads use state-read and reconciliation workers.
+
+  "src/infra/outbound/delivery-queue-media-staging.kernel.ts", // Media retention SQL executes through delivery-queue.worker.
+  "src/infra/outbound/delivery-queue-storage.kernel.ts", // Outbound reads use state-read; mutations use delivery storage workers.
+
+  "src/node-host/node-worker-turn-store.kernel.ts", // Turn kernels are instantiated only by node-worker-journal.worker.
+
+  "src/plugin-state/plugin-blob-store.sqlite.ts", // Plugin-blob writes and shared-state read worker only.
+
+  "src/plugins/conversation-binding-state.kernel.ts", // Shared-state worker binding-approval commands only.
+  "src/plugins/official-external-plugin-catalog-snapshot-store.kernel.ts", // Shared-state worker catalog-snapshot commands only.
+
+  "src/secrets/store/secret-store-config-ref.kernel.ts", // Config-ref writes are called only by the shared-state worker runtime.
+  "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
+
+  "src/skills/lifecycle/upload-store-commit.ts", // Skill-upload worker commit command only.
+  "src/skills/lifecycle/upload-store.kernel.ts", // Skill-upload worker dispatcher only.
+  "src/skills/lifecycle/upload-store.sqlite.ts", // Skill-upload worker kernels; host imports pure options only.
+
+  "src/skills/workshop/collection-review.kernel.ts", // Skill-workshop worker collection-review reads only.
+  "src/skills/workshop/curator.kernel.ts", // Skill-workshop worker curator and usage commands only.
+  "src/skills/workshop/store-proposal.kernel.ts", // Skill-workshop worker proposal commands only.
+  "src/skills/workshop/store-sqlite-event.ts", // Skill-workshop and shared-state Doctor worker commands only.
+  "src/skills/workshop/store-sqlite-rollback.ts", // Skill-workshop worker rollback commands only.
+  "src/skills/workshop/store-sqlite-transition.ts", // Skill-workshop worker transition commands only.
+
+  "src/state/backup-run-records.kernel.ts", // Backup record writes are called only by the shared-state worker runtime.
+  "src/state/github-personal-publication-lifecycle.ts", // Receipt SQL runs in shared-state worker dispatch; host helper enqueues commands.
+  "src/state/openclaw-state-lease-worker.ts", // Lease transaction dispatch is called only by the shared-state worker backend.
+  "src/state/openclaw-state-worker-runtime.ts",
+  "src/state/session-repository-workspaces.kernel.ts", // SQL callers are shared-state workspace dispatch and the state read worker.
+
+  "src/transcripts/store-sqlite-read.ts", // SQL callers are transcript worker read/write dispatchers only.
+  "src/transcripts/store-sqlite-write.ts", // SQL writes are called only by the transcript worker dispatcher.
+  "src/transcripts/store-sqlite.ts", // SQL callers are transcript worker kernels; host imports are pure helpers.
+  "src/transcripts/store-worker-write.ts", // Called only by the shared-state worker runtime.
 ]);
 const exceptionModules = new Set([
   "src/state/openclaw-state-db-transaction.ts",
