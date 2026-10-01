@@ -277,10 +277,14 @@ export function createSessionRowPlacementProjection(
       const selectRows = () => {
         const selected = withCanonicalSessionValidationDeferral(() => {
           preparedQueries = queries(projection.state.cfg);
-          return preparedQueries.flatMap((query) => {
+          const ids: string[] = [];
+          for (const query of preparedQueries) {
             const row = inOwnerContext(() => lookup(query));
-            return row?.entry ? [row.entry.sessionId] : [];
-          });
+            if (row?.entry) {
+              ids.push(row.entry.sessionId);
+            }
+          }
+          return ids;
         });
         deferred = selected.kind === "pending" ? selected : undefined;
         selectedIds = selected.kind === "complete" ? selected.value : [];

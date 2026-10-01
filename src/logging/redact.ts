@@ -57,6 +57,11 @@ import {
 import { PEM_REDACT_MATCHER, PEM_REDACT_PATTERN_SOURCE } from "./redact-pem.js";
 import { startRedactionMeasurement } from "./redact-performance.js";
 import {
+  couldMatchDefaultFullContextPatterns,
+  couldMatchDefaultRedactPatterns,
+  createRedactPrefilter,
+} from "./redact-prefilter.js";
+import {
   captureSecretRedactionRegistrySnapshot,
   createSecretValueRedactor,
   redactRegisteredSecretValues,
@@ -135,42 +140,6 @@ const STRUCTURED_SECRET_ENV_FIELD_RE = new RegExp(
   String.raw`^(?:(?:[A-Z0-9]+[_-])+(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)|API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})$`,
   "i",
 );
-
-// Fast-path gate: with no user-configured patterns, redactSensitiveText skips the full
-// default-pattern walk unless one of these triggers matches. Every DEFAULT_REDACT_PATTERNS
-// entry and sensitive form/URL key must stay reachable here — a missing trigger silently
-// leaks that secret shape, so each family keeps a default-options fixture in redact.test.ts.
-const DEFAULT_REDACT_PREFILTER_SOURCES: string[] = [
-  // Sensitive key names shared by the env/JSON/query/form/header/assignment families.
-  String.raw`KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|COOKIE|SIGNATURE|CREDENTIAL|CARD|CVC|CVV|PAYMENT|PRIVATE KEY`,
-  String.raw`security[-_]?code|\bpass\s*[=:]|\bpassphrase\s*[=:]|_(?:password|pass|passphrase|passwd)\s*[=:]|jwt\s*[=:]|session=|code=|\bsig\s*=`,
-  String.raw`\bBearer\s+`,
-  // URL userinfo and connection-string password slots (`scheme://user:pass@host`).
-  String.raw`:\/\/[^\/\s:@]*:[^\s@]+@`,
-  // Vendor token prefixes and webhook hosts, ordered like DEFAULT_REDACT_PATTERNS.
-  String.raw`sk-|gh[opsur]_|github_pat_|glpat-|gloas-|gldt-|glcbt-|glptt-|glft-|glimt-|glagent-|glwt-|glsoat-|glffct-|glrt-|glrtr-|GR1348941|_gitlab_session=|xox[baprs]-|xapp-|hooks\.slack\.com|discord|gsk_|AIza|ya29\.|1\/\/0|eyJ|pplx-|fal_|fc-|bb_live_|gAAAA|[sr]k_(?:live|test)_|SG\.|npm_|pypi-|do[opr]_v1_|dp\.(?:ct|pt|sa|st|scim|audit)\.|dckr_|bkua_|CCIPAT_|sbp_|dapi[0-9a-f]|dd[pw]_|glsa_|nfp_|CFPAT-|ATCTT3|ATATT|ATBB|BBDC-|HRKU-|pat-(?:eu|na)1-|apify_api_|FlyV1|fio-u-|tvly-|exa_|syt_|retaindb_|mem0_|brv_|xai-|fw-|fw_|fpk_`,
-  String.raw`(?:^|[^A-Za-z0-9_])(?:am_|sk_)`,
-  String.raw`A[KS]IA[A-Z0-9]|AKID|LTAI|hf_|api_org_|r8_`,
-  String.raw`\bbot\d{6,}:|\b\d{6,}:[A-Za-z0-9_-]{20,}`,
-  // Obfuscated form/URL keys: percent escapes can rewrite any key letter, while plus or
-  // invisible splices break the literal key-name triggers above mid-word. After a splice the
-  // tail may mix further splices with key characters (e.g. an interior plus a trailing
-  // filler). Require a key character before or after a splice so bare `+=` or line-leading
-  // `===` separators do not trip the fast path.
-  String.raw`%[0-9A-Fa-f]{2}[${FORM_BODY_KEY_INVISIBLE_CHARS}+A-Za-z0-9_%.-]*=`,
-  // Search at the required assignment separator, not at every invisible character.
-  // Look behind it to retain the same obfuscated-key language without rescanning blank runs.
-  String.raw`=(?<=(?:\+|[${FORM_BODY_KEY_INVISIBLE_CHARS}])(?:[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*[A-Za-z0-9_%.-])+[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*=)|=(?<=[A-Za-z0-9_%.-][${FORM_BODY_KEY_INVISIBLE_CHARS}+]+=)`,
-];
-const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
-  `(?:${DEFAULT_REDACT_PREFILTER_SOURCES.join("|")})`,
-  "iu",
-);
-
-// Whole-context rules admit prefixes whose boundaries differ under Unicode case folding.
-// Keep the shared text probe unchanged: its chunked matching has separate boundary semantics.
-const FULL_CONTEXT_REDACT_EXTRA_TRIGGERS_RE =
-  /JWT|Bearer\s+|am_|sk_|(?<!\d)\d{6,}:[A-Za-z0-9_-]{20,}/i;
 
 type RedactOptions = {
   mode?: RedactSensitiveMode;
@@ -723,14 +692,6 @@ export function redactText(
   }
 }
 
-function couldMatchDefaultRedactPatterns(text: string): boolean {
-  return DEFAULT_REDACT_PREFILTER_RE.test(text) || AWS_SECRET_ACCESS_KEY_MATCHER.couldMatch(text);
-}
-
-function couldMatchDefaultFullContextPatterns(text: string): boolean {
-  return couldMatchDefaultRedactPatterns(text) || FULL_CONTEXT_REDACT_EXTRA_TRIGGERS_RE.test(text);
-}
-
 function markPatternMatchRedaction(
   bitmap: boolean[],
   input: string,
@@ -985,6 +946,7 @@ function redactSensitiveFieldValueWithOptions(
   options: RedactOptions,
   path: readonly string[] = [key],
   objectPath = true,
+  couldMatch = couldMatchDefaultRedactPatterns,
 ): string {
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
   if (isPublicShareIdPath(path)) {
@@ -1004,8 +966,7 @@ function redactSensitiveFieldValueWithOptions(
   // in sync with every built-in pattern and sensitive form/URL key. Explicit
   // user patterns still require the full scan because they have no prefilter.
   const redacted =
-    !usesBuiltInRedactPatterns(fieldOptions.patterns) ||
-    couldMatchDefaultRedactPatterns(exactRedacted)
+    !usesBuiltInRedactPatterns(fieldOptions.patterns) || couldMatch(exactRedacted)
       ? redactText(exactRedacted, resolved.patterns)
       : exactRedacted;
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
@@ -1074,11 +1035,12 @@ function redactStructuredSecretValue(
   value: unknown,
   seen: WeakSet<object>,
   options: RedactOptions,
+  couldMatch: (text: string) => boolean,
   path: readonly string[] = key ? [key] : [],
   objectPath = true,
 ): unknown {
   if (typeof value === "string") {
-    return redactSensitiveFieldValueWithOptions(key, value, options, path, objectPath);
+    return redactSensitiveFieldValueWithOptions(key, value, options, path, objectPath, couldMatch);
   }
   if (value === null || value === undefined) {
     return value;
@@ -1092,7 +1054,7 @@ function redactStructuredSecretValue(
     }
     seen.add(value);
     const out = value.map((entry) =>
-      redactStructuredSecretValue(key, entry, seen, options, path, false),
+      redactStructuredSecretValue(key, entry, seen, options, couldMatch, path, false),
     );
     seen.delete(value);
     return out;
@@ -1113,6 +1075,7 @@ function redactStructuredSecretValue(
         child,
         seen,
         options,
+        couldMatch,
         [...path, name],
         objectPath,
       );
@@ -1128,13 +1091,16 @@ function redactSecretsWithOptions<T>(value: T, options: RedactOptions): T {
   if (typeof value === "string") {
     return redactSensitiveText(value, options) as T;
   }
-  if (value === null || value === undefined) {
+  if (value === null || typeof value !== "object") {
     return value;
   }
-  if (typeof value !== "object") {
-    return value;
-  }
-  return redactStructuredSecretValue("", value, new WeakSet<object>(), options) as T;
+  return redactStructuredSecretValue(
+    "",
+    value,
+    new WeakSet<object>(),
+    options,
+    createRedactPrefilter(couldMatchDefaultRedactPatterns),
+  ) as T;
 }
 
 export function redactSecrets<T>(value: T): T {
@@ -1502,6 +1468,7 @@ function redactLogRecord<Result>(
     }
     const serialized = message ? JSON.stringify(materialized) : json;
     const decodedPatterns = options.decodedOptions?.patterns ?? resolved.patterns;
+    const couldMatch = createRedactPrefilter(couldMatchDefaultFullContextPatterns);
     const result = finish(
       redactJsonRecord(
         serialized,
@@ -1512,9 +1479,7 @@ function redactLogRecord<Result>(
             { patterns: preparationPatterns },
             {
               patterns: resolved.patterns,
-              ...(resolved.patterns === defaultResolvedPatterns
-                ? { couldMatch: couldMatchDefaultFullContextPatterns }
-                : {}),
+              ...(resolved.patterns === defaultResolvedPatterns ? { couldMatch } : {}),
             },
           ],
         ],
@@ -1528,8 +1493,7 @@ function redactLogRecord<Result>(
             : !field.origin.structured ||
               field.origin.primitiveMask ||
               isPublicShareIdPath(field.path)) ||
-          (decodedPatterns === defaultResolvedPatterns &&
-            !couldMatchDefaultFullContextPatterns(currentValue)),
+          (decodedPatterns === defaultResolvedPatterns && !couldMatch(currentValue)),
         message,
       ),
       // Native conversion can preserve proxy key order; only the materialized tree is canonical.

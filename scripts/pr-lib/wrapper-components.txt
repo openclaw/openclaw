@@ -914,6 +914,7 @@ src/logging/redact-pattern-runtime.ts
 src/logging/redact-patterns.ts
 src/logging/redact-pem.ts
 src/logging/redact-performance.ts
+src/logging/redact-prefilter.ts
 src/logging/redact.ts
 src/logging/secret-redaction-registry.ts
 src/logging/state.ts
