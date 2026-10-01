@@ -1,6 +1,7 @@
 // Mirror fence tests cover which session's writer claim a delivery mirror carries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
 import type { DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
 import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
@@ -60,7 +61,7 @@ async function withRunningSession(run: () => Promise<void>): Promise<void> {
 }
 
 function appendedArgs() {
-  return mocks.appendAssistantMessageToSessionTranscript.mock.calls[0]?.[0];
+  return vi.mocked(appendAssistantMessageToSessionTranscript).mock.calls[0]?.[0];
 }
 
 describe("outbound delivery mirror writer fence", () => {

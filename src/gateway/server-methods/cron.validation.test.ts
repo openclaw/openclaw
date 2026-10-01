@@ -47,6 +47,7 @@ import { getGatewayProcessInstanceId } from "../process-instance.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
 import {
   createCronTestContext,
+  agentTurnCronParams,
   createCronTestInvoker,
   createCronCallerClient as callerClient,
   createCronJob,
@@ -213,18 +214,6 @@ function telegramDeliveryWithSlackFailure(overrides: Partial<CronDelivery> = {})
 
 function setRuntimeConfig(config: OpenClawConfig): void {
   getRuntimeConfig.mockReturnValue(config);
-}
-
-function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
-  return {
-    name: "cron job",
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
-    ...overrides,
-  };
 }
 
 function expectCronSuccess(respond: ReturnType<typeof vi.fn>): void {

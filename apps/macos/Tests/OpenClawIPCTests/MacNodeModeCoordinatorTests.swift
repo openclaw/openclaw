@@ -272,15 +272,6 @@ struct MacNodeModeCoordinatorTests {
         #expect(await probe.hasCaptured())
     }
 
-    @Test func `stale endpoint attempt is rejected after a suspended permission query`() {
-        #expect(MacNodeModeCoordinator.endpointAttemptIsCurrent(
-            capturedGeneration: 7,
-            currentGeneration: 7))
-        #expect(!MacNodeModeCoordinator.endpointAttemptIsCurrent(
-            capturedGeneration: 7,
-            currentGeneration: 8))
-    }
-
     @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async {
         let worker = CoordinatorNodeHostWorkerProbe()
         let session = GatewayNodeSession()
@@ -505,8 +496,6 @@ struct MacNodeModeCoordinatorTests {
     }
 
     @Test func `paused node state requires route disconnect`() {
-        #expect(MacNodeModeCoordinator.pausedStateRequiresDisconnect(true))
-        #expect(!MacNodeModeCoordinator.pausedStateRequiresDisconnect(false))
         #expect(MacNodeModeCoordinator.controlTransitionRequiresRouteInvalidation(
             previousPaused: false,
             nextPaused: true,

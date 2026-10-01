@@ -1,9 +1,13 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { startAcpSpawnParentStreamRelay } from "./acp-spawn-parent-stream.js";
 
-const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatMock = vi.fn();
-const recordAcpParentStreamEventsMock = vi.fn();
+const { enqueueSystemEventMock, requestHeartbeatMock, recordAcpParentStreamEventsMock } =
+  vi.hoisted(() => ({
+    enqueueSystemEventMock: vi.fn(),
+    requestHeartbeatMock: vi.fn(),
+    recordAcpParentStreamEventsMock: vi.fn(),
+  }));
 
 vi.mock("../../../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
@@ -30,7 +34,6 @@ vi.mock("./acp-parent-stream-store.sqlite.js", async () => {
 });
 
 let emitAgentEvent: typeof import("../../../infra/agent-events.js").emitAgentEvent;
-let startAcpSpawnParentStreamRelay: typeof import("./acp-spawn-parent-stream.js").startAcpSpawnParentStreamRelay;
 
 const progressCommentaryDeliveryContext = {
   channel: "forum",
@@ -83,7 +86,6 @@ function firstMockCall(
 describe("startAcpSpawnParentStreamRelay", () => {
   beforeAll(async () => {
     ({ emitAgentEvent } = await import("../../../infra/agent-events.js"));
-    ({ startAcpSpawnParentStreamRelay } = await import("./acp-spawn-parent-stream.js"));
   });
 
   beforeEach(() => {

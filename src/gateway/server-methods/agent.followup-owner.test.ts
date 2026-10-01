@@ -4,24 +4,25 @@ import {
   describe1AfterEach1,
   describe1BeforeEach0,
   getAgentTestMocks,
-  invokeAgent,
   makeContext,
   prime,
 } from "./agent.test-harness.js";
 // Provider/session fixtures are isolated; RPC admission, authority, and plugin effects are real.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { prepareAgentCommandExecutionIdentity } from "../../agents/agent-command-execution-identity.js";
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
 import {
   bindRequesterOwnerIdentity,
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import * as completionDelivery from "../../agents/subagents/announce/subagent-announce-completion-delivery.js";
 import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import {
   captureRequesterFollowupAuthority,
@@ -32,7 +33,6 @@ import {
   captureGatewayToolCallerAssertion,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
-import type { AgentToolGatewayRequestCaller } from "../../agents/tools/in-process-gateway.js";
 import { startSessionsSendReplyFlow } from "../../agents/tools/sessions-send-reply-flow.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import {
@@ -50,14 +50,15 @@ import {
 } from "../../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createPluginToolFactoryContext } from "../../plugins/tool-factory-context.js";
 import { bindPluginToolCallbacks } from "../../plugins/tool-factory-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { abortChatRunById } from "../chat-abort.js";
+import { createContext as createInProcessContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
-import { agentHandlers } from "./agent.js";
-import type { RespondFn } from "./types.js";
 
 let metadataOwner: GatewayPluginMetadataOwner | undefined;
 beforeAll(() => {
@@ -99,9 +100,9 @@ describe("Gateway followup owner final effect", () => {
     await describe1AfterEach1();
   });
 
-  it.each(["observer error", "observer error before dispatch", "cancel before dispatch"] as const)(
+  it.for(["observer error", "observer error before dispatch", "cancel before dispatch"] as const)(
     "checks %s after RPC admission and before a versioned plugin writes",
-    async (outcome) => {
+    async (outcome, { signal }) => {
       const root = dirs.make("openclaw-followup-owner-effect-");
       const output = path.join(root, "owner-effect.txt");
       const config = { commands: { ownerAllowFrom: ["discord:owner-1"] } };
@@ -161,12 +162,43 @@ describe("Gateway followup owner final effect", () => {
       }
       expect(requesterAuthority).toBeDefined();
       const closed = createDeferredCore();
-      const parentSettled = createDeferredCore();
+      const accepted = createDeferredCore();
       const entered = createDeferredCore();
       const releaseEffect = createDeferredCore();
       let pluginError: unknown;
-      let gatewayError: unknown;
       let effectStarted = false;
+      let continuation: Promise<unknown> | undefined;
+      const context = Object.assign(createInProcessContext(), makeContext());
+      const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+      const parentRunId = "announce:sessions-send:owner-proof-child:completion";
+      const dispatch = completionDelivery.runAnnounceAgentCall;
+      const observeAdmission = vi
+        .spyOn(completionDelivery, "runAnnounceAgentCall")
+        .mockImplementation((params) =>
+          dispatch({
+            ...params,
+            onAccepted: (receipt) => {
+              params.onAccepted?.(receipt);
+              accepted.resolve();
+            },
+          }),
+        );
+      const stageInput = mocks.stageSessionPendingInput.getMockImplementation();
+      if (!stageInput) {
+        throw new Error("Expected the in-memory session input fixture");
+      }
+      mocks.stageSessionPendingInput.mockImplementation(async (scope, options) => {
+        const input = await stageInput(scope, options);
+        return input
+          ? {
+              ...input,
+              complete: (terminal: AgentRunTerminalOutcome) => {
+                options.assertCompletionCurrent?.();
+                return terminal;
+              },
+            }
+          : undefined;
+      });
       const completion = SessionFollowupCompletion.bind({
         runId: "owner-proof-child",
         requesterSessionKey: SESSION,
@@ -178,7 +210,19 @@ describe("Gateway followup owner final effect", () => {
         custody: {
           signal: new AbortController().signal,
           assertCurrent() {},
-          run: (work) => work(),
+          run: (work) => {
+            const result = withPluginRuntimeGatewayRequestScope(
+              {
+                context,
+                client,
+                resolveGatewayContext: () => context,
+                isWebchatConnect: () => false,
+              },
+              work,
+            );
+            continuation = Promise.resolve(result);
+            return result;
+          },
           release: () => {
             requesterAuthority?.release();
             closed.resolve();
@@ -186,9 +230,9 @@ describe("Gateway followup owner final effect", () => {
         },
       });
       completion.markAccepted("owner-proof-child");
-      const context = makeContext();
       mocks.agentCommand.mockImplementation(async (opts: AgentCommandGatewayIngressOpts) => {
         const runId = opts.runId!;
+        await opts.userTurnTranscriptRecorder?.persistApproved();
         const admission = prepareAgentCommandExecutionIdentity({
           opts,
           prepared: {
@@ -288,61 +332,9 @@ describe("Gateway followup owner final effect", () => {
       if (delayedDispatch) {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
-      const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
-      const gatewayCall: AgentToolGatewayRequestCaller = async <T>(
-        request: Parameters<AgentToolGatewayRequestCaller>[0],
-      ) => {
-        request.assertDispatchCurrent?.();
-        const rpcParams = request.params;
-        if (!isRecord(rpcParams)) {
-          throw new Error("Expected Gateway RPC parameters");
-        }
-        if (request.method === "agent") {
-          const respond = vi.fn<RespondFn>((ok, payload) => {
-            if (!ok || (isRecord(payload) && payload.status !== "accepted")) {
-              parentSettled.resolve();
-            }
-          });
-          await invokeAgent(rpcParams, {
-            client,
-            context,
-            respond,
-            flushDispatch: !delayedDispatch,
-          });
-          const [ok, payload, error] = respond.mock.calls[0] ?? [];
-          if (!ok) {
-            gatewayError = error;
-            throw new Error(JSON.stringify(error));
-          }
-          return payload as T;
-        }
-        if (request.method !== "agent.wait") {
-          throw new Error("unexpected Gateway method");
-        }
-        if (outcome === "observer error" || delayedDispatch) {
-          throw new Error("gateway closed (1006): simulated transport loss");
-        }
-        const reply = createDeferredCore<T>();
-        await agentHandlers["agent.wait"]!({
-          params: rpcParams,
-          req: { type: "req", id: "owner-proof-wait", method: "agent.wait" },
-          context,
-          client,
-          isWebchatConnect: () => false,
-          respond: (ok, payload, error) => {
-            if (ok) {
-              reply.resolve(payload as T);
-            } else {
-              reply.reject(new Error(JSON.stringify(error)));
-            }
-          },
-        });
-        return await reply.promise;
-      };
       try {
         await startSessionsSendReplyFlow({
           completion,
-          callGateway: gatewayCall,
           runId: "owner-proof-child",
           skip: false,
           reply: { status: "ok", replyText: "ready" },
@@ -355,45 +347,85 @@ describe("Gateway followup owner final effect", () => {
           replyTimeoutMs: 1000,
           replyMode: "one-way",
         });
+        if (!continuation) {
+          throw new Error("Expected retained native completion work");
+        }
+        const settled = continuation.catch(() => undefined);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            accepted.promise,
+            settled,
+            "Parent ended before native private admission",
+          ),
+          signal,
+        );
         if (delayedDispatch) {
-          await closed.promise;
           expect(authorityReleased).toBe(false);
           expect(effectStarted).toBe(false);
           if (outcome === "cancel before dispatch") {
-            for (const entry of context.chatAbortControllers.values()) {
-              entry.controller.abort();
-            }
+            expect(
+              abortChatRunById(context, {
+                runId: parentRunId,
+                sessionKey: SESSION,
+                stopReason: "rpc",
+              }).aborted,
+            ).toBe(true);
+          } else {
+            completion.close(new Error("simulated observer loss before execution"));
+            expect(authorityReleased).toBe(false);
           }
-          await vi.runOnlyPendingTimersAsync();
+          // Cross the native accepted-ack yield without advancing run deadlines.
+          await vi.advanceTimersByTimeAsync(10);
         }
         if (outcome !== "cancel before dispatch") {
-          await Promise.race([entered.promise, parentSettled.promise]);
+          await withinTest(
+            awaitGateBeforeSettlement(entered.promise, settled, "Parent ended before plugin entry"),
+            signal,
+          );
         }
         expect(
           effectStarted,
           JSON.stringify({
             pluginError: String(pluginError),
-            gatewayError,
             commands: mocks.agentCommand.mock.calls.length,
           }),
         ).toBe(outcome !== "cancel before dispatch");
         expect(existsSync(output)).toBe(false);
         if (outcome === "observer error") {
-          await closed.promise;
+          completion.close(new Error("simulated observer loss during execution"));
+          expect(authorityReleased).toBe(false);
         }
       } finally {
-        releaseEffect.resolve();
-        await closed.promise;
-        await parentSettled.promise;
-        await authorityRetired.promise;
+        try {
+          releaseEffect.resolve();
+          if (vi.isFakeTimers()) {
+            await vi.advanceTimersByTimeAsync(10);
+          }
+          if (continuation) {
+            await withinTest(
+              continuation.catch(() => undefined),
+              signal,
+            );
+          }
+          await withinTest(closed.promise, signal);
+          await withinTest(authorityRetired.promise, signal);
+        } finally {
+          observeAdmission.mockRestore();
+          vi.useRealTimers();
+        }
       }
       expect(authorityReleased).toBe(true);
       if (outcome === "cancel before dispatch") {
         expect(mocks.agentCommand).not.toHaveBeenCalled();
         expect(existsSync(output)).toBe(false);
       } else {
+        expect(mocks.agentCommand).toHaveBeenCalledOnce();
         expect(pluginError).toBeUndefined();
         expect(readFileSync(output, "utf8")).toBe("authorized owner effect");
+        expect(context.dedupe.get(`agent:${parentRunId}`)?.payload).toMatchObject({
+          status: "ok",
+          inputProcessingCompleted: true,
+        });
       }
     },
   );

@@ -689,7 +689,7 @@ public enum ChatSessionSidebarModel {
         {
             // Sessions can lag behind a fresh switch/new-session; keep the
             // active row selectable instead of showing an empty selection.
-            entries.append(OpenClawChatSessionEntry.placeholder(key: currentSessionKey))
+            entries.append(OpenClawChatSessionEntry(key: currentSessionKey))
         }
         return entries
     }

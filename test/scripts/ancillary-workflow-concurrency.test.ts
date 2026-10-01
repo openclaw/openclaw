@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -270,6 +271,7 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
           continue;
         }
         await runInNewContext(`(async () => {\n${step.with.script}\n})()`, {
+          require: createRequire(import.meta.url),
           context: { eventName: github.event_name, payload: github.event },
           core: {
             setOutput: (key: string, value: string) => {

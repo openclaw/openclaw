@@ -23,6 +23,14 @@ import {
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
 
+// Published clients send "deliver"; translate only the already-snapshotted request.
+function normalizeCronRequestDeliveryMode(input: CronJobPatch | null): void {
+  const delivery = input?.delivery;
+  if (typeof delivery?.mode === "string" && delivery.mode.trim().toLowerCase() === "deliver") {
+    delivery.mode = "announce";
+  }
+}
+
 /** Validate authored fields before normalization can erase blank or invalid input. */
 export function normalizeCronAddRequest(params: unknown): {
   candidate: unknown;
@@ -41,11 +49,12 @@ export function normalizeCronAddRequest(params: unknown): {
     throw new Error("enabled must be a boolean");
   }
   assertCronDeliveryInputNonBlankFields(rawParams?.delivery);
+  const normalized = normalizeCronJobCreate(params, {
+    sessionContext: { sessionKey: readStringField(rawParams, "sessionKey") },
+  });
+  normalizeCronRequestDeliveryMode(normalized);
   return {
-    candidate:
-      normalizeCronJobCreate(params, {
-        sessionContext: { sessionKey: readStringField(rawParams, "sessionKey") },
-      }) ?? params,
+    candidate: normalized ?? params,
     enabledExplicit: parsedEnabled !== undefined,
   };
 }
@@ -63,6 +72,7 @@ export function normalizeCronUpdateRequest(params: unknown): {
   }
   assertCronDeliveryInputNonBlankFields(patchFields?.delivery);
   const normalizedPatch = normalizeCronJobPatch(rawPatch);
+  normalizeCronRequestDeliveryMode(normalizedPatch);
   return {
     candidate: normalizedPatch && rawParams ? { ...rawParams, patch: normalizedPatch } : params,
     normalizedPatch,

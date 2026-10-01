@@ -43,6 +43,10 @@ export function createDoctorMaintenanceState(options: {
   const closeResources = async () => {
     await resources?.close();
     await inspections?.close();
+    // Auth inspection readers are pooled separately from canonical agent handles.
+    const { closeAuthProfileReadPool } =
+      await import("../agents/auth-profiles/sqlite-read-pool.js");
+    closeAuthProfileReadPool({ kind: "root", rootPath: resolveStateDir(selectedEnv) });
     resources = undefined;
     inspections = undefined;
   };

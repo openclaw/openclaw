@@ -1,4 +1,5 @@
 // Gateway CLI coverage tests cover gateway command branches and output modes.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

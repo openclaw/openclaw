@@ -16,7 +16,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import {
+  prepareDoctorContext,
+  withDoctorConfigMaintenance,
+} from "./doctor-config-flow.test-support.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 describe("Doctor workspace persistence", () => {
@@ -344,9 +347,11 @@ describe("Doctor workspace persistence", () => {
           let firstPolicies: unknown;
           let firstRows: unknown;
           for (const pass of [1, 2]) {
-            const ctx = await prepareDoctorContext(configPath);
-            await runInitialConfigWriteHealth(ctx);
-            await runWriteConfigHealth(ctx);
+            await withDoctorConfigMaintenance(async () => {
+              const ctx = await prepareDoctorContext(configPath);
+              await runInitialConfigWriteHealth(ctx);
+              await runWriteConfigHealth(ctx);
+            });
             const snapshot = await readConfigFileSnapshot();
             const policies = {
               main: snapshot.config.agents?.entries?.main?.models,

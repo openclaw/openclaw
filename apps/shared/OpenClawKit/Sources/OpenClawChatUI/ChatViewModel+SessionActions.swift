@@ -135,10 +135,7 @@ extension OpenClawChatViewModel {
         self.isCreatingSession = true
         defer { self.isCreatingSession = false }
         let initiatingSession = self.currentSessionSnapshot()
-        let normalizedAgentID = agentID?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let requestedAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let requestedAgentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
         let requested = self.generatedNewSessionKey(agentID: requestedAgentID)
         // Only authoritative identities decide agent ownership; scanning the roster
         // could adopt an unrelated agent and hand sessions.create a cross-agent parent.
@@ -305,8 +302,7 @@ extension OpenClawChatViewModel {
 
     public func setSessionGroup(key: String, group: String?, agentID: String? = nil) async throws {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
-        let normalized = group?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextGroup = normalized?.isEmpty == false ? normalized : nil
+        let nextGroup = ChatPayloadDecoding.trimmedNonEmptyString(group)
         let owner = self.sidebarData
         let row = self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId)
         let token = row
@@ -440,8 +436,7 @@ extension OpenClawChatViewModel {
 
     public func fetchSessionList(search: String?, archived: Bool) async -> [OpenClawChatSessionEntry] {
         let session = self.currentSessionSnapshot()
-        let normalizedSearch = search?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let query = normalizedSearch?.isEmpty == false ? normalizedSearch : nil
+        let query = ChatPayloadDecoding.trimmedNonEmptyString(search)
         do {
             let res = try await self.transport.listSessions(
                 limit: Self.sessionListFetchLimit,
@@ -839,8 +834,7 @@ extension OpenClawChatViewModel {
     private static func sessionMutationEntryID(for message: OpenClawChatMessage) -> String? {
         guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
         else { return nil }
-        let entryID = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return entryID?.isEmpty == false ? entryID : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(message.transcriptMessageID)
     }
 
     public func setSessionUnread(key: String, unread: Bool, agentID: String? = nil) {
@@ -980,10 +974,7 @@ extension OpenClawChatViewModel {
     @discardableResult
     public func restoreSession(_ session: OpenClawChatSessionEntry) async -> Bool {
         let target = self.sessionMutationTarget(key: session.key, agentID: session.agentId)
-        guard let expectedSessionID = session.sessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !expectedSessionID.isEmpty
-        else {
+        guard let expectedSessionID = ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId) else {
             self.errorText = "Session lifecycle action requires a durable session identity."
             return false
         }

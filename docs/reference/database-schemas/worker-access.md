@@ -84,6 +84,19 @@ cleanup leaves history pending when an accepted write's outcome is unknown; a
 later successful receipt does not clear that uncertainty. Stored formats,
 schemas, and path-redaction rules are unchanged.
 
+The canonical worker retains the actual existing-schema ledger connection for
+step and phase mutations. Its first transaction admits integrity and the stable
+table contract; later writes reuse the schema owner's facts and re-admit that
+contract after schema changes, including another feature's lazy table creation.
+Every write retains transaction-held source, ownership metadata, content-version,
+and write-authority checks. Content markers remain current SQLite snapshot reads;
+only their prepared statements are cached.
+Candidate validation warms that writer before snapshot selection and holds the
+existing actor operation through validation and copied-state cleanup, including
+silent copy intervals. Idle inspection and actor drainage include the retained
+writer. The one-shot synchronous API still closes its connection after each call;
+neither path bootstraps or migrates the full runtime schema.
+
 Mutable execution also awaits validation, activation, and inspected Git-target
 phase receipts through that worker. The phase transformation and terminal-row
 no-op behavior stay with the existing ledger kernel. After each receipt wait,

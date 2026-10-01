@@ -2657,7 +2657,7 @@ struct ChatViewModelTests {
         let requests = viewModel.pendingQuestionAttentionRequests
         let summary = ChatSessionSidebarModel.attentionSummary(
             requests: requests + [requests[0]],
-            sessions: [.placeholder(key: sessionKey)], mainSessionKey: "agent:main:main",
+            sessions: [.init(key: sessionKey)], mainSessionKey: "agent:main:main",
             activeAgentID: "main", sessionRoutingContract: nil)
         #expect(summary?.oldest.id == "older")
         #expect(summary?.count == 5)

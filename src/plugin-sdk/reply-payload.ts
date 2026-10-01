@@ -262,13 +262,11 @@ export async function sendPayloadWithChunkedTextAndMedia<
   }
   const limit = params.textChunkLimit;
   const chunkedText = limit && params.chunker ? params.chunker(text, limit) : [text];
-  const chunks = resolveTextChunksWithFallback(text, chunkedText);
-  let lastResult = params.emptyResult;
-  for (const chunk of chunks) {
-    lastResult = await params.sendText({ ...params.ctx, text: chunk });
-    await params.onResult?.(lastResult);
-  }
-  return lastResult;
+  return (await sendPayloadTextChunkSequence({
+    chunks: resolveTextChunksWithFallback(text, chunkedText),
+    send: ({ text: chunk }) => params.sendText({ ...params.ctx, text: chunk }),
+    onResult: (result) => params.onResult?.(result),
+  }))!;
 }
 
 /**
@@ -455,19 +453,18 @@ export async function sendTextMediaPayload(params: {
     limit && params.adapter.chunker
       ? params.adapter.chunker(text, limit, { formatting: params.ctx.formatting })
       : [text];
-  const chunks = resolveTextChunksWithFallback(text, chunkedText);
-  let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
-  for (const chunk of chunks) {
-    lastResult = await sendAndReport((onDeliveryResult) =>
-      params.adapter.sendText!({
-        ...params.ctx,
-        text: chunk,
-        replyToId: nextReplyToId(),
-        onDeliveryResult,
-      }),
-    );
-  }
-  return lastResult!;
+  return (await sendPayloadTextChunkSequence({
+    chunks: resolveTextChunksWithFallback(text, chunkedText),
+    send: ({ text: chunk }) =>
+      sendAndReport((onDeliveryResult) =>
+        params.adapter.sendText!({
+          ...params.ctx,
+          text: chunk,
+          replyToId: nextReplyToId(),
+          onDeliveryResult,
+        }),
+      ),
+  }))!;
 }
 
 /** Detect numeric-looking target ids for channels that distinguish ids from handles. */

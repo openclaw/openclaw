@@ -16,6 +16,7 @@ import {
 } from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
+  resolveCatalogProfile,
   selectProfileDisplayEntries,
   projectUserProfileDisplay,
   selectResolvedUserProfile,
@@ -284,6 +285,38 @@ export function selectUserProfileDisplaysInDatabase(
       const raw = byId.get(toUSVString(id));
       return [id, raw?.merged_into ? (byId.get(raw.merged_into) ?? raw) : raw];
     }),
+  );
+}
+
+/** Project a bounded display cohort from the resident Gateway catalog. */
+export function projectUserProfileDisplays(
+  ids: readonly string[],
+  resolve: (id: string) => Omit<ProfileDisplayRow, "role"> | undefined,
+) {
+  return new Map(
+    ids.flatMap((id) => {
+      const profile = resolve(id);
+      return profile ? [[id, projectUserProfileDisplay(profile)] as const] : [];
+    }),
+  );
+}
+
+/** Resolve display navigation against the resident Gateway catalog. */
+export function resolveUserProfileReferenceInCatalog(
+  rows: Map<string, ProfileDisplayRow>,
+  reference: string,
+  allowedProfileIds?: ReadonlySet<string>,
+) {
+  const allowed = (row: ProfileDisplayRow) =>
+    !allowedProfileIds || allowedProfileIds.has(row.merged_into ?? row.id);
+  const raw = rows.get(reference);
+  return matchUserProfileReference(
+    reference,
+    raw && allowed(raw) ? resolveCatalogProfile(rows, reference)?.id : undefined,
+    (prefix) =>
+      [...rows.values()]
+        .filter((row) => allowed(row) && row.id.toLowerCase().startsWith(prefix))
+        .map((row) => row.merged_into ?? row.id),
   );
 }
 

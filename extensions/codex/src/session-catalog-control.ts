@@ -80,7 +80,7 @@ export function createCodexSessionCatalogControl(params: {
   });
   const requestOptionsByConfig = new WeakMap<
     OpenClawConfig,
-    Map<string, CodexCatalogRequestOptions>
+    { config: OpenClawConfig; byAgent: Map<string, CodexCatalogRequestOptions> }
   >();
   const indexes = new Map<string, CodexCatalogIndex>();
   const retiringState = new Map<string, Promise<void>>();
@@ -308,24 +308,25 @@ export function createCodexSessionCatalogControl(params: {
         startOptions: structuredClone(resolvedStartOptions),
       };
     }
-    let byAgent = requestOptionsByConfig.get(runtimeConfig);
+    let snapshot = requestOptionsByConfig.get(runtimeConfig);
     const cacheKey = `${agentId ?? ""}\0${source?.sourceHomeId ?? ""}`;
-    const cached = byAgent?.get(cacheKey);
+    const cached = snapshot?.byAgent.get(cacheKey);
     if (cached) {
       // Plugin start options derive from this same immutable config snapshot. Config reload changes
       // object identity; re-cloning on every poll only adds CPU and allocation to the catalog path.
       return cached;
     }
+    if (!snapshot) {
+      // The fleet-sized config belongs to the generation, not each agent/home connection.
+      snapshot = { config: structuredClone(runtimeConfig), byAgent: new Map() };
+      requestOptionsByConfig.set(runtimeConfig, snapshot);
+    }
     const resolved = {
       agentDir,
-      config: structuredClone(runtimeConfig),
+      config: snapshot.config,
       startOptions: structuredClone(resolvedStartOptions),
     };
-    if (!byAgent) {
-      byAgent = new Map();
-      requestOptionsByConfig.set(runtimeConfig, byAgent);
-    }
-    byAgent.set(cacheKey, resolved);
+    snapshot.byAgent.set(cacheKey, resolved);
     return resolved;
   };
   const createRequestSnapshot = (
