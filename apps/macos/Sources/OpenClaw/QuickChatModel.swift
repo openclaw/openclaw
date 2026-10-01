@@ -391,14 +391,6 @@ final class QuickChatModel {
             self.sendState != .sending
     }
 
-    var canCaptureTextContext: Bool {
-        self.canCaptureWindow
-    }
-
-    var canSelectRecentSession: Bool {
-        self.canCaptureWindow
-    }
-
     var canToggleDictation: Bool {
         self.isDictating || self.isStartingDictation || self.canCaptureWindow
     }
@@ -538,7 +530,7 @@ final class QuickChatModel {
     }
 
     func captureFocusedAppText() {
-        guard self.canCaptureTextContext, self.isPresentationActive else { return }
+        guard self.canCaptureWindow, self.isPresentationActive else { return }
         let captureID = UUID()
         let presentationID = self.presentationID
         self.textContextCaptureID = captureID

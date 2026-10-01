@@ -554,7 +554,6 @@ export default definePluginEntry({
           coreConfig: api.config,
           ensureRuntime,
           stateRuntime: api.runtime.state,
-          logger: api.logger,
         });
       },
       { commands: ["voicecall"], descriptors: [VOICE_CALL_CLI_DESCRIPTOR] },

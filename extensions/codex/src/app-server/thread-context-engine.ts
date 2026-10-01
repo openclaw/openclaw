@@ -8,11 +8,10 @@ import type {
   CodexAppServerContextEngineProjectionBinding,
 } from "./session-binding.js";
 
-export type CodexContextEngineThreadBootstrapProjection = {
-  mode: "thread_bootstrap";
-  epoch: string;
-  fingerprint?: string;
-};
+export type CodexContextEngineThreadBootstrapProjection = Pick<
+  CodexAppServerContextEngineProjectionBinding,
+  "mode" | "epoch" | "fingerprint"
+>;
 
 export function buildContextEngineBinding(
   params: EmbeddedRunAttemptParams,

@@ -68,56 +68,78 @@ function resolveNativeHost(filename: string): string | undefined {
   return undefined;
 }
 
+/** Verdicts belong to one capture; replacement namespaces and placements must be admitted again. */
+export function createPluginNativeReferenceValidator(boundary: string) {
+  const admitted = new WeakMap<PluginNativeNamespaceFact, Set<string>>();
+  return (
+    target: string,
+    fact: PluginNativeArtifactFact,
+    namespace: PluginNativeNamespaceFact,
+    expectedHost?: string,
+  ): void => {
+    const directory = path.dirname(
+      pluginNativeNamespaceMemberRelativePath(namespace, fact.capturedPath),
+    );
+    const placement = `${directory}\0${path.dirname(target)}`;
+    let placements = admitted.get(namespace);
+    try {
+      if (!placements?.has(placement)) {
+        assertPluginNativeReferenceDirectory(target, namespace, boundary, directory);
+        if (!placements) {
+          placements = new Set();
+          admitted.set(namespace, placements);
+        }
+        placements.add(placement);
+      }
+      if (expectedHost && resolveNativeHost(target) !== expectedHost) {
+        throw new Error("The native companion directory resolves a different OpenClaw host");
+      }
+    } catch (cause) {
+      throw new Error(
+        "Native plugin companions cannot be preserved without file symlinks. Enable file symlink support for this filesystem, then reload the plugin.",
+        { cause },
+      );
+    }
+  };
+}
+
 /** Hardlinks keep bytes but not realpath parents; only a coherent captured directory can use them. */
-export function assertPluginNativeReferenceNamespace(
+function assertPluginNativeReferenceDirectory(
   target: string,
-  fact: PluginNativeArtifactFact,
   namespace: PluginNativeNamespaceFact,
   boundary: string,
-  expectedHost?: string,
+  directory: string,
 ): void {
-  const relative = pluginNativeNamespaceMemberRelativePath(namespace, fact.capturedPath);
-  const directory = path.dirname(relative);
-  try {
-    for (const [name, member] of Object.entries(namespace.members)) {
-      if (!isPathInside(directory, name || ".")) {
-        continue;
-      }
-      const filename = fs.realpathSync(
-        path.join(path.dirname(target), path.relative(directory, name || ".")),
-      );
-      if (
-        !isPathInside(boundary, filename) &&
-        !isPathInside(pluginNativeNamespaceBoundary(namespace), filename)
-      ) {
-        throw new Error(`Companion ${name} leaves the captured generation`);
-      }
-      const current = fs.statSync(filename, { bigint: true });
-      if (member.sizeBytes === undefined) {
-        if (!current.isDirectory()) {
-          throw new Error(`Companion ${name} is not a directory`);
-        }
-        continue;
-      }
-      const captured = fs.statSync(pluginNativeNamespaceMemberPath(namespace, name), {
-        bigint: true,
-      });
-      if (current.dev === captured.dev && current.ino === captured.ino) {
-        continue;
-      }
-      const content = hashPluginSourceFile(filename, path.dirname(filename));
-      if (content.contentHash !== member.contentHash || content.sizeBytes !== member.sizeBytes) {
-        throw new Error(`Companion ${name} differs from its captured bytes`);
-      }
+  for (const [name, member] of Object.entries(namespace.members)) {
+    if (!isPathInside(directory, name || ".")) {
+      continue;
     }
-    if (expectedHost && resolveNativeHost(target) !== expectedHost) {
-      throw new Error("The native companion directory resolves a different OpenClaw host");
-    }
-  } catch (cause) {
-    throw new Error(
-      "Native plugin companions cannot be preserved without file symlinks. Enable file symlink support for this filesystem, then reload the plugin.",
-      { cause },
+    const filename = fs.realpathSync(
+      path.join(path.dirname(target), path.relative(directory, name || ".")),
     );
+    if (
+      !isPathInside(boundary, filename) &&
+      !isPathInside(pluginNativeNamespaceBoundary(namespace), filename)
+    ) {
+      throw new Error(`Companion ${name} leaves the captured generation`);
+    }
+    const current = fs.statSync(filename, { bigint: true });
+    if (member.sizeBytes === undefined) {
+      if (!current.isDirectory()) {
+        throw new Error(`Companion ${name} is not a directory`);
+      }
+      continue;
+    }
+    const captured = fs.statSync(pluginNativeNamespaceMemberPath(namespace, name), {
+      bigint: true,
+    });
+    if (current.dev === captured.dev && current.ino === captured.ino) {
+      continue;
+    }
+    const content = hashPluginSourceFile(filename, path.dirname(filename));
+    if (content.contentHash !== member.contentHash || content.sizeBytes !== member.sizeBytes) {
+      throw new Error(`Companion ${name} differs from its captured bytes`);
+    }
   }
 }
 

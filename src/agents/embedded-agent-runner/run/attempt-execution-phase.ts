@@ -2,6 +2,7 @@ import {
   bindOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import { withGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
@@ -119,7 +120,14 @@ export async function runEmbeddedAttemptExecutionPhase(
       if (input.runAbortController.signal.aborted) {
         return abortable(Promise.resolve());
       }
-      return abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options)));
+      const runPrompt = () => activeSession.prompt(prompt, options);
+      return abortable(
+        trackPromptSettlePromise(
+          input.sessionLock.assertCronRootCurrent
+            ? withGuardedFetchRequestAuthority(input.sessionLock.assertCronRootCurrent, runPrompt)
+            : runPrompt(),
+        ),
+      );
     });
   const onBlockReply = attempt.onBlockReply
     ? bindOwnedSessionTranscriptWrites(

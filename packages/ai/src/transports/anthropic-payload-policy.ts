@@ -126,11 +126,7 @@ export function isAnthropicServerToolClearingEnabled(
 }
 
 function resolveBaseUrlHostname(baseUrl: string): string | undefined {
-  try {
-    return new URL(baseUrl).hostname;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(baseUrl)?.hostname;
 }
 
 function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {

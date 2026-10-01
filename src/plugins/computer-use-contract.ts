@@ -57,9 +57,9 @@ export const COMPUTER_ACT_V1_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1
 export const COMPUTER_CONTRACT_MISMATCH = "COMPUTER_CONTRACT_MISMATCH";
 export const COMPUTER_STALE_OBSERVATION = "COMPUTER_STALE_OBSERVATION";
 
-const SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
+export const COMPUTER_SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
 const DELIVERY_MODES = ["background", "foreground"] as const;
-const ESCALATION_REASONS = [
+export const COMPUTER_ESCALATION_REASONS = [
   "ax_tree_pixel_mismatch",
   "background_delivery_failed",
   "foreground_ineffective",
@@ -138,7 +138,7 @@ const ComputerActV1ParamsSchema = Type.Union([
   actionObject(["scroll"], {
     ...optionalPointerFields,
     modifiers: Type.Optional(Type.String()),
-    scrollDirection: Type.Optional(Type.Enum(SCROLL_DIRECTIONS, { type: "string" })),
+    scrollDirection: Type.Optional(Type.Enum(COMPUTER_SCROLL_DIRECTIONS, { type: "string" })),
     scrollAmount: Type.Optional(Type.Integer({ minimum: 1 })),
     ...optionalScreenFields,
     ...optionalReferenceFields,
@@ -293,7 +293,7 @@ export const ComputerActParamsSchema = Type.Union([
     deltaY: Type.Optional(Type.Number()),
   }),
   actionObject(["escalate_scope"], {
-    reason: Type.Enum(ESCALATION_REASONS, { type: "string" }),
+    reason: Type.Enum(COMPUTER_ESCALATION_REASONS, { type: "string" }),
   }),
   actionObject(["get_recording_state", "stop_recording"], {}),
   actionObject(["start_recording"], {

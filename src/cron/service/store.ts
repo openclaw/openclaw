@@ -396,25 +396,51 @@ export function snapshotStoreForRollback(state: CronServiceState): CronRollbackS
 }
 
 /** Retain the service and physical store before asynchronous mutation planning. */
-export function captureCronJobMutationSource(state: CronServiceState) {
-  const context = captureOpenClawStateWorkerContext();
+export function captureCronServiceMutationSource(
+  state: CronServiceState,
+  context = captureOpenClawStateWorkerContext(),
+) {
   const storeKey = cronStoreKey(state.deps.storePath);
   const generation = state.lifecycleGeneration;
+  const assertStorageCurrent = () => {
+    context.admission.assertCurrent();
+    if (
+      cronStoreKey(state.deps.storePath) !== storeKey ||
+      resolveOpenClawStateSqlitePath() !== context.admission.databasePath
+    ) {
+      throw new Error("Cron mutation source or service changed before commit");
+    }
+  };
+  return {
+    context,
+    storeKey,
+    assertStorageCurrent,
+    assertCurrent() {
+      assertStorageCurrent();
+      if (state.lifecycleGeneration !== generation) {
+        throw new Error("Cron mutation source or service changed before commit");
+      }
+    },
+  };
+}
+
+export function captureCronJobMutationSource(state: CronServiceState) {
+  const source = captureCronServiceMutationSource(state);
   const resolveDefaultAgentId = () =>
     state.deps.resolveDefaultAgentId
       ? state.deps.resolveDefaultAgentId()
       : state.deps.defaultAgentId;
   const defaultAgentId = resolveDefaultAgentId();
+  const effectiveDefaultAgentId = defaultAgentId ?? state.deps.defaultAgentId;
   return {
-    context,
-    storeKey,
+    ...source,
+    defaultAgentId: effectiveDefaultAgentId,
     assertCurrent() {
-      context.admission.assertCurrent();
+      source.assertCurrent();
+      const currentDefaultAgentId = resolveDefaultAgentId();
       if (
-        state.lifecycleGeneration !== generation ||
-        cronStoreKey(state.deps.storePath) !== storeKey ||
-        resolveOpenClawStateSqlitePath() !== context.admission.databasePath ||
-        resolveDefaultAgentId() !== defaultAgentId
+        currentDefaultAgentId !== defaultAgentId ||
+        (currentDefaultAgentId ?? state.deps.defaultAgentId) !== effectiveDefaultAgentId
       ) {
         throw new Error("Cron mutation source or service changed before commit");
       }
@@ -501,7 +527,9 @@ export async function persistCronJobMutation(params: {
     },
     publish({ store, jobsFingerprint: committedJobs, runtimeFingerprint: committedRuntime }) {
       published = true;
-      markCommitted?.();
+      if (changes.changedIds.size > 0) {
+        markCommitted?.();
+      }
       const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
       noteCronJobsStoreCommit(source.storeKey);
       state.store = store;
@@ -538,9 +566,8 @@ export async function persistCronJobMutation(params: {
       }
     },
     onRolledBackMutation(refusal) {
-      if (refusal.kind === "store-changed") {
-        loadedCronStoreRevisions.set(state, { revision: -1 });
-      }
+      // A foreign receipt owner can advance runtime rows without publishing in this process.
+      loadedCronStoreRevisions.set(state, { revision: -1 });
       throw refusal.kind === "receipt-conflict"
         ? new CronRunReceiptConflictError(refusal.receipt)
         : new CronJobsStoreChangedError(source.storeKey);

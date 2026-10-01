@@ -94,12 +94,11 @@ function handleBranchKeydown(target: HTMLElement, event: KeyboardEvent): boolean
 export function resolveCheckoutChip(params: {
   destination: "local" | "remote" | "cloud";
   worktree: boolean;
-  worktreeAvailable: boolean;
   worktreeName: string;
   headBranch?: string;
   baseRef: string;
   repository?: boolean;
-}): CheckoutChipState | null {
+}): CheckoutChipState {
   const worktreeName = params.worktreeName.trim();
   if (params.worktree && !params.repository && worktreeName) {
     return { label: t("newSession.checkoutWorktreeNamed", { name: worktreeName }) };
@@ -117,9 +116,6 @@ export function resolveCheckoutChip(params: {
         ? t("newSession.checkoutRepositoryFrom", { branch: params.baseRef })
         : t("newSession.checkoutRepository"),
     };
-  }
-  if (params.destination === "local" && !params.worktreeAvailable && !params.worktree) {
-    return null;
   }
   if (!params.worktree) {
     return { label: params.headBranch || t("newSession.checkoutCurrent") };

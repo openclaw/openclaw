@@ -58,14 +58,12 @@ export async function prepareEmbeddedRunRuntime(input: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }) {
   const params = input.runParams;
-  let provider = input.provider;
-  let modelId = input.modelId;
   const modelSetup = await resolveEmbeddedRunModelSetup({
     assertCurrent: input.assertCurrent,
     runParams: params,
     sessionAdmission: input.sessionAdmission,
-    provider,
-    modelId,
+    provider: input.provider,
+    modelId: input.modelId,
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
     globalLane: input.globalLane,
@@ -74,10 +72,10 @@ export async function prepareEmbeddedRunRuntime(input: {
     onHooksResolved: () => input.markStartupStage("hooks"),
     preparedModelRuntime: input.preparedModelRuntime,
   });
-  provider = modelSetup.provider;
-  modelId = modelSetup.modelId;
   const pluginMetadataSnapshot = input.preparedModelRuntime?.metadataSnapshot;
   const {
+    provider,
+    modelId,
     requestedModelId,
     modelSelectionChangedByHook,
     requestStreamTransportOverrides,

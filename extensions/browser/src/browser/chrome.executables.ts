@@ -377,8 +377,7 @@ function resolveLinuxExecutablePath(command: string): string | null {
   if (cleaned.startsWith("/")) {
     return cleaned;
   }
-  const resolved = execBrowserProbe("which", [cleaned], 800);
-  return resolved ? resolved.trim() : null;
+  return execBrowserProbe("which", [cleaned], 800);
 }
 
 function readWindowsProgId(): string | null {

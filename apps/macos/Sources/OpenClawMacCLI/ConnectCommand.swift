@@ -195,15 +195,7 @@ func runConnect(_ args: [String], configURL: URL) async {
 
 private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
     if json {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(output),
-           let text = String(data: data, encoding: .utf8)
-        {
-            print(text)
-        } else {
-            print("{\"error\":\"failed to encode JSON\"}")
-        }
+        printCLIJSON(output, fallback: "{\"error\":\"failed to encode JSON\"}")
         return
     }
 

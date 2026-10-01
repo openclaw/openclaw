@@ -2,6 +2,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -9,6 +10,7 @@ import {
   FLAG_TERMINATOR,
   getCommandPositionalsWithRootOptions,
 } from "../infra/cli-root-options.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import type {
   PluginManifestCommandAliasRecord,
   PluginManifestToolOwnerRecord,
@@ -27,12 +29,20 @@ import {
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
-const ROOT_HELP_ALIASES = new Set(["tools"]);
+const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
 ]);
+const CLI_PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
 
 export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
@@ -112,9 +122,7 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
       return argv;
     }
     if (i === updateIndex) {
-      const next = [...argv];
-      next.splice(updateIndex, 1, "update");
-      return next;
+      return argv.toSpliced(updateIndex, 1, "update");
     }
     const consumed = consumeRootOptionToken(argv, i);
     if (consumed > 0) {
@@ -150,9 +158,6 @@ export function shouldUseRootHelpFastPath(
     (invocation.isRootHelpInvocation ||
       (invocation.commandPath.length === 1 &&
         ROOT_HELP_ALIASES.has(invocation.commandPath[0] ?? "") &&
-        invocation.hasHelpOrVersion) ||
-      (invocation.commandPath.length === 1 &&
-        invocation.commandPath[0] === "help" &&
         invocation.hasHelpOrVersion))
   );
 }
@@ -188,6 +193,22 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
     return false;
   }
   return resolveCliNetworkProxyPolicy(policyArgv) === "default";
+}
+
+export function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
+    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
+  );
+}
+
+export function shouldBootstrapCliProxyBeforeFastPath(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (isDebugProxyCaptureEnvEnabled(env)) {
+    return true;
+  }
+  return CLI_PROXY_ENV_KEYS.some((key) => normalizeOptionalString(env[key]) !== undefined);
 }
 
 function formatExcludedPluginCommand(command: string, owner: string): string {

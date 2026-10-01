@@ -251,11 +251,6 @@ class SecurePrefs(
     MutableStateFlow(plainPrefs.getInt(notificationsForwardingMaxEventsPerMinuteKey, 20).coerceAtLeast(1))
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> = _notificationForwardingMaxEventsPerMinute
 
-  private val _notificationForwardingSessionKey by lazy {
-    MutableStateFlow(loadNotificationForwardingSessionKey(gatewayRegistry.activeStableId.value))
-  }
-  val notificationForwardingSessionKey: StateFlow<String?> get() = _notificationForwardingSessionKey
-
   private val _voiceMicEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceMicEnabledKey, false))
   val voiceMicEnabled: StateFlow<Boolean> = _voiceMicEnabled
 
@@ -505,21 +500,12 @@ class SecurePrefs(
     return true
   }
 
-  internal fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    val normalized = value.coerceAtLeast(1)
-    plainPrefs.edit {
-      putInt(notificationsForwardingMaxEventsPerMinuteKey, normalized)
-    }
-    _notificationForwardingMaxEventsPerMinute.value = normalized
-  }
-
   internal fun setNotificationForwardingSessionKey(value: String?) {
     val stableId = gatewayRegistry.activeStableId.value ?: return
     val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
     plainPrefs.edit {
       putString(notificationForwardingSessionKeyKey(stableId), normalized.orEmpty())
     }
-    _notificationForwardingSessionKey.value = normalized
   }
 
   fun loadGatewayCredentials(stableId: String): GatewayCredentials {
@@ -636,9 +622,6 @@ class SecurePrefs(
 
   fun clearNotificationForwardingSessionKey(stableId: String) {
     plainPrefs.edit { remove(notificationForwardingSessionKeyKey(stableId)) }
-    if (gatewayRegistry.activeStableId.value == stableId) {
-      _notificationForwardingSessionKey.value = null
-    }
   }
 
   fun getString(key: String): String? = securePrefs.getString(key, null)
@@ -735,7 +718,6 @@ class SecurePrefs(
       ?.takeIf { it.isNotEmpty() }
 
   private fun handleActiveGatewayChanged(stableId: String?) {
-    _notificationForwardingSessionKey.value = loadNotificationForwardingSessionKey(stableId)
     _incomingCallsEnabled.value = isIncomingCallAllowed(stableId)
   }
 
@@ -763,11 +745,7 @@ class SecurePrefs(
 
   fun setVoiceWakeEnabled(value: Boolean) = _voiceWakeEnabled.persistBoolean(voiceWakeEnabledKey, value)
 
-  fun setVoiceWakeWords(words: List<String>) {
-    val sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
-    persistStringList(voiceWakeWordsKey, sanitized)
-    _voiceWakeWords.value = sanitized
-  }
+  fun setVoiceWakeWords(words: List<String>) = _voiceWakeWords.persistStringList(voiceWakeWordsKey, VoiceWakePreferences.sanitizeTriggerWords(words))
 
   fun setSpeakerEnabled(value: Boolean) = _speakerEnabled.persistBoolean("voice.speakerEnabled", value)
 
@@ -1117,35 +1095,20 @@ class SecurePrefs(
       } else {
         _modelFavorites.value + trimmed
       }
-    persistStringList(chatModelFavoritesKey, next)
-    _modelFavorites.value = next
+    _modelFavorites.persistStringList(chatModelFavoritesKey, next)
   }
 
   fun recordModelRecent(ref: String) {
     val trimmed = ref.trim()
     if (trimmed.isEmpty()) return
-    val next = (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents)
-    persistStringList(chatModelRecentsKey, next)
-    _modelRecents.value = next
+    _modelRecents.persistStringList(chatModelRecentsKey, (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents))
   }
 
-  fun setSessionCustomGroups(groups: List<String>) {
-    val sanitized = groups.map(String::trim).filter { it.isNotEmpty() }.distinct()
-    persistStringList(sessionCustomGroupsKey, sanitized)
-    _sessionCustomGroups.value = sanitized
-  }
+  fun setSessionCustomGroups(groups: List<String>) = _sessionCustomGroups.persistStringList(sessionCustomGroupsKey, groups.map(String::trim).filter { it.isNotEmpty() }.distinct())
 
-  fun setSidebarPageOrder(pageIds: List<String>) {
-    val sanitized = sanitizeSidebarPageOrder(pageIds)
-    persistStringList(sidebarPageOrderKey, sanitized)
-    _sidebarPageOrder.value = sanitized
-  }
+  fun setSidebarPageOrder(pageIds: List<String>) = _sidebarPageOrder.persistStringList(sidebarPageOrderKey, sanitizeSidebarPageOrder(pageIds))
 
-  fun setSidebarVisiblePages(pageIds: List<String>) {
-    val sanitized = sanitizeSidebarVisiblePages(pageIds)
-    persistStringList(sidebarVisiblePagesKey, sanitized)
-    _sidebarVisiblePages.value = sanitized
-  }
+  fun setSidebarVisiblePages(pageIds: List<String>) = _sidebarVisiblePages.persistStringList(sidebarVisiblePagesKey, sanitizeSidebarVisiblePages(pageIds))
 
   private fun MutableStateFlow<Boolean>.persistBoolean(
     key: String,
@@ -1160,6 +1123,14 @@ class SecurePrefs(
     next: String,
   ) {
     plainPrefs.edit { putString(key, next) }
+    value = next
+  }
+
+  private fun MutableStateFlow<List<String>>.persistStringList(
+    key: String,
+    next: List<String>,
+  ) {
+    this@SecurePrefs.persistStringList(key, next)
     value = next
   }
 

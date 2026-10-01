@@ -297,7 +297,7 @@ describe("cron service ops persist rollback", () => {
         agentId: "doomed",
       });
       expect(
-        writeCronJobScratch({
+        await writeCronJobScratch({
           storePath,
           jobId: removed.id,
           content: "deleted agent scratch",

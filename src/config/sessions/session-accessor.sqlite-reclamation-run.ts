@@ -192,6 +192,7 @@ export async function runSqliteSessionReclamation(params: {
             ),
           assertRequestCurrent,
           signal,
+          params.plan.databaseOptions.path,
         );
       };
       const retained = await runExclusiveSqliteSessionWrite(
@@ -295,6 +296,7 @@ export async function runSqliteSessionReclamation(params: {
           },
           assertOpeningCurrent,
           signal,
+          params.plan.databaseOptions.path,
         );
       } finally {
         await execution.release();

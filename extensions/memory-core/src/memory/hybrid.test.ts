@@ -1,12 +1,11 @@
 // Memory Core tests cover hybrid plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  buildFtsQuery,
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
   selectHybridSearchResults,
 } from "./hybrid.js";
-import { bm25RankToScore } from "./keyword-query.js";
+import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
 
 type HybridInputs = Parameters<typeof mergeHybridResults>[0];
 type VectorHit = HybridInputs["vector"][number];

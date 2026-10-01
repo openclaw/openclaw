@@ -40,12 +40,8 @@ import type { CronStoreFile } from "./types.js";
 export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
 export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 export { CronJobsStoreChangedError } from "./store/save-error.js";
-export type {
-  CronConfigJobRuntimeEntry,
-  CronQuarantinedJob,
-  LoadedCronStore,
-  QuarantinedCronConfigJob,
-} from "./store/types.js";
+export type { CronConfigJobRuntimeEntry, LoadedCronStore } from "./store/types.js";
+export type { CronQuarantinedJob, QuarantinedCronConfigJob } from "./types-shared.js";
 export { loadCronQuarantinedJobs, saveCronQuarantinedJobs } from "./store/quarantine.js";
 
 const MAX_TRACKED_CRON_STORE_REVISIONS = 64;

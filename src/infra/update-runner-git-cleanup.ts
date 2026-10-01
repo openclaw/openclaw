@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { formatUpdateCleanupCommand } from "./update-maintenance.js";
 import { MAX_LOG_CHARS, runStep } from "./update-runner-command.js";
@@ -63,12 +64,6 @@ export async function cleanupGitPreflight(
       MAX_LOG_CHARS,
     );
   }
-  if (removeStep.exitCode !== 0) {
-    removeStep.advisory = {
-      kind: "recoverable-maintenance",
-      message: `Skipped preflight cleanup. Remove the retained temporary copy with: ${formatUpdateCleanupCommand(preflightRoot)}. Reason: ${removeStep.stderrTail || "temporary worktree removal failed"}`,
-    };
-  }
   await runCleanupCommand(["git", "-C", options.cwd, "worktree", "prune"], {
     cwd: options.cwd,
   }).catch((error: unknown) => {
@@ -77,12 +72,34 @@ export async function cleanupGitPreflight(
     }
     return null;
   });
-  await fs
+  const removed = await fs
     .rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
-    .catch(() => {});
+    .then(
+      () => true,
+      (error: unknown) => {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
+        if (removeStep.exitCode === 0) {
+          removeStep.exitCode = 1;
+        }
+        removeStep.stderrTail = trimLogTail(
+          [removeStep.stderrTail, formatErrorMessage(error)].filter(Boolean).join("\n"),
+          MAX_LOG_CHARS,
+        );
+        return false;
+      },
+    );
+  if (removeStep.exitCode !== 0) {
+    removeStep.advisory = {
+      kind: "recoverable-maintenance",
+      message: `Skipped preflight cleanup. Remove the retained temporary copy with: ${formatUpdateCleanupCommand(preflightRoot)}. Reason: ${removeStep.stderrTail || "temporary worktree removal failed"}`,
+    };
+  }
   options.progress?.onStepComplete?.({
     ...removeStep,
     index: options.stepIndex,
     total: options.totalSteps,
   });
+  return removed;
 }

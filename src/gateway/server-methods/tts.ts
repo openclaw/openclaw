@@ -1,4 +1,4 @@
-// Gateway RPC handlers for text-to-speech status, preferences, and conversion.
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -16,9 +16,8 @@ import {
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
 import { resolvePreparedTtsProvider } from "../../tts/tts-provider-resolution.js";
-import { resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
+import { resolveTtsPersonaList, resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
 import {
-  getTtsPersona,
   isTtsProviderConfigured,
   listTtsPersonas,
   resolveExplicitTtsOverrides,
@@ -36,12 +35,6 @@ import { respondUnavailableOnThrow } from "./response.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-function yieldBeforeTtsStatusSetup(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 function resolveTtsGatewayStatusFacts(cfg: OpenClawConfig) {
   const settings = resolveTtsSettingsSnapshot({ cfg });
@@ -70,11 +63,10 @@ function setTtsEnabledHandler(enabled: boolean): GatewayRequestHandler {
   };
 }
 
-/** Gateway request handlers for TTS status, preference mutation, and synthesis. */
 export const ttsHandlers: GatewayRequestHandlers = {
   "tts.status": async ({ respond, context }) => {
     await respondUnavailableOnThrow(respond, async () => {
-      await yieldBeforeTtsStatusSetup();
+      await yieldToEventLoop();
       const cfg = context.getRuntimeConfig();
       const { configuredByProvider, provider, settings, speechProviders } =
         resolveTtsGatewayStatusFacts(cfg);
@@ -258,20 +250,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
   "tts.personas": async ({ respond, context }) => {
     await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
-      const active = getTtsPersona(config, prefsPath);
-      respond(true, {
-        active: active?.id ?? null,
-        personas: listTtsPersonas(config).map((persona) => ({
-          id: persona.id,
-          label: persona.label,
-          description: persona.description,
-          provider: persona.provider,
-          fallbackPolicy: persona.fallbackPolicy,
-          providers: Object.keys(persona.providers ?? {}),
-        })),
-      });
+      respond(true, resolveTtsPersonaList(cfg));
     });
   },
   "tts.setPersona": async ({ params, respond, context }) => {

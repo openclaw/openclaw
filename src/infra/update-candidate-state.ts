@@ -135,6 +135,8 @@ export const UpdateCandidateSnapshotInventorySchema = z.object({
   databases: UpdateCandidateStateInventorySchema,
   pluginBytes: z.number().nonnegative(),
   pluginPlan: z.literal(UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME),
+  // Published candidate workers before named snapshot warnings omit this field.
+  warnings: z.array(z.string()).default([]),
 });
 export const UpdateStateSchemaInspectionPlanSchema = z.object({
   files: z.array(z.tuple([z.string(), StateDatabaseDiscoverySchema])),
@@ -308,6 +310,7 @@ export async function readUpdateCandidateStateInventoryInProcess(
       databases: files,
       pluginBytes: plugins.bytes,
       pluginPlan: UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
+      warnings: plugins.warnings,
     };
   };
   if (await fileExists(shared)) {

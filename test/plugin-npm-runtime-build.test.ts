@@ -24,6 +24,7 @@ import {
 } from "../scripts/lib/plugin-npm-runtime-build.mts";
 import { resolveRuntimeWorkerThreadExecArgv } from "../src/infra/runtime-worker-url.js";
 import { defineBundledChannelSetupEntry } from "../src/plugin-sdk/channel-entry-contract.js";
+import { writePublicRuntimeSurfacePluginFixture } from "./helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -580,31 +581,10 @@ describe("plugin npm runtime build planning", () => {
   });
 
   it("includes top-level public runtime surfaces", () => {
-    const packageDir = tempDirs.make("openclaw-plugin-runtime-public-surfaces-");
-    writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/public-surfaces-fixture",
-        version: "1.0.0",
-        openclaw: { extensions: ["./index.ts"] },
-      }),
-    );
-    writeFileSync(path.join(packageDir, "openclaw.plugin.json"), "{}\n");
-    mkdirSync(path.join(packageDir, "assets"));
-    mkdirSync(path.join(packageDir, "skills"));
-    for (const file of [
-      "api.ts",
-      "index.ts",
-      "runtime-api.ts",
-      "README.md",
-      "assets/icon.png",
-      "assets/activity.svg",
-    ]) {
-      writeFileSync(path.join(packageDir, file), "");
-    }
-
+    const fixtureRoot = tempDirs.make("openclaw-plugin-public-surfaces-");
+    const { packageDir } = writePublicRuntimeSurfacePluginFixture(fixtureRoot);
     const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir }),
+      resolvePluginNpmRuntimeBuildPlan({ repoRoot: fixtureRoot, packageDir }),
     );
     expect(plan.entry).toEqual({
       api: path.join(packageDir, "api.ts"),

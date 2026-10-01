@@ -2,6 +2,7 @@ import { lstatSync, symlinkSync, unlinkSync, type Stats } from "node:fs";
 // Links plugin peer packages for local development installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { hasErrnoCode } from "../infra/errors.js";
 import { resolveUserPath } from "../infra/home-dir.js";
@@ -57,11 +58,7 @@ export function resolveOpenClawHostDependency(manifest: {
   peerDependencies?: unknown;
 }): OpenClawHostDependency | null {
   for (const declaration of ["peerDependencies", "optionalDependencies", "dependencies"] as const) {
-    const dependencies = manifest[declaration];
-    const spec =
-      typeof dependencies === "object" && dependencies !== null && !Array.isArray(dependencies)
-        ? (dependencies as Record<string, unknown>).openclaw
-        : undefined;
+    const spec = asOptionalRecord(manifest[declaration])?.openclaw;
     if (typeof spec === "string" && spec) {
       return { declaration, spec };
     }

@@ -1,8 +1,3 @@
-/**
- * Subagent list builder.
- *
- * Combines live registry runs and persisted session metadata for sessions_list/subagents views.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
@@ -23,15 +18,15 @@ import {
   type SubagentExecutionObservation,
 } from "./subagent-execution-observation.js";
 import type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
-import {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-} from "./subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { shouldKeepSubagentRunChildLink } from "./subagent-run-liveness.js";
 import { buildSubagentRunView } from "./subagent-run-view.js";
-import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
+import {
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
+  resolveSubagentDisplayStatus,
+} from "./subagent-session-metrics.js";
 
 type SubagentListItem = {
   index: number;
@@ -183,20 +178,6 @@ function buildChildSessionIndex(
   return childSessionsByController;
 }
 
-function buildListText(params: {
-  active: Array<{ line: string }>;
-  recent: Array<{ line: string }>;
-  recentMinutes: number;
-}) {
-  return [
-    "active subagents:",
-    ...(params.active.length ? params.active.map((entry) => entry.line) : ["(none)"]),
-    "",
-    `recent (last ${params.recentMinutes}m):`,
-    ...(params.recent.length ? params.recent.map((entry) => entry.line) : ["(none)"]),
-  ].join("\n");
-}
-
 /** Build structured and text views for active and recent subagent runs. */
 export function buildSubagentList(params: {
   context: SubagentListReadContext;
@@ -262,6 +243,12 @@ export function buildSubagentList(params: {
     total: runView.latest.length,
     active,
     recent,
-    text: buildListText({ active, recent, recentMinutes: params.context.recentMinutes }),
+    text: [
+      "active subagents:",
+      ...(active.length ? active.map((entry) => entry.line) : ["(none)"]),
+      "",
+      `recent (last ${params.context.recentMinutes}m):`,
+      ...(recent.length ? recent.map((entry) => entry.line) : ["(none)"]),
+    ].join("\n"),
   };
 }

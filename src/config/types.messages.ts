@@ -1,4 +1,3 @@
-// Defines message queue and delivery configuration types.
 import type { z } from "zod";
 import type {
   BroadcastSchema,

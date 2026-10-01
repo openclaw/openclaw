@@ -60,24 +60,15 @@ export function shouldFallbackToStartupEntry(params: { code: number; detail: str
 }
 
 function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
-  const appData = env.APPDATA?.trim();
-  if (appData) {
-    return path.join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
+  let appData = env.APPDATA?.trim();
+  if (!appData) {
+    const home = env.USERPROFILE?.trim() || env.HOME?.trim();
+    if (!home) {
+      throw new Error("Windows startup folder unavailable: APPDATA/USERPROFILE not set");
+    }
+    appData = path.join(home, "AppData", "Roaming");
   }
-  const home = env.USERPROFILE?.trim() || env.HOME?.trim();
-  if (!home) {
-    throw new Error("Windows startup folder unavailable: APPDATA/USERPROFILE not set");
-  }
-  return path.join(
-    home,
-    "AppData",
-    "Roaming",
-    "Microsoft",
-    "Windows",
-    "Start Menu",
-    "Programs",
-    "Startup",
-  );
+  return path.join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
 }
 
 function sanitizeWindowsFilename(value: string): string {
@@ -301,6 +292,38 @@ async function readWindowsTaskCommand(
       }
     };
     const action = registered?.status === "found" ? registered.actions?.[0] : undefined;
+    if (
+      registered?.status === "found" &&
+      normalizeWindowsTaskIdentity(registered.taskPath ?? "") ===
+        normalizeWindowsTaskIdentity(taskName) &&
+      registered.actions &&
+      registered.actions.length > 1 &&
+      options?.onLauncherContent
+    ) {
+      // Inventory needs evidence from later custom actions even though a multi-action
+      // task cannot supply one effective Gateway command or lifecycle authority.
+      for (const candidate of registered.actions) {
+        if (candidate.type !== 0) {
+          continue;
+        }
+        const argv = [
+          candidate.path,
+          ...splitArgsPreservingQuotes(candidate.arguments, { escapeMode: "backslash-quote-only" }),
+        ];
+        for (const pathname of argv.filter((arg) => /\.(?:bat|cmd|vbs)$/i.test(arg))) {
+          try {
+            assertStaticTaskPath(pathname);
+            const scriptPath = /\.bat$/i.test(pathname)
+              ? pathname
+              : (await readTaskLauncher(pathname, options.onLauncherContent, false, deadline))
+                  .scriptPath;
+            options.onLauncherContent(await readTaskFile(scriptPath, deadline), scriptPath);
+          } catch {
+            assertInspectionDeadline();
+          }
+        }
+      }
+    }
     if (
       registered?.status === "found" &&
       (!registered.taskPath ||
@@ -556,11 +579,6 @@ export function buildTaskScript({
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
-  // Redirect stdin from NUL: a Scheduled Task console (even hidden via the
-  // VBS launcher) still hands the gateway real console handles, so
-  // `process.stdin.isTTY` reports true and interactive permission prompts
-  // block forever on a console no one can see (#112173). With stdin at NUL
-  // the gateway and its workers correctly take non-interactive paths.
   const commandArguments =
     environment?.OPENCLAW_SERVICE_KIND === "gateway"
       ? [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
@@ -569,11 +587,6 @@ export function buildTaskScript({
     `${commandArguments.map((argument) => quoteCmdScriptArg(argument)).join(" ")} ${STDIN_NUL_REDIRECT}`,
   );
   return `${lines.join("\r\n")}\r\n`;
-}
-
-function renderStartupLaunchCommand(scriptPath: string): string {
-  const cmdExePath = quoteCmdScriptArg(getWindowsCmdExePath());
-  return `start "" /min ${cmdExePath} /d /c ${quoteCmdScriptArg(scriptPath)}`;
 }
 
 export function buildStartupLauncherScript(params: {
@@ -586,7 +599,9 @@ export function buildStartupLauncherScript(params: {
     assertNoCmdLineBreak(trimmedDescription, "Startup launcher description");
     lines.push(`rem ${trimmedDescription}`);
   }
-  lines.push(renderStartupLaunchCommand(params.scriptPath));
+  lines.push(
+    `start "" /min ${quoteCmdScriptArg(getWindowsCmdExePath())} /d /c ${quoteCmdScriptArg(params.scriptPath)}`,
+  );
   return `${lines.join("\r\n")}\r\n`;
 }
 

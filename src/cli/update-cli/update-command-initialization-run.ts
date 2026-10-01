@@ -24,6 +24,7 @@ import {
   assertUpdateAdmissionConfigUnchanged,
   inspectStagedUpdateCandidateAdmission,
 } from "./update-command-candidate-admission.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
 import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -106,6 +107,19 @@ export async function initializeAndRunUpdate(
                 return;
               }
               const selectedTarget = selection.target;
+              const candidateAdmissionEnabled =
+                selectedTarget?.updateInstallKind === "package" &&
+                usesCandidateUpdateAdmission(opts, prepared.installKind);
+              // Candidate execution stays in the selected profile; only installed union checks
+              // can need a separate caller projection.
+              const callerLegacyConfigPlan =
+                selectedTarget &&
+                !selectedTarget.managedServiceRootRedirect &&
+                !candidateAdmissionEnabled &&
+                opts.channel &&
+                resolveConfigPath(env) !== resolveConfigPath()
+                  ? (await readUpdateChannelConfig(true)).legacyConfigPlan
+                  : undefined;
               const root = selection.refusal
                 ? selection.refusal.report.root
                 : selection.target.root;
@@ -120,6 +134,7 @@ export async function initializeAndRunUpdate(
                 env,
                 runId,
                 executor,
+                callerLegacyConfigPlan,
                 registerRun: async (run) => {
                   registerRun(run);
                   for (const result of selectedTarget?.preflightSteps ?? []) {
@@ -256,9 +271,6 @@ export async function initializeAndRunUpdate(
               const artifact =
                 target.updateInstallKind === "package" &&
                 !canResolveRegistryVersionForPackageTarget(target.packageInstallSpec ?? target.tag);
-              const candidateAdmissionEnabled =
-                usesCandidateUpdateAdmission(opts, prepared.installKind) &&
-                target.updateInstallKind === "package";
               const stageParams = (presentation: ReturnType<typeof createUpdateProgress>) => ({
                 reapplyLocalOverrides: opts.reapplyLocalOverrides,
                 root: target.root,
@@ -311,7 +323,7 @@ export async function initializeAndRunUpdate(
                           applyUpdateCandidateAdmission({
                             target,
                             opts,
-                            result: initialization.candidateAdmission,
+                            result: initialization.candidateAdmission.result,
                           });
                         } catch (error) {
                           if (!(error instanceof UpdatePreMutationError)) {
@@ -351,13 +363,12 @@ export async function initializeAndRunUpdate(
                 const timeoutMs = prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
                 const selectedStoredChannel = target.storedChannel;
                 const candidateAdmissionChecks =
-                  initialization.candidateAdmission?.verdict?.verdict === "admit"
-                    ? initialization.candidateAdmission.verdict.facts.checks.map(
+                  initialization.candidateAdmission?.result.verdict?.verdict === "admit"
+                    ? initialization.candidateAdmission.result.verdict.facts.checks.map(
                         (check) => check.name,
                       )
                     : undefined;
                 const checkSchemas = async (phase?: "before" | "after") => {
-                  const { readUpdateChannelConfig } = await import("./update-command-config.js");
                   const config = await withOwnedManagedUpdateEnv(env, () =>
                     readUpdateChannelConfig(Boolean(opts.channel), {
                       tolerateReadFailure: candidateAdmissionChecks?.includes("config"),
@@ -378,6 +389,7 @@ export async function initializeAndRunUpdate(
                   Object.assign(target, config);
                   return await preflightUpdateCommandSchemas({
                     ...target,
+                    callerLegacyConfigPlan,
                     shouldRestart: prepared.shouldRestart,
                     updateStepTimeoutMs: timeoutMs,
                     invocationCwd,

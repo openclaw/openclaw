@@ -29,6 +29,7 @@ import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
+import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { captureAgentJobSession } from "./agent-job.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
@@ -84,6 +85,13 @@ export function dispatchAgentRunFromGateway(params: {
   const assertSettlementCurrent = params.assertSettlementCurrent;
   const registeredRunEntry = params.admittedRunEntry;
   const jobSessionBinding = registeredRunEntry ?? params.ingressOpts;
+  const publishReplay = (entry: DedupeEntry) =>
+    setGatewayDedupeEntries({
+      dedupe: params.context.dedupe,
+      keys: params.dedupeKeys,
+      session: captureAgentJobSession(jobSessionBinding),
+      entry: diagnostics.forReplay(entry),
+    });
   const registeredRunInstance = registeredRunEntry?.operationalRunInstance;
   const registeredLifecycleGeneration = registeredRunEntry?.lifecycleGeneration;
   const registeredSessionKey = registeredRunEntry?.sessionKey;
@@ -296,18 +304,13 @@ export function dispatchAgentRunFromGateway(params: {
       const inputProcessingCompleted =
         recordedInputCompletion?.reason === "completed" && responseStatus === "ok";
       const persistTerminalDedupe = () => {
-        setGatewayDedupeEntries({
-          dedupe: params.context.dedupe,
-          keys: params.dedupeKeys,
-          session: captureAgentJobSession(jobSessionBinding),
-          entry: diagnostics.forReplay({
-            ts: Date.now(),
-            ok: true,
-            payload: {
-              ...payload,
-              ...(inputProcessingCompleted ? { inputProcessingCompleted: true } : {}),
-            },
-          }),
+        publishReplay({
+          ts: Date.now(),
+          ok: true,
+          payload: {
+            ...payload,
+            ...(inputProcessingCompleted ? { inputProcessingCompleted: true } : {}),
+          },
         });
       };
       const settled = await settle({ terminalOutcome, onRecovered: persistTerminalDedupe });
@@ -315,16 +318,11 @@ export function dispatchAgentRunFromGateway(params: {
         const summary = "failed to persist cron continuation settlement";
         const error = errorShape(ErrorCodes.UNAVAILABLE, summary);
         const failedPayload = { runId: params.runId, status: "error" as const, summary };
-        setGatewayDedupeEntries({
-          dedupe: params.context.dedupe,
-          keys: params.dedupeKeys,
-          session: captureAgentJobSession(jobSessionBinding),
-          entry: diagnostics.forReplay({
-            ts: Date.now(),
-            ok: false,
-            payload: failedPayload,
-            error,
-          }),
+        publishReplay({
+          ts: Date.now(),
+          ok: false,
+          payload: failedPayload,
+          error,
         });
         cleanupRunOwner();
         params.io.emitFinal([false, failedPayload, error], {
@@ -396,16 +394,11 @@ export function dispatchAgentRunFromGateway(params: {
           : {}),
       };
       const persistTerminalDedupe = (settlementPersisted: boolean) => {
-        setGatewayDedupeEntries({
-          dedupe: params.context.dedupe,
-          keys: params.dedupeKeys,
-          session: captureAgentJobSession(jobSessionBinding),
-          entry: diagnostics.forReplay({
-            ts: Date.now(),
-            ok: aborted && settlementPersisted,
-            payload,
-            ...(aborted ? {} : { error }),
-          }),
+        publishReplay({
+          ts: Date.now(),
+          ok: aborted && settlementPersisted,
+          payload,
+          ...(aborted ? {} : { error }),
         });
       };
       const settled = await settle({

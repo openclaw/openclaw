@@ -1,4 +1,3 @@
-// Runtime gateway RPC helper shared by CLI commands that call the Gateway.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,

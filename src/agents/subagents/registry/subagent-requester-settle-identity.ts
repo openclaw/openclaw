@@ -1,5 +1,6 @@
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export function buildRequesterSettleWakeIdentity(params: {
   requesterSessionKey: string;
@@ -7,11 +8,19 @@ export function buildRequesterSettleWakeIdentity(params: {
   batchRunIds: readonly string[];
   rearmGeneration?: number;
   attemptIndex?: number;
-  parentOnly?: boolean;
+  /**
+   * Private completion turns reuse one key across attempts: a retry must not republish
+   * private input under a new identity. Deliverable turns suffix each retry so a
+   * cached terminal failure cannot replay in place of a new delivery attempt.
+   * Pause notices also use fresh attempts, even when their completion stays private.
+   */
+  sharedAttemptKey?: boolean;
+  pause?: boolean;
 }): { batchKey: string; runId: string } {
   const batchKey = [
     `requester-settle:${params.requesterAgentId ?? "unknown"}:${params.requesterSessionKey}:${params.batchRunIds.toSorted().join(",")}`,
     params.rearmGeneration === undefined ? undefined : `yield-${params.rearmGeneration}`,
+    params.pause ? "pause" : undefined,
   ]
     .filter(Boolean)
     .join(":");
@@ -19,7 +28,9 @@ export function buildRequesterSettleWakeIdentity(params: {
   return {
     batchKey,
     runId: buildAnnounceIdempotencyKey(
-      params.parentOnly || attemptIndex === 0 ? batchKey : `${batchKey}:retry-${attemptIndex}`,
+      (params.sharedAttemptKey && !params.pause) || attemptIndex === 0
+        ? batchKey
+        : `${batchKey}:retry-${attemptIndex}`,
     ),
   };
 }
@@ -33,7 +44,8 @@ export function isRequesterSettleWakeForRun(params: {
 }): boolean {
   const { entry, requesterSessionKey, requesterAgentId } = params;
   const wake = entry.requesterSettleWake;
-  const batchRunIds = wake?.batchRunIds;
+  const pauseNotice = entry.pauseReason === "sessions_yield" && wake?.pauseNotice;
+  const batchRunIds = pauseNotice ? [entry.runId] : wake?.batchRunIds;
   if (
     entry.requesterSessionKey !== requesterSessionKey ||
     (entry.requesterAgentId && entry.requesterAgentId !== requesterAgentId) ||
@@ -44,16 +56,20 @@ export function isRequesterSettleWakeForRun(params: {
   ) {
     return false;
   }
-  const parentOnly = batchRunIds.some((runId) => {
-    const member = params.runsById.get(runId);
-    return (
-      member?.requesterSessionKey === requesterSessionKey &&
-      (!member.requesterAgentId || member.requesterAgentId === requesterAgentId) &&
-      member.requesterSettleWake !== undefined &&
-      member.requesterSettleWake.rearmGeneration === wake.rearmGeneration &&
-      member.completionTarget === "parent"
-    );
-  });
+  // Mirrors the frozen admission policy: a yielded private batch that was
+  // admitted as deliverable retries under fresh keys like any public batch.
+  const sharedAttemptKey =
+    wake.yieldedFinalDeliverable !== true &&
+    batchRunIds.some((runId) => {
+      const member = params.runsById.get(runId);
+      return (
+        member?.requesterSessionKey === requesterSessionKey &&
+        (!member.requesterAgentId || member.requesterAgentId === requesterAgentId) &&
+        member.requesterSettleWake !== undefined &&
+        member.requesterSettleWake.rearmGeneration === wake.rearmGeneration &&
+        member.completionTarget === "parent"
+      );
+    });
   // Pending backoff still belongs to the last admitted attempt, not its next retry.
   return (
     params.runId ===
@@ -63,7 +79,8 @@ export function isRequesterSettleWakeForRun(params: {
       batchRunIds,
       rearmGeneration: wake.rearmGeneration,
       attemptIndex: wake.attemptCount - 1,
-      parentOnly,
+      sharedAttemptKey,
+      pause: Boolean(pauseNotice),
     }).runId
   );
 }
@@ -85,4 +102,50 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
     completionRequesterSessionId: entry.completionRequesterSessionId,
     completionRequesterLifecycleRevision: entry.completionRequesterLifecycleRevision,
   };
+}
+
+/** Completion custody can outlive a requester that finished without explicitly yielding. */
+export function hasRequesterCompletionCohort(entry: SubagentRunRecord): boolean {
+  const wake = entry.requesterSettleWake;
+  return (
+    wake?.requesterYieldBatch === true ||
+    (wake?.rearmGeneration !== undefined && wake.batchRunIds?.includes(entry.runId) === true)
+  );
+}
+
+/** A frozen completion cohort can own distinct tasks that share one child session. */
+export function isRequesterCompletionCohortCurrent(
+  entry: SubagentRunRecord,
+  cohort: readonly SubagentRunRecord[],
+  latestForSession: (
+    sessionKey: string,
+    matches?: (candidate: SubagentRunRecord) => boolean,
+  ) => SubagentRunRecord | null,
+): boolean {
+  const taskRunId = entry.taskRunId ?? entry.runId;
+  const task = latestForSession(
+    entry.childSessionKey,
+    (candidate) => (candidate.taskRunId ?? candidate.runId) === taskRunId,
+  );
+  if (
+    entry.killReconciliation?.supersededAt !== undefined ||
+    (task && compareSubagentRunGeneration(task, entry) > 0)
+  ) {
+    return false;
+  }
+  const latest = latestForSession(entry.childSessionKey);
+  return (
+    !latest ||
+    compareSubagentRunGeneration(latest, entry) <= 0 ||
+    cohort.some(
+      (candidate) =>
+        candidate.runId === latest.runId &&
+        candidate.generation === latest.generation &&
+        candidate.requesterSessionKey === entry.requesterSessionKey &&
+        candidate.requesterAgentId === entry.requesterAgentId &&
+        candidate.requesterStorePath === entry.requesterStorePath &&
+        candidate.requesterTurnRunId === entry.requesterTurnRunId &&
+        (candidate.taskRunId ?? candidate.runId) !== taskRunId,
+    )
+  );
 }

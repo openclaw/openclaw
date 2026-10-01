@@ -449,7 +449,7 @@ export function buildMediaGenerationStartedToolResult(params: {
       {
         type: "text" as const,
         text: [
-          `Background task started for ${params.generationLabel} generation (${params.taskHandle?.taskId ?? "unknown"}). Do not call ${params.toolName} again for this request. Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here when it's ready.`,
+          `Background task started for ${params.generationLabel} generation (${params.taskHandle?.taskId ?? "unknown"}). Do not call ${params.toolName} again for this request. Do not wait, poll, or yield for it: end this turn (a short acknowledgement at most); the completion arrives as a later turn and sends the finished ${params.completionLabel} here.`,
           ...(params.messages ?? []),
         ]
           .filter((entry): entry is string => Boolean(entry))

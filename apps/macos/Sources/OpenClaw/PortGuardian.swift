@@ -1,9 +1,8 @@
 import AppKit
+import Darwin
 import Foundation
 import OSLog
 import Security
-#if canImport(Darwin)
-import Darwin
 
 @_silgen_name("csops")
 private func portGuardianCSOps(
@@ -11,7 +10,6 @@ private func portGuardianCSOps(
     _: UInt32,
     _: UnsafeMutableRawPointer?,
     _: Int) -> Int32
-#endif
 
 actor PortGuardian {
     static let shared = PortGuardian()
@@ -286,7 +284,6 @@ actor PortGuardian {
     /// The captured process and current receipt must still authorize every signal.
     /// A wait can outlive the orphan or let another owner reclaim its receipt.
     private func terminateOrphanedTunnel(_ orphan: OrphanedTunnel) async -> Bool {
-        #if canImport(Darwin)
         let record = orphan.record
         guard record.pid > 0 else { return false }
         for signal in [SIGTERM, SIGKILL] {
@@ -310,9 +307,6 @@ actor PortGuardian {
             if await Self.waitForProcessExit(orphan) { return true }
         }
         return false
-        #else
-        return false
-        #endif
     }
 
     private static func waitForProcessExit(_ orphan: OrphanedTunnel, timeout: TimeInterval = 1.0) async -> Bool {
@@ -334,7 +328,6 @@ actor PortGuardian {
     }
 
     private static func tunnelProcessInfo(pid: Int32) -> TunnelProcessInfo? {
-        #if canImport(Darwin)
         guard pid > 0 else { return nil }
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
@@ -348,9 +341,6 @@ actor PortGuardian {
             parentPid: info.kp_eproc.e_ppid,
             startedAt: started,
             fullCommand: self.readFullCommand(pid: pid))
-        #else
-        return nil
-        #endif
     }
 
     struct PortReport: Identifiable {
@@ -468,14 +458,10 @@ actor PortGuardian {
 
     func isListening(port: Int, pid: Int32? = nil) async -> Bool {
         if let pid {
-            #if canImport(Darwin)
             guard let port = UInt16(exactly: port) else { return false }
             // Tunnel readiness polls this exact child every 100 ms. Inspect its
             // sockets in-process so each poll does not launch lsof and ps.
             return ProcessSocketListenerInspector.isListening(pid: pid, port: port)
-            #else
-            return false
-            #endif
         }
         return await !(self.listeners(on: port)).isEmpty
     }
@@ -602,7 +588,6 @@ actor PortGuardian {
     }
 
     private static func executablePath(for pid: Int32) -> String? {
-        #if canImport(Darwin)
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
         guard length > 0 else { return nil }
@@ -610,9 +595,6 @@ actor PortGuardian {
         let trimmed = buffer.prefix { $0 != 0 }
         let bytes = trimmed.map { UInt8(bitPattern: $0) }
         return String(bytes: bytes, encoding: .utf8)
-        #else
-        return nil
-        #endif
     }
 
     private func probeGatewayHealthIfNeeded(

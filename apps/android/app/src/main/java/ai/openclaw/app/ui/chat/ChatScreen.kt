@@ -649,7 +649,7 @@ internal fun ChatScreen(
       if (activeSession.agentRuntimeId == "codex") nativeString("Native Codex model") else nativeString("Locked session model")
     } else {
       selectedModelRef?.let { selected ->
-        modelCatalog.firstOrNull { it.providerQualifiedRef() == selected }?.name?.takeIf { it.isNotBlank() }
+        selectedCatalogModel?.name?.takeIf { it.isNotBlank() }
           ?: selected.substringAfterLast('/')
       } ?: nativeString("Model")
     }
@@ -4492,9 +4492,9 @@ internal fun chatContextSummary(
   usage: ChatContextUsage,
   locale: Locale = Locale.getDefault(),
 ): ChatContextSummary? {
-  val fraction = contextMeterWidth(usage) ?: return null
   val used = usage.totalTokens?.takeIf { it >= 0L } ?: return null
   val context = usage.contextTokens?.takeIf { it > 0L } ?: return null
+  val fraction = (used.toDouble() / context.toDouble()).coerceIn(0.0, 1.0).toFloat()
   val approximate = usage.totalTokensFresh == false
   val approximation = if (approximate) "~" else ""
   val percent = (fraction * 100).roundToInt()
@@ -4822,12 +4822,6 @@ internal fun userFacingChatError(
     lower.contains("unauthorized") || lower.contains("auth") -> nativeString("Gateway authentication needs attention.")
     else -> error
   }
-}
-
-internal fun contextMeterWidth(usage: ChatContextUsage): Float? {
-  val total = usage.totalTokens?.takeIf { it >= 0L } ?: return null
-  val context = usage.contextTokens?.takeIf { it > 0L } ?: return null
-  return (total.toDouble() / context.toDouble()).coerceIn(0.0, 1.0).toFloat()
 }
 
 internal fun chatThinkingSupported(

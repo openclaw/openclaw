@@ -36,19 +36,6 @@ import {
 } from "../browser/extension-setup.js";
 import { runBrowserCliCommand, type BrowserParentOpts } from "./browser-cli-shared.js";
 
-function resolveChromeExtensionDir(pluginRoot?: string): string {
-  if (pluginRoot) {
-    return path.join(pluginRoot, "chrome-extension");
-  }
-  // extensions/browser/dist/cli/ -> extensions/browser/chrome-extension
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "..", "..", "chrome-extension");
-}
-
-function resolveBrowserPluginRoot(pluginRoot?: string): string {
-  return pluginRoot ?? path.resolve(resolveChromeExtensionDir(), "..");
-}
-
 async function buildPairingString(options: { gatewayUrl?: string; localGateway: boolean }) {
   const cfg = getRuntimeConfig();
   if (options.localGateway && options.gatewayUrl !== undefined) {
@@ -110,6 +97,10 @@ export function registerBrowserExtensionCommands(
   parentOpts: (cmd: Command) => BrowserParentOpts,
   pluginRoot?: string,
 ) {
+  // extensions/browser/dist/cli/ -> extensions/browser/
+  const defaultPluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const resolvedPluginRoot = pluginRoot ?? defaultPluginRoot;
+  const bundledDir = path.join(pluginRoot || defaultPluginRoot, "chrome-extension");
   const extension = browser
     .command("extension")
     .description("Install and inspect the OpenClaw Chrome extension bootstrap");
@@ -121,7 +112,7 @@ export function registerBrowserExtensionCommands(
     .action(async () => {
       // The entry owns binary framing and origin validation. Never print CLI diagnostics here.
       try {
-        const entry = await resolveNativeHostPath(resolveBrowserPluginRoot(pluginRoot));
+        const entry = await resolveNativeHostPath(resolvedPluginRoot);
         await import(pathToFileURL(entry).href);
       } catch {
         process.exitCode = 1;
@@ -146,8 +137,8 @@ export function registerBrowserExtensionCommands(
           const result = await runBrowserExtensionSetup({
             action: opts.action,
             nativeHostExecutable: opts.nativeHostExecutable,
-            bundledDir: resolveChromeExtensionDir(pluginRoot),
-            pluginRoot: resolveBrowserPluginRoot(pluginRoot),
+            bundledDir,
+            pluginRoot: resolvedPluginRoot,
             cfg: getRuntimeConfig(),
             profile: opts.browserProfile ?? parentOpts(command).browserProfile,
             waitMs: normalizeExtensionInstallWaitMs(opts.waitMs),
@@ -176,9 +167,7 @@ export function registerBrowserExtensionCommands(
     .description("Print the unpacked Chrome extension directory (Load unpacked)")
     .action(async () => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        defaultRuntime.log(
-          await resolveChromeExtensionLoadPath(resolveChromeExtensionDir(pluginRoot)),
-        );
+        defaultRuntime.log(await resolveChromeExtensionLoadPath(bundledDir));
       });
     });
 
@@ -204,7 +193,6 @@ export function registerBrowserExtensionCommands(
       await runBrowserCliCommand(async () => {
         const json = opts.json === true || parentOpts(command).json === true;
         const waitMs = normalizeExtensionInstallWaitMs(opts.waitMs);
-        const bundledDir = resolveChromeExtensionDir(pluginRoot);
         if (!json) {
           defaultRuntime.log(info("Preparing the OpenClaw Chrome extension…"));
         }
@@ -212,7 +200,7 @@ export function registerBrowserExtensionCommands(
           action: "install",
           nativeHostExecutable: opts.nativeHostExecutable,
           bundledDir,
-          pluginRoot: resolveBrowserPluginRoot(pluginRoot),
+          pluginRoot: resolvedPluginRoot,
           waitMs,
           requestStoreInstall: opts.store !== false,
           profile: opts.browserProfile ?? parentOpts(command).browserProfile,
@@ -256,8 +244,8 @@ export function registerBrowserExtensionCommands(
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await repairChromeExtensionNativeHosts({
-          bundledDir: resolveChromeExtensionDir(pluginRoot),
-          pluginRoot: resolveBrowserPluginRoot(pluginRoot),
+          bundledDir,
+          pluginRoot: resolvedPluginRoot,
           fromNativeHostPath: opts.from,
           dryRun: opts.dryRun === true,
         });
@@ -290,8 +278,8 @@ export function registerBrowserExtensionCommands(
           action: "inspect",
           profile: opts.browserProfile ?? parentOpts(command).browserProfile,
           nativeHostExecutable: opts.nativeHostExecutable,
-          pluginRoot: resolveBrowserPluginRoot(pluginRoot),
-          bundledDir: resolveChromeExtensionDir(pluginRoot),
+          pluginRoot: resolvedPluginRoot,
+          bundledDir,
         });
         if (json) {
           defaultRuntime.writeJson(status);
@@ -354,7 +342,7 @@ export function registerBrowserExtensionCommands(
       await runCommandWithRuntime(defaultRuntime, async () => {
         const json = opts.json === true || parentOpts(command).json === true;
         const result = await uninstallChromeExtensionNativeHosts({
-          pluginRoot: resolveBrowserPluginRoot(pluginRoot),
+          pluginRoot: resolvedPluginRoot,
           nativeHostExecutable: opts.nativeHostExecutable,
           browserProfile: opts.browserProfile ?? parentOpts(command).browserProfile,
           removeStore: opts.removeStore === true,
@@ -410,7 +398,7 @@ export function registerBrowserExtensionCommands(
           [
             setupLine,
             info("1. Load the extension: chrome://extensions → Developer mode → Load unpacked →"),
-            `   ${resolveChromeExtensionDir(pluginRoot)}`,
+            `   ${bundledDir}`,
             info("2. Open the OpenClaw popup and paste this pairing string:"),
             "",
             theme.heading(result.pairing),

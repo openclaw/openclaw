@@ -1,4 +1,5 @@
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
@@ -91,7 +92,9 @@ type EmbeddedRunAttemptBase = Omit<
   | "admittedRunContext"
 >;
 
-export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
+export type EmbeddedRunFastModeParam =
+  | Exclude<FastMode, "auto">
+  | (() => Exclude<FastMode, "auto"> | undefined);
 
 type EmbeddedRunAttemptOperation = "attempt" | "settled-tool-finalization";
 
@@ -275,24 +278,13 @@ export type EmbeddedRunAttemptResult = {
   assistantTranscriptIdempotencyKey?: string;
   /** Host-private terminal identity used to close the accepted transcript turn. */
   contextEngineTerminalAnchor?: import("../../../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
-  preflightRecovery?:
-    | {
-        route: Exclude<PreemptiveCompactionRoute, "fits">;
-        source?: "mid-turn";
-        estimatedPromptTokens?: number;
-        promptBudgetBeforeReserve?: number;
-        overflowTokens?: number;
-        handled: true;
-        truncatedCount?: number;
-      }
-    | {
-        route: Exclude<PreemptiveCompactionRoute, "fits">;
-        source?: "mid-turn";
-        estimatedPromptTokens?: number;
-        promptBudgetBeforeReserve?: number;
-        overflowTokens?: number;
-        handled?: false;
-      };
+  preflightRecovery?: {
+    route: Exclude<PreemptiveCompactionRoute, "fits">;
+    source?: "mid-turn";
+    estimatedPromptTokens?: number;
+    promptBudgetBeforeReserve?: number;
+    overflowTokens?: number;
+  } & ({ handled: true; truncatedCount?: number } | { handled?: false });
   sessionIdUsed: string;
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;

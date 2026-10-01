@@ -229,17 +229,11 @@ function legacyIncognitoSessionKey(sessionKey: string): string {
 function listReservedIncognitoKeys(database: DatabaseSync): string[] {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
   const keys = new Set<string>();
-  for (const row of executeSqliteQuerySync(
-    database,
-    db.selectFrom("session_nodes").select("session_key"),
-  ).rows) {
-    keys.add(row.session_key);
-  }
-  for (const row of executeSqliteQuerySync(
-    database,
-    db.selectFrom("session_windows").select("session_key"),
-  ).rows) {
-    keys.add(row.session_key);
+  for (const table of ["session_nodes", "session_windows"] as const) {
+    for (const row of executeSqliteQuerySync(database, db.selectFrom(table).select("session_key"))
+      .rows) {
+      keys.add(row.session_key);
+    }
   }
   return [...keys].filter(isIncognitoSessionKey).toSorted();
 }
@@ -362,26 +356,25 @@ function visitSessionEntryKeyFields(
   if (!isRecord(value)) {
     return;
   }
-  const entry = value;
   for (const key of [
     "heartbeatIsolatedBaseSessionKey",
     "spawnedBy",
     "completionOwnerSessionKey",
     "parentSessionKey",
   ]) {
-    visit(entry, key);
+    visit(value, key);
   }
-  if (isRecord(entry.forkSource)) {
-    visit(entry.forkSource, "sessionKey");
+  if (isRecord(value.forkSource)) {
+    visit(value.forkSource, "sessionKey");
   }
-  if (Array.isArray(entry.compactionCheckpoints)) {
-    for (const checkpoint of entry.compactionCheckpoints) {
+  if (Array.isArray(value.compactionCheckpoints)) {
+    for (const checkpoint of value.compactionCheckpoints) {
       if (isRecord(checkpoint)) {
         visit(checkpoint, "sessionKey");
       }
     }
   }
-  if (isRecord(entry.systemPromptReport)) {
-    visit(entry.systemPromptReport, "sessionKey");
+  if (isRecord(value.systemPromptReport)) {
+    visit(value.systemPromptReport, "sessionKey");
   }
 }

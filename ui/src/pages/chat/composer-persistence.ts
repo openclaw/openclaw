@@ -13,6 +13,7 @@ import {
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   captureChatOutboxAdmission,
+  notifyDraftPresence,
   notifyStoredChatOutboxChanges,
   readStoredOutboxStore as readStore,
   resolvePendingComposerSessions,
@@ -235,9 +236,7 @@ function persistCapturedChatComposerStateResult(
       // Notify only on presence transitions: sidebar draft indicators consume
       // presence, and content-only notifies would let projection subscribers
       // re-persist a stale pane over a newer draft (route-fallback invariant).
-      if (Boolean(storedDraft || session?.replyTarget) !== Boolean(draft || replyTarget)) {
-        notifyStoredChatOutboxChanges();
-      }
+      notifyDraftPresence({ ...session, draft: storedDraft }, { draft, goalMode, replyTarget });
       // Subscribers can reveal private-session metadata while the controller's
       // reentrancy guard defers its next write. Retire that captured scope now.
       if (
@@ -748,7 +747,7 @@ export class ChatComposerPersistence {
       ) {
         this.retireDurableScope(snapshot.durable.scope, snapshot.draftRevision);
       } else {
-        this.durablePersistence.persist(snapshot.durable);
+        void this.durablePersistence.persist(snapshot.durable);
       }
     }
     if (status === "persisted" && this.pending === snapshot) {
@@ -869,7 +868,7 @@ export class ChatComposerPersistence {
       this.durableOwner = null;
       this.forceDurableOwnerRestore = false;
       this.durableRestoreProtected = false;
-      this.durablePersistence.retire(scope, revision);
+      void this.durablePersistence.retire(scope, revision);
     }
   }
 
@@ -957,7 +956,7 @@ export class ChatComposerPersistence {
                 state.chatReplyTarget ||
                 (state.chatAttachments?.length ?? 0) > 0)
             ) {
-              this.durablePersistence.persist({
+              void this.durablePersistence.persist({
                 ...baseline.durable,
                 expectedRevision: storedRevision,
               });
@@ -997,7 +996,7 @@ export class ChatComposerPersistence {
           draftRevision: adoptedRevision,
         });
         if (forceOwnerRestore && this.lastPersisted.durable) {
-          this.durablePersistence.persist({
+          void this.durablePersistence.persist({
             ...this.lastPersisted.durable,
             expectedRevision: draft.revision,
           });

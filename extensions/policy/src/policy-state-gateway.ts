@@ -1,4 +1,3 @@
-// Policy plugin gateway exposure evidence.
 import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyGatewayExposureEvidence } from "./policy-state-types.js";
@@ -146,23 +145,17 @@ function pushGatewayHttpEndpointEvidence(
   endpoint: "chatCompletions" | "responses",
 ): void {
   const config = endpoints[endpoint];
-  if (!isRecord(config)) {
+  if (!isRecord(config) || config.enabled !== true) {
     return;
   }
   const source = `oc://openclaw.config/gateway/http/endpoints/${endpoint}`;
-  const enabled = config.enabled === true;
-  if (enabled) {
-    entries.push({
-      id: `gateway-http-${endpoint}`,
-      kind: "httpEndpoint",
-      source: `${source}/enabled`,
-      value: true,
-      endpoint,
-    });
-  }
-  if (!enabled) {
-    return;
-  }
+  entries.push({
+    id: `gateway-http-${endpoint}`,
+    kind: "httpEndpoint",
+    source: `${source}/enabled`,
+    value: true,
+    endpoint,
+  });
   if (endpoint === "chatCompletions") {
     pushGatewayHttpUrlFetchEvidence(entries, source, endpoint, ["images"], config.images);
     return;

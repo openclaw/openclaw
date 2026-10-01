@@ -140,6 +140,18 @@ describe("exact-run announcement results", () => {
     },
   );
 
+  it.each([false, true])(
+    "does not resurrect ANNOUNCE_SKIP from retained history: retained=%s",
+    async (retained) => {
+      const child = completedChild("ANNOUNCE_SKIP");
+      child.completion!.fallbackResultText = "stale fallback";
+      installTranscript(retained ? [assistant(child.runId, "ANNOUNCE_SKIP")] : []);
+      await expect(readChildCompletionFindings([child])).resolves.toMatchObject({
+        text: undefined,
+      });
+    },
+  );
+
   it("rejects a run replaced during an asynchronous transcript read", async () => {
     const child = completedChild("original answer");
     const originalRunId = child.runId;

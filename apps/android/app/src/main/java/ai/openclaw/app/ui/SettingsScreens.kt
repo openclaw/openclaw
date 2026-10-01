@@ -74,7 +74,6 @@ import ai.openclaw.app.voice.AudioInputDeviceOption
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.audioInputDeviceOptionFromKey
 import android.Manifest
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -926,19 +925,7 @@ private fun AudioInputDeviceRow(
     subtitle = subtitle,
     metadata = nativeString("Next session").takeIf { pending },
     leading = { ClawIconBadge(Icons.Default.Mic) },
-    trailing =
-      if (selected) {
-        {
-          Icon(
-            imageVector = Icons.Default.Check,
-            contentDescription = nativeString("Selected"),
-            modifier = Modifier.size(18.dp),
-            tint = ClawTheme.colors.primary,
-          )
-        }
-      } else {
-        null
-      },
+    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
     onClick = onClick,
   )
 }
@@ -2355,20 +2342,18 @@ private fun AppLanguageRow(
     title = appLanguageTitle(language),
     subtitle = appLanguageRowSubtitle(language = language, systemLanguageTag = systemLanguageTag),
     leading = { ClawIconBadge(Icons.Default.Language) },
-    trailing =
-      if (selected) {
-        {
-          Icon(
-            imageVector = Icons.Default.Check,
-            contentDescription = nativeString("Selected"),
-            modifier = Modifier.size(18.dp),
-            tint = ClawTheme.colors.primary,
-          )
-        }
-      } else {
-        null
-      },
+    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
     onClick = onClick,
+  )
+}
+
+@Composable
+private fun SettingsSelectionCheck() {
+  Icon(
+    imageVector = Icons.Default.Check,
+    contentDescription = nativeString("Selected"),
+    modifier = Modifier.size(18.dp),
+    tint = ClawTheme.colors.primary,
   )
 }
 
@@ -3015,8 +3000,7 @@ private fun copySettingsDetailValue(
   value: String,
 ) {
   val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw $title", value))
-  Toast.makeText(context, nativeString("\$title copied", title), Toast.LENGTH_SHORT).show()
+  clipboard.copyTextWithConfirmation(context, "OpenClaw $title", value, nativeString("\$title copied", title))
 }
 
 @Composable

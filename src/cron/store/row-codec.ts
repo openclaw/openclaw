@@ -156,6 +156,7 @@ function decodeCronJobConfig(jobJson: Record<string, unknown>): Record<string, u
 export function rowToCronJob(
   row: Pick<CronJobReadRow, "job_id" | "state_json" | "runtime_updated_at_ms" | "updated_at">,
   jobJson: Record<string, unknown>,
+  createdAtMsFallback?: number,
 ): CronStoredJob | null {
   const state = tryParseJsonObject(row.state_json);
   if (!state || getInvalidPersistedCronJobReason(jobJson)) {
@@ -168,7 +169,7 @@ export function rowToCronJob(
   const createdAtMs =
     typeof jobJson.createdAtMs === "number" && Number.isFinite(jobJson.createdAtMs)
       ? jobJson.createdAtMs
-      : Date.now();
+      : (createdAtMsFallback ?? Date.now());
   // Doctor retains unresolved legacy markers in config JSON; runtime never consumes them.
   const {
     notify: _legacyNotify,
@@ -695,7 +696,10 @@ export function updateCronRuntimeRows(
 }
 
 /** Reconstructs loaded cron store data and config-runtime sidecars from SQLite rows. */
-export function loadedCronStoreFromRows(rows: CronJobReadRow[]): LoadedCronStore {
+export function loadedCronStoreFromRows(
+  rows: CronJobReadRow[],
+  createdAtMsFallback?: number,
+): LoadedCronStore {
   const jobs: CronStoredJob[] = [];
   const configJobs: LoadedCronStore["configJobs"] = [];
   const configJobIndexes: number[] = [];
@@ -714,7 +718,7 @@ export function loadedCronStoreFromRows(rows: CronJobReadRow[]): LoadedCronStore
       });
       continue;
     }
-    const job = rowToCronJob(row, parsedJobJson);
+    const job = rowToCronJob(row, parsedJobJson, createdAtMsFallback);
     const configJob = decodeCronJobConfig(parsedJobJson);
     const runtimeEntry = {
       updatedAtMs: normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at),

@@ -1,4 +1,3 @@
-// Compares TUI selections, returned metadata, and Gateway or embedded events.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   readSessionMessageIdentity,

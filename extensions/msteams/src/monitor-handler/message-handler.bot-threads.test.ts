@@ -213,7 +213,6 @@ describe("Teams mention policy in bot-created channel threads", () => {
       const sentIds = await sendMSTeamsMessages({
         replyStyle: "thread",
         app: deps.app,
-        appId: deps.appId,
         conversationRef: {
           agent: { id: "bot-id" },
           conversation: {

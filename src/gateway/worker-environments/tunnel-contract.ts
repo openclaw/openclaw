@@ -176,7 +176,7 @@ export type WorkerLocalWorkspaceReconcileRequest = {
   assertCurrent?: () => void;
   stagedResult: {
     ref: string;
-    record(ref: string): void;
+    record(ref: string): void | Promise<void>;
   };
 };
 

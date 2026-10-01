@@ -111,6 +111,20 @@ class IncomingCallOptInRuntimeTest {
     }
 
   @Test
+  fun removingTheSelectedGatewayClearsThePublishedIncomingCallOptIn() {
+    val prefs = createPrefs()
+    selectGateway(prefs, "gateway-a")
+    prefs.setIncomingCallsEnabled(true)
+    assertTrue(prefs.incomingCallsEnabled.value)
+
+    assertTrue(prefs.gatewayRegistry.remove("gateway-a"))
+
+    assertFalse(prefs.incomingCallsEnabled.value)
+    assertFalse(prefs.isIncomingCallAllowed("gateway-a"))
+    assertFalse(createPrefs().incomingCallsEnabled.value)
+  }
+
+  @Test
   fun unscopedPreviewConsentDoesNotAuthorizeTheSelectedGateway() {
     app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).edit(commit = true) {
       putBoolean("voice.incomingCallsEnabled", true)

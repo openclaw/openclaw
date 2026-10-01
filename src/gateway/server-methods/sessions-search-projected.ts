@@ -8,7 +8,10 @@ import type { SessionStoreTarget } from "../../config/sessions/targets.js";
 import { runSynchronousWork } from "../../shared/synchronous-work.js";
 import { filterSessionEntries } from "../session-list-filters.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import {
   prepareProjectedSessionList,
   prepareSessionSearchIdentityNames,
@@ -24,10 +27,7 @@ export async function searchProjectedSessionTranscripts(params: {
   client: GatewayClient | null;
   onResult: (result: SessionsSearchResult) => void;
 }) {
-  const projection = getSessionRowProjection(params.context);
-  if (!projection) {
-    throw new Error("Session projection is unavailable before Gateway startup completes");
-  }
+  const projection = requireSessionRowProjection(params.context);
   let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
   const select = () => {
     const { prepared, presentation, filters } = prepareProjectedSessionList({

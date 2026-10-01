@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
+import type { NpmIntegrityDriftPayload } from "../infra/npm-integrity.js";
 import { isPackageVersionDowngrade } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
@@ -150,23 +151,13 @@ export function formatGitInstallFailure(params: {
   return `Failed to ${params.phase} ${params.pluginId}: ${params.error} (git ${params.spec}).`;
 }
 
-type InstallIntegrityDrift = {
-  spec: string;
-  expectedIntegrity: string;
-  actualIntegrity: string;
-  resolution: {
-    resolvedSpec?: string;
-    version?: string;
-  };
-};
-
 function createPluginUpdateIntegrityDriftHandler(params: {
   pluginId: string;
   dryRun: boolean;
   logger: PluginUpdateLogger;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }) {
-  return async (drift: InstallIntegrityDrift) => {
+  return async (drift: NpmIntegrityDriftPayload) => {
     const payload: PluginUpdateIntegrityDriftParams = {
       pluginId: params.pluginId,
       spec: drift.spec,

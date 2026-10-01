@@ -1,11 +1,9 @@
-// Shared rendering context for the standard and full status reports.
-import type { RenderTableOptions, TableColumn } from "../../../packages/terminal-core/src/table.js";
+import { renderTable, type TableColumn } from "../../../packages/terminal-core/src/table.js";
 
 type StatusReportContext = {
   lines: string[];
   heading: (text: string) => string;
   width: number;
-  renderTable: (input: RenderTableOptions) => string;
 };
 
 /** Keeps section spacing in one rendering owner. */
@@ -33,7 +31,7 @@ export function appendStatusReportTable(
   trailer?: string | null,
 ) {
   appendStatusReportHeading(context, title);
-  context.lines.push(context.renderTable({ width: context.width, columns, rows }).trimEnd());
+  context.lines.push(renderTable({ width: context.width, columns, rows }).trimEnd());
   if (trailer) {
     context.lines.push(trailer);
   }

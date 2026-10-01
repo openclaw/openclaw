@@ -1,4 +1,3 @@
-// Question gateway methods create, inspect, wait for, and resolve transient prompts.
 import {
   ErrorCodes,
   errorShape,

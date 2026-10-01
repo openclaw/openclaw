@@ -233,7 +233,6 @@ export function mergeStreamingText(
   return `${previous}${next}`;
 }
 
-/** Streaming card session manager */
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;
@@ -573,12 +572,10 @@ export class FeishuStreamingSession {
       }
     }
 
-    // Update note with final model/provider info
     if (options?.note) {
       await this.updateNoteContent(options.note);
     }
 
-    // Close streaming mode
     // A rejected final write must not advertise content that CardKit never accepted.
     const acceptedText = this.state.sentText;
     this.state.sequence += 1;

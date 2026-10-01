@@ -231,13 +231,11 @@ function waitForFeishuWsCycleEnd(params: {
         return;
       }
       settled = true;
-      if (handleAbort) {
-        params.abortSignal?.removeEventListener("abort", handleAbort);
-      }
+      params.abortSignal?.removeEventListener("abort", handleAbort);
       resolve(result);
     };
 
-    const handleAbort: (() => void) | undefined = () => finish("abort");
+    const handleAbort = () => finish("abort");
     params.abortSignal?.addEventListener("abort", handleAbort, { once: true });
     if (params.abortSignal?.aborted) {
       finish("abort");

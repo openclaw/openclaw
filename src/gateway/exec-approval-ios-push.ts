@@ -70,28 +70,16 @@ type ApprovalPushSendResult = {
   reason?: string;
 };
 
-type ApprovalPushSender = (params: {
-  target: DeliveryTarget;
-  approvalId: string;
-  plan: DeliveryPlan;
-}) => Promise<ApprovalPushSendResult>;
-
 type ApprovalRequestLike = { id: string };
+type ApprovalPushParams = ReturnType<typeof approvalPushTransport> & {
+  approvalId: string;
+  gatewayDeviceId: string;
+};
 
 type ApprovalPushDriver<TRequest extends ApprovalRequestLike> = {
   approvalKind: ChannelApprovalKind;
-  sendRequested: (params: {
-    request: TRequest;
-    target: DeliveryTarget;
-    plan: DeliveryPlan;
-    gatewayDeviceId: string;
-  }) => Promise<ApprovalPushSendResult>;
-  sendResolved: (params: {
-    approvalId: string;
-    target: DeliveryTarget;
-    plan: DeliveryPlan;
-    gatewayDeviceId: string;
-  }) => Promise<ApprovalPushSendResult>;
+  sendRequested: (request: TRequest, params: ApprovalPushParams) => Promise<ApprovalPushSendResult>;
+  sendResolved: (params: ApprovalPushParams) => Promise<ApprovalPushSendResult>;
 };
 
 function isIosPlatform(platform: string | undefined): boolean {
@@ -113,43 +101,6 @@ function resolveActiveOperatorToken(device: PairedDevice): DeviceAuthToken | nul
   return operatorToken;
 }
 
-function canReceiveApprovalRequests(device: PairedDevice): boolean {
-  const operatorToken = resolveActiveOperatorToken(device);
-  if (!operatorToken) {
-    return false;
-  }
-  return roleScopesAllow({
-    role: OPERATOR_ROLE,
-    requestedScopes: [APPROVALS_SCOPE, READ_SCOPE],
-    allowedScopes: operatorToken.scopes,
-  });
-}
-
-function shouldTargetDevice(params: {
-  device: PairedDevice;
-  requireApprovalScope: boolean;
-}): boolean {
-  if (!isIosPlatform(params.device.platform)) {
-    return false;
-  }
-  if (!hasEffectivePairedDeviceRole(params.device, OPERATOR_ROLE)) {
-    return false;
-  }
-  if (!params.requireApprovalScope) {
-    return true;
-  }
-  return canReceiveApprovalRequests(params.device);
-}
-
-async function loadRegisteredTargets(params: {
-  deviceIds: readonly string[];
-}): Promise<DeliveryTarget[]> {
-  if (params.deviceIds.length === 0) {
-    return [];
-  }
-  return await loadApnsRegistrations(params.deviceIds);
-}
-
 async function resolvePairedTargets(params: {
   requireApprovalScope: boolean;
   isTargetVisible?: (target: ApprovalPushTarget) => boolean;
@@ -157,23 +108,30 @@ async function resolvePairedTargets(params: {
   const pairing = await listDevicePairing();
   const deviceIds = pairing.paired
     .filter((device) => {
-      if (!shouldTargetDevice({ device, requireApprovalScope: params.requireApprovalScope })) {
+      if (!isIosPlatform(device.platform) || !hasEffectivePairedDeviceRole(device, OPERATOR_ROLE)) {
         return false;
       }
       const operatorToken = resolveActiveOperatorToken(device);
       if (
-        params.isTargetVisible &&
-        !params.isTargetVisible({
-          deviceId: device.deviceId,
-          scopes: operatorToken?.scopes ?? [],
-        })
+        params.requireApprovalScope &&
+        (!operatorToken ||
+          !roleScopesAllow({
+            role: OPERATOR_ROLE,
+            requestedScopes: [APPROVALS_SCOPE, READ_SCOPE],
+            allowedScopes: operatorToken.scopes,
+          }))
       ) {
         return false;
       }
-      return true;
+      return (
+        params.isTargetVisible?.({
+          deviceId: device.deviceId,
+          scopes: operatorToken?.scopes ?? [],
+        }) ?? true
+      );
     })
     .map((device) => device.deviceId);
-  return await loadRegisteredTargets({ deviceIds });
+  return deviceIds.length > 0 ? await loadApnsRegistrations(deviceIds) : [];
 }
 
 async function resolveDeliveryPlan(params: {
@@ -186,7 +144,7 @@ async function resolveDeliveryPlan(params: {
   // Request delivery requires current approval scope; resolution delivery may
   // target prior node ids so existing notification badges can be cleared.
   const targets = params.explicitNodeIds?.length
-    ? await loadRegisteredTargets({ deviceIds: params.explicitNodeIds })
+    ? await loadApnsRegistrations(params.explicitNodeIds)
     : await resolvePairedTargets({
         requireApprovalScope: params.requireApprovalScope,
         isTargetVisible: params.isTargetVisible,
@@ -244,81 +202,37 @@ async function resolveDeliveryPlan(params: {
   };
 }
 
-async function clearStaleApnsRegistrationIfNeeded(params: {
-  nodeId: string;
-  registration: ApnsRegistration;
-  result: { status: number; reason?: string };
-}): Promise<void> {
-  if (
-    shouldClearStoredApnsRegistration({
-      registration: params.registration,
-      result: params.result,
-    })
-  ) {
-    await clearApnsRegistrationIfCurrent({
-      nodeId: params.nodeId,
-      registration: params.registration,
-    });
-  }
-}
-
-async function sendRequestedPushes<TRequest extends ApprovalRequestLike>(params: {
-  request: TRequest;
-  plan: DeliveryPlan;
-  log: GatewayLikeLogger;
-  driver: ApprovalPushDriver<TRequest>;
-}): Promise<{ attempted: number; delivered: number }> {
-  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
-  return await sendApprovalPushes({
-    approvalId: params.request.id,
-    plan: params.plan,
-    log: params.log,
-    approvalKind: params.driver.approvalKind,
-    label: "request",
-    logThrown: true,
-    send: async ({ target, plan }) =>
-      await params.driver.sendRequested({
-        request: params.request,
-        target,
-        plan,
-        gatewayDeviceId,
-      }),
-  });
-}
-
 async function sendApprovalPushes(params: {
   approvalId: string;
   plan: DeliveryPlan;
   log: GatewayLikeLogger;
   approvalKind: ChannelApprovalKind;
   label: "request" | "cleanup";
-  logThrown: boolean;
-  send: ApprovalPushSender;
+  send: (params: ApprovalPushParams) => Promise<ApprovalPushSendResult>;
 }): Promise<{ attempted: number; delivered: number }> {
+  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
   // Stale registrations are cleared on both direct and relay failures so future
   // approval prompts do not keep targeting dead APNs device tokens.
   const results = await Promise.allSettled(
     params.plan.targets.map(async (target) => {
       const result = await params.send({
-        target,
+        ...approvalPushTransport(target, params.plan),
         approvalId: params.approvalId,
-        plan: params.plan,
+        gatewayDeviceId,
       });
-      await clearStaleApnsRegistrationIfNeeded({
-        nodeId: target.nodeId,
-        registration: target.registration,
-        result,
-      });
+      if (shouldClearStoredApnsRegistration({ registration: target.registration, result })) {
+        await clearApnsRegistrationIfCurrent(target);
+      }
       if (!result.ok) {
         params.log.warn?.(
           `${params.approvalKind} approvals: iOS ${params.label} push failed node=${target.nodeId} status=${result.status} reason=${result.reason ?? "unknown"}`,
         );
       }
-      return { nodeId: target.nodeId, ok: result.ok };
+      return result.ok;
     }),
   );
   for (const result of results) {
-    if (params.logThrown && result.status === "rejected") {
+    if (params.label === "request" && result.status === "rejected") {
       const message = formatErrorMessage(result.reason);
       params.log.warn?.(
         `${params.approvalKind} approvals: iOS ${params.label} push threw error: ${message}`,
@@ -327,32 +241,8 @@ async function sendApprovalPushes(params: {
   }
   return {
     attempted: params.plan.targets.length,
-    delivered: results.filter((result) => result.status === "fulfilled" && result.value.ok).length,
+    delivered: results.filter((result) => result.status === "fulfilled" && result.value).length,
   };
-}
-
-async function sendResolvedPushes<TRequest extends ApprovalRequestLike>(params: {
-  approvalId: string;
-  plan: DeliveryPlan;
-  log: GatewayLikeLogger;
-  driver: ApprovalPushDriver<TRequest>;
-}): Promise<void> {
-  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
-  await sendApprovalPushes({
-    approvalId: params.approvalId,
-    plan: params.plan,
-    log: params.log,
-    approvalKind: params.driver.approvalKind,
-    label: "cleanup",
-    logThrown: false,
-    send: async ({ target, approvalId, plan }) =>
-      await params.driver.sendResolved({
-        approvalId,
-        target,
-        plan,
-        gatewayDeviceId,
-      }),
-  });
 }
 
 function createApprovalIosPushDelivery<TRequest extends ApprovalRequestLike>(params: {
@@ -385,11 +275,13 @@ function createApprovalIosPushDelivery<TRequest extends ApprovalRequestLike>(par
     if (plan.targets.length === 0) {
       return;
     }
-    await sendResolvedPushes({
+    await sendApprovalPushes({
       approvalId,
       plan,
       log: params.log,
-      driver: params.driver,
+      approvalKind: params.driver.approvalKind,
+      label: "cleanup",
+      send: params.driver.sendResolved,
     });
   };
 
@@ -413,11 +305,13 @@ function createApprovalIosPushDelivery<TRequest extends ApprovalRequestLike>(par
 
         const deliveryState: ApprovalDeliveryState = {
           nodeIds: plan.targets.map((target) => target.nodeId),
-          requestPushPromise: sendRequestedPushes({
-            request,
+          requestPushPromise: sendApprovalPushes({
+            approvalId: request.id,
             plan,
             log: params.log,
-            driver: params.driver,
+            approvalKind: params.driver.approvalKind,
+            label: "request",
+            send: (push) => params.driver.sendRequested(request, push),
           }).catch((err: unknown) => {
             const message = formatErrorMessage(err);
             params.log.error?.(
@@ -473,18 +367,8 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
     log: params.log,
     driver: {
       approvalKind: "exec",
-      sendRequested: async ({ request, target, plan, gatewayDeviceId }) =>
-        await sendApnsExecApprovalAlert({
-          ...approvalPushTransport(target, plan),
-          approvalId: request.id,
-          gatewayDeviceId,
-        }),
-      sendResolved: async ({ approvalId, target, plan, gatewayDeviceId }) =>
-        await sendApnsExecApprovalResolvedWake({
-          ...approvalPushTransport(target, plan),
-          approvalId,
-          gatewayDeviceId,
-        }),
+      sendRequested: (_request, push) => sendApnsExecApprovalAlert(push),
+      sendResolved: sendApnsExecApprovalResolvedWake,
     },
   });
 }
@@ -495,21 +379,14 @@ export function createPluginApprovalIosPushDelivery(params: { log: GatewayLikeLo
     log: params.log,
     driver: {
       approvalKind: "plugin",
-      sendRequested: async ({ request, target, plan, gatewayDeviceId }) =>
+      sendRequested: (request, push) =>
         // Keep reviewer-only detail out of size-constrained lock-screen push payloads.
-        await sendApnsPluginApprovalAlert({
-          ...approvalPushTransport(target, plan),
-          approvalId: request.id,
-          gatewayDeviceId,
+        sendApnsPluginApprovalAlert({
+          ...push,
           title: request.request.title,
           description: request.request.description,
         }),
-      sendResolved: async ({ approvalId, target, plan, gatewayDeviceId }) =>
-        await sendApnsPluginApprovalResolvedWake({
-          ...approvalPushTransport(target, plan),
-          approvalId,
-          gatewayDeviceId,
-        }),
+      sendResolved: sendApnsPluginApprovalResolvedWake,
     },
   });
 }

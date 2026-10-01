@@ -358,10 +358,13 @@ serveOwnedWorkerTasks(
           await import("./session-accessor.sqlite-entry-list.read.js");
         return {
           kind: "session-entry-list" as const,
-          entries: listSessionEntriesReadOnly({
-            ...request.scope,
-            env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-          }),
+          entries: listSessionEntriesReadOnly(
+            {
+              ...request.scope,
+              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+            },
+            { continuation: request.continuation },
+          ),
         };
       }
       if (request.kind === "usage-cache") {
@@ -473,6 +476,14 @@ serveOwnedWorkerTasks(
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
+          if (request.kind === "session-activity-summary-source") {
+            const { readActivitySummaryBatch } =
+              await import("../../gateway/session-activity-summary-source.js");
+            return {
+              kind: "session-activity-summary-source" as const,
+              source: readActivitySummaryBatch(request),
+            };
+          }
           if (request.kind === "session-title-fields") {
             const { readSessionTitleFieldsFromTranscript } =
               await import("../../gateway/session-transcript-title-reader.js");

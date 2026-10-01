@@ -59,6 +59,7 @@ function createLinkedCheckoutFixture() {
   for (const file of [
     "scripts/run-tsgo.mjs",
     "scripts/run-tsgo.mts",
+    "scripts/generate-kysely-types.mts",
     "scripts/tsx.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib",

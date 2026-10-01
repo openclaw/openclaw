@@ -47,8 +47,6 @@ function Resolve-OpenClawProgramScope($rule) {
     $value = ([string]$rule.$field).Trim()
     if ($value) { return $value }
   }
-  $ports = ([string]$rule.LocalPorts).Trim()
-  if ($ports -ne '' -and $ports -ne '*') { return 'Any' }
   return 'Any'
 }
 function Get-OpenClawManagedRules {

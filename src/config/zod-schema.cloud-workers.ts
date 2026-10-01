@@ -88,8 +88,7 @@ const CloudWorkerProfileShape = {
 };
 
 const CloudWorkerProfileSchema = z
-  .object(CloudWorkerProfileShape)
-  .strict()
+  .strictObject(CloudWorkerProfileShape)
   .register(configUiMetadata, {
     label: "Cloud Worker Profile",
     help: "One cloud worker profile selected by name when creating an environment. Keep provider credentials in supported references rather than embedding secret material in this block.",
@@ -125,14 +124,10 @@ const CloudWorkersConfigShape = {
     label: "Cloud Worker Desktop (Labs)",
     help: "Enables the experimental worker.desktop.observe surface and Control UI Desktop panel for desktop-capable cloud worker environments.",
   }),
-  preparedPool: z
-    .object(CloudWorkerPreparedPoolShape)
-    .strict()
-    .optional()
-    .register(configUiMetadata, {
-      label: "Cloud Worker Prepared Pool",
-      help: "Limits for prepared cloud workers kept ready for later sessions. Reserves incur running-machine charges until provider cleanup completes; their fixed expiry follows actual project demand and the provider's existing idle policy.",
-    }),
+  preparedPool: z.strictObject(CloudWorkerPreparedPoolShape).optional().register(configUiMetadata, {
+    label: "Cloud Worker Prepared Pool",
+    help: "Limits for prepared cloud workers kept ready for later sessions. Reserves incur running-machine charges until provider cleanup completes; their fixed expiry follows actual project demand and the provider's existing idle policy.",
+  }),
   projectProfiles: z
     .record(CloudWorkerProjectKeySchema, CloudWorkerProjectProfileSchema)
     .optional()
@@ -149,7 +144,7 @@ const CloudWorkersConfigShape = {
     }),
 };
 
-export const CloudWorkersConfigSchema = z.object(CloudWorkersConfigShape).strict().optional();
+export const CloudWorkersConfigSchema = z.strictObject(CloudWorkersConfigShape).optional();
 
 export const { labels: CLOUD_WORKER_FIELD_LABELS, help: CLOUD_WORKER_FIELD_HELP } =
   projectConfigFieldMetadata(CloudWorkersConfigSchema, "cloudWorkers");

@@ -22,9 +22,6 @@ import type {
 } from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
 
-type MemoryRuntime = NonNullable<
-  PluginRegistry["memoryCapabilities"][number]["capability"]["runtime"]
->;
 type MemorySearchAuthorization = Parameters<
   NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>
 >[0];
@@ -32,14 +29,14 @@ type WorkspaceMemoryPathClassification = Parameters<
   NonNullable<MemoryPluginRuntime["classifyWorkspaceMemoryPaths"]>
 >[0];
 type MemoryRuntimeOwner = {
-  runtime?: MemoryRuntime;
+  runtime?: MemoryPluginRuntime;
   standalone?: true;
   searchRuntimeRegistered?: boolean;
   error?: string;
 };
-const enrolledStandaloneMemoryRuntimes = new WeakSet<MemoryRuntime>();
+const enrolledStandaloneMemoryRuntimes = new WeakSet<MemoryPluginRuntime>();
 let standaloneMemoryRegistrySlot:
-  | { runtime?: MemoryRuntime; retiredRuntimes: Set<MemoryRuntime> }
+  | { runtime?: MemoryPluginRuntime; retiredRuntimes: Set<MemoryPluginRuntime> }
   | undefined;
 const registeredMemoryManagerAdapters = new WeakMap<
   RegisteredMemorySearchManager,
@@ -89,11 +86,10 @@ function normalizeRegisteredMemoryManager(
 /** Resolves the configured memory slot to the single runtime plugin that may load memory. */
 function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   const plugins = normalizePluginsConfig(config.plugins);
-  const memorySlot = plugins.slots.memory;
-  if (!plugins.enabled || typeof memorySlot !== "string" || memorySlot.trim().length === 0) {
+  const pluginId = plugins.slots.memory;
+  if (!plugins.enabled || !pluginId) {
     return [];
   }
-  const pluginId = memorySlot.trim();
   if (plugins.deny.includes(pluginId) || plugins.entries[pluginId]?.enabled === false) {
     return [];
   }
@@ -111,7 +107,7 @@ function resolveMemoryRuntimeWorkspaceDir(
   return resolveUserPath(dir);
 }
 
-function listCurrentMemoryRuntimes(): MemoryRuntime[] {
+function listCurrentMemoryRuntimes(): MemoryPluginRuntime[] {
   const runtimes = new Set(standaloneMemoryRegistrySlot?.retiredRuntimes);
   const current = getMemoryRuntime();
   if (current) {

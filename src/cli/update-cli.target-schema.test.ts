@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
-import * as versionManagerPath from "../shared/version-manager-path.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -456,6 +455,7 @@ describe("update-cli", () => {
         for (const listener of listeners) {
           listener();
         }
+        await exitCalled.promise;
         // Inspect while preflight remains blocked: ordinary unwind cannot settle this row.
         expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
           runId: before.runId,
@@ -464,7 +464,6 @@ describe("update-cli", () => {
           reason: "interrupted",
           finishedAtMs: expect.any(Number),
         });
-        await exitCalled.promise;
         expect(processExitSpy).toHaveBeenCalledWith(signal === "SIGINT" ? 130 : 143);
         expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(packageBefore);
         expect(packageInstallCommandCall()).toBeUndefined();
@@ -479,8 +478,8 @@ describe("update-cli", () => {
   it.each([true, false])(
     "uses inspected package runtime requirements when a later lookup disagrees (compatible=%s)",
     async (compatible) => {
-      // This case specifies system-runtime guidance, independent of the host Node manager.
-      vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
+      // This case specifies a non-container system runtime, independent of the test host.
+      runtimeRecovery.mockNonContainerSystemRuntime();
       const root = await mockPackageInstallAtCaseDir("openclaw-runtime-target");
       const inspectedEngine = compatible ? ">=22.19.0" : ">=999.0.0";
       vi.mocked(fetchNpmPackageTargetStatus)

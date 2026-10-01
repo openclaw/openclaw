@@ -21,6 +21,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import java.time.Instant
+import java.time.ZoneId
 import java.util.concurrent.atomic.AtomicReference
 
 internal object AndroidScreenshotFixture {
@@ -39,7 +40,13 @@ internal object AndroidScreenshotFixture {
   const val gatewayId = "android-screenshot-gateway"
   val browserFocusAvailable: Boolean get() = scene == AndroidScreenshotScene.Browser
   const val controlUiBaseUrl = "http://127.0.0.1:18789"
-  val mainSessionKey: String get() = if (workScene) "agent:main:node-work-proof" else "agent:main:node-screenshot"
+  val mainSessionKey: String
+    get() =
+      when {
+        workScene -> "agent:main:node-work-proof"
+        scene == AndroidScreenshotScene.Snooze -> "agent:main:dashboard:snooze-active"
+        else -> "agent:main:node-screenshot"
+      }
   val sourcePreviewConfig: GatewaySourcePreviewConfig?
     get() = if (scene == AndroidScreenshotScene.Sources) GatewaySourcePreviewConfig(controlUiBaseUrl, "", "https://gateway.example", true, 0L) else null
 
@@ -55,6 +62,7 @@ internal object AndroidScreenshotFixture {
   private val branchLeaves = (1..12).map { "android-screenshot-branch-${it.toString().padStart(2, '0')}" }
 
   fun createRequester(branchesEnabled: Boolean = this.branchesEnabled): (String, String?) -> String {
+    val fixtureNowMs = System.currentTimeMillis()
     val activeLeaf = AtomicReference(branchLeaves.first())
     // A runtime gets a fresh lifetime; list refreshes and scene re-entry keep its exact record.
     val pendingQuestion =
@@ -141,7 +149,7 @@ internal object AndroidScreenshotFixture {
         }
 
         "sessions.list" -> {
-          if (branchesEnabled) branchSessionList(paramsJson, activeLeaf.get()) else sessionList(paramsJson)
+          if (branchesEnabled) branchSessionList(paramsJson, activeLeaf.get()) else sessionList(paramsJson, fixtureNowMs)
         }
 
         "sessions.branches.list" -> {
@@ -848,7 +856,39 @@ internal object AndroidScreenshotFixture {
     cost?.let { put("cost", it) }
   }
 
-  private fun sessionList(paramsJson: String?): String {
+  private fun sessionList(
+    paramsJson: String?,
+    fixtureNowMs: Long,
+  ): String {
+    if (scene == AndroidScreenshotScene.Snooze) {
+      val wakeAtMs =
+        Instant
+          .ofEpochMilli(fixtureNowMs)
+          .atZone(ZoneId.systemDefault())
+          .toLocalDate()
+          .plusDays(1)
+          .atTime(9, 0)
+          .atZone(ZoneId.systemDefault())
+          .toInstant()
+          .toEpochMilli()
+      return buildJsonObject {
+        putJsonArray("sessions") {
+          addJsonObject {
+            session("agent:main:dashboard:snooze-active", "Trip checklist", fixtureNowMs).forEach { (key, value) -> put(key, value) }
+            put("sessionId", "screenshot-snooze-active")
+          }
+          addJsonObject {
+            session("agent:main:dashboard:snooze-sleeping", "Weekend reading", fixtureNowMs - 60_000).forEach { (key, value) -> put(key, value) }
+            put("sessionId", "screenshot-snooze-sleeping")
+            put("snoozedAt", fixtureNowMs)
+            put("snoozedUntil", wakeAtMs)
+          }
+        }
+        put("count", 2)
+        put("totalCount", 2)
+        put("hasMore", false)
+      }.toString()
+    }
     if (scene == AndroidScreenshotScene.Browser) {
       return buildJsonObject {
         putJsonArray("sessions") {

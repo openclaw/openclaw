@@ -29,6 +29,8 @@ import {
 } from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
+  packageIntegrityDifferences,
+  PackageIntegrityMismatchError,
   type PackageIntegrityFingerprint,
 } from "./package-update-integrity.js";
 import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
@@ -160,7 +162,10 @@ export function createPublicationOwner(
     }
     const observed = await createPackageIntegrityReader().tree(file, logical);
     if (!isDeepStrictEqual(observed, expected)) {
-      throw new Error(`Package publication object changed: ${file}`);
+      throw new PackageIntegrityMismatchError(
+        `Package publication object changed: ${file}`,
+        packageIntegrityDifferences(expected, observed),
+      );
     }
     return true;
   };

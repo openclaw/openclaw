@@ -18,6 +18,11 @@ import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
@@ -444,11 +449,22 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["no_activity", "stuck_recovery"] as const)(
-    "sends truthful stalled feedback when %s expires the active reply",
-    async (reason) => {
+  it.each([
+    { reason: "no_activity", continued: undefined, notice: true },
+    { reason: "stuck_recovery", continued: undefined, notice: true },
+    { reason: "stuck_recovery", continued: false, notice: true },
+    { reason: "stuck_recovery", continued: true, notice: false },
+    { reason: "finalization_stalled", continued: true, notice: false },
+  ] as const)(
+    "sends the stall notice only as a last resort ($reason, continued=$continued)",
+    async ({ reason, continued, notice }) => {
       const resolverStarted = createDeferred();
+      const continueStalledTurn = vi.fn(() => continued === true);
       const dispatchParams = createVisibleDispatchParams(async (_ctx, options) => {
+        const runState = resolveReplyOperationRunState(options);
+        if (runState && continued !== undefined) {
+          runState.continueStalledTurn = continueStalledTurn;
+        }
         resolverStarted.resolve();
         await new Promise<void>((resolve) => {
           options?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
@@ -464,11 +480,48 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       expect(operation).toBeDefined();
       expect(expireStaleReplyOperation(operation!, reason)).toBe(false);
 
-      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
-      expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
-        text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
-        isError: true,
-      });
+      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: notice });
+      expect(continueStalledTurn).toHaveBeenCalledTimes(
+        continued !== undefined && reason !== "finalization_stalled" ? 1 : 0,
+      );
+      if (notice) {
+        expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
+          text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+          isError: true,
+        });
+      } else {
+        expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      }
     },
   );
+
+  it("keeps a queued channel turn accepted when the busy session frees before final admission", async () => {
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    sessionStoreMocks.currentEntry = { sessionId: "active-session", updatedAt: Date.now() };
+    const runState: ReplyOperationRunState = {};
+    const dispatchParams = createVisibleDispatchParams(async () => {
+      // The turn queues behind pending follow-up work; the owner settles before
+      // dispatch reacquires the now-idle session for final delivery.
+      runState.admission = { status: "accepted", mode: "followup" };
+      activeOperation.complete();
+      return undefined;
+    });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ...dispatchParams,
+        replyOptions: {
+          [REPLY_OPERATION_RUN_STATE]: runState,
+          turnAdoptionLifecycle: { admission: "exclusive", onAdopted: () => {} },
+        },
+      }),
+    ).resolves.toMatchObject({ queuedFinal: false });
+    expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+  });
 });

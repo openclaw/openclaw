@@ -246,9 +246,10 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result.failures).toEqual([]);
   });
 
-  it("accepts a persisted marketplace bundle record without transient format metadata", async () => {
+  it("accepts a persisted marketplace bundle with an unrelated non-object package.json", async () => {
     const dir = path.join(tmpRoot, "marketplace-bundle");
     await writeBundle({ dir, format: "cursor" });
+    await fs.writeFile(path.join(dir, "package.json"), "null", "utf8");
     const result = await runPluginPayloadSmokeCheck({
       records: {
         "marketplace-bundle": {
@@ -608,21 +609,47 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
-  it("reports a failure when package.json cannot be parsed", async () => {
-    const dir = path.join(tmpRoot, "broken");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "package.json"), "not-json", "utf8");
-    const result = await checkPackage("broken", dir);
-    expect(result.failures).toStrictEqual([
-      {
-        pluginId: "broken",
-        installPath: dir,
-        reason: "invalid-package-json",
-        detail:
-          "Could not parse package.json: Unexpected token 'o', \"not-json\" is not valid JSON",
-      },
-    ]);
-  });
+  it.each([
+    ["not-json", "Unexpected token 'o', \"not-json\" is not valid JSON"],
+    ["null", "package.json must be an object"],
+    ["[]", "package.json must be an object"],
+    ["42", "package.json must be an object"],
+    ["true", "package.json must be an object"],
+    ['"text"', "package.json must be an object"],
+  ])(
+    "reports invalid package.json %s and continues checking later plugins",
+    async (content, error) => {
+      const dir = path.join(tmpRoot, "broken");
+      const laterDir = path.join(tmpRoot, "later");
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "package.json"), content, "utf8");
+      await writePackage(laterDir, { name: "later", main: "missing.js" });
+
+      const result = await runPluginPayloadSmokeCheck({
+        records: {
+          broken: { source: "npm", installPath: dir },
+          later: { source: "npm", installPath: laterDir },
+        },
+        env: {},
+      });
+
+      expect(result.checked).toEqual(["broken", "later"]);
+      expect(result.failures).toStrictEqual([
+        {
+          pluginId: "broken",
+          installPath: dir,
+          reason: "invalid-package-json",
+          detail: `Could not parse package.json: ${error}`,
+        },
+        {
+          pluginId: "later",
+          installPath: laterDir,
+          reason: "missing-main-entry",
+          detail: `Plugin main entry "missing.js" not found at ${path.join(laterDir, "missing.js")}`,
+        },
+      ]);
+    },
+  );
 
   it.each(["EACCES"])("classifies a %s package.json read failure as unreadable", async (code) => {
     const dir = path.join(tmpRoot, "unreadable");

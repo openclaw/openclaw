@@ -590,7 +590,7 @@ export function loadUiPreferences(
     // Scoped blobs from builds that persisted tokens durably get rewritten once
     // so the plaintext token leaves localStorage.
     if ("token" in parsed || migratedSidebarEntries !== null) {
-      persistSettings(
+      saveSettings(
         { ...settings, token: loadSessionToken(gatewayUrl) },
         { selectGateway: !targetGatewayUrl },
       );
@@ -599,10 +599,6 @@ export function loadUiPreferences(
   } catch {
     return defaults;
   }
-}
-
-export function saveSettings(next: UiSettings) {
-  persistSettings(next);
 }
 
 // Single change seam over the one write channel every settings mutation uses;
@@ -621,7 +617,7 @@ export function patchSettings(
 ): UiSettings {
   const previous = loadSettings(patch.gatewayUrl);
   const next = { ...previous, ...patch };
-  persistSettings(next, {
+  saveSettings(next, {
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
   });
   settingsChangeListener?.(previous, next);
@@ -641,7 +637,7 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
   }
 }
 
-function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
+export function saveSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);

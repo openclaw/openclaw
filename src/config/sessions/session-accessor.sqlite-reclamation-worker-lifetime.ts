@@ -576,7 +576,7 @@ export class SqliteReclamationWorker {
     });
   }
 
-  private revoke(): void {
+  revoke(): void {
     this.retirementReason ??= "revoked";
     this.revoked = true;
     if (this.commitGate) {

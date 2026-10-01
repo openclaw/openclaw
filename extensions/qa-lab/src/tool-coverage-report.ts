@@ -179,15 +179,12 @@ function buildRow(params: {
 }): QaToolCoverageRow {
   const result = mergeScenarioResults(params.group.scenarios, params.results);
   const tracking = params.group.scenarios.map(readScenarioTracking).find(Boolean);
-  const metadata = params.group.scenarios
-    .map(readScenarioRuntimeToolCoverageMetadata)
-    .find((entry) => entry.required);
-  const firstScenario = expectDefined(
-    params.group.scenarios[0],
+  const metadata = params.group.scenarios.map(readScenarioRuntimeToolCoverageMetadata);
+  const fallbackMetadata = expectDefined(
+    metadata[0],
     `QA tool fixture group ${params.group.tool} scenario`,
   );
-  const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(firstScenario);
-  const rowMetadata = metadata ?? fallbackMetadata;
+  const rowMetadata = metadata.find((entry) => entry.required) ?? fallbackMetadata;
   const runtimeToolName = params.group.scenarios.map(readScenarioRuntimeToolName).find(Boolean);
   const openclawCalls = summarizeRuntimeToolCalls(result, "openclaw", runtimeToolName);
   const codexCalls = summarizeRuntimeToolCalls(result, "codex", runtimeToolName);
@@ -257,13 +254,14 @@ export function buildQaToolCoverageReport(params: {
   const failures = evaluated
     ? rows.map(coverageFailureForRow).filter((failure): failure is string => Boolean(failure))
     : [];
+  const requiredTools = rows.filter((row) => row.required).length;
   return {
     runtimePair: normalizeRuntimePair(params.runtimePair ?? params.summary?.run?.runtimePair),
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     evaluated,
     totalTools: rows.length,
-    requiredTools: rows.filter((row) => row.required).length,
-    reportOnlyTools: rows.filter((row) => !row.required).length,
+    requiredTools,
+    reportOnlyTools: rows.length - requiredTools,
     trackedTools: rows.filter((row) => Boolean(row.tracking)).length,
     nativeWorkspaceTools: rows.filter((row) => row.bucket === "codex-native-workspace").length,
     dynamicIntegrationTools: rows.filter((row) => row.bucket === "openclaw-dynamic-integration")
@@ -272,9 +270,7 @@ export function buildQaToolCoverageReport(params: {
       (row) => row.capabilityLayer === "openclaw-dynamic-searchable",
     ).length,
     optionalTools: rows.filter((row) => row.bucket === "optional-profile-or-plugin").length,
-    passingTools: evaluated
-      ? rows.filter((row) => row.required && !coverageFailureForRow(row)).length
-      : 0,
+    passingTools: evaluated ? requiredTools - failures.length : 0,
     failingTools: failures.length,
     rows,
     pass: failures.length === 0,

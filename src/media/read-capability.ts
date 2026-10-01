@@ -1,4 +1,3 @@
-// Media read capability helpers gate file reads by configured media access rules.
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveGroupToolPolicy } from "../agents/agent-tools.policy.js";

@@ -216,12 +216,6 @@ export function createFeishuMessageReceiveHandler({
     await enqueue(sequentialKey, task);
   };
 
-  const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
-    const senderId =
-      event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim();
-    return senderId || undefined;
-  };
-
   const resolveDebounceText = (event: FeishuMessageEvent): string => {
     return resolveText({
       event,
@@ -254,7 +248,8 @@ export function createFeishuMessageReceiveHandler({
       resolveDebounceMs,
       buildKey: ({ event }) => {
         const chatId = event.message.chat_id?.trim();
-        const senderId = resolveSenderDebounceId(event);
+        const senderId =
+          event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim();
         if (!chatId || !senderId) {
           return null;
         }
@@ -418,7 +413,8 @@ export function createFeishuMessageReceiveHandler({
       event.message.message_type.trim() === "post" &&
       messageDedupeKey !== messageId &&
       (await hasProcessedMessage(messageId, accountId, log)) &&
-      parsePostContent(event.message.content).attachments.length === 0
+      parsePostContent(event.message.content, { includeTopLevelFiles: false }).attachments
+        .length === 0
     ) {
       log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
       await completeSuppressedIngress();

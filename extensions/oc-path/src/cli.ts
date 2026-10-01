@@ -10,29 +10,15 @@ import { constants as fsConstants, promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
-import {
-  MAX_JSONC_INPUT_BYTES,
-  OcEmitSentinelError,
-  OcPathError,
-  REDACTED_SENTINEL,
-  emitJsonc,
-  emitJsonl,
-  emitMd,
-  emitYaml,
-  findOcPaths,
-  formatOcPath,
-  inferKind,
-  parseJsonc,
-  parseJsonl,
-  parseMd,
-  parseOcPath,
-  parseYaml,
-  resolveOcPath,
-  setOcPath,
-  type OcAst,
-  type OcMatch,
-  type OcPath,
-} from "./oc-path/index.js";
+import { inferKind } from "./oc-path/dispatch.js";
+import { findOcPaths } from "./oc-path/find.js";
+import { MAX_JSONC_INPUT_BYTES, parseJsonc } from "./oc-path/jsonc/parse.js";
+import { parseJsonl } from "./oc-path/jsonl/parse.js";
+import { OcPathError, formatOcPath, parseOcPath, type OcPath } from "./oc-path/oc-path.js";
+import { parseMd } from "./oc-path/parse.js";
+import { OcEmitSentinelError, REDACTED_SENTINEL } from "./oc-path/sentinel.js";
+import { resolveOcPath, setOcPath, type OcAst, type OcMatch } from "./oc-path/universal.js";
+import { parseYaml } from "./oc-path/yaml/parse.js";
 
 interface PathCommandOptions {
   readonly json?: boolean;
@@ -60,10 +46,7 @@ const SCRUB_PLACEHOLDER = "[REDACTED]";
 // Defense-in-depth: replace the redaction sentinel with `[REDACTED]`
 // before writing, even if upstream emits it.
 function scrubSentinel(s: string): string {
-  if (!s.includes(REDACTED_SENTINEL)) {
-    return s;
-  }
-  return s.split(REDACTED_SENTINEL).join(SCRUB_PLACEHOLDER);
+  return s.replaceAll(REDACTED_SENTINEL, SCRUB_PLACEHOLDER);
 }
 
 function detectMode(options: PathCommandOptions): OutputMode {
@@ -101,22 +84,6 @@ function tryParse(pathStr: string, mode: OutputMode): OcPath | null {
     if (err instanceof OcPathError) {
       emitError(mode, `parse failed: ${err.message}`, err.code);
       process.exitCode = 2;
-      return null;
-    }
-    throw err;
-  }
-}
-
-// Catch OcEmitSentinelError so it goes through the structured error
-// path; otherwise commander prints `String(err)` raw and bypasses the
-// `--json` scrubbed-error boundary.
-function catchSentinel<T>(label: string, mode: OutputMode, fn: () => T): T | null {
-  try {
-    return fn();
-  } catch (err) {
-    if (err instanceof OcEmitSentinelError) {
-      emitError(mode, `${label} refused: ${err.message}`, "OC_EMIT_SENTINEL");
-      process.exitCode = 1;
       return null;
     }
     throw err;
@@ -181,22 +148,6 @@ async function loadOcPathFile(
     return { ast: parseYaml(raw).ast, raw };
   }
   return { ast: parseMd(raw).ast, raw };
-}
-
-function emitForKind(ast: OcAst, fileName?: string): string {
-  // Plumb fileName so sentinel errors carry file context.
-  const opts = fileName !== undefined ? { fileNameForGuard: fileName } : {};
-  switch (ast.kind) {
-    case "jsonc":
-      return emitJsonc(ast, opts);
-    case "jsonl":
-      return emitJsonl(ast, opts);
-    case "md":
-      return emitMd(ast, opts);
-    case "yaml":
-      return emitYaml(ast, opts);
-  }
-  return "";
 }
 
 function resolveFsPath(path: OcPath, options: PathCommandOptions): string {
@@ -317,11 +268,17 @@ async function pathSetCommand(
     return;
   }
 
-  const result = catchSentinel("set", mode, () =>
-    setOcPath(loaded.ast, ocPath, value, { valueJson: options.valueJson === true }),
-  );
-  if (result === null) {
-    return;
+  let result: ReturnType<typeof setOcPath>;
+  try {
+    result = setOcPath(loaded.ast, ocPath, value, { valueJson: options.valueJson === true });
+  } catch (err) {
+    // Keep sentinel errors inside the scrubbed --json error boundary.
+    if (err instanceof OcEmitSentinelError) {
+      emitError(mode, `set refused: ${err.message}`, "OC_EMIT_SENTINEL");
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
   }
   if (!result.ok) {
     const detail = result.detail;
@@ -333,12 +290,8 @@ async function pathSetCommand(
     process.exitCode = 1;
     return;
   }
-  // Per-kind emit can still refuse the sentinel even after set succeeds.
-  const newBytes = catchSentinel("emit", mode, () => emitForKind(result.ast, ocPath.file));
-  if (newBytes === null) {
-    return;
-  }
-
+  // Setters guard edits and publish the rebuilt bytes; round-trip emission reads them verbatim.
+  const newBytes = result.ast.raw;
   const byteLength = Buffer.byteLength(newBytes, "utf8");
 
   if (options.dryRun === true) {
@@ -468,10 +421,7 @@ async function pathEmitCommand(fileArg: string, options: PathCommandOptions): Pr
   if (loaded === null) {
     return;
   }
-  const bytes = catchSentinel("emit", mode, () => emitForKind(loaded.ast, fileName));
-  if (bytes === null) {
-    return;
-  }
+  const bytes = loaded.ast.raw;
   if (mode === "json") {
     process.stdout.write(scrubSentinel(JSON.stringify({ ok: true, kind: loaded.ast.kind, bytes })));
     return;

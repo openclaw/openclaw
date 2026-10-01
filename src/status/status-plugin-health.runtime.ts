@@ -140,7 +140,11 @@ function filterRuntimeToolQuarantinesForRegistry(params: {
 
 // Compact status reads only the active registry and persisted health stores;
 // full config-driven channel inspection is reserved for the installed path.
-export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot {
+export async function collectRuntimePluginHealthSnapshot(): Promise<StatusPluginHealthSnapshot> {
+  const [contextEngineQuarantines, runtimeToolQuarantines] = await Promise.all([
+    listContextEngineQuarantines(),
+    listPersistedRuntimeToolSchemaQuarantines(),
+  ]);
   const registry = getActiveRuntimePluginRegistry();
   const diagnostics = (registry?.diagnostics ?? []).map(normalizeDiagnostic);
   const plugins = (registry?.plugins ?? []).map(normalizeSnapshotPlugin);
@@ -148,9 +152,9 @@ export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot
   return {
     plugins,
     diagnostics,
-    contextEngineQuarantines: listContextEngineQuarantines(),
+    contextEngineQuarantines,
     runtimeToolQuarantines: filterRuntimeToolQuarantinesForRegistry({
-      quarantines: listPersistedRuntimeToolSchemaQuarantines(),
+      quarantines: runtimeToolQuarantines,
       plugins,
     }),
     channelPluginFailures: collectChannelPluginFailures({
@@ -166,7 +170,7 @@ export async function collectInstalledPluginHealthSnapshot(params: {
 }): Promise<StatusPluginHealthSnapshot> {
   const { buildPluginCompatibilityNotices, buildPluginSnapshotReport } =
     await import("../plugins/status.js");
-  const runtime = collectRuntimePluginHealthSnapshot();
+  const runtime = await collectRuntimePluginHealthSnapshot();
   const report = buildPluginSnapshotReport({
     config: params.config,
     workspaceDir: params.workspaceDir,

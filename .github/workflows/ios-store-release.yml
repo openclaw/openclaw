@@ -1,17 +1,21 @@
 name: iOS Store Release
 
-run-name: iOS Store ${{ inputs.operation }}
+run-name: iOS ${{ (github.event_name == 'schedule' || inputs.operation == 'testflight') && 'TestFlight distribution' || format('Store {0}', inputs.operation) }}
 
 on:
+  schedule:
+    - cron: "0 7 * * *"
+      timezone: America/Los_Angeles
   workflow_dispatch:
     inputs:
       operation:
-        description: Upload a release or capture screenshots without uploading
+        description: Stage an App Store release, distribute TestFlight, or capture screenshots
         required: true
         default: release
         type: choice
         options:
           - release
+          - testflight
           - screenshots
 
 permissions: {}
@@ -28,7 +32,7 @@ env:
 jobs:
   screenshots:
     name: Capture release screenshots without uploading
-    if: inputs.operation == 'screenshots' && github.repository == 'openclaw/openclaw'
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'screenshots' && github.repository == 'openclaw/openclaw'
     permissions:
       contents: read
     runs-on: xcode-27-xlarge
@@ -100,10 +104,13 @@ jobs:
           retention-days: 14
 
   qualify:
-    if: inputs.operation == 'release' && github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
+    if: >-
+      github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
+      github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
     permissions:
+      actions: read
       contents: read
-    # Qualification rebuilds tracked plugin manifests; keep its workspace separate
+    # Keep native qualification products and disposable Gateway state separate
     # from the clean checkout that admits the release.
     uses: ./.github/workflows/ios-release-e2e.yml
     with:
@@ -113,12 +120,17 @@ jobs:
   release:
     name: Prepare and upload iOS release
     needs: qualify
-    if: inputs.operation == 'release' && github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
+    if: >-
+      !cancelled() &&
+      github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
+      ((github.event_name == 'schedule' && vars.IOS_TESTFLIGHT_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.operation == 'testflight' || (inputs.operation == 'release' && needs.qualify.result == 'success'))))
     permissions:
       contents: write
     runs-on: xcode-27-xlarge
     timeout-minutes: 360
-    environment: ios-store-release
+    environment: ${{ (github.event_name == 'schedule' || inputs.operation == 'testflight') && 'ios-testflight' || 'ios-store-release' }}
     steps:
       - name: Checkout release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -226,12 +238,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          IOS_RELEASE_DESTINATION: ${{ (github.event_name == 'schedule' || inputs.operation == 'testflight') && 'testflight' || 'app-store' }}
+          OPENCLAW_TESTFLIGHT_GROUP_ID: ${{ vars.OPENCLAW_TESTFLIGHT_GROUP_ID }}
           SCAN_APP_NAME: OpenClaw
           SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"
         run: |
           set -euo pipefail
           gh auth setup-git
           pnpm ios:release:upload -- \
+            --destination "$IOS_RELEASE_DESTINATION" \
             --recovery-dir "$RUNNER_TEMP/ios-release-recovery"
 
       - name: Retain release plan and notes
@@ -242,6 +257,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ios-release-recovery/ios-plan.json
             ${{ runner.temp }}/ios-release-recovery/release-notes.json
+            ${{ runner.temp }}/ios-release-recovery/testflight-result.json
           if-no-files-found: error
           retention-days: 30
 

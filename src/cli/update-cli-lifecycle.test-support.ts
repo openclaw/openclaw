@@ -154,6 +154,9 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     process.exitCode = undefined;
     const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
     tempHome = await createTempHomeEnv("openclaw-update-cli-home-");
+    // Original-state capture must discover this simulated install's plugins.
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(fixtureRoot, "checkout", "extensions");
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     commandTransport.npmPrefix = tempDirs.make("openclaw-cli-npm-prefix-");
     process.env.NPM_CONFIG_GLOBALCONFIG = globalNpmConfig;
     process.env.npm_config_globalconfig = globalNpmConfig;

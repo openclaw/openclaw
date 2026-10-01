@@ -10,13 +10,13 @@ export function observeManagedCodexLauncherFailure(
 ): void {
   let prefix = "";
   let launchCode: string | undefined;
-  const startupFailure: NonNullable<CodexAppServerTransport["startupFailure"]> = {
-    complete() {
-      child.stderr.off("data", onData);
-      child.off("exit", onExit);
-      prefix = "";
-    },
+  const complete = () => {
+    child.stderr.off("data", onData);
+    child.off("exit", onExit);
+    child.off("close", complete);
+    prefix = "";
   };
+  const startupFailure: NonNullable<CodexAppServerTransport["startupFailure"]> = { complete };
   const onData = (chunk: string | Buffer) => {
     if (launchCode || prefix.length >= 16_384) {
       return;
@@ -35,8 +35,16 @@ export function observeManagedCodexLauncherFailure(
     ) {
       launchCode = "ENOENT";
     }
+    if (child.exitCode !== null) {
+      onExit(child.exitCode);
+    }
   };
   const onExit = (code: number | null) => {
+    // Exit can precede pipe data; registration already drains that data before
+    // choosing its failure. Keep observing until the diagnostic or pipe close.
+    if (code === 1 && !launchCode) {
+      return;
+    }
     startupFailure.complete();
     if (code !== 1 || !launchCode) {
       return;
@@ -52,5 +60,6 @@ export function observeManagedCodexLauncherFailure(
   };
   child.stderr.on("data", onData);
   child.once("exit", onExit);
+  child.once("close", complete);
   Object.assign(child, { startupFailure });
 }

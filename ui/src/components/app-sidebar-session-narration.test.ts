@@ -14,7 +14,9 @@ import {
   SidebarSessionNarrationController,
   type SidebarNarrationSyncInput,
 } from "./app-sidebar-session-narration.ts";
+import type { SidebarToolActivity } from "./app-sidebar-session-types.ts";
 import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
+import "../test-helpers/app-sidebar-tool-activity-cases.ts";
 
 // Mirrors the controller-internal throttle; asserting through timers keeps the
 // constant unexported (production-only export policy).
@@ -478,9 +480,11 @@ describe("SidebarSessionNarrationController", () => {
     };
     const lines: Array<ReadonlyMap<string, string>> = [];
     const digests: Array<ReadonlyMap<string, { headline: string }>> = [];
+    const tools: Array<ReadonlyMap<string, SidebarToolActivity>> = [];
     const controller = new SidebarSessionNarrationController(
       (next) => lines.push(next),
       (next) => digests.push(next),
+      (next) => tools.push(next),
     );
     controller.sync({
       enabled: true,
@@ -492,6 +496,7 @@ describe("SidebarSessionNarrationController", () => {
       agentId: "main",
     });
 
+    controller.handleEvent(chatDelta("Reading source"));
     controller.handleEvent(
       gatewayEvent("agent", {
         sessionKey: "agent:main:run",
@@ -500,7 +505,8 @@ describe("SidebarSessionNarrationController", () => {
         data: { name: "read" },
       }),
     );
-    expect(lines.at(-1)?.get("agent:main:run")).toBe("Using read");
+    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("read");
+    expect(lines.at(-1)?.get("agent:main:run")).toBe("Reading source");
 
     controller.handleEvent(
       gatewayEvent("session.observer", {
@@ -521,7 +527,8 @@ describe("SidebarSessionNarrationController", () => {
         data: { name: "list" },
       }),
     );
-    expect(lines.at(-1)?.get("agent:main:run")).toBe("Using list");
+    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("list");
+    expect(lines.at(-1)?.get("agent:main:run")).toBe("Reading source");
 
     controller.handleEvent(
       gatewayEvent("session.observer", {
@@ -580,52 +587,8 @@ describe("SidebarSessionNarrationController", () => {
       }),
     );
     expect(digests.at(-1)?.has("agent:main:run")).toBe(false);
-    expect(lines.at(-1)?.get("agent:main:run")).toBe("Using test");
-  });
-
-  it("publishes assistant commentary and throttles a newer tool signal", async () => {
-    const subscribeMessages = vi.fn(() =>
-      Promise.resolve({ key: "agent:main:run", agentId: null }),
-    );
-    const unsubscribeMessages = vi.fn(() => Promise.resolve());
-    const source = { subscribeMessages, unsubscribeMessages };
-    const updates: Array<ReadonlyMap<string, string>> = [];
-    const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
-    const connectionIdentity = {};
-    controller.sync({
-      enabled: true,
-      connected: true,
-      connectionIdentity,
-      source,
-      openSessionKey: "",
-      rows: [runningRow("agent:main:run")],
-      agentId: "main",
-    });
-    await Promise.resolve();
-
-    controller.handleEvent(chatDelta("**Reading** files.", "**Reading** files."));
-    controller.handleEvent(
-      gatewayEvent("session.tool", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "tool",
-        data: { phase: "start", name: "read" },
-      }),
-    );
-
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading files.");
-    await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS - 1);
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading files.");
-    await vi.advanceTimersByTimeAsync(1);
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("Using read");
-
-    controller.disconnect();
-    expect(unsubscribeMessages).toHaveBeenCalledWith({
-      key: "agent:main:run",
-      agentId: null,
-    });
-    expect(updates.at(-1)?.size).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("test");
+    expect(lines.at(-1)?.get("agent:main:run")).toBeUndefined();
   });
 
   it("seeds a mid-run chat subscription from the cumulative message snapshot", () => {

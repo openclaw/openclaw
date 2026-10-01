@@ -1,4 +1,3 @@
-// Provider model helpers normalize model catalog entries shared by provider plugins.
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildAnthropicReplayPolicyForModel,

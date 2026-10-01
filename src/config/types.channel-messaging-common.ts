@@ -1,4 +1,3 @@
-// Defines common channel messaging configuration types.
 import type { z } from "zod";
 import type { NativeExecApprovalEnableMode } from "./types.approvals.js";
 import type { ChannelDeliveryStreamingConfig } from "./types.base.js";

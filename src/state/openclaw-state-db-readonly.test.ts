@@ -40,6 +40,7 @@ import {
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import * as readWorker from "./openclaw-state-read-worker.js";
 
@@ -805,6 +806,23 @@ it.each(["synchronous", "discovery"] as const)(
         writer.exec("UPDATE held SET value='later'");
         expect(current()).toEqual(["later", "later"]);
         expect(read()).toBe("first");
+        const foreign = createOptions(path.join(root, "foreign"));
+        openOpenClawStateDatabase(foreign).db.exec(
+          "CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed');",
+        );
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.exec("UPDATE held SET value='uncommitted'");
+          expect(
+            withSynchronousArtifactPreservingStateSnapshot(
+              () =>
+                withExistingOpenClawStateDatabaseReadOnly(
+                  ({ db: reader }) => reader.prepare("SELECT value FROM held").get()?.value,
+                  foreign,
+                ),
+              { current: options },
+            ),
+          ).toBe("committed");
+        }, foreign);
       };
       try {
         if (inherited === "synchronous") {
@@ -824,6 +842,7 @@ it.each(["synchronous", "discovery"] as const)(
         }
       } finally {
         writer.close();
+        await closeOpenClawStateDatabaseAsync();
       }
     });
   },

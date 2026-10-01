@@ -254,20 +254,38 @@ describe("candidate update admission", () => {
     }
   });
 
-  it("returns invalid-config with exit 3 without repairing or quoting rejected config values", async () => {
-    writeConfig({ gateway: { port: "private-invalid-value" } });
-    const before = snapshotFiles();
-    await updateAdmitCommand(contextPath);
-    expect(readVerdict()).toMatchObject({
-      verdict: "refuse",
-      reasons: [
-        { code: "invalid-config", message: expect.any(String), nextAction: expect.any(String) },
-      ],
-    });
-    expect(stdout).not.toContain("private-invalid-value");
-    expect(process.exitCode).toBe(3);
-    expect(snapshotFiles()).toEqual(before);
-  });
+  it.each([
+    {
+      kind: "invalid value",
+      config: { gateway: { port: "private-invalid-value" } },
+      nextAction: /openclaw doctor --fix/,
+    },
+    {
+      kind: "retired format",
+      config: { heartbeat: { every: "private-invalid-value" } },
+      nextAction: /Install OpenClaw 2026\.9\.5[\s\S]*openclaw doctor --fix/,
+    },
+  ])(
+    "refuses $kind without repairing or quoting rejected config values",
+    async ({ config, nextAction }) => {
+      writeConfig(config);
+      const before = snapshotFiles();
+      await updateAdmitCommand(contextPath);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          {
+            code: "invalid-config",
+            message: expect.any(String),
+            nextAction: expect.stringMatching(nextAction),
+          },
+        ],
+      });
+      expect(stdout).not.toContain("private-invalid-value");
+      expect(process.exitCode).toBe(3);
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
 
   it.each([
     { policy: "allowlist", verdict: "admit", exitCode: 0 },

@@ -38,7 +38,6 @@ async function killLatestSubagentRun(params: {
   scope: KillScope;
   suppressTaskDelivery?: boolean;
   beforeSessionKill?: () => boolean;
-  expectedRunId?: string;
   expectedGeneration?: number;
   expectedOwnerKey?: string;
 }): Promise<{
@@ -363,8 +362,6 @@ export async function killSubagentRunAdmin(
         tree,
         scope,
         beforeSessionKill: control?.beforeSessionKill,
-        // Resolve stable task identity once; a later replacement must not inherit this Stop.
-        expectedRunId: expectedRunId || (expectedTaskRunId ? entry.runId : undefined),
         expectedGeneration: params.expectedGeneration,
         expectedOwnerKey: params.expectedOwnerKey?.trim() || undefined,
       });

@@ -42,7 +42,7 @@ import {
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
 import {
-  isAgentMainSessionKey,
+  resolveProtectedSessionVisibilityError,
   resolveSessionWorkerPlacementPatchError,
   sessionLog,
 } from "./sessions-shared.js";
@@ -84,16 +84,6 @@ function archiveUnavailableError(key: string, message: "active" | "stopping"): E
       : `Session ${key} did not finish stopping; retry the archive.`,
     { retryable: true },
   );
-}
-
-function protectedArchiveError(cfg: OpenClawConfig, canonicalKey: string): ErrorShape | undefined {
-  if (canonicalKey === "unknown") {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive the unknown session sentinel.");
-  }
-  if (canonicalKey === "global" || isAgentMainSessionKey(cfg, canonicalKey)) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive an agent's main session.");
-  }
-  return undefined;
 }
 
 function archiveTargetChanged(params: {
@@ -173,7 +163,11 @@ export async function prepareSessionPatchArchive(params: {
     if (missingHarnessSessionError) {
       return err(errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError));
     }
-    const protectedError = protectedArchiveError(cfg, freshCanonicalKey);
+    const protectedError = resolveProtectedSessionVisibilityError(
+      cfg,
+      freshCanonicalKey,
+      "archive",
+    );
     if (protectedError) {
       return err(protectedError);
     }
@@ -319,7 +313,7 @@ export function validateSessionPatchArchiveProjection(params: {
     return archiveChangedError(params.key);
   }
   return (
-    protectedArchiveError(params.cfg, params.primaryKey) ??
+    resolveProtectedSessionVisibilityError(params.cfg, params.primaryKey, "archive") ??
     resolvePluginSessionOwnershipError({
       action: "patch",
       entry: params.existingEntry,

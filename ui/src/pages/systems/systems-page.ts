@@ -157,10 +157,7 @@ class SystemsPage extends OpenClawLightDomElement {
   constructor() {
     super();
     void this.poll;
-    new SubscriptionsController(this).watch(
-      () => this.routeData?.controller,
-      (controller, notify) => controller.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.routeData?.controller);
   }
 
   override connectedCallback(): void {

@@ -9,8 +9,11 @@ parse_ios_release_args() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --build-number|--revision|--version|--team-id)
+      --build-number|--revision|--version|--team-id|--destination)
         if [[ "$1" == --team-id && "$mode" != prepare ]]; then
+          break
+        fi
+        if [[ "$1" == --destination && "$mode" != plan && "$mode" != upload ]]; then
           break
         fi
         if [[ -z "${2-}" || "${2-}" == --* ]]; then
@@ -23,6 +26,12 @@ parse_ios_release_args() {
           --revision) APP_STORE_REVISION="$2" ;;
           --version) RELEASE_VERSION="$2" ;;
           --team-id) TEAM_ID="$2" ;;
+          --destination)
+            case "$2" in
+              app-store|testflight) RELEASE_DESTINATION="$2" ;;
+              *) echo "Unsupported iOS release destination: $2" >&2; exit 1 ;;
+            esac
+            ;;
         esac
         shift 2
         ;;

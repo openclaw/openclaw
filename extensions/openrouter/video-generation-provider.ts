@@ -141,8 +141,7 @@ function buildImageInputs(inputImages: VideoGenerationSourceAsset[] | undefined)
 } {
   const frameImages: OpenRouterFrameImagePart[] = [];
   const inputReferences: OpenRouterImagePart[] = [];
-  let hasFirstFrame = false;
-  let hasLastFrame = false;
+  const frameTypes = new Set<OpenRouterFrameImagePart["frame_type"]>();
 
   for (const image of inputImages ?? []) {
     const role = normalizeOptionalString(image.role);
@@ -152,22 +151,15 @@ function buildImageInputs(inputImages: VideoGenerationSourceAsset[] | undefined)
     }
 
     const frameType =
-      role === "last_frame"
-        ? "last_frame"
-        : role === "first_frame"
-          ? "first_frame"
-          : hasFirstFrame
-            ? "last_frame"
-            : "first_frame";
+      role === "first_frame" || role === "last_frame"
+        ? role
+        : frameTypes.has("first_frame")
+          ? "last_frame"
+          : "first_frame";
 
-    if (frameType === "first_frame" && !hasFirstFrame) {
-      frameImages.push({ ...toImagePart(image), frame_type: "first_frame" });
-      hasFirstFrame = true;
-      continue;
-    }
-    if (frameType === "last_frame" && !hasLastFrame) {
-      frameImages.push({ ...toImagePart(image), frame_type: "last_frame" });
-      hasLastFrame = true;
+    if (!frameTypes.has(frameType)) {
+      frameImages.push({ ...toImagePart(image), frame_type: frameType });
+      frameTypes.add(frameType);
       continue;
     }
     inputReferences.push(toImagePart(image));

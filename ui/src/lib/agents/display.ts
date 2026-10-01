@@ -22,8 +22,6 @@ import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts"
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
 
-export { formatAgentRuntimeLabel };
-
 type AgentRosterEntry = {
   id: string;
   kind?: "agent" | "system";

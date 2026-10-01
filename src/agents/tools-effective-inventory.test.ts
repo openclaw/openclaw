@@ -314,7 +314,7 @@ describe("resolveEffectiveToolInventory", () => {
     expect(labels).toEqual(["Lookup (docs)", "Lookup (jira)"]);
   });
 
-  it("projects plugin tool metadata into the effective inventory", async () => {
+  it("projects plugin metadata published during provider normalization", async () => {
     const registry = createEmptyPluginRegistry();
     registry.toolMetadata = [
       {
@@ -330,9 +330,12 @@ describe("resolveEffectiveToolInventory", () => {
         },
       },
     ];
-    setActivePluginRegistry(registry);
     const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal8 } =
       await loadHarness({
+        normalizeToolsMock: vi.fn((options) => {
+          setActivePluginRegistry(registry);
+          return options.tools;
+        }),
         tools: [
           mockTool({
             name: "docs_lookup",

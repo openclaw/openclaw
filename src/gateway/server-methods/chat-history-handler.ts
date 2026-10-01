@@ -27,6 +27,7 @@ import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
+import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
@@ -350,6 +351,12 @@ export async function handleChatHistoryRequest({
         { config: cfg, phase: method },
       );
 
+      // Unsaved sessions have no resident row, but their configured defaults use the same wire contract.
+      if (!entry && sessionInfo) {
+        const presentFastMode = prepareSessionFastModePresentation(client);
+        sessionInfo.fastMode = presentFastMode(sessionInfo.fastMode);
+        sessionInfo.effectiveFastMode = presentFastMode(sessionInfo.effectiveFastMode);
+      }
       if (entry && !sessionInfo) {
         respondChatHistoryUnavailable(
           method,
@@ -575,7 +582,7 @@ export async function handleChatHistoryRequest({
         defaults,
         sessionInfo,
         thinkingLevel,
-        fastMode: entry?.fastMode,
+        fastMode: prepareSessionFastModePresentation(client)(entry?.fastMode),
         toolOverrides: entry?.toolOverrides,
         verboseLevel,
         ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),

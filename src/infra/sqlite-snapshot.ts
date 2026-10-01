@@ -79,7 +79,7 @@ type PublishVerifiedSqliteFileOptions = {
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
 };
 
-type VerifiedSqliteSnapshot = {
+type VerifiedSqliteSnapshot = SqliteFileContent & {
   path: string;
   userVersion: number;
 };
@@ -666,7 +666,7 @@ async function verifyAndPublishSqliteSnapshot(
           }
         },
       });
-      return { path: options.targetPath, userVersion };
+      return { path: options.targetPath, userVersion, ...expectedContent };
     } finally {
       if (snapshot.isOpen) {
         snapshot.close();

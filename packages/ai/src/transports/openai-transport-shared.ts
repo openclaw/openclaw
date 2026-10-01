@@ -218,24 +218,23 @@ function appendOpenAICompletionsReasoningDelta(
     batch.hasVisibleText = true;
   }
   const previous = batch.deltas[batch.deltas.length - 1];
-  if (!previous || previous.kind !== next.kind) {
+  if (
+    !previous ||
+    previous.kind !== next.kind ||
+    (next.kind === "thinking" &&
+      previous.kind === "thinking" &&
+      previous.signature !== next.signature)
+  ) {
     batch.deltas.push(next);
     if (next.kind === "thinking") {
       batch.mirroredThinking.push(next.text);
     }
     return;
   }
-  if (next.kind === "thinking" && previous.kind === "thinking") {
-    if (previous.signature !== next.signature) {
-      batch.deltas.push(next);
-      batch.mirroredThinking.push(next.text);
-      return;
-    }
-    previous.text += next.text;
-    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
-    return;
-  }
   previous.text += next.text;
+  if (next.kind === "thinking") {
+    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
+  }
 }
 
 function createOpenAICompletionsReasoningBatch(): MutableOpenAICompletionsReasoningBatch {

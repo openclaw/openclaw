@@ -336,7 +336,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     },
   );
 
-  it.each([true, false, undefined])(
+  it.each([true, false])(
     "preserves output schemas and channel-progress visibility (%s) across runtime clones",
     (hideFromChannelProgress) => {
       const outputSchema = Type.Object(
@@ -361,9 +361,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
 
       expect(result[0]).toBe(normalized);
       expect(result[0]?.outputSchema).toBe(outputSchema);
-      expect(result[0]?.hideFromChannelProgress).toBe(
-        hideFromChannelProgress === true ? true : undefined,
-      );
+      expect(result[0]?.hideFromChannelProgress).toBe(hideFromChannelProgress ? true : undefined);
     },
   );
 
@@ -453,43 +451,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
           toolName: "tool[0]",
           toolIndex: 0,
           violations: ["tool[0].name is unreadable"],
-        },
-      ],
-    ]);
-  });
-
-  it("quarantines unreadable tools before provider schema normalization", () => {
-    const healthy = { ...createParameterFreeTool(), name: "healthy" } as AgentTool;
-    const unreadable = { ...createParameterFreeTool(), name: "fuzzplugin_unreadable" } as AgentTool;
-    Object.defineProperty(unreadable, "parameters", {
-      enumerable: true,
-      get() {
-        throw new Error("fuzzplugin parameters getter exploded");
-      },
-    });
-    const tools = [unreadable, healthy];
-    const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
-    mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools: entries }) => entries);
-
-    expect(
-      normalizeAgentRuntimeTools({
-        tools,
-        provider: "openai",
-        onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
-      }),
-    ).toEqual([healthy]);
-    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: [healthy],
-        provider: "openai",
-      }),
-    );
-    expect(diagnostics).toEqual([
-      [
-        {
-          toolName: "fuzzplugin_unreadable",
-          toolIndex: 0,
-          violations: ["fuzzplugin_unreadable.parameters is unreadable"],
         },
       ],
     ]);

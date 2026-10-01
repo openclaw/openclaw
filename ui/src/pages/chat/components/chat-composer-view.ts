@@ -8,6 +8,7 @@ import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
+import { clearCompositionEnd } from "../../../lib/ime.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import type { ComposerDictationController } from "../composer-dictation.ts";
@@ -538,6 +539,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     @focus=${handleSelect}
                     @pointerup=${handleSelect}
                     @keyup=${(event: KeyboardEvent) => {
+                      clearCompositionEnd(event);
                       state.emojiMenu.handleKeyup(event);
                       if (
                         event.key.startsWith("Arrow") ||

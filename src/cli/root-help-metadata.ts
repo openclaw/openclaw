@@ -1,13 +1,9 @@
 // Cached startup metadata readers for precomputed root and subcommand help text.
+import {
+  PRECOMPUTED_SUBCOMMAND_HELP_NAMES,
+  type PrecomputedSubcommandHelpName,
+} from "./precomputed-help-commands.js";
 import { readCliStartupMetadata } from "./startup-metadata.js";
-
-export type PrecomputedSubcommandHelpName =
-  | "config"
-  | "doctor"
-  | "gateway"
-  | "models"
-  | "plugins"
-  | "sessions";
 
 type PrecomputedHelpTextKey =
   | "rootHelpText"
@@ -79,14 +75,7 @@ export function outputPrecomputedSubcommandHelpText(commandName: string): boolea
 function isPrecomputedSubcommandHelpName(
   commandName: string,
 ): commandName is PrecomputedSubcommandHelpName {
-  return (
-    commandName === "config" ||
-    commandName === "doctor" ||
-    commandName === "gateway" ||
-    commandName === "models" ||
-    commandName === "plugins" ||
-    commandName === "sessions"
-  );
+  return PRECOMPUTED_SUBCOMMAND_HELP_NAMES.some((name) => name === commandName);
 }
 
 function isSubcommandHelpTextRecord(

@@ -6,12 +6,15 @@ import type {
   WorkerTranscriptCommitParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
+  WorkerGatewayToolCancelParams,
+  WorkerGatewayToolInvokeParams,
+} from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import type {
   WorkerInferenceCancelParams,
   WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
-import type { WorkerSessionToolName } from "../../worker/tool-authority.js";
 import {
   admitWorkerConnection,
   validateWorkerConnectionIdentity,
@@ -20,26 +23,26 @@ import {
 } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
-import type {
-  WorkerInferenceCancelApplicationResult,
-  WorkerInferenceStartApplicationResult,
-} from "./inference.types.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
 import {
   acknowledgeWorkerTurnFinishing,
+  getWorkerTurnToolSurface,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 import type { WorkerTranscriptCommitOutcome } from "./transcript-commit-store.js";
 import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
-import type { WorkerSessionToolExecutor } from "./worker-session-tool-result.js";
+import type {
+  WorkerGatewayToolRuntime,
+  WorkerGatewayToolSink,
+} from "./worker-gateway-tool-contract.js";
+import { workerSessionToolErrorResult } from "./worker-session-tool-result.js";
 import {
   createWorkerComputerRpc,
   type WorkerComputerExecutor,
 } from "./worker-turn-computer-rpc.js";
-import { createWorkerSessionToolRpc } from "./worker-turn-session-tool-rpc.js";
 
 type WorkerProcessTurnBinding = {
   turnClaim: WorkerSessionTurnClaim;
@@ -59,7 +62,8 @@ type WorkerTurnRequest =
   | { kind: "inference" }
   | { kind: "live"; seq: number }
   | { kind: "transcript"; seq: number }
-  | { kind: "session-tool" };
+  | { kind: "session-tool" }
+  | { kind: "tool-surface"; surface: WorkerGatewayToolRuntime | undefined };
 
 type WorkerPlacementValidation = "sessionless" | "durable" | "invalid";
 
@@ -77,12 +81,8 @@ type WorkerLiveEventServiceResult =
   | WorkerLiveEventApplicationResult
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
-type WorkerInferenceStartServiceResult =
-  | WorkerInferenceStartApplicationResult
-  | { ok: false; closeReason: WorkerProtocolCloseReason };
-
-type WorkerInferenceCancelServiceResult =
-  | WorkerInferenceCancelApplicationResult
+type WorkerInferenceServiceResult<K extends "start" | "cancel"> =
+  | Awaited<ReturnType<ReturnType<typeof createWorkerInferenceManager>[K]>>
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 type WorkerTurnRpcOptions = {
@@ -94,7 +94,6 @@ type WorkerTurnRpcOptions = {
   liveEvents?: Pick<WorkerLiveEventReceiver, "apply">;
   placementStore?: WorkerSessionPlacementGate;
   executeComputer?: WorkerComputerExecutor;
-  executeSessionTool?: WorkerSessionToolExecutor;
   inference: ReturnType<typeof createWorkerInferenceManager>;
   isStopping: () => boolean;
   now: () => number;
@@ -273,7 +272,12 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (options.isStopping()) {
       return { ok: false, closeReason: "environment-unavailable" };
     }
-    const placement = validateWorkerPlacement(identity);
+    const placement =
+      request.kind === "tool-surface"
+        ? request.surface && getWorkerTurnToolSurface(identity) === request.surface
+          ? "durable"
+          : "invalid"
+        : validateWorkerPlacement(identity);
     if (placement === "invalid") {
       return { ok: false, closeReason: "placement-mismatch" };
     }
@@ -381,34 +385,67 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       }
     });
 
-  const validateTool = (
-    identity: WorkerConnectionIdentity,
-    toolName: WorkerSessionToolName | "computer",
-  ) => {
-    const requestAdmission = validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
-      kind: "session-tool",
-    });
-    if (!requestAdmission.ok) {
-      return "closeReason" in requestAdmission
-        ? requestAdmission
-        : { ok: false as const, closeReason: "placement-mismatch" as const };
-    }
-    const binding = placementClaim(identity);
-    if (!binding || !options.placementStore?.isWorkerTurnToolAuthorized(binding, toolName)) {
-      return { ok: false as const, closeReason: "method-not-allowed" as const };
-    }
-    return { ok: true as const };
-  };
-
   const executeComputer = createWorkerComputerRpc({
     execute: options.executeComputer,
-    validate: (identity) => validateTool(identity, "computer"),
+    validate: (identity) => {
+      const requestAdmission = validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
+        kind: "session-tool",
+      });
+      if (!requestAdmission.ok) {
+        return "closeReason" in requestAdmission
+          ? requestAdmission
+          : { ok: false as const, closeReason: "placement-mismatch" as const };
+      }
+      const binding = placementClaim(identity);
+      if (!binding || !options.placementStore?.isWorkerTurnToolAuthorized(binding, "computer")) {
+        return { ok: false as const, closeReason: "method-not-allowed" as const };
+      }
+      return { ok: true as const };
+    },
   });
 
-  const executeSessionTool = createWorkerSessionToolRpc({
-    execute: options.executeSessionTool,
-    validate: validateTool,
-  });
+  const withToolSurface = async <T>(
+    identity: WorkerConnectionIdentity,
+    run: (runtime: NonNullable<ReturnType<typeof getWorkerTurnToolSurface>>) => Promise<T> | T,
+  ) => {
+    const runtime = getWorkerTurnToolSurface(identity);
+    const validate = () =>
+      validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
+        kind: "tool-surface",
+        surface: runtime,
+      });
+    const admitted = validate();
+    if (!admitted.ok) {
+      return "closeReason" in admitted
+        ? admitted
+        : { ok: false as const, closeReason: "placement-mismatch" as const };
+    }
+    if (!runtime) {
+      return { ok: false as const, closeReason: "method-not-allowed" as const };
+    }
+    const result = await run(runtime);
+    const current = validate();
+    return current.ok
+      ? { ok: true as const, result }
+      : "closeReason" in current
+        ? current
+        : { ok: false as const, closeReason: "placement-mismatch" as const };
+  };
+  const getToolSurface = (identity: WorkerConnectionIdentity) =>
+    withToolSurface(identity, (runtime) => runtime.getSurface(identity));
+  const invokeGatewayTool = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerGatewayToolInvokeParams,
+    sink: WorkerGatewayToolSink,
+    signal?: AbortSignal,
+  ) =>
+    withToolSurface(identity, (runtime) =>
+      runtime.invoke(identity, request, sink, signal).catch(workerSessionToolErrorResult),
+    );
+  const cancelGatewayTool = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerGatewayToolCancelParams,
+  ) => withToolSurface(identity, (runtime) => runtime.cancel(request));
 
   const validateLiveEvent = (
     identity: WorkerConnectionIdentity,
@@ -517,39 +554,53 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     });
   };
 
+  const validateInference = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceStartParams | WorkerInferenceCancelParams,
+  ) => {
+    if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
+      return { ok: false, reason: "session-not-attached" } as const;
+    }
+    return validateAttachedWorkerRequest(identity, request.runEpoch, {
+      kind: "inference",
+    });
+  };
   const revalidateInference = (
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceStartParams | WorkerInferenceCancelParams,
   ): "epoch-mismatch" | "session-not-attached" | null => {
-    if (request.sessionId !== identity.sessionId) {
-      return "session-not-attached";
-    }
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-      kind: "inference",
-    });
+    const binding = validateInference(identity, request);
     return binding.ok ? null : "reason" in binding ? binding.reason : "session-not-attached";
   };
-
-  const validateInferenceRequest = (
-    identity: WorkerConnectionIdentity,
-    request: WorkerInferenceStartParams | WorkerInferenceCancelParams,
-  ) =>
-    request.sessionId !== identity.sessionId || request.runId !== identity.runId
-      ? ({ ok: false, reason: "session-not-attached" } as const)
-      : validateAttachedWorkerRequest(identity, request.runEpoch, { kind: "inference" });
 
   const startInference = async (
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceStartParams,
     sink: WorkerInferenceSink,
-  ): Promise<WorkerInferenceStartServiceResult> => {
-    const binding = validateInferenceRequest(identity, request);
+  ): Promise<WorkerInferenceServiceResult<"start">> => {
+    const binding = validateInference(identity, request);
     if (!binding.ok) {
       return binding;
     }
     const source = sourceFor(identity);
     if (!source) {
       return { ok: false, reason: "session-not-attached" };
+    }
+    if (request.context.tools?.length) {
+      const runtime = getWorkerTurnToolSurface(identity);
+      if (!runtime) {
+        return { ok: false, reason: "invalid-context" };
+      }
+      const surface = await runtime.getSurface(identity);
+      source.receiptAuthority();
+      const tools = surface.tools.map(({ definition: { name, description, parameters } }) => ({
+        name,
+        description,
+        parameters,
+      }));
+      if (JSON.stringify(request.context.tools) !== JSON.stringify(tools)) {
+        return { ok: false, reason: "invalid-context" };
+      }
     }
     return inference.start({
       identity,
@@ -564,8 +615,8 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
   const cancelInference = async (
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceCancelParams,
-  ): Promise<WorkerInferenceCancelServiceResult> => {
-    const binding = validateInferenceRequest(identity, request);
+  ): Promise<WorkerInferenceServiceResult<"cancel">> => {
+    const binding = validateInference(identity, request);
     if (!binding.ok) {
       return binding;
     }
@@ -636,11 +687,18 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       }
       return finish(admitted);
     },
-    validateWorkerConnection: (identity: WorkerConnectionIdentity) => {
+    validateWorkerConnection: (
+      identity: WorkerConnectionIdentity,
+      request?: { toolSurface: true },
+    ) => {
       if (options.isStopping()) {
         return "environment-unavailable" as const;
       }
-      const placement = validateWorkerPlacement(identity);
+      const placement = request?.toolSurface
+        ? getWorkerTurnToolSurface(identity)
+          ? "durable"
+          : "invalid"
+        : validateWorkerPlacement(identity);
       if (placement === "invalid") {
         return "placement-mismatch" as const;
       }
@@ -659,7 +717,9 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     },
     commitTranscript,
     pushLiveEvent,
-    executeSessionTool,
+    getToolSurface,
+    invokeGatewayTool,
+    cancelGatewayTool,
     executeComputer,
     startInference,
     cancelInference,

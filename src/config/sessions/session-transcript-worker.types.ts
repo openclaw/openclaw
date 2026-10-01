@@ -18,6 +18,10 @@ import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
+import type {
+  SessionActivitySummaryBatchInput,
+  SessionActivitySummaryBatchResult,
+} from "./activity-summary-source.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
@@ -196,6 +200,12 @@ type SessionTitleFieldsWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
+type SessionActivitySummarySourceWorkerInput = SessionActivitySummaryBatchInput & {
+  kind: "session-activity-summary-source";
+  database: { agentId: string; path: string };
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
 type SessionRowBackfillWorkerInput = {
   kind: "session-row-backfill";
   database: { agentId: string; path: string };
@@ -322,6 +332,7 @@ type SessionEntryListWorkerInput = {
   kind: "session-entry-list";
   database: { agentId: string; path: string };
   scope: SessionEntryListScope;
+  continuation?: CanonicalSessionReaderContinuation;
 };
 
 export type SessionExactEntriesWorkerInput = {
@@ -333,14 +344,7 @@ export type SessionExactEntriesWorkerSelection =
   | {
       sessionKeys: readonly string[];
       selection?: never;
-      projection?:
-        | "full"
-        | "backing"
-        | "sharing"
-        | "replacement"
-        | "creation"
-        | "list"
-        | "lifecycle";
+      projection?: "full" | "sharing" | "replacement" | "creation" | "list" | "lifecycle";
     }
   | {
       sessionKeys?: never;
@@ -468,6 +472,7 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
+  | SessionActivitySummarySourceWorkerInput
   | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionProjectionStatusWorkerInput
@@ -524,6 +529,10 @@ export type SessionTranscriptWorkerValues = {
   "history-page": SessionHistoryWorkerResult;
   "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
   "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
+  "session-activity-summary-source": {
+    kind: "session-activity-summary-source";
+    source: SessionActivitySummaryBatchResult;
+  };
   "session-row-backfill": { kind: "session-row-backfill"; fields: SessionRowTranscriptFields };
   "session-row-presence": boolean;
   "projection-status": boolean;
@@ -583,27 +592,32 @@ export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWor
       error: SessionTranscriptWorkerError;
     };
 
+type SessionHistoryReader<
+  Input extends SessionHistoryWorkerInput,
+  Value = SessionTranscriptWorkerValues[Input["kind"]],
+> = (input: Omit<Input, "kind" | "database">) => Promise<Value>;
+
+type CancellableSessionHistoryReader<
+  Input extends SessionHistoryWorkerInput,
+  Value = SessionTranscriptWorkerValues[Input["kind"]],
+> = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
+
 export type SessionHistoryWorkerDatabase = {
   prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
-  readArchivePresence: (
-    input: Omit<SessionArchivePresenceWorkerInput, "kind" | "database">,
-  ) => Promise<boolean>;
-  readPendingArchives: (
-    input: Omit<SessionPendingArchivesWorkerInput, "kind" | "database">,
-    signal?: AbortSignal,
-  ) => Promise<boolean>;
+  readArchivePresence: SessionHistoryReader<SessionArchivePresenceWorkerInput, boolean>;
+  readPendingArchives: CancellableSessionHistoryReader<SessionPendingArchivesWorkerInput, boolean>;
   findTranscriptEvent: (
     request: SessionTranscriptMatchWorkerInput["request"],
   ) => Promise<{ event: TranscriptEvent } | undefined>;
-  readHistoricalEvictionCandidates: (
-    input: Omit<SessionHistoricalEvictionCandidatesWorkerInput, "kind" | "database">,
-  ) => Promise<string[]>;
-  readArchivePruning: (
-    input: Omit<SessionArchivePruningWorkerInput, "kind" | "database">,
-  ) => Promise<PublishedSessionTranscriptArchive | null>;
-  readColdMetadata: (
-    input: Omit<SessionColdMetadataWorkerInput, "kind" | "database">,
-  ) => Promise<SessionColdMetadataWorkerResult>;
+  readHistoricalEvictionCandidates: SessionHistoryReader<
+    SessionHistoricalEvictionCandidatesWorkerInput,
+    string[]
+  >;
+  readArchivePruning: SessionHistoryReader<
+    SessionArchivePruningWorkerInput,
+    PublishedSessionTranscriptArchive | null
+  >;
+  readColdMetadata: SessionHistoryReader<SessionColdMetadataWorkerInput>;
   searchTranscripts: (
     params: SessionTranscriptSearchWorkerInput["params"],
   ) => Promise<SessionTranscriptSearchResult>;
@@ -613,66 +627,53 @@ export type SessionHistoryWorkerDatabase = {
     prepare: () => Omit<SessionTranscriptHistoryWorkerInput, "database">,
     inputBytes: number,
   ) => Promise<SessionHistoryWorkerResult>;
-  readPreview: (
-    input: Omit<SessionPreviewWorkerInput, "kind" | "database">,
-  ) => Promise<SessionPreviewItem[]>;
-  readTitleFields: (
-    input: Omit<SessionTitleFieldsWorkerInput, "kind" | "database">,
-  ) => Promise<SessionTitleFields>;
+  readPreview: SessionHistoryReader<SessionPreviewWorkerInput, SessionPreviewItem[]>;
+  readTitleFields: SessionHistoryReader<SessionTitleFieldsWorkerInput, SessionTitleFields>;
+  readActivitySummarySource: SessionHistoryReader<
+    SessionActivitySummarySourceWorkerInput,
+    SessionActivitySummaryBatchResult
+  >;
   readRowBackfill: (
     params: SessionRowBackfillWorkerInput["params"],
   ) => Promise<SessionRowTranscriptFields>;
   readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
-  readProjectionStatus: (
-    input: Omit<SessionProjectionStatusWorkerInput, "kind" | "database">,
-    signal?: AbortSignal,
-  ) => Promise<boolean>;
-  readIdentityEvidence: (
-    input: Omit<SessionIdentityEvidenceWorkerInput, "kind" | "database">,
-  ) => Promise<SessionIdentityEvidenceResult[]>;
-  readTranscript: (
-    input: Omit<SessionTranscriptHydrationWorkerInput, "kind" | "database">,
-    signal?: AbortSignal,
-  ) => Promise<PreparedSessionTranscriptHydration>;
-  readCurrentTurnEntry: (
-    input: Omit<SessionTranscriptCurrentTurnEntryWorkerInput, "kind" | "database">,
-    signal?: AbortSignal,
-  ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
+  readProjectionStatus: CancellableSessionHistoryReader<SessionProjectionStatusWorkerInput>;
+  readIdentityEvidence: SessionHistoryReader<
+    SessionIdentityEvidenceWorkerInput,
+    SessionIdentityEvidenceResult[]
+  >;
+  readTranscript: CancellableSessionHistoryReader<
+    SessionTranscriptHydrationWorkerInput,
+    PreparedSessionTranscriptHydration
+  >;
+  readCurrentTurnEntry: CancellableSessionHistoryReader<SessionTranscriptCurrentTurnEntryWorkerInput>;
   readExactEntries: (
     input: SessionExactEntriesWorkerRequest,
     signal?: AbortSignal,
   ) => Promise<SessionExactEntriesWorkerResult>;
-  readRowFacts: (
-    input: Omit<SessionRowFactsWorkerInput, "kind" | "database">,
-  ) => Promise<SessionRowFactsWorkerResult>;
-  readEntries: (scope: SessionEntryListWorkerInput["scope"]) => Promise<SessionEntrySummary[]>;
-  readEntryResult: (
-    input: Omit<SessionEntryReadWorkerInput, "kind" | "database">,
-  ) => Promise<
+  readRowFacts: SessionHistoryReader<SessionRowFactsWorkerInput>;
+  readEntries: (
+    scope: SessionEntryListWorkerInput["scope"],
+    continuation?: CanonicalSessionReaderContinuation,
+  ) => Promise<SessionEntrySummary[]>;
+  readEntryResult: SessionHistoryReader<
+    SessionEntryReadWorkerInput,
     import("@openclaw/normalization-core/result").Result<
       SessionEntryReadWorkerResult["entry"],
       unknown
     >
   >;
-  readEntryCurrent: (
-    input: Omit<SessionEntryCurrentWorkerInput, "kind" | "database">,
-  ) => Promise<SessionEntryCurrentFacts | undefined>;
-  readDiagnosticText: (
-    input: Omit<SessionDiagnosticTextWorkerInput, "kind" | "database">,
-  ) => Promise<string | undefined>;
-  readMembers: (
-    input: Omit<SessionMembersWorkerInput, "kind" | "database">,
-  ) => Promise<SessionMember[]>;
-  readMembershipFacts: (
-    input: Omit<SessionMembershipFactsWorkerInput, "kind" | "database">,
-  ) => Promise<SessionMembershipFacts>;
-  readProgressCard: (
-    input: Omit<SessionProgressCardWorkerInput, "kind" | "database">,
-  ) => Promise<ProgressCard | null>;
-  readPendingInputReceipts: (
-    input: Omit<SessionPendingInputReceiptsWorkerInput, "kind" | "database">,
-  ) => Promise<ReturnType<typeof listSessionPendingInputReceipts>>;
-  readUsageCache: (
-    input: Omit<SessionUsageCacheWorkerInput, "kind" | "database">,
-  ) => Promise<SessionCostUsageCacheReadResult>;
+  readEntryCurrent: SessionHistoryReader<
+    SessionEntryCurrentWorkerInput,
+    SessionEntryCurrentFacts | undefined
+  >;
+  readDiagnosticText: SessionHistoryReader<SessionDiagnosticTextWorkerInput, string | undefined>;
+  readMembers: SessionHistoryReader<SessionMembersWorkerInput>;
+  readMembershipFacts: SessionHistoryReader<SessionMembershipFactsWorkerInput>;
+  readProgressCard: SessionHistoryReader<SessionProgressCardWorkerInput, ProgressCard | null>;
+  readPendingInputReceipts: SessionHistoryReader<
+    SessionPendingInputReceiptsWorkerInput,
+    ReturnType<typeof listSessionPendingInputReceipts>
+  >;
+  readUsageCache: SessionHistoryReader<SessionUsageCacheWorkerInput>;
 };

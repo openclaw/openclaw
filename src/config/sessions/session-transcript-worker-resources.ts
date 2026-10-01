@@ -1,6 +1,9 @@
 import { channel } from "node:diagnostics_channel";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+} from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import {
@@ -64,9 +67,6 @@ function createHistoryPool() {
   });
 }
 
-const historyPages = createHistoryPool();
-const maintenancePages = createHistoryPool();
-
 function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
     workerUrl,
@@ -124,43 +124,26 @@ const historyDatabases = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
 let historyGeneration = 0;
-export const historyLane: SessionHistoryWorkerLane = {
-  name: "Session history",
-  pool: historyPages,
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
+function createDatabaseWorkerLane<Pool extends SessionDatabaseWorkerLane["pool"]>(
+  name: string,
+  pool: Pool,
+): SessionDatabaseWorkerLane & { pool: Pool } {
+  return { name, pool, nativeSequence: 0, retiredSequence: 0, pending: 0 };
+}
+
+export const historyLane = createDatabaseWorkerLane("Session history", createHistoryPool());
 // Keep list materialization independent of large history pages, with one extra reader per store.
-export const projectionLane: SessionHistoryWorkerLane = {
-  name: "Session projection",
-  pool: createHistoryPool(),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
+export const projectionLane = createDatabaseWorkerLane("Session projection", createHistoryPool());
 // Full-store validation cannot yield its snapshot to a foreground history read.
-export const maintenanceLane: SessionHistoryWorkerLane = {
-  name: "Session maintenance",
-  pool: maintenancePages,
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-export const costReadLane: SessionCostWorkerLane = {
-  name: "Session usage read",
-  pool: createUsageCostPool("read"),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-export const costRefreshLane: SessionCostWorkerLane = {
-  name: "Session usage refresh",
-  pool: createUsageCostPool("refresh"),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
+export const maintenanceLane = createDatabaseWorkerLane("Session maintenance", createHistoryPool());
+export const costReadLane = createDatabaseWorkerLane(
+  "Session usage read",
+  createUsageCostPool("read"),
+);
+export const costRefreshLane = createDatabaseWorkerLane(
+  "Session usage refresh",
+  createUsageCostPool("refresh"),
+);
 
 const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane];
 const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
@@ -295,9 +278,12 @@ async function closeDatabaseWorkerResource(
   idle: boolean,
 ): Promise<void> {
   const pool = historyWorkerLanes.find((candidate) => candidate === lane)?.pool;
-  // Active reads and Bun retain native-exit custody. Idle Node readers can
-  // release the exact database while retaining the worker's loaded code.
-  if (!idle || process.versions.bun || !pool) {
+  // Active reads retain native-exit custody even when ordinary close releases handles.
+  if (
+    !idle ||
+    !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources ||
+    !pool
+  ) {
     await rotateDatabaseWorkers(lane);
     return;
   }
@@ -441,8 +427,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       return closing;
     };
     const settleCandidates = async () => {
-      // Bun and failed discovery can retain native handles outside candidate custody.
-      if (discoveryFailed || process.versions.bun) {
+      // Failed discovery can retain native handles outside candidate custody.
+      if (
+        discoveryFailed ||
+        !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+      ) {
         await retire();
         return;
       }

@@ -5,7 +5,7 @@ import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  POLICY_RULE_METADATA as RAW_POLICY_RULE_METADATA,
+  POLICY_RULE_METADATA,
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
 } from "./doctor/metadata.js";
@@ -65,8 +65,6 @@ type PolicyRuleClaim = {
     readonly value: string;
   };
 };
-
-const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = RAW_POLICY_RULE_METADATA;
 
 export async function buildPolicyConformanceReport(params: {
   readonly baselinePath: string;

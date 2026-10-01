@@ -32,6 +32,7 @@ import {
 } from "./openclaw-state-db-read-connection.js";
 import {
   withCachedOpenClawStateDatabaseReadOnly,
+  withMaintenanceOpenClawStateDatabaseReadOnly,
   type ReusedOpenClawStateReadOnlyDatabase,
 } from "./openclaw-state-db-readonly-reuse.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
@@ -195,7 +196,9 @@ export function isArtifactPreservingStateRead(): boolean {
 type ScopedRead = ReturnType<typeof openOpenClawStateReadOnlyLocation>;
 const synchronousReadSnapshots = resolveGlobalSingleton(
   Symbol.for("openclaw.synchronousStateReadSnapshots"),
-  (): { current: Map<string, ScopedRead> | undefined } => ({ current: undefined }),
+  (): { current: Map<string, ScopedRead> | undefined; currentAuthorityPath?: string } => ({
+    current: undefined,
+  }),
 );
 
 /** One synchronous metadata operation shares private bytes, never later admission reads. */
@@ -205,16 +208,19 @@ export function withSynchronousArtifactPreservingStateSnapshot<T>(
 ): T {
   if (options?.current) {
     // Check inherited admission before selecting fresh bytes for this assertion.
-    resolveReadOnlyPath(options.current);
+    const pathname = resolveReadOnlyPath(options.current);
     const inherited = synchronousReadSnapshots.current;
+    const inheritedAuthority = synchronousReadSnapshots.currentAuthorityPath;
     return stateSnapshotReads.exit(() => {
       synchronousReadSnapshots.current = undefined;
+      synchronousReadSnapshots.currentAuthorityPath = pathname;
       try {
         return withArtifactPreservingStateReads(() =>
           withSynchronousArtifactPreservingStateSnapshot(operation),
         );
       } finally {
         synchronousReadSnapshots.current = inherited;
+        synchronousReadSnapshots.currentAuthorityPath = inheritedAuthority;
       }
     });
   }
@@ -262,7 +268,11 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
       value: withOpenClawStateReadOnlyLocation(operation, pathname, snapshot.location),
     };
   }
-  return withCachedOpenClawStateDatabaseReadOnly(operation, pathname, currentAuthority);
+  return withCachedOpenClawStateDatabaseReadOnly(
+    operation,
+    pathname,
+    currentAuthority || synchronousReadSnapshots.currentAuthorityPath === pathname,
+  );
 }
 
 function withFreshOpenClawStateDatabaseReadOnly<T>(
@@ -272,6 +282,12 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
 ): T {
   const env = options.env ?? process.env;
   openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+  if (synchronousReadSnapshots.currentAuthorityPath === pathname) {
+    const maintained = withMaintenanceOpenClawStateDatabaseReadOnly(operation, pathname);
+    if (maintained.reused) {
+      return maintained.value;
+    }
+  }
   // Even read-only SQLite opens can create a missing WAL. The existing worker
   // snapshots committed WAL pages without touching source sidecars or caller-held locks.
   // One consistent snapshot per synchronous scope avoids mixed reads and duplicate copies.
@@ -378,7 +394,14 @@ export function executeExistingOpenClawStateRead(
 function startExistingOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
-  { context, current, mapError, signal, preferIndependentWarmRead }: OpenClawStateReadOptions = {},
+  {
+    context,
+    current,
+    live,
+    mapError,
+    signal,
+    preferIndependentWarmRead,
+  }: OpenClawStateReadOptions = {},
 ): OpenClawStateReadCompletion {
   const receipt: OpenClawStateReadReceipt = { phase: "before-read" };
   try {
@@ -391,10 +414,16 @@ function startExistingOpenClawStateRead(
         mapError,
         context,
         signal,
-        current,
+        current || live,
         preferIndependentWarmRead,
       );
-    const read = current ? () => stateSnapshotReads.exit(execute) : execute;
+    // Active writer observations use the retained worker connection, not a new
+    // artifact-preserving copy. Admission and canonical close still own it.
+    const read = live
+      ? () => artifactPreservingReads.run(false, () => stateSnapshotReads.exit(execute))
+      : current
+        ? () => stateSnapshotReads.exit(execute)
+        : execute;
     return context?.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(read) : read();
   } catch (error) {
     throw mapError ? mapError(error, receipt.phase) : error;

@@ -96,9 +96,6 @@ struct OpenClawChatComposer: View {
     let style: OpenClawChatView.Style
     let showsSessionSwitcher: Bool
     let userAccent: Color?
-    let assistantName: String?
-    let assistantAvatarText: String?
-    let assistantAvatarTint: Color?
     let composerChrome: OpenClawChatView.ComposerChrome
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
@@ -455,25 +452,16 @@ struct OpenClawChatComposer: View {
         OpenClawChatComposerPresentationOwner(viewModel: self.viewModel)
     }
 
-    private func attachmentCaptureOwner() -> OpenClawChatAttachmentCaptureOwner {
-        OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
-    }
-
     #if !os(macOS)
     var photoPickerPresentation: Binding<Bool> {
         Binding(
             get: { self.showsPhotoPicker },
             set: { isPresented in
                 if isPresented {
-                    self.photoPickerOwner = self.attachmentCaptureOwner()
+                    self.photoPickerOwner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
                 }
                 self.showsPhotoPicker = isPresented
             })
-    }
-
-    private func presentPhotoPicker() {
-        self.photoPickerOwner = self.attachmentCaptureOwner()
-        self.showsPhotoPicker = true
     }
 
     var fileImporterPresentation: Binding<Bool> {
@@ -481,7 +469,7 @@ struct OpenClawChatComposer: View {
             get: { self.showsFileImporter },
             set: { isPresented in
                 if isPresented {
-                    self.fileImporterOwner = self.attachmentCaptureOwner()
+                    self.fileImporterOwner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
                 }
                 self.showsFileImporter = isPresented
             })
@@ -493,7 +481,7 @@ struct OpenClawChatComposer: View {
             set: { isPresented in
                 #if canImport(UIKit)
                 if isPresented {
-                    self.cameraCaptureOwner = self.attachmentCaptureOwner()
+                    self.cameraCaptureOwner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
                 }
                 #endif
                 self.showsCameraPicker = isPresented
@@ -614,7 +602,7 @@ struct OpenClawChatComposer: View {
             #if os(macOS)
             self.pickFilesMac()
             #else
-            self.presentPhotoPicker()
+            self.photoPickerPresentation.wrappedValue = true
             #endif
         } label: {
             Image(systemName: "paperclip")
@@ -1428,7 +1416,7 @@ extension OpenClawChatComposer {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes
-        let owner = self.attachmentCaptureOwner()
+        let owner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
         panel.begin { resp in
             guard resp == .OK else { return }
             owner.addAttachments(urls: panel.urls)
@@ -1439,7 +1427,7 @@ extension OpenClawChatComposer {
         guard self.isAttachmentInputEnabled else { return false }
         let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard !fileProviders.isEmpty else { return false }
-        let owner = self.attachmentCaptureOwner()
+        let owner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
         for item in fileProviders {
             item.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
                 guard let data = item as? Data,

@@ -13,7 +13,12 @@ import {
   type LookupFn,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalObjectRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  asSafeIntegerInRange,
+  isRecord,
+  normalizeBoundedOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b";
@@ -57,15 +62,13 @@ const lookupNvidiaFeaturedModelHostname = (async (
 }) as LookupFn;
 
 export function buildNvidiaProvider(): ModelProviderConfig {
-  const provider = {
-    ...buildManifestModelProviderConfig({
-      providerId: "nvidia",
-      catalog: manifest.modelCatalog.providers.nvidia,
-    }),
-    apiKey: "NVIDIA_API_KEY",
-  };
+  const provider = buildManifestModelProviderConfig({
+    providerId: "nvidia",
+    catalog: manifest.modelCatalog.providers.nvidia,
+  });
   return {
     ...provider,
+    apiKey: "NVIDIA_API_KEY",
     models: applyNvidiaModelDefaults(provider.models),
   };
 }
@@ -205,58 +208,41 @@ function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinit
 
 function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {
   const entry = asOptionalObjectRecord(row);
-  if (!entry) {
-    return null;
-  }
+  const id = normalizeBoundedOptionalString(entry?.model, FEATURED_MODEL_MAX_ID_LENGTH);
+  const name = normalizeBoundedOptionalString(
+    entry?.["model-name"],
+    FEATURED_MODEL_MAX_NAME_LENGTH,
+  );
+  const contextWindow = asSafeIntegerInRange(entry?.context, {
+    min: 1,
+    max: FEATURED_MODEL_MAX_CONTEXT_WINDOW,
+  });
+  const maxTokens = asSafeIntegerInRange(entry?.["max-output"], {
+    min: 1,
+    max: FEATURED_MODEL_MAX_OUTPUT_TOKENS,
+  });
   if (
-    typeof entry.model !== "string" ||
-    typeof entry["model-name"] !== "string" ||
-    !isBoundedPositiveInteger(entry.context, FEATURED_MODEL_MAX_CONTEXT_WINDOW) ||
-    !isBoundedPositiveInteger(entry["max-output"], FEATURED_MODEL_MAX_OUTPUT_TOKENS)
+    !id ||
+    !name ||
+    !contextWindow ||
+    !maxTokens ||
+    hasControlCharacter(id, true) ||
+    hasControlCharacter(name)
   ) {
     return null;
   }
-  const id = normalizeNvidiaFeaturedModelId(entry.model);
-  const name = normalizeFeaturedModelName(entry["model-name"]);
-  if (!id || !name) {
-    return null;
-  }
   return {
-    id,
+    id: id.includes("/") ? id : `nvidia/${id}`,
     name,
     reasoning: false,
     input: ["text"],
-    contextWindow: entry.context,
-    maxTokens: entry["max-output"],
+    contextWindow,
+    maxTokens,
     cost: { ...FEATURED_MODEL_COST },
     compat: {
       requiresStringContent: true,
     },
   };
-}
-
-function normalizeNvidiaFeaturedModelId(model: string): string {
-  const trimmed = model.trim();
-  if (
-    !trimmed ||
-    trimmed.length > FEATURED_MODEL_MAX_ID_LENGTH ||
-    hasControlCharacter(trimmed, true)
-  ) {
-    return "";
-  }
-  return trimmed.includes("/") ? trimmed : `nvidia/${trimmed}`;
-}
-
-function normalizeFeaturedModelName(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed || trimmed.length > FEATURED_MODEL_MAX_NAME_LENGTH || hasControlCharacter(trimmed)) {
-    return "";
-  }
-  return trimmed;
-}
-
-function isBoundedPositiveInteger(value: unknown, max: number): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= max;
 }
 
 function hasControlCharacter(value: string, includeSpace = false): boolean {

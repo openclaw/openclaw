@@ -626,9 +626,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         if (error instanceof ResponsesStreamFailure && error.observation) {
           logResponsesFailedNoDetails(error.observation);
         }
+        const incompleteReason = output.diagnostics?.find(
+          ({ type }) => type === "openai_responses_terminal",
+        )?.details?.incompleteReason;
         log.warn(
           `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
-            summarizeOpenAITransportError(error),
+            summarizeOpenAITransportError(error) +
+            (typeof incompleteReason === "string" ? ` incompleteReason=${incompleteReason}` : ""),
         );
         failTransportStream({ stream, output, signal: options?.signal, error });
       } finally {

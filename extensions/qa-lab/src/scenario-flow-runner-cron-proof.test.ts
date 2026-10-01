@@ -28,7 +28,7 @@ type Job = {
   deleteAfterRun?: boolean;
   state: { nextRunAtMs: number };
 };
-type ToolCall = { action: string; job: Job };
+type ToolCall = { action: string; job?: Job; jobId?: string; includeDisabled?: boolean };
 
 function historyMessages(calls: ToolCall[], shape: HistoryShape) {
   const messages = calls.flatMap<Record<string, unknown>>((input, index) => {
@@ -39,7 +39,7 @@ function historyMessages(calls: ToolCall[], shape: HistoryShape) {
           toolName: "automations",
           toolCallId: id,
           input,
-          text: JSON.stringify({ id: input.job.id }),
+          text: JSON.stringify(input.job ? { id: input.job.id } : { ok: true }),
         }),
       ];
     }
@@ -81,6 +81,7 @@ async function runSchedulingFixture(
     historyError?: Error;
     persistentHistoryError?: boolean;
     onHistoryRead?: () => void;
+    initialHistoryCallCount?: number;
     mutateCalls?: (calls: ToolCall[]) => void;
     mutateJobs?: (jobs: Job[]) => void;
     mutateRestartedJobs?: (jobs: Job[]) => void;
@@ -141,7 +142,12 @@ async function runSchedulingFixture(
           ? "agent:qa:qa-channel:group:group:qa-cron-authority"
           : `agent:qa:qa-channel:direct:dm:cron-model-author-${suffix}`,
       );
-      return { messages: history };
+      return {
+        messages:
+          historyReads === 1 && options.initialHistoryCallCount !== undefined
+            ? historyMessages(calls.slice(0, options.initialHistoryCallCount), shape)
+            : history,
+      };
     }
     if (method === "sessions.list") {
       return {
@@ -160,7 +166,7 @@ async function runSchedulingFixture(
       if (restarted) {
         options.mutateRestartedJobs?.(visible);
       }
-      return { jobs: visible };
+      return { jobs: [...visible, job("background-maintenance", 99)] };
     }
     if (method === "cron.runs") {
       if (params.id === "job-0") {
@@ -279,12 +285,56 @@ describe("scheduling YAML canonical tool proof", () => {
   );
 
   it.each(["direct", "nested"] as const)(
-    "accepts one-shot/recurring evidence in %s history",
+    "accepts one-shot/recurring evidence alongside other owners in %s history",
     async (shape) => {
       const { result, restarted, removed } = await runSchedulingFixture("recurring", shape);
       expect(result.status).toBe("pass");
       expect(restarted).toBe(true);
       expect(removed).toEqual(["job-1"]);
+    },
+  );
+
+  it.each([
+    ["direct", ["list"]],
+    ["nested", ["list"]],
+    ["direct", ["list", "status", "get", "runs"]],
+    ["nested", ["list", "status", "get", "runs"]],
+  ] as const)("allows %s read-only introspection %j around two adds", async (shape, actions) => {
+    const { result, restarted, removed } = await runSchedulingFixture("recurring", shape, {
+      mutateCalls: (calls) => {
+        calls.unshift({ action: actions[0], includeDisabled: true });
+        calls.push(...actions.slice(1).map((action) => ({ action, jobId: "job-0" })));
+      },
+    });
+    expect(result.status).toBe("pass");
+    expect(restarted).toBe(true);
+    expect(removed).toEqual(["job-1"]);
+  });
+
+  it.each(["direct", "nested"] as const)(
+    "waits for the second add after list plus the first add in %s history",
+    async (shape) => {
+      const { result, historyReads } = await runSchedulingFixture("recurring", shape, {
+        mutateCalls: (calls) => calls.unshift({ action: "list", includeDisabled: true }),
+        initialHistoryCallCount: 2,
+      });
+      expect(result.status).toBe("pass");
+      expect(historyReads).toBe(2);
+      expect(Date.now()).toBe(now + 250);
+    },
+  );
+
+  it.each(["run", "update", "remove", "wake", "next_check", "unknown"])(
+    "rejects unrequested %s alongside read-only introspection and two adds",
+    async (action) => {
+      await expect(
+        runSchedulingFixture("recurring", "nested", {
+          mutateCalls: (calls) => {
+            calls.unshift({ action: "list", includeDisabled: true });
+            calls.push({ action, jobId: "job-0" });
+          },
+        }),
+      ).rejects.toThrow(/expected exactly two/);
     },
   );
 
@@ -354,6 +404,9 @@ describe("scheduling YAML canonical tool proof", () => {
         mutateCalls: (calls) => {
           assert.ok(calls[0]);
           calls.push(structuredClone(calls[0]));
+          if (kind === "recurring") {
+            calls.unshift({ action: "list", includeDisabled: true });
+          }
         },
       }),
     ).rejects.toThrow(/expected exactly (four|two)/);
@@ -416,6 +469,16 @@ describe("scheduling YAML canonical tool proof", () => {
         },
       }),
     ).rejects.toThrow(/recurring job did not remain scheduled/);
+  });
+
+  it.each(["at", "every"])("rejects a replayed %s job with a new identity", async (schedule) => {
+    await expect(
+      runSchedulingFixture("recurring", "nested", {
+        mutateRestartedJobs: (jobs) => {
+          jobs.push(job(`qa-model-${schedule}-${suffix}`, 98));
+        },
+      }),
+    ).rejects.toThrow(/unexpected scenario cron jobs/);
   });
 
   it("rejects a recurring job whose next execution does not advance", async () => {

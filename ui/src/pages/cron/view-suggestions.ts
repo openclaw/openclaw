@@ -1,7 +1,4 @@
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing } from "lit";
 import type { CronProps } from "./view-types.ts";
 
@@ -24,7 +21,7 @@ export function renderCronSuggestionLists(
     "cron-failure-alert-to-suggestions": props.failureAlertToSuggestions,
     "cron-delivery-account-suggestions": props.accountSuggestions,
   }).map(([id, options]) => {
-    const clean = uniqueStrings(normalizeStringEntries(options));
+    const clean = normalizeUniqueStringEntries(options);
     return clean.length === 0
       ? nothing
       : html`<datalist id=${id}>

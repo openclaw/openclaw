@@ -159,13 +159,8 @@ async function resolveBrewPrefixBinDir(
   return undefined;
 }
 
-async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
-  const exe = brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
-  if (!exe) {
-    return undefined;
-  }
-
-  const prefixBin = await resolveBrewPrefixBinDir(timeoutMs, exe);
+async function resolveBrewBinDir(timeoutMs: number, brewExe: string): Promise<string | undefined> {
+  const prefixBin = await resolveBrewPrefixBinDir(timeoutMs, brewExe);
   if (prefixBin) {
     return prefixBin;
   }
@@ -506,14 +501,6 @@ function isGoToolchainPrerequisiteFailure(result: SkillInstallResult): boolean {
   );
 }
 
-async function canBootstrapGoViaApt(): Promise<boolean> {
-  if (!hasBinary("apt-get")) {
-    return false;
-  }
-  const access = await resolveAptCommandAccess();
-  return access.available;
-}
-
 /**
  * Preflight twin of installSkill's prerequisite fallbacks (brew exe, ensureUvInstalled,
  * ensureGoInstalled/installGoViaApt). Says whether a recipe kind can run without manual
@@ -549,7 +536,9 @@ export async function resolveInstallerKindReadiness(kind: string): Promise<Skill
           ? { ready: true }
           : { ready: false, reason: "go" };
       }
-      return (await canBootstrapGoViaApt()) ? { ready: true } : { ready: false, reason: "go" };
+      return hasBinary("apt-get") && (await resolveAptCommandAccess()).available
+        ? { ready: true }
+        : { ready: false, reason: "go" };
     }
     default:
       return { ready: true };

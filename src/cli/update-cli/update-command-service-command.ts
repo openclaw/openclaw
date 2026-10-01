@@ -168,17 +168,11 @@ export async function runUpdatedInstallGatewayCommand(
       `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,
     );
   }
-  const args = ["gateway", action];
-  if (installing) {
-    args.push("--force");
-    if (params.gatewayPort !== undefined) {
-      args.push("--port", String(params.gatewayPort));
-    }
-  } else {
-    // Update retries must not bypass the installer's backup and drift audit.
-    args.push("--preserve-definition");
+  // Update retries must not bypass the installer's backup and drift audit.
+  const args = ["gateway", action, installing ? "--force" : "--preserve-definition"];
+  if (installing && params.gatewayPort !== undefined) {
+    args.push("--port", String(params.gatewayPort));
   }
-  // Capture one structured child result in both outer output modes.
   args.push("--json");
   const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
   // The child manages this service from outside it. Captured Gateway markers

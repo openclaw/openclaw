@@ -143,6 +143,10 @@ struct IOSGatewayChatTransportTests {
                         agentid: #require(request.params["agentId"]?.value as? String),
                         name: "Assistant", namesource: "default", avatar: "A")), as: UTF8.self)
                 case "sessions.create": #"{"key":"forked"}"#
+                case "users.self": #"{"profile":{"id":"profile-viewer"}}"#
+                case "session.reactions.list":
+                    #"{"sessionId":"transcript-1","reactions":{"saved-1":[{"emoji":"👍","count":1,"identities":[{"id":"profile-viewer","label":"Alex"}]}]}}"#
+                case "session.reactions.set": #"{"messageId":"saved-1","reactions":[]}"#
                 default: #"{"entry":{}}"#
                 }
                 socket.emitReceiveSuccess(.data(Data(
@@ -157,14 +161,22 @@ struct IOSGatewayChatTransportTests {
                         "sessions.patch",
                         "sessions.delete",
                         "sessions.create",
+                        "users.self",
+                        "session.reactions.list",
+                        "session.reactions.set",
                     ],
-                    capabilities: unreadAckAdvertisement == true ? ["session-unread-ack-contract"] : [])
-                guard unreadAckAdvertisement == nil else { return .data(hello) }
+                    capabilities: unreadAckAdvertisement == true ? ["session-unread-ack-contract"] : [],
+                    scopes: ["operator.write"])
                 var frame = try #require(JSONSerialization.jsonObject(with: hello) as? [String: Any])
                 var payload = try #require(frame["payload"] as? [String: Any])
-                var features = try #require(payload["features"] as? [String: Any])
-                features.removeValue(forKey: "capabilities")
-                payload["features"] = features
+                var auth = try #require(payload["auth"] as? [String: Any])
+                auth["sessionCap"] = "view"
+                payload["auth"] = auth
+                if unreadAckAdvertisement == nil {
+                    var features = try #require(payload["features"] as? [String: Any])
+                    features.removeValue(forKey: "capabilities")
+                    payload["features"] = features
+                }
                 frame["payload"] = payload
                 return try .data(JSONSerialization.data(withJSONObject: frame))
             })
@@ -187,6 +199,71 @@ struct IOSGatewayChatTransportTests {
             await gateway.disconnect()
             throw error
         }
+    }
+
+    @Test func `reactions preserve hello access and encode requests on their captured route`() async throws {
+        try await self.withSessionTransport { transport, recorder in
+            let lease = try #require(await transport.acquireReactionsRouteLease())
+            #expect(lease.access.sessionCap == "view")
+            #expect(lease.access.role == "operator")
+            #expect(lease.access.scopes == ["operator.write"])
+            #expect(lease.access.userID == "profile-viewer")
+            #expect(lease.access.canList)
+            #expect(!lease.access.canReact(
+                sharingRole: "viewer", visibility: "shared", archived: false, catalog: false))
+            let reacquired = try #require(await transport.acquireReactionsRouteLease())
+            #expect(reacquired.routeID == lease.routeID)
+            #expect(reacquired.access.userID == "profile-viewer")
+
+            let listed = try await lease.list(sessionKey: "global", agentID: "research")
+            #expect(listed.sessionID == "transcript-1")
+            #expect(listed.reactions["saved-1"] == [OpenClawChatReactionSummary(
+                emoji: "👍", count: 1,
+                identities: [OpenClawChatReactionIdentity(id: "profile-viewer", label: "Alex")])])
+            let result = try await lease.set(
+                sessionKey: "global", agentID: "research", messageID: "saved-1", emoji: "👍", remove: true)
+            #expect(result == OpenClawChatReactionsSetResult(messageID: "saved-1", reactions: []))
+
+            let requests = await recorder.all()
+            #expect(requests.filter { $0.method == "users.self" }.count == 1)
+            let list = try #require(requests.first { $0.method == "session.reactions.list" })
+            #expect(list.params == ["sessionKey": AnyCodable("global"), "agentId": AnyCodable("research")])
+            let set = try #require(requests.first { $0.method == "session.reactions.set" })
+            #expect(set.params == [
+                "sessionKey": AnyCodable("global"), "agentId": AnyCodable("research"),
+                "messageId": AnyCodable("saved-1"), "emoji": AnyCodable("👍"), "remove": AnyCodable(true),
+            ])
+
+            await transport.gateway.disconnect()
+            #expect(await lease.isCurrent() == false)
+            #expect(await transport.acquireReactionsRouteLease() == nil)
+            await #expect(throws: CancellationError.self) {
+                try await lease.set(
+                    sessionKey: "global", agentID: "research", messageID: "saved-1", emoji: "👍", remove: false)
+            }
+            #expect(await recorder.all().count == requests.count)
+        }
+    }
+
+    @Test func `reaction events decode transcript identity and typed reactor summaries`() throws {
+        let frame = try JSONDecoder().decode(EventFrame.self, from: Data(#"""
+        {"type":"event","event":"session.reaction","payload":{
+          "sessionKey":"global","agentId":"research","sessionId":"transcript-1","messageId":"saved-1",
+          "emoji":"👍","action":"added","actor":{"type":"human","id":"profile-viewer"},
+          "reactions":[{"emoji":"👍","count":2,"identities":[
+            {"id":"profile-viewer","label":"Alex"},{"id":"profile-other"}]}]
+        }}
+        """#.utf8))
+        guard case let .sessionReaction(event) = OpenClawChatGatewayPayloadCodec.event(from: frame) else {
+            Issue.record("Expected a native session reaction event")
+            return
+        }
+        #expect(event == OpenClawChatReactionEvent(
+            sessionKey: "global", agentID: "research", sessionID: "transcript-1", messageID: "saved-1",
+            reactions: [OpenClawChatReactionSummary(emoji: "👍", count: 2, identities: [
+                OpenClawChatReactionIdentity(id: "profile-viewer", label: "Alex"),
+                OpenClawChatReactionIdentity(id: "profile-other"),
+            ])]))
     }
 
     @Test func `new session roster preserves selectable choices on its captured connection`() async throws {

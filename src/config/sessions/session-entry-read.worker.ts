@@ -31,7 +31,6 @@ import {
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { readSessionBackingFactsInDatabase } from "./session-backing-facts.js";
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
@@ -153,25 +152,18 @@ export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerIn
   };
 }
 
-/** Full rows share a snapshot with lifecycle fallback; backing reads retain listing admission. */
+/** Full rows share a snapshot with lifecycle fallback; list reads retain listing admission. */
 export function readExactSessionEntriesWithLifecycle(
   request: SessionExactEntriesWorkerInput,
 ): SessionExactEntriesWorkerResult {
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      request.projection === "backing" || request.projection === "list"
+      request.projection === "list"
         ? {
             kind: "session-exact-entries" as const,
-            entries:
-              request.projection === "list"
-                ? readSelectedSessionEntriesInDatabase(database, request.sessionKeys, {
-                    continuation: request.continuation,
-                  })
-                : readSessionBackingFactsInDatabase(
-                    database,
-                    request.sessionKeys,
-                    request.continuation,
-                  ),
+            entries: readSelectedSessionEntriesInDatabase(database, request.sessionKeys, {
+              continuation: request.continuation,
+            }),
             lifecycleTimestamps: {},
           }
         : withSqlitePostCommitPublications(database.db, () =>

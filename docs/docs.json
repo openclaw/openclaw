@@ -1739,6 +1739,7 @@
               {
                 "group": "Plugin guides",
                 "pages": [
+                  "plugins/agentsapi",
                   {
                     "group": "Codex",
                     "pages": [
@@ -3171,6 +3172,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.7",
                   "releases/2026.9.6",
                   "releases/2026.9.5",
                   "releases/2026.9.4",

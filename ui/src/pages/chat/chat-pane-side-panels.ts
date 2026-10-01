@@ -43,13 +43,6 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.requestUpdate();
   };
 
-  protected selectedSessionRailMode(sessionKey: string): "expanded" | "hidden" {
-    const state = this.state;
-    const visible =
-      state?.sessionKey === sessionKey && isSidebarSlotVisible(state.sidebarLayout, "companion");
-    return visible ? "expanded" : "hidden";
-  }
-
   protected restorePaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
     if (!this.compact) {
       return layout;
@@ -84,8 +77,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     if (!state) {
       return;
     }
-    const visible = this.selectedSessionRailMode(state.sessionKey) === "expanded";
-    if (intent === "toggle" && visible) {
+    if (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion")) {
       this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
       this.setSessionObserverVisibility(false);
       return;

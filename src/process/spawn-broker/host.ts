@@ -19,7 +19,7 @@ import { BrokerChild } from "./child.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
 import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
-import { holdPipe, restorePipePrefix, restoreStdinPipe } from "./pipe.js";
+import { holdPipe, restoreStdinPipe } from "./pipe.js";
 import {
   SpawnBrokerError,
   type BrokerRequest,
@@ -218,6 +218,11 @@ export class SpawnBrokerHost {
   }
 
   sealNativeResources(): Promise<void> {
+    if (this.resourceClaims && !this.available) {
+      return Promise.reject(
+        new SpawnBrokerError("Native resource broker is not ready for cleanup"),
+      );
+    }
     return (
       this.resourceClaims?.seal() ??
       Promise.reject(new SpawnBrokerError("Native resources are disabled"))
@@ -541,8 +546,8 @@ export class SpawnBrokerHost {
         void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
       } else if (message.type === "pipe-prefix") {
         const pipe = request.child.stdio[message.fd];
-        if (pipe instanceof Socket) {
-          restorePipePrefix(pipe, message.bytes);
+        if (pipe instanceof Socket && message.bytes.length > 0) {
+          pipe.unshift(message.bytes);
         }
       } else if (message.type === "execa-result") {
         // Started commands publish their owned PID first on this ordered channel.

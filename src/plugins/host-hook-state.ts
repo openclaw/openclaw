@@ -89,44 +89,24 @@ export async function enqueuePluginNextTurnInjection(params: {
   injection: PluginNextTurnInjection;
   now?: number;
 }): Promise<PluginNextTurnInjectionEnqueueResult> {
-  if (typeof params.injection.sessionKey !== "string") {
-    return { enqueued: false, id: "", sessionKey: "" };
-  }
-  const sessionKey = params.injection.sessionKey.trim();
+  const sessionKey = normalizeOptionalString(params.injection.sessionKey) ?? "";
   if (!sessionKey) {
     return { enqueued: false, id: "", sessionKey };
   }
-  if (typeof params.injection.text !== "string") {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  const text = params.injection.text.trim();
-  if (!text) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (text.length > MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (params.injection.metadata !== undefined && !isPluginJsonValue(params.injection.metadata)) {
-    return { enqueued: false, id: "", sessionKey };
-  }
+  const text = normalizeOptionalString(params.injection.text);
   if (
-    params.injection.idempotencyKey !== undefined &&
-    (typeof params.injection.idempotencyKey !== "string" ||
-      params.injection.idempotencyKey.trim().length === 0 ||
-      params.injection.idempotencyKey.length >
-        MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH)
-  ) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (
-    params.injection.placement !== undefined &&
-    !isPluginNextTurnInjectionPlacement(params.injection.placement)
-  ) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (
-    params.injection.ttlMs !== undefined &&
-    (!Number.isFinite(params.injection.ttlMs) || params.injection.ttlMs < 0)
+    !text ||
+    text.length > MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH ||
+    (params.injection.metadata !== undefined && !isPluginJsonValue(params.injection.metadata)) ||
+    (params.injection.idempotencyKey !== undefined &&
+      (typeof params.injection.idempotencyKey !== "string" ||
+        params.injection.idempotencyKey.trim().length === 0 ||
+        params.injection.idempotencyKey.length >
+          MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH)) ||
+    (params.injection.placement !== undefined &&
+      !isPluginNextTurnInjectionPlacement(params.injection.placement)) ||
+    (params.injection.ttlMs !== undefined &&
+      (!Number.isFinite(params.injection.ttlMs) || params.injection.ttlMs < 0))
   ) {
     return { enqueued: false, id: "", sessionKey };
   }

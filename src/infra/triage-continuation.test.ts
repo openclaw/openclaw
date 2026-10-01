@@ -14,6 +14,7 @@ import {
   useTriageLeaseDatabaseFixture,
 } from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
+import { createManagedHandoffLeaseDatabase } from "./update-managed-service-handoff-database.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
@@ -568,14 +569,15 @@ unix.each(["abrupt-executor", "replacement"] as const)(
       expect(await owner.exit).toEqual({ code: 7, signal: null });
       expect(owner.output().stderr).toContain("cleanup is uncertain");
     } else {
-      const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-      try {
-        db.prepare(
-          "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ? AND owner = ?",
-        ).run("replacement-generation", root, String(held.owner));
-      } finally {
-        db.close();
-      }
+      // Admitted children inspect this database while the fixture replaces the owner.
+      createManagedHandoffLeaseDatabase(resolveManagedUpdateLeaseDatabasePath())(true, (db) => {
+        const replaced = db
+          .prepare(
+            "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ? AND owner = ?",
+          )
+          .run("replacement-generation", root, String(held.owner));
+        expect(replaced.changes).toBe(1);
+      });
       await vi.waitFor(() => fs.access(path.join(root, "held.cancelled")), { timeout: 5000 });
     }
     const fenced = readClaim(root);

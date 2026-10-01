@@ -276,10 +276,6 @@ function readUpdatesSettings(
   };
 }
 
-function parseTimestampMs(value: string | null): number | null {
-  return parseDateStringTimestampMs(value) ?? null;
-}
-
 function renderTimestamp(timestampMs: number, nowMs = Date.now()) {
   const relative = formatTimeAgo(Math.max(0, nowMs - timestampMs));
   return renderSettingsValue(
@@ -293,8 +289,8 @@ function renderTimestamp(timestampMs: number, nowMs = Date.now()) {
 function renderBuildFacts(props: UpdatesViewProps) {
   const installKind = props.update.updateSchedule?.install?.kind;
   const git = props.update.updateSchedule?.install?.git;
-  const builtAtMs = parseTimestampMs(props.controlUiBuiltAt);
-  const commitAtMs = git?.commitAtMs ?? parseTimestampMs(props.controlUiCommitAt);
+  const builtAtMs = parseDateStringTimestampMs(props.controlUiBuiltAt) ?? null;
+  const commitAtMs = git?.commitAtMs ?? parseDateStringTimestampMs(props.controlUiCommitAt) ?? null;
   return renderSettingsSection({ title: t("updates.page.buildTitle") }, [
     renderSettingsRow({
       title: t("updates.page.gatewayVersion"),
@@ -430,7 +426,7 @@ function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
   >`;
 }
 
-function readGitCommits(props: UpdatesViewProps) {
+function renderCommitList(props: UpdatesViewProps) {
   const update = props.update.updateAvailable;
   const comparison = getUpdateGitComparison(props.update.updateSchedule, update);
   const commitsMatch =
@@ -438,11 +434,7 @@ function readGitCommits(props: UpdatesViewProps) {
     comparison.commitsBehind === update?.commitsBehind &&
     comparison.currentSha === update?.currentSha &&
     comparison.upstreamSha === update?.upstreamSha;
-  return commitsMatch ? (update?.commits ?? []) : [];
-}
-
-function renderCommitList(props: UpdatesViewProps) {
-  const commits = readGitCommits(props);
+  const commits = commitsMatch ? (update?.commits ?? []) : [];
   if (commits.length === 0) {
     return nothing;
   }

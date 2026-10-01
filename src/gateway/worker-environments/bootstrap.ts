@@ -79,16 +79,8 @@ try {
 const VERIFY_ARCHIVE_JS = String.raw`const crypto = require("node:crypto");
 const fs = require("node:fs");
 try {
-  const actual = crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex");
-  process.exit(actual === process.argv[2] ? 0 : 1);
-} catch {
-  process.exit(1);
-}`;
-
-const VERIFY_NPM_PACKAGE_JS = String.raw`const crypto = require("node:crypto");
-const fs = require("node:fs");
-try {
-  const actual = "sha512-" + crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64");
+  const npm = process.argv[3] === "npm";
+  const actual = (npm ? "sha512-" : "") + crypto.createHash(npm ? "sha512" : "sha256").update(fs.readFileSync(process.argv[1])).digest(npm ? "base64" : "hex");
   process.exit(actual === process.argv[2] ? 0 : 1);
 } catch {
   process.exit(1);
@@ -310,6 +302,13 @@ read_lock_owner() {
   fi
 }
 
+remove_observed_lock() {
+  current_owner=$(read_lock_owner)
+  if [ "$current_owner" = "$owner" ]; then
+    if [ -L "$lock" ]; then rm -f "$lock"; else rm -rf "$lock"; fi
+  fi
+}
+
 attempt=0
 while ! ln -s "$lock_identity" "$lock" 2>/dev/null; do
   if receipt_matches; then
@@ -344,10 +343,7 @@ while ! ln -s "$lock_identity" "$lock" 2>/dev/null; do
     *) valid_owner=0 ;;
   esac
   if [ "$stale_owner" -eq 1 ]; then
-    current_owner=$(read_lock_owner)
-    if [ "$current_owner" = "$owner" ]; then
-      if [ -L "$lock" ]; then rm -f "$lock"; else rm -rf "$lock"; fi
-    fi
+    remove_observed_lock
     continue
   fi
   if [ "$valid_owner" -eq 1 ] && kill -0 "$owner_pid" 2>/dev/null; then
@@ -360,18 +356,12 @@ while ! ln -s "$lock_identity" "$lock" 2>/dev/null; do
     continue
   fi
   if [ "$valid_owner" -eq 1 ]; then
-    current_owner=$(read_lock_owner)
-    if [ "$current_owner" = "$owner" ]; then
-      if [ -L "$lock" ]; then rm -f "$lock"; else rm -rf "$lock"; fi
-    fi
+    remove_observed_lock
     continue
   fi
   attempt=$((attempt + 1))
   if [ "$valid_owner" -eq 0 ] && [ "$attempt" -ge 5 ]; then
-    current_owner=$(read_lock_owner)
-    if [ "$current_owner" = "$owner" ]; then
-      if [ -L "$lock" ]; then rm -f "$lock"; else rm -rf "$lock"; fi
-    fi
+    remove_observed_lock
     continue
   fi
   sleep 1
@@ -396,7 +386,7 @@ rm -rf "$staging"
 mkdir -p "$staging"
 case "$install" in
   bundle)
-    if ! node -e '${VERIFY_ARCHIVE_JS}' "$upload" "$archive_sha256"; then
+    if ! node -e '${VERIFY_ARCHIVE_JS}' "$upload" "$archive_sha256" "$install"; then
       printf '%s\n' 'worker bundle archive digest mismatch' >&2
       exit 2
     fi
@@ -411,7 +401,7 @@ case "$install" in
     npm pack "$package_spec" --pack-destination "$staging" --ignore-scripts --json --registry=https://registry.npmjs.org/ > "$npm_pack_json"
     package_archive=$(node -e '${READ_NPM_PACK_FILENAME_JS}' "$npm_pack_json")
     package_archive=$staging/$package_archive
-    if ! node -e '${VERIFY_NPM_PACKAGE_JS}' "$package_archive" "$package_integrity"; then
+    if ! node -e '${VERIFY_ARCHIVE_JS}' "$package_archive" "$package_integrity" "$install"; then
       printf '%s\n' 'worker npm package integrity mismatch' >&2
       exit 2
     fi
@@ -752,4 +742,3 @@ export async function bootstrapWorker(
     await prepared.dispose();
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

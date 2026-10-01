@@ -271,20 +271,29 @@ export async function resolveWorkerPlacementSessionTarget<
     initialTarget.store,
     initialTarget.storeKeys,
   );
-  const initialIdentity = {
-    lifecycleRevision: initialEntry?.lifecycleRevision,
-    archivedAt: initialEntry?.archivedAt,
-    worktreeId: initialEntry?.worktree?.id,
-    repositoryWorkspaceId: initialEntry?.repositoryWorkspaceId,
-  };
-  const prepared = initialIdentity.repositoryWorkspaceId
-    ? await getSessionRepositoryWorkspaceStore().prepare(initialIdentity.repositoryWorkspaceId)
-    : undefined;
   const expected = params.expectedTarget ?? initialTarget;
   const targetChangedError = () =>
     params.expectedTarget
       ? new WorkerDispatchTargetChangedError(params.errorMessage)
       : new Error(params.errorMessage);
+  if (
+    initialTarget.storePath !== expected.storePath ||
+    initialTarget.canonicalKey !== expected.canonicalKey ||
+    initialTarget.agentId !== expected.agentId ||
+    !initialEntry ||
+    initialEntry.sessionId !== params.sessionId
+  ) {
+    throw targetChangedError();
+  }
+  const initialIdentity = {
+    lifecycleRevision: initialEntry.lifecycleRevision,
+    archivedAt: initialEntry.archivedAt,
+    worktreeId: initialEntry.worktree?.id,
+    repositoryWorkspaceId: initialEntry.repositoryWorkspaceId,
+  };
+  const prepared = initialIdentity.repositoryWorkspaceId
+    ? await getSessionRepositoryWorkspaceStore().prepare(initialIdentity.repositoryWorkspaceId)
+    : undefined;
   const resolveBinding = (config = params.config) => {
     const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
       cfg: config,

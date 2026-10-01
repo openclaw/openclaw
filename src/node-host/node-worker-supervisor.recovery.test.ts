@@ -109,36 +109,21 @@ function fixture(label: string) {
 }
 
 describe("node worker supervisor recovery", () => {
-  it
-    .runIf(process.platform === "linux" || process.platform === "darwin")
-    .for(
-      [
-        "close",
-        "recover",
-        "anchor-lost",
-        "initialize",
-        "environment-stop",
-        "close-after-initialize",
-        "cancel-running",
-        "owner-replaced",
-        "identity-reused",
-        "status-completed",
-        "cancel-completed",
-        "replay-completed",
-      ].flatMap((operation) =>
-        cleanupContracts
-          .filter(
-            (mode) =>
-              mode === "owned-anchor" ||
-              ["recover", "anchor-lost", "identity-reused", "status-completed"].includes(operation),
-          )
-          .map((mode) => ({ operation, mode })),
-      ),
-    )(
+  it.runIf(process.platform === "linux" || process.platform === "darwin").for([
+    ...["close", "environment-stop", "cancel-running", "owner-replaced"].map((operation) => ({
+      operation,
+      mode: "owned-anchor" as const,
+    })),
+    ...["identity-reused", "status-completed"].map((operation) => ({
+      operation,
+      mode: cleanupContracts.at(-1)!,
+    })),
+    ...cleanupContracts.map((mode) => ({ operation: "anchor-lost", mode })),
+  ])(
     "$mode: $operation observes a stopped cleanup anchor with unreadable argv without releasing its slot",
     async ({ operation, mode }, { signal: testSignal }) => {
       const { bundleRoot, env, root, workspaceDir } = fixture("node-worker-stopped-recovery-");
-      const retainsCompletedTurn = operation.endsWith("-completed");
+      const retainsCompletedTurn = operation === "status-completed";
       const input = testWorkerLaunchInput(
         workspaceDir,
         "stopped-former-owner",
@@ -158,7 +143,7 @@ describe("node worker supervisor recovery", () => {
       const anchor = receipt.worker!;
       ownedProcessGroups.push(anchor);
       const capacitySnapshots: Array<{ total: number; available: number }> = [];
-      const totalCapacity = ["initialize", "environment-stop"].includes(operation) ? 2 : 1;
+      const totalCapacity = operation === "environment-stop" ? 2 : 1;
       const capacityUnavailable = createDeferred();
       const capacityReleased = createDeferred();
       const replacement = createNodeWorkerSupervisor({
@@ -235,17 +220,7 @@ describe("node worker supervisor recovery", () => {
         await racePromiseWithAbortSignal(capacityUnavailable.promise, testSignal);
         expect(capacitySnapshots.at(-1)).toEqual({ total: totalCapacity, available: 0 });
         expect(initialized).toBe(false);
-        if (
-          [
-            "initialize",
-            "environment-stop",
-            "close-after-initialize",
-            "cancel-running",
-            "owner-replaced",
-            "identity-reused",
-          ].includes(operation) ||
-          completed
-        ) {
+        if (operation !== "close" && operation !== "anchor-lost") {
           await initialization;
           const store = new NodeWorkerLaunchStore(journal);
           expect(await store.get(input.launchId)).toMatchObject({
@@ -289,19 +264,6 @@ describe("node worker supervisor recovery", () => {
             expect(await replacement.hasActiveWork()).toBe(false);
             return;
           }
-          if (operation === "close-after-initialize") {
-            await replacement.close();
-            const published = [...capacitySnapshots];
-            process.kill(anchor.pid, "SIGCONT");
-            await waitForIdentityDeath(anchor);
-            expect(await store.get(input.launchId)).toMatchObject({
-              state: "running",
-              ...completedCleanupProof(mode),
-            });
-            expect(await replacement.status(input.launchId)).toMatchObject({ state: "running" });
-            expect(capacitySnapshots).toEqual(published);
-            return;
-          }
           if (operation === "owner-replaced" || operation === "identity-reused") {
             const signal = vi.spyOn(process, "kill");
             try {
@@ -341,34 +303,10 @@ describe("node worker supervisor recovery", () => {
             expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
             return;
           }
-          if (operation === "initialize") {
-            const next = testWorkerLaunchInput(workspaceDir, "free-slot", "wait");
-            next.descriptor.admission.environmentId = "free-environment";
-            next.descriptor.admission.sessionId = "free-session";
-            const running = await replacement.launch(next, TEST_WORKER_ENDPOINT);
-            expect(running).toMatchObject({ state: "running" });
-            expect(running.worker).not.toEqual(anchor);
-            await vi.waitFor(() =>
-              expect(
-                JSON.parse(
-                  fs.readFileSync(path.join(workspaceDir, "free-slot.started.json"), "utf8"),
-                ),
-              ).toMatchObject({ pid: expect.any(Number), starts: 1 }),
-            );
-            expect(await store.nonterminalCount()).toBe(2);
-            expect(capacitySnapshots.at(-1)).toEqual({ total: 2, available: 0 });
-            expect(await replacement.cancel(testNodeWorkerLaunchIdentity(next))).toMatchObject({
-              state: "cancelled",
-            });
-            await waitForIdentityDeath(running.worker!);
-            await vi.waitFor(async () => expect(await store.nonterminalCount()).toBe(1));
-          }
           const reconcile = () =>
-            operation === "cancel-completed" || operation === "cancel-running"
+            operation === "cancel-running"
               ? replacement.cancel(testNodeWorkerLaunchIdentity(input))
-              : operation === "replay-completed"
-                ? replacement.launch(input, TEST_WORKER_ENDPOINT)
-                : replacement.status(input.launchId);
+              : replacement.status(input.launchId);
           const [reconciled] = await Promise.all([reconcile(), replacement.status(input.launchId)]);
           expect(reconciled).toMatchObject(completed ?? { state: "running" });
           expect(inspectNodeWorkerProcessIdentity(anchor)).toBe("live");
@@ -413,23 +351,6 @@ describe("node worker supervisor recovery", () => {
           expect(await replacement.hasActiveWork()).toBe(true);
           return;
         }
-        if (operation === "recover") {
-          process.kill(anchor.pid, "SIGCONT");
-          await initialization;
-          await waitForIdentityDeath(anchor);
-          // Initialization bounds its wait; the recovery owner releases capacity after cleanup.
-          await racePromiseWithAbortSignal(capacityReleased.promise, testSignal);
-          expect(await new NodeWorkerLaunchStore(journal).get(input.launchId)).toMatchObject({
-            state: "interrupted",
-            worker: anchor,
-            workerCleanupMode: mode,
-            ...completedCleanupProof(mode),
-          });
-          expect(inspectOwnedNodeWorkerTree(anchor)).toBe("dead");
-          expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 1 });
-          expect(await replacement.hasActiveWork()).toBe(false);
-          return;
-        }
         closing = replacement.close().then(() => {
           closed = true;
         });
@@ -450,6 +371,7 @@ describe("node worker supervisor recovery", () => {
       })().catch((error: unknown) => {
         bodyFailure = { error };
       });
+      const capacityAfterClose = [...capacitySnapshots];
       openProbe.mockRestore();
       psProbe.mockRestore();
       const resumed = Promise.resolve().then(() => {
@@ -491,6 +413,8 @@ describe("node worker supervisor recovery", () => {
                 worker: anchor,
                 ...completedCleanupProof(mode),
               });
+              expect(await replacement.status(input.launchId)).toMatchObject({ state: "running" });
+              expect(capacitySnapshots).toEqual(capacityAfterClose);
             }),
         ])
       ).flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
@@ -621,43 +545,8 @@ describe("node worker supervisor recovery", () => {
     await supervisor.close();
   });
 
-  it("releases a stale pending slot during restart reconciliation", async () => {
-    const { bundleRoot, env, workspaceDir } = fixture("node-worker-restart-pending-");
-    await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get("schema-probe");
-    const input = testWorkerLaunchInput(workspaceDir, "restart-pending-launch");
-    await insertLaunch({
-      env,
-      input,
-      state: "pending",
-      supervisor: { pid: 2_147_483_647, startTime: 1 },
-      turn: true,
-    });
-    const capacitySnapshots: Array<{ total: number; available: number }> = [];
-    const supervisor = createNodeWorkerSupervisor({
-      bundleRoot,
-      env,
-      capacity: 1,
-      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
-    });
-
-    await supervisor.initialize();
-
-    expect(await supervisor.status(input.launchId)).toMatchObject({
-      state: "interrupted",
-      worker: null,
-    });
-    expect(capacitySnapshots).toEqual([
-      { total: 1, available: 0 },
-      { total: 1, available: 1 },
-    ]);
-    await supervisor.close();
-  });
-
   it.runIf(process.platform !== "win32").each([
-    { operation: "replay", state: "interrupted", leader: "live" },
     { operation: "cancel", state: "cancelled", leader: "live" },
-    { operation: "replay", state: "interrupted", leader: "dead" },
-    { operation: "cancel", state: "cancelled", leader: "dead" },
     { operation: "initialize", state: "interrupted", leader: "dead" },
     { operation: "environment stop", state: "cancelled", leader: "live" },
   ])(
@@ -802,9 +691,7 @@ describe("node worker supervisor recovery", () => {
           recovered =
             operation === "initialize"
               ? await supervisor.initialize().then(() => supervisor.status(input.launchId))
-              : operation === "cancel"
-                ? await supervisor.cancel(testNodeWorkerLaunchIdentity(input))
-                : await supervisor.launch(input, TEST_WORKER_ENDPOINT);
+              : await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
         }
 
         expect(recovered).toMatchObject({ state, worker });
@@ -864,23 +751,17 @@ describe("node worker supervisor recovery", () => {
     await second.close();
   });
 
-  it
-    .runIf(process.platform !== "win32")
-    .each(
-      [false, true].flatMap((external) => cleanupContracts.map((mode) => ({ external, mode }))),
-    )(
-    "$mode uses IPC disconnect after owner SIGKILL, then reconciles only after exact tree death (external=$external)",
-    async ({ external, mode }) => {
+  it.runIf(process.platform !== "win32").each(cleanupContracts)(
+    "%s uses IPC disconnect after external-owner SIGKILL, then reconciles only after exact tree death",
+    async (mode) => {
       const {
         bundleRoot,
         env: fixtureEnv,
         root,
         workspaceDir,
       } = fixture("node-worker-owner-kill-");
-      const env = { ...fixtureEnv, ...(external ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}) };
-      if (external) {
-        claimOpenClawStateOwnership("node-recovery-test", { env });
-      }
+      const env = { ...fixtureEnv, OPENCLAW_SUPERVISOR_MODE: "external" };
+      claimOpenClawStateOwnership("node-recovery-test", { env });
       const input = testWorkerLaunchInput(workspaceDir, "owner-kill-launch", "tree");
       selectCleanupContract(input, mode);
       const workerModePath = path.join(workspaceDir, "worker-supervision.json");

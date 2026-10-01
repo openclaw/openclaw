@@ -169,9 +169,6 @@ function validateIdentityAvatar(
   env?: NodeJS.ProcessEnv,
 ): ConfigValidationIssue[] {
   const agents = listAgentEntriesWithSource(config);
-  if (agents.length === 0) {
-    return [];
-  }
   const issues: ConfigValidationIssue[] = [];
   for (const { entry, source } of agents) {
     const avatarRaw = entry.identity?.avatar;

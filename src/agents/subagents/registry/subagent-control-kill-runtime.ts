@@ -17,10 +17,7 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { isCurrentSubagentRun } from "./subagent-control-scope.js";
-import {
-  persistSubagentAbortedLastRun,
-  type SubagentKillSession,
-} from "./subagent-control-session.js";
+import type { SubagentKillSession } from "./subagent-control-session.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
   type SubagentCancellationControl,
@@ -465,23 +462,6 @@ export async function killSubagentRun(params: {
       if (declined && !stopAccepted) {
         return declined;
       }
-      const persistAbortedLastRun = (abortedLastRun: boolean, strict = false) =>
-        persistSubagentAbortedLastRun({
-          childSessionKey,
-          storePath: resolved.storePath,
-          hasSessionEntry: resolved.entry !== undefined,
-          expectedSessionId: sessionId,
-          expectedLifecycleRevision: sessionLifecycleRevision,
-          abortedLastRun,
-          isCurrent: () => killOwnerCurrent(),
-          assertCommitAllowed: () => {
-            assertState();
-            if (!killOwnerCurrent()) {
-              throw new Error("subagent kill lifecycle retired before abort-marker commit");
-            }
-          },
-          strict,
-        });
       if (!killClaim) {
         try {
           killClaim = await claimSelectedRunKill();
@@ -511,7 +491,7 @@ export async function killSubagentRun(params: {
         if (!killOwnerCurrent()) {
           return { killed: false, sessionId, superseded: true };
         }
-        let marked: number;
+        let marked = 0;
         try {
           marked = await markSubagentRunTerminated({
             runId: params.entry.runId,
@@ -535,15 +515,20 @@ export async function killSubagentRun(params: {
                 throw new Error("Subagent kill publication lost its original claim");
               }
             },
+            onPublished: (count) => {
+              marked = count;
+            },
           });
         } catch (error) {
           if (hasSqliteWorkerOutcomeUnknown(error)) {
             throw error;
           }
+          const action =
+            marked > 0 ? "finish subagent kill cleanup" : "persist subagent kill tombstone";
           return {
-            killed: false,
+            killed: marked > 0,
             sessionId,
-            error: `Failed to persist subagent kill tombstone: ${formatErrorMessage(error)}`,
+            error: `Failed to ${action}: ${formatErrorMessage(error)}`,
           };
         }
         if (marked === 0) {
@@ -557,7 +542,6 @@ export async function killSubagentRun(params: {
             targetState: resolveSubagentKillTargetState(params.entry),
           };
         }
-        await persistAbortedLastRun(true);
         return { killed: marked > 0, sessionId };
       };
       try {

@@ -20,6 +20,10 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     return this.fileWatcher?.capacityDegraded ?? false;
   }
 
+  protected get memoryWatcherHealth() {
+    return this.fileWatcher?.health();
+  }
+
   protected ensureWatcher() {
     if (!this.sources.has("memory") || !this.settings.sync.watch || this.closed) {
       return;

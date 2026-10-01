@@ -84,28 +84,21 @@ function parseExecDirectiveArgs(raw: string): Omit<
     if (key === "host") {
       rawExecHost = value;
       execHost = normalizeExecTarget(value) ?? undefined;
-      if (!execHost) {
-        invalidHost = true;
-      }
+      invalidHost ||= !execHost;
     } else if (key === "security") {
       rawExecSecurity = value;
       execSecurity = normalizeExecSecurity(value) ?? undefined;
-      if (!execSecurity) {
-        invalidSecurity = true;
-      }
+      invalidSecurity ||= !execSecurity;
     } else if (key === "ask") {
       rawExecAsk = value;
       execAsk = normalizeExecAsk(value) ?? undefined;
-      if (!execAsk) {
-        invalidAsk = true;
-      }
+      invalidAsk ||= !execAsk;
     } else if (key === "node") {
       rawExecNode = value;
-      const trimmed = value.trim();
-      if (!trimmed) {
+      if (!value) {
         invalidNode = true;
       } else {
-        execNode = trimmed;
+        execNode = value;
       }
     } else {
       break;

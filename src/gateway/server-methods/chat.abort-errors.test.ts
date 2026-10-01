@@ -14,6 +14,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import * as subagentControlSession from "../../agents/subagents/registry/subagent-control-session.js";
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
 import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
@@ -30,7 +31,6 @@ import {
   appendTranscriptMessageSync,
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
-  patchSessionEntryCore,
   readSessionTranscriptWatermark,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
@@ -404,8 +404,7 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
     const childKey = "agent:child:subagent:incarnation";
     const storePath = path.join(fixture.stateDir, "agents/main/sessions/sessions.json");
     const childStore = path.join(fixture.stateDir, "agents/child/sessions/sessions.json");
-    // Automatic seed maintenance would wait on the fixture's held child writer
-    // while retaining the archive queue needed by parent deletion.
+    // Seed directly; this fixture controls the cancellation/reset interleaving.
     replaceSessionEntrySync(
       { storePath, sessionKey },
       {
@@ -458,19 +457,7 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
       }
     });
     const native = boundary.endsWith("native new");
-    let writer: Promise<unknown> | undefined;
-    const childHandle = createEmbeddedRunHandle({
-      abort: () => {
-        writer = patchSessionEntryCore(
-          { storePath: childStore, sessionKey: childKey },
-          async () => {
-            entered.resolve();
-            await release.promise;
-            return null;
-          },
-        );
-      },
-    });
+    const childHandle = createEmbeddedRunHandle();
     setActiveEmbeddedRun("incarnation-child", childHandle, childKey);
     const parentAdmission = await beginSessionWorkAdmission({
       scope: storePath,
@@ -494,6 +481,19 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
     });
     context.chatAbortControllers.set("parent", parent);
     context.chatRunState.getOrCreate("parent").buffer = "old delayed partial";
+    // Hold only the original marker after termination, without occupying the child writer FIFO.
+    const persistMarker = subagentControlSession.persistSubagentAbortedLastRun;
+    let markerHeld = false;
+    const markerWriter = vi
+      .spyOn(subagentControlSession, "persistSubagentAbortedLastRun")
+      .mockImplementation(async (params) => {
+        if (!markerHeld && params.childSessionKey === childKey && params.abortedLastRun) {
+          markerHeld = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return await persistMarker(params);
+      });
     let completed = false;
     const abort = invokeChatAbortHandler({
       handler: (options) =>
@@ -518,7 +518,7 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
       expect(context.chatAbortControllers.has("parent")).toBe(false);
       expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");
       // Explicit reset drains children, including native /new. Keep the original
-      // abort pending on its marker writer, not on work the reset must stop.
+      // abort pending on its marker publication, not on work the reset must stop.
       clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
       if (native) {
         const reset = await initSessionState({
@@ -575,7 +575,6 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
         ).not.toHaveProperty("firstKeptEntryId");
       }
       release.resolve();
-      await writer;
       const response = await abort;
       expect(response).toHaveBeenCalledWith(true, expect.objectContaining({ aborted: true }));
       expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");
@@ -592,9 +591,12 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
       parentAdmission.release();
       operation.complete();
       release.resolve();
-      await writer;
-      await abort;
-      clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
+      markerWriter.mockRestore();
+      try {
+        await abort;
+      } finally {
+        clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
+      }
     }
   },
 );

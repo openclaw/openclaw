@@ -28,11 +28,7 @@ export const nativeHookRelayUnregisterQueue = {
     );
   },
   async flush(): Promise<void> {
-    while (pending.size > 0) {
-      const entry = pending.values().next().value;
-      if (!entry) {
-        break;
-      }
+    for (const entry of pending) {
       clearTimeout(entry.timeout);
       entry.unregister();
     }

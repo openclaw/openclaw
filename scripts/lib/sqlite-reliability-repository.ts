@@ -56,18 +56,12 @@ function listRepositoryEntries(repositoryPath: string): string[] {
   return fs.existsSync(repositoryPath) ? fs.readdirSync(repositoryPath) : [];
 }
 
-async function runCrashPoint(params: {
-  crashPoint: RepositoryCrashPoint;
-  expectedPayload: CompactionPayloadProof;
-  expectedState: ReliabilityStateProof;
-  identity: SnapshotDatabaseIdentity;
-  provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
-  repositoryPath: string;
-  sourcePath: string;
-  validationRootPath: string;
-  verifyPayload: (databasePath: string) => CompactionPayloadProof;
-  verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<CrashPointResult> {
+async function runCrashPoint(
+  params: Parameters<typeof runRepositoryInterruptionProof>[0] & {
+    crashPoint: RepositoryCrashPoint;
+    provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
+  },
+): Promise<CrashPointResult> {
   const visibleBefore = await params.provider.list();
   const visiblePathsBefore = new Set(
     visibleBefore.map((snapshot) => path.resolve(snapshot.ref.path)),

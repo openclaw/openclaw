@@ -217,12 +217,6 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
   );
 }
 
-function loadProviderContractEntriesForPluginIds(
-  pluginIds: readonly string[],
-): ProviderContractEntry[] {
-  return pluginIds.flatMap((pluginId) => loadProviderContractEntriesForPluginId(pluginId));
-}
-
 function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContractEntry[] {
   const publicArtifactEntries = resolveBundledExplicitProviderContractsFromPublicArtifacts({
     onlyPluginIds: [pluginId],
@@ -233,7 +227,7 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
 
   try {
     providerContractLoadError = undefined;
-    const entries = loadScopedCapabilityRuntimeRegistryEntries({
+    return loadScopedCapabilityRuntimeRegistryEntries({
       pluginId,
       capabilityLabel: "provider",
       loadEntries: (registry) =>
@@ -243,11 +237,7 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
             pluginId: entry.pluginId,
             provider: entry.provider,
           })),
-    }).map((entry) => ({
-      pluginId: entry.pluginId,
-      provider: entry.provider,
-    }));
-    return entries;
+    });
   } catch (error) {
     providerContractLoadError = error instanceof Error ? error : new Error(String(error));
     return [];
@@ -365,15 +355,12 @@ export function resolveProviderContractProvidersForPluginIds(
   const allowed = new Set(pluginIds);
   return [
     ...new Map(
-      loadProviderContractEntriesForPluginIds([...allowed])
+      [...allowed]
+        .flatMap(loadProviderContractEntriesForPluginId)
         .filter((entry) => allowed.has(entry.pluginId))
         .map((entry) => [entry.provider.id, entry.provider]),
     ).values(),
   ];
 }
-function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEntry[] {
-  return resolveBundledManifestContracts();
-}
-
 export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry[] =
-  createLazyArrayView(loadPluginRegistrationContractRegistry);
+  createLazyArrayView(resolveBundledManifestContracts);

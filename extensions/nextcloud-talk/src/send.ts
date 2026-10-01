@@ -11,7 +11,7 @@ import {
   convertMarkdownTables,
   fetchWithSsrFGuard,
   generateNextcloudTalkSignature,
-  getNextcloudTalkRuntime,
+  getOptionalNextcloudTalkRuntime,
   requireRuntimeConfig,
   resolveMarkdownTableMode,
   resolveNextcloudTalkAccount,
@@ -82,42 +82,6 @@ function normalizeRoomToken(to: string): string {
     throw new Error("Room token is required for Nextcloud Talk sends");
   }
   return normalized;
-}
-
-function recordNextcloudTalkOutboundActivity(accountId: string): void {
-  try {
-    getNextcloudTalkRuntime().channel.activity.record({
-      channel: "nextcloud-talk",
-      accountId,
-      direction: "outbound",
-    });
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "Nextcloud Talk runtime not initialized") {
-      throw error;
-    }
-  }
-}
-
-function createNextcloudTalkSendReceipt(params: {
-  messageId: string;
-  roomToken: string;
-  replyTo?: string;
-}) {
-  const messageId = params.messageId.trim();
-  return createMessageReceiptFromOutboundResults({
-    results:
-      messageId && messageId !== "unknown"
-        ? [
-            {
-              channel: "nextcloud-talk",
-              messageId,
-              conversationId: params.roomToken,
-            },
-          ]
-        : [],
-    kind: "text",
-    ...(params.replyTo ? { replyToId: params.replyTo } : {}),
-  });
 }
 
 export async function sendMessageNextcloudTalk(
@@ -228,15 +192,29 @@ export async function sendMessageNextcloudTalk(
       console.log(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}`);
     }
 
-    recordNextcloudTalkOutboundActivity(account.accountId);
+    getOptionalNextcloudTalkRuntime()?.channel.activity.record({
+      channel: "nextcloud-talk",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
 
+    const receiptMessageId = messageId.trim();
     return {
       messageId,
       roomToken,
-      receipt: createNextcloudTalkSendReceipt({
-        messageId,
-        roomToken,
-        ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
+      receipt: createMessageReceiptFromOutboundResults({
+        results:
+          receiptMessageId && receiptMessageId !== "unknown"
+            ? [
+                {
+                  channel: "nextcloud-talk",
+                  messageId: receiptMessageId,
+                  conversationId: roomToken,
+                },
+              ]
+            : [],
+        kind: "text",
+        ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
       }),
       timestamp,
     };

@@ -177,8 +177,8 @@ class GatewayRegistryStore(
       val nextConnectedStableIds = _connectedStableIds.value.filterNot { it == normalized }
       if (!persistSynchronously(nextEntries, nextActiveStableId, nextConnectedStableIds)) return@synchronized false
 
-      // Publish only after the durable commit. Notification is post-commit and cannot turn a
-      // successful removal into a failure that would cancel the database recovery marker.
+      // Publish only after the durable commit. Observer failure cannot turn a successful
+      // removal into a failure that would cancel the database recovery marker.
       _entries.value = nextEntries
       _activeStableId.value = nextActiveStableId
       _connectedStableIds.value = nextConnectedStableIds

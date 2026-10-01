@@ -428,19 +428,13 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
   if (state) {
     info.state = state;
   }
-  const pidValue = entries.pid;
-  if (pidValue) {
-    const pid = parseStrictPositiveInteger(pidValue);
-    if (pid !== undefined) {
-      info.pid = pid;
-    }
+  const pid = parseStrictPositiveInteger(entries.pid);
+  if (pid !== undefined) {
+    info.pid = pid;
   }
-  const exitStatusValue = entries["last exit status"];
-  if (exitStatusValue) {
-    const status = parseStrictInteger(exitStatusValue);
-    if (status !== undefined) {
-      info.lastExitStatus = status;
-    }
+  const status = parseStrictInteger(entries["last exit status"]);
+  if (status !== undefined) {
+    info.lastExitStatus = status;
   }
   const exitReason = entries["last exit reason"];
   if (exitReason) {
