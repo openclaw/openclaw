@@ -16,6 +16,7 @@ import { bindCronSelfRemovalCommitGuard } from "../../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
+import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import {
   resolveCronDeliveryPreview,
   resolveCronDeliveryPreviews,
@@ -901,11 +902,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       const ack = { ...result, processInstanceId: getGatewayProcessInstanceId() };
       const callerSessionKey = client?.internal?.agentRuntimeIdentity?.sessionKey;
       // An agent turn holds the main lane and its own session lane until it ends, so a run
-      // that executes there, or commits a current-session result there, cannot finish
+      // that executes there, or announces a current-session result into it, cannot finish
       // while this request waits.
       const dependentSessionKey =
         job.sessionTarget === "current"
-          ? job.sessionKey
+          ? resolveCronDeliveryPlan(job).requested
+            ? job.sessionKey
+            : undefined
           : resolveCronSessionTargetSessionKey(job.sessionTarget);
       const cfg = context.getRuntimeConfig();
       const runQueuesBehindCaller =

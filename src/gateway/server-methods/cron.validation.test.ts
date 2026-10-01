@@ -4104,6 +4104,12 @@ describe("cron method validation", () => {
       },
       waits: false,
     },
+    {
+      // Quiet current jobs run detached and never commit into the conversation.
+      name: "quiet current-session",
+      job: { sessionTarget: "current", sessionKey: "agent:ops:main", delivery: { mode: "none" } },
+      waits: true,
+    },
     { name: "isolated", job: { sessionTarget: "isolated" }, waits: true },
     {
       // The automations tool stamps the creator's session onto non-isolated jobs.
