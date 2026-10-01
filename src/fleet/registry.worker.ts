@@ -13,7 +13,7 @@ import {
   reserveFleetCellInDatabase,
   updateFleetCellImageInDatabase,
 } from "./registry.kernel.js";
-import type { FleetCellOperationName, ReserveFleetCellParams } from "./registry.types.js";
+import type { ReserveFleetCellParams } from "./registry.types.js";
 
 function inTransaction<Input, Output>(operation: (db: DatabaseSync, input: Input) => Output) {
   return (input: Input, { open, stateOptions }: WorkerOperationContext): Output =>
@@ -40,17 +40,7 @@ export const fleetOperations = {
     assertFleetCellOperationInDatabase(db, input.tenantId, input.operationOwner);
     return deleteFleetCellInDatabase(db, input.tenantId);
   }),
-  "fleet.operation.acquire": inTransaction(
-    (
-      db,
-      input: { tenantId: string; operation: FleetCellOperationName; owner: string; nowMs?: number },
-    ): void => acquireFleetCellOperationInDatabase(db, input),
-  ),
-  "fleet.operation.heartbeat": inTransaction(
-    (db, input: { tenantId: string; owner: string; nowMs?: number }): void =>
-      heartbeatFleetCellOperationInDatabase(db, input),
-  ),
-  "fleet.operation.release": inTransaction((db, input: { tenantId: string; owner: string }): void =>
-    releaseFleetCellOperationInDatabase(db, input),
-  ),
+  "fleet.operation.acquire": inTransaction(acquireFleetCellOperationInDatabase),
+  "fleet.operation.heartbeat": inTransaction(heartbeatFleetCellOperationInDatabase),
+  "fleet.operation.release": inTransaction(releaseFleetCellOperationInDatabase),
 } satisfies WorkerOperationHandlers;

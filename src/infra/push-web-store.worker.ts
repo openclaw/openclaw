@@ -2,10 +2,10 @@ import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.
 import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
+  WorkerOperations,
 } from "../state/worker-operation-registry.js";
 import * as store from "./push-web-store.kernel.js";
 import { WebPushSubscriptionBindingError } from "./push-web-store.records.js";
-import type { WebPushWorkerOperations } from "./push-web-store.worker-contract.js";
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
@@ -74,6 +74,8 @@ export const webPushOperations = {
     { open },
   ) => store.insertVapidKeyPairIfAbsentInDatabase({ ...input, database: open() }),
 } satisfies WorkerOperationHandlers;
+
+type WebPushWorkerOperations = WorkerOperations<typeof webPushOperations>;
 
 // Preserve the direct worker entry point exercised by the existing profile-read contract.
 export function executeWebPushCommand(

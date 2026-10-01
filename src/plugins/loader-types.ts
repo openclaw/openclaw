@@ -25,6 +25,8 @@ export type PluginRuntimeRecovery = {
 /** Inputs shared by runtime, snapshot, and CLI-metadata plugin loading. */
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
+  /** Provider lookup config before activation copies; only captured generations may share. */
+  registrationConfigOrigin?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir?: string;

@@ -3,6 +3,16 @@ import OpenClawKit
 import OpenClawProtocol
 
 public enum OpenClawChatSessionKey {
+    public static func matchesIncludingDefaultMainAlias(_ incoming: String, _ current: String) -> Bool {
+        let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if incoming == current {
+            return true
+        }
+        return (incoming == "agent:main:main" && current == "main") ||
+            (incoming == "main" && current == "agent:main:main")
+    }
+
     public static func agentID(from sessionKey: String?) -> String? {
         let parts = (sessionKey ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -15,6 +25,60 @@ public enum OpenClawChatSessionKey {
 
 /// Canonical gateway payload mapping shared by the native Apple chat transports.
 public enum OpenClawChatGatewayPayloadCodec {
+    private enum SpeechError: LocalizedError {
+        case emptyAudio
+
+        var errorDescription: String? {
+            "Gateway tts.speak returned empty audio"
+        }
+    }
+
+    public static func decodeSpeechClip(_ data: Data) throws -> OpenClawChatSpeechClip {
+        let response = try JSONDecoder().decode(TtsSpeakResult.self, from: data)
+        guard let audioData = Data(base64Encoded: response.audiobase64), !audioData.isEmpty else {
+            throw SpeechError.emptyAudio
+        }
+        return OpenClawChatSpeechClip(
+            data: audioData,
+            outputFormat: response.outputformat,
+            mimeType: response.mimetype,
+            fileExtension: response.fileextension)
+    }
+
+    public static func decodeReactionsList(_ data: Data) throws -> OpenClawChatReactionsListResult {
+        let result = try JSONDecoder().decode(SessionReactionsListResult.self, from: data)
+        return try OpenClawChatReactionsListResult(
+            sessionID: result.sessionid,
+            reactions: result.reactions.mapValues {
+                try GatewayPayloadDecoding.decode($0, as: [OpenClawChatReactionSummary].self)
+            })
+    }
+
+    public static func decodeReactionsSet(_ data: Data) throws -> OpenClawChatReactionsSetResult {
+        let result = try JSONDecoder().decode(SessionReactionsSetResult.self, from: data)
+        return try OpenClawChatReactionsSetResult(
+            messageID: result.messageid,
+            reactions: result.reactions.map(self.reactionSummary))
+    }
+
+    private static func reactionSummary(_ summary: MessageReactionSummary) throws -> OpenClawChatReactionSummary {
+        try OpenClawChatReactionSummary(
+            emoji: summary.emoji,
+            count: summary.count,
+            identities: summary.identities.map {
+                try GatewayPayloadDecoding.decode(AnyCodable($0), as: OpenClawChatReactionIdentity.self)
+            })
+    }
+
+    private static func reactionEvent(_ event: SessionReactionEvent) throws -> OpenClawChatReactionEvent {
+        try OpenClawChatReactionEvent(
+            sessionKey: event.sessionkey,
+            agentID: event.agentid,
+            sessionID: event.sessionid,
+            messageID: event.messageid,
+            reactions: event.reactions.map(self.reactionSummary))
+    }
+
     public static func decodeSessionsList(_ data: Data, agentID: String?) throws -> OpenClawChatSessionsListResponse {
         var decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
         decoded.sessions = decoded.sessions.map { row in
@@ -191,6 +255,10 @@ public enum OpenClawChatGatewayPayloadCodec {
             return .modelSelectionChanged
         case "sessions.changed":
             return decode(OpenClawChatSessionsChangedEvent.self).map(OpenClawChatTransportEvent.sessionsChanged)
+        case "session.reaction":
+            guard let event = decode(SessionReactionEvent.self),
+                  let reaction = try? self.reactionEvent(event) else { return nil }
+            return .sessionReaction(reaction)
         case "session.narration":
             // Native foreground subscriptions use full streams; bounded narration
             // tails cannot replace transcript messages.

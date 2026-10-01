@@ -194,7 +194,6 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       }
       const channelId = readStringParam(ctx.params, "channelId");
       const channelIds = readStringArrayParam(ctx.params, "channelIds");
-      // Resolve guildId from channel info when not explicitly provided.
       if (!guildId) {
         const rawInferChannelId = channelId ?? channelIds?.[0];
         if (rawInferChannelId) {

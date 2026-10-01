@@ -254,7 +254,7 @@ async function verifySelfConsumerReload(
     | "final checkpoint"
     | "later replacement target",
 ) {
-  const prepareConfigEffects = vi.fn(() => async () => {});
+  const prepareConfigEffects = vi.fn(() => ({ retire: () => {}, rollback: async () => {} }));
   let checkpoints = 0;
   let consumer: PluginInstanceConsumer | undefined;
   const fixture = await createFixture({
@@ -334,7 +334,7 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     abortOnCandidateStart: false,
     prepareConfigEffects: () => {
       reserved.resolve();
-      return async () => {};
+      return { retire: () => {}, rollback: async () => {} };
     },
     register(api, owner) {
       if (owner !== "first") {
@@ -422,20 +422,12 @@ async function verifyExplicitDrainWait(
         : () => released.resolve();
   const call = kind === "active call" ? instance.run(() => released.promise) : undefined;
   const drainEntered = createDeferredCore();
-  const drain = instance.drain.bind(instance);
   const waitForWork = instance.waitForRetainedWork.bind(instance);
-  const observation =
-    kind === "active call"
-      ? vi.spyOn(instance, "drain").mockImplementation((...args) => {
-          const pending = drain(...args);
-          drainEntered.resolve();
-          return pending;
-        })
-      : vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
-          const pending = waitForWork(...args);
-          drainEntered.resolve();
-          return pending;
-        });
+  const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
+    const pending = waitForWork(...args);
+    drainEntered.resolve();
+    return pending;
+  });
   let settled = false;
   vi.useFakeTimers();
   const reloading = fixture

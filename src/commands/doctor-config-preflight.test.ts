@@ -236,10 +236,14 @@ describe("runDoctorConfigPreflight", () => {
 
       await withDoctorConfigPreflightHome(async (home) => {
         await writeOpenClawConfig(home, {
-          models: { providers: { openai: { contextTokens: 64_000 } } },
+          plugins: { deny: ["missing-doctor-warning-plugin"] },
         });
 
-        await runDoctorConfigPreflight({ ...configOnlyOptions, invalidConfigNote: false });
+        const preflight = await runDoctorConfigPreflight({
+          ...configOnlyOptions,
+          invalidConfigNote: false,
+        });
+        expect(preflight.snapshot.valid).toBe(true);
       });
 
       const records = warnSpy.mock.calls
@@ -250,24 +254,35 @@ describe("runDoctorConfigPreflight", () => {
         expect.objectContaining({
           level: "warn",
           subsystem: "config",
-          message: expect.stringContaining("models.providers.openai.contextTokens"),
+          message: expect.stringContaining(
+            "plugins.deny: plugin not found: missing-doctor-warning-plugin",
+          ),
         }),
       );
       expect(noteMock).not.toHaveBeenCalledWith(expect.anything(), "Config warnings");
     });
   });
 
-  it("renders legacy context-budget notices with their config paths", async () => {
+  it("renders current config warnings with their config paths", async () => {
     await withStdoutIsTTY(true, async () => {
       await withDoctorConfigPreflightHome(async (home) => {
         await writeOpenClawConfig(home, {
-          models: { providers: { openai: { contextTokens: 64_000 } } },
+          plugins: { deny: ["missing-doctor-warning-plugin"] },
         });
 
-        await runDoctorConfigPreflight({ ...configOnlyOptions, invalidConfigNote: false });
+        const preflight = await runDoctorConfigPreflight({
+          ...configOnlyOptions,
+          invalidConfigNote: false,
+        });
+        expect(preflight.snapshot.valid).toBe(true);
 
         const output = noteMock.mock.calls.map(([message]) => message).join("\n");
-        expect(output).toContain("- models.providers.openai.contextTokens:");
+        expect(noteMock).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "- plugins.deny: plugin not found: missing-doctor-warning-plugin",
+          ),
+          "Config warnings",
+        );
         expect(output).not.toContain("- : ");
       });
     });

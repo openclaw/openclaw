@@ -50,6 +50,7 @@ import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-
 // real reload transaction and async owners, not a cold model/plugin runtime.
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   advancePreparedModelRuntimeConfig: vi.fn(),
+  beginPreparedModelRuntimePluginDrain: () => ({ pendingPublication: false, release: () => {} }),
   markPreparedModelRuntimeSnapshotsStale: vi.fn(),
   rejectPendingPreparedModelRuntimeReplacement: vi.fn(),
   refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
@@ -151,7 +152,7 @@ function startManagedGatewayConfigReloader(
     startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
     reloadPlugins: vi.fn(async ({ prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() });
+      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() }).retire();
       return {
         runtime: { operationId: "test-reload", generation: 1, pluginIds: [] },
         activeChannels: new Set(),

@@ -909,8 +909,7 @@ try:
     reaped.append({"pid": reaped_pid, "status": reaped_status})
     if group_present():
         raise RuntimeError("renderer group remains after exact leaf reap")
-    wait(lambda: controller.poll() is not None)
-    report["controllerCode"] = controller.returncode
+    report["controllerCode"] = controller.wait(timeout=max(0, min(5, deadline - time.monotonic())))
 except BaseException as error:
     report["fixtureError"] = type(error).__name__ + ": " + str(error).replace(str(root), "<fixture>")
 finally:

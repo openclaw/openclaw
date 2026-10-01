@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { format } from "oxfmt";
 import * as ts from "typescript/unstable/ast";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const defaultRoot = path.resolve(import.meta.dirname, "..");
 const outputPath = "docs/reference/database-schemas/worker-access-inventory.md";
 const primitives = new Map([
   ["executeSqliteQuerySync", "Q"],
@@ -93,14 +94,14 @@ const reviewed = new Map([
     "src/config/sessions/session-reaction-store.kernel.ts",
     {
       priority: 99,
-      evidence: "Durable reads use worker; writes and incognito reads remain native",
+      evidence: "Durable reads and writes use workers; incognito keeps its native owner",
     },
   ],
   [
     "src/config/sessions/session-reaction-store.ts",
     {
       priority: 99,
-      evidence: "Native reaction writer; worker broker excludes process-held incognito",
+      evidence: "Worker-admitted reaction writes; process-held incognito retains native owner",
     },
   ],
   [
@@ -108,6 +109,13 @@ const reviewed = new Map([
     {
       priority: 99,
       evidence: "Reaction bindings use worker; other synchronous registry callers remain",
+    },
+  ],
+  [
+    "src/cron/store/quarantine.kernel.ts",
+    {
+      priority: 99,
+      evidence: "Shared by worker operations and native Doctor store-repair transactions",
     },
   ],
 ]);
@@ -217,41 +225,47 @@ function findCalls(source) {
   return calls;
 }
 
-function inventory() {
+export function inventory(root = defaultRoot, ref = "", staged = false) {
   using parser = createNativeTypeScriptParser({ cwd: root });
-  const candidates = execFileSync(
-    "rg",
-    [
-      "-l",
-      [...primitives.keys()].join("|"),
-      "src",
-      "extensions",
-      "packages",
-      "scripts",
-      "-g",
-      "*.ts",
-      "-g",
-      "*.tsx",
-      "-g",
-      "*.js",
-      "-g",
-      "*.mjs",
-      "-g",
-      "*.mts",
-      "-g",
-      "*.cts",
-      "-g",
-      "*.cjs",
-    ],
+  const roots = ["src", "extensions", "packages", "scripts"];
+  const pattern = [...primitives.keys()].join("|");
+  const snapshot = ref !== "" || staged;
+  const result = spawnSync(
+    snapshot ? "git" : "rg",
+    snapshot
+      ? [
+          "grep",
+          "-l",
+          "-z",
+          "-E",
+          ...(ref ? [] : ["--cached"]),
+          pattern,
+          ...(ref ? [ref] : []),
+          "--",
+          ...roots,
+        ]
+      : [
+          "-l",
+          "--null",
+          "-g",
+          "*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          pattern,
+          ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
+        ],
     { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  )
-    .trim()
-    .split("\n");
-  const files = candidates.filter((file) => !excluded.test(file));
+  );
+  if (result.error || (result.status !== 0 && result.status !== 1)) {
+    throw result.error ?? new Error(result.stderr || "SQLite inventory source scan failed");
+  }
+  const files = result.stdout
+    .split("\0")
+    .map((file) => (ref ? file.slice(ref.length + 1) : file))
+    .filter((file) => /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) && !excluded.test(file));
+  const texts = snapshot ? loadRatchetSources(root, files, ref) : null;
   const sources = parser.parseSourceFiles(
     files.map((fileName) => ({
       fileName,
-      text: fs.readFileSync(path.join(root, fileName), "utf8"),
+      text: texts ? texts.get(fileName) : fs.readFileSync(path.join(root, fileName), "utf8"),
     })),
   );
   const invalidSource = parser.getSyntacticDiagnostics()[0];
@@ -260,10 +274,9 @@ function inventory() {
       `Cannot inventory invalid syntax in ${path.relative(root, invalidSource.fileName ?? root)}`,
     );
   }
-  return sources
-    .flatMap((source, index) => {
-      const file = files[index];
-      const calls = findCalls(source);
+  return files
+    .flatMap((file, index) => {
+      const calls = findCalls(sources[index]);
       return calls.length ? [{ file, owner: ownerOf(file), calls, ...classify(file) }] : [];
     })
     .toSorted(
@@ -334,7 +347,7 @@ function render(rows) {
     "",
     "The history cutover leaves selected/current session entries, pending-input/receipt reads, the retained transcript-session key, and lazy subagent source/run-input visibility reads as native work. Ordinary full pages were already worker-backed; raw cursor delta reads now share that worker. Process-held incognito database lifetime and the existing CLI-import history path remain explicit migration gaps. Incognito data cannot be reopened by a durable path in another isolate; this is remaining owner/lifetime work, not a new synchronous exception. A failed durable worker read never selects that local path.",
     "",
-    "Durable session reaction summaries and target-message reads use the admitted history worker. The reaction row kernel remains T1: writes and process-held incognito reads retain their existing native owner. The write cutover is blocked by the current broker contract: `supportsOpenClawAgentDatabaseExecution` excludes incognito scopes, and `openOpenClawAgentSqliteWorkerStore` requires a file identity. Supporting process-held databases requires their owner/lifetime cutover; this partial migration adds no broker or synchronous exception. Reaction mirroring reads durable source conversation bindings through the history worker, including a final read after account/config preparation and immediately before dispatch; synchronous handoff guards retain live reactor, session, and config checks. The conversation registry remains T1 because other synchronous callers are outside this cutover. Schemas, stored bytes, retention, and update behavior are unchanged.",
+    "Durable session reaction summaries and target-message reads use the admitted history worker; reaction writes use the canonical SQLite worker broker with live transaction and commit admission. Process-held incognito reads and writes retain their sole native owner because their database cannot be reopened by path. The synchronous reaction kernel is shared by those admitted worker and incognito paths; no new broker capability or native fallback is added. Reaction mirroring reads durable source conversation bindings through the history worker, including a final read after account/config preparation and immediately before dispatch; synchronous handoff guards retain live reactor, session, and config checks. The conversation registry remains T1 because other synchronous callers are outside this cutover. Schemas, stored bytes, retention, and update behavior are unchanged.",
     "",
     "## Next five independent lanes",
     "",
@@ -372,33 +385,37 @@ function render(rows) {
   return `${lines.join("\n")}\n`;
 }
 
-const args = process.argv.slice(2);
-if (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0])) {
-  console.error("Usage: node scripts/database-worker-inventory.mjs --write|--check|--json");
-  process.exitCode = 2;
-} else {
-  const rows = inventory();
-  if (args[0] === "--json") {
-    console.log(JSON.stringify({ totals: totals(rows), files: rows }, null, 2));
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  const args = process.argv.slice(2);
+  if (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0])) {
+    console.error("Usage: node scripts/database-worker-inventory.mjs --write|--check|--json");
+    process.exitCode = 2;
   } else {
-    const formatted = await format(outputPath, render(rows), { proseWrap: "preserve" });
-    if (formatted.errors.length > 0) {
-      throw new Error(`Inventory Markdown formatting failed: ${JSON.stringify(formatted.errors)}`);
-    }
-    const rendered = formatted.code;
-    const destination = path.join(root, outputPath);
-    if (args[0] === "--write") {
-      fs.writeFileSync(destination, rendered);
-      console.log(
-        `Wrote ${outputPath}: ${rows.length} files, ${totals(rows).calls} call expressions`,
-      );
-    } else if (!fs.existsSync(destination) || fs.readFileSync(destination, "utf8") !== rendered) {
-      console.error(
-        `${outputPath} is stale; run node scripts/database-worker-inventory.mjs --write`,
-      );
-      process.exitCode = 1;
+    const rows = inventory();
+    if (args[0] === "--json") {
+      console.log(JSON.stringify({ totals: totals(rows), files: rows }, null, 2));
     } else {
-      console.log(`Current: ${outputPath}`);
+      const formatted = await format(outputPath, render(rows), { proseWrap: "preserve" });
+      if (formatted.errors.length > 0) {
+        throw new Error(
+          `Inventory Markdown formatting failed: ${JSON.stringify(formatted.errors)}`,
+        );
+      }
+      const rendered = formatted.code;
+      const destination = path.join(defaultRoot, outputPath);
+      if (args[0] === "--write") {
+        fs.writeFileSync(destination, rendered);
+        console.log(
+          `Wrote ${outputPath}: ${rows.length} files, ${totals(rows).calls} call expressions`,
+        );
+      } else if (!fs.existsSync(destination) || fs.readFileSync(destination, "utf8") !== rendered) {
+        console.error(
+          `${outputPath} is stale; run node scripts/database-worker-inventory.mjs --write`,
+        );
+        process.exitCode = 1;
+      } else {
+        console.log(`Current: ${outputPath}`);
+      }
     }
   }
 }

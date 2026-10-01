@@ -78,8 +78,6 @@
   text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
 }
 
-/* ---------- detail overlay ---------- */
-
 .channels-detail,
 .channels-wizard {
   display: flex;
@@ -131,8 +129,6 @@
   gap: var(--space-3);
   padding: var(--space-4) var(--space-4) var(--space-5);
 }
-
-/* ---------- DM sender access requests ---------- */
 
 .channels-pairing-filters {
   display: flex;
@@ -236,8 +232,6 @@
     justify-content: flex-start;
   }
 }
-
-/* ---------- setup wizard dialog ---------- */
 
 .channels-wizard {
   width: min(540px, calc(100vw - 48px));

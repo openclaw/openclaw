@@ -115,13 +115,22 @@ flow:
             - ref: sessionKey
             - lambda:
                 params: [history]
-                expr: "(() => { const calls = projectQaToolMessages(history.messages ?? []).flatMap((message) => message.role === 'assistant' && Array.isArray(message.content) ? message.content : []).filter((item) => item.type === 'toolCall' && item.name === 'automations'); return calls.length >= 2 ? calls : undefined; })()"
+                expr: >-
+                  (() => {
+                    const mutations = projectQaToolMessages(history.messages ?? [])
+                      .flatMap((message) => message.role === 'assistant' && Array.isArray(message.content) ? message.content : [])
+                      .filter((item) => item.type === 'toolCall' && item.name === 'automations'
+                        && !['list', 'status', 'get', 'runs'].includes(item.arguments?.action));
+                    return mutations.filter((call) => call.arguments?.action === 'add').length >= 2
+                      || mutations.some((call) => call.arguments?.action !== 'add')
+                      ? mutations : undefined;
+                  })()
             - expr: liveTurnTimeoutMs(env, 180000)
             - 250
         - assert:
             expr: "cronToolCalls.length === 2 && cronToolCalls.every((toolCall) => toolCall.arguments?.action === 'add' && toolCall.arguments?.job && typeof toolCall.arguments.job === 'object')"
             message:
-              expr: "`expected exactly two logical automations add calls, saw ${JSON.stringify(cronToolCalls)}`"
+              expr: "`expected exactly two logical automations add calls and no other mutations, saw ${JSON.stringify(cronToolCalls)}`"
         - assert:
             expr: "cronToolCalls.some((call) => call.arguments.job.name === oneShotName && call.arguments.job.schedule?.kind === 'at' && call.arguments.job.schedule.at === oneShotAt && call.arguments.job.payload?.message === `Reply exactly ${oneShotPayloadMarker}`) && cronToolCalls.some((call) => call.arguments.job.name === recurringName && call.arguments.job.schedule?.kind === 'every' && call.arguments.job.schedule.everyMs === config.recurringEveryMs && call.arguments.job.payload?.message === `Reply exactly ${recurringPayloadMarker}`)"
             message:

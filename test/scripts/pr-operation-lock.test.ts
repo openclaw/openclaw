@@ -266,6 +266,7 @@ function installRequiredPrCommandStubs(binDir: string) {
 interface SupervisedFixtureOptions {
   accelerateTimeouts?: boolean;
   env?: NodeJS.ProcessEnv;
+  materializedAnchor?: boolean;
 }
 
 async function runSupervisedFixture(
@@ -275,26 +276,46 @@ async function runSupervisedFixture(
 ) {
   // Entry bookkeeping is fixture-owned, not an untracked checkout transition input.
   const entryDir = tempDirs.make("openclaw-pr-supervised-entry-");
+  const anchorDir = options.materializedAnchor
+    ? realpathSync(tempDirs.make("openclaw-pr-anchor."))
+    : undefined;
+  if (anchorDir) {
+    copyPrWrapperSources(anchorDir);
+  }
   const groupFile = writeFixtureFile(entryDir, "supervised-fixture.pgid", "");
-  const entry = writeFixtureFile(entryDir, "supervised-fixture-entry.sh", [
-    "#!/usr/bin/env bash",
-    `printf '%s\\n' "$$" > ${shellQuote(groupFile)}`,
-    `exec ${shellQuote(fixture)}`,
-  ]);
-  chmodSync(entry, 0o755);
-  const controller = spawn(
-    process.execPath,
+  const entry = writeFixtureFile(
+    anchorDir ?? entryDir,
+    anchorDir ? "scripts/pr" : "supervised-fixture-entry.sh",
     [
-      ...(options.accelerateTimeouts
-        ? [
-            "--require",
-            createProcessGroupTimingPreload(tempDirs.make("openclaw-pr-operation-lock-timing-")),
-          ]
-        : []),
-      processGroupRunner,
-      repoDir,
-      entry,
+      "#!/usr/bin/env bash",
+      `printf '%s\\n' "$$" > ${shellQuote(groupFile)}`,
+      `exec ${shellQuote(fixture)}`,
     ],
+  );
+  chmodSync(entry, 0o755);
+  const nodeArgs = [
+    ...(options.accelerateTimeouts
+      ? [
+          "--require",
+          createProcessGroupTimingPreload(tempDirs.make("openclaw-pr-operation-lock-timing-")),
+        ]
+      : []),
+    anchorDir ? join(anchorDir, "scripts/pr-lib/process-group-runner.mjs") : processGroupRunner,
+    repoDir,
+    entry,
+  ];
+  const controller = spawn(
+    anchorDir ? "/bin/bash" : process.execPath,
+    anchorDir
+      ? [
+          "-c",
+          'exec 9< "$1"; export OPENCLAW_PR_ANCHOR_CREATOR_PID=$$ OPENCLAW_PR_ANCHOR_FD=9; shift; exec "$@"',
+          "anchor-fixture",
+          anchorDir,
+          process.execPath,
+          ...nodeArgs,
+        ]
+      : nodeArgs,
     {
       cwd: repoDir,
       env: { ...createIndependentPrFixtureEnv(), ...options.env },
@@ -348,7 +369,7 @@ async function runSupervisedFixture(
     }
     throw new AggregateError(failures, "supervised fixture did not settle", { cause: error });
   }
-  return { status: controller.exitCode, signal: controller.signalCode, stdout, stderr };
+  return { status: controller.exitCode, signal: controller.signalCode, stdout, stderr, anchorDir };
 }
 
 function runSupervisedOperation(
@@ -1339,7 +1360,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "acquire_pr_operation_lock 42",
         `node '${launcherScript}'`,
       ],
-      { accelerateTimeouts: true },
+      { accelerateTimeouts: true, materializedAnchor: true },
     );
 
     const operationPgid = await waitForProcessId(operationPgidFile);
@@ -1352,6 +1373,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.stderr).toContain("Warning:");
     expect(result.stderr).toContain("group=dead, pipe=open");
     expect(result.stderr).toContain("#124583");
+    expect(existsSync(join(result.anchorDir!, "scripts/pr"))).toBe(true);
   }, 15_000);
   it("retains a clean-exit lock when the leader completion marker is suppressed", async () => {
     const repoDir = createRepo();

@@ -398,7 +398,7 @@ export async function applyLegacyCronStoreRepair(params: {
           });
         }
       } else if (quarantine) {
-        saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
+        await saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
       }
     } catch (err) {
       rethrowSqliteSchemaVersionError(err);

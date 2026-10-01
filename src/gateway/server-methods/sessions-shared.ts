@@ -102,16 +102,19 @@ export function loadAccessorSessionEntryForGatewayTarget(params: {
   key: string;
   cfg: OpenClawConfig;
   agentId?: string;
+  clone?: boolean;
 }) {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
     exactRead: true,
+    ...(params.clone === false ? { clone: false } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   return {
     target,
     storePath: target.storePath,
+    store: target.store,
     // Exact probes include internal-effects rows that operator inventory reads hide.
     entry: isInternalSessionEffectsKey(target.canonicalKey)
       ? undefined
@@ -119,27 +122,6 @@ export function loadAccessorSessionEntryForGatewayTarget(params: {
     canonicalKey: target.canonicalKey,
     sessionStoreKey: target.canonicalKey,
   };
-}
-
-export function loadSessionEntriesForTarget(params: {
-  key: string;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  includeStoreChildEntries?: boolean;
-}) {
-  const target = resolveGatewaySessionStoreTargetWithStore({
-    cfg: params.cfg,
-    key: params.key,
-    clone: false,
-    exactRead: true,
-    includeStoreChildEntries: params.includeStoreChildEntries,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
-  const store = target.store;
-  const entry = isInternalSessionEffectsKey(target.canonicalKey)
-    ? undefined
-    : resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
-  return { target, storePath: target.storePath, store, entry };
 }
 
 export function emitSessionOperation(

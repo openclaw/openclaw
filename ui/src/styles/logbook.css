@@ -92,8 +92,6 @@
   }
 }
 
-/* ---- Timeline ---- */
-
 .logbook__timeline {
   display: flex;
   flex-direction: column;
@@ -284,8 +282,6 @@
     padding-left: 12px;
   }
 }
-
-/* ---- Side panel ---- */
 
 .logbook__side {
   display: flex;

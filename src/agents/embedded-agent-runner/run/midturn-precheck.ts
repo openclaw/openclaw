@@ -36,7 +36,6 @@ export class MidTurnPrecheckSignal extends Error {
   }
 }
 
-/** Narrows unknown errors to the mid-turn overflow signal used by attempt cleanup. */
 export function isMidTurnPrecheckSignal(error: unknown): error is MidTurnPrecheckSignal {
   return error instanceof MidTurnPrecheckSignal;
 }
