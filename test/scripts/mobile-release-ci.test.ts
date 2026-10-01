@@ -77,6 +77,25 @@ function readOutputs(file: string): Record<string, string> {
   );
 }
 
+function evaluateWorkflowExpression(expression: string, context: Record<string, unknown>): unknown {
+  return runInNewContext(expression.replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), context);
+}
+
+function releaseUploadArguments(upload: WorkflowStep, env: NodeJS.ProcessEnv): string[] {
+  return command(
+    "bash",
+    [
+      "-c",
+      [
+        "gh() { :; }",
+        "pnpm() { printf '%s\\n' \"$@\"; }",
+        expectDefined(upload.run, "release upload command"),
+      ].join("\n"),
+    ],
+    { env: { ...process.env, ...env, RUNNER_TEMP: "/synthetic-runner-temp" } },
+  ).split("\n");
+}
+
 function releaseArtifactFiles(workflowFile: string, artifactPrefix: string, runnerTemp: string) {
   const workflow = parse(fs.readFileSync(workflowFile, "utf8")) as {
     jobs: {
@@ -97,7 +116,16 @@ function releaseArtifactFiles(workflowFile: string, artifactPrefix: string, runn
   if (!upload?.with?.path) {
     throw new Error(`Missing ${artifactPrefix} upload in ${workflowFile}`);
   }
-  expect(upload.if).toBe("always()");
+  expect(
+    evaluateWorkflowExpression(upload.if ?? "success()", {
+      always: () => true,
+      success: () => false,
+      failure: () => true,
+      cancelled: () => false,
+      github: { event_name: "workflow_dispatch" },
+      inputs: { operation: "release" },
+    }),
+  ).toBe(true);
   const patterns = upload.with.path
     .trim()
     .split(/\r?\n/u)
@@ -224,8 +252,7 @@ describe("mobile release CI tools", () => {
         failure: () => qualificationResult === "failure",
         always: () => true,
       };
-      const evaluate = (expression: string) =>
-        runInNewContext(expression.replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), context);
+      const evaluate = (expression: string) => evaluateWorkflowExpression(expression, context);
       expect(Boolean(evaluate(workflow.jobs.qualify.if)), JSON.stringify(scenario)).toBe(
         scenario.qualify ?? false,
       );
@@ -252,40 +279,132 @@ describe("mobile release CI tools", () => {
           ),
         ),
       ).toBe("external-group-id");
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          [
-            "gh() { :; }",
-            "pnpm() { printf '%s\\n' \"$@\"; }",
-            expectDefined(upload.run, "iOS upload command"),
-          ].join("\n"),
-        ],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            IOS_RELEASE_DESTINATION: String(
-              evaluate(
-                expectDefined(
-                  uploadEnvironment.IOS_RELEASE_DESTINATION,
-                  "iOS release destination expression",
-                ),
+      expect(
+        releaseUploadArguments(upload, {
+          IOS_RELEASE_DESTINATION: String(
+            evaluate(
+              expectDefined(
+                uploadEnvironment.IOS_RELEASE_DESTINATION,
+                "iOS release destination expression",
               ),
             ),
-            RUNNER_TEMP: "/synthetic-runner-temp",
-          },
-        },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim().split("\n")).toEqual([
+          ),
+        }),
+      ).toEqual([
         "ios:release:upload",
         "--",
         "--destination",
         scenario.destination,
         "--recovery-dir",
         "/synthetic-runner-temp/ios-release-recovery",
+      ]);
+    }
+  });
+
+  it("routes enabled daily and manual Android internal builds without screenshot tooling", () => {
+    const workflow = parse(
+      fs.readFileSync(".github/workflows/android-store-release.yml", "utf8"),
+    ) as {
+      on: {
+        schedule: Array<{ cron: string; timezone: string }>;
+        workflow_dispatch: { inputs: { operation: { default: string; options: string[] } } };
+      };
+      concurrency: { group: string; "cancel-in-progress": boolean };
+      jobs: { release: { if: string; environment: string; steps: WorkflowStep[] } };
+    };
+    expect(workflow.on.schedule).toEqual([{ cron: "0 7 * * *", timezone: "America/Los_Angeles" }]);
+    expect(workflow.on.workflow_dispatch.inputs.operation).toMatchObject({
+      default: "release",
+      options: ["release", "internal"],
+    });
+    expect(workflow.concurrency).toMatchObject({
+      group: "android-release",
+      "cancel-in-progress": false,
+    });
+    const release = workflow.jobs.release;
+    const findStep = (name: string) =>
+      expectDefined(
+        release.steps.find((step) => step.name === name),
+        name,
+      );
+    const upload = findStep("Prepare and upload Android release");
+    const uploadEnvironment = expectDefined(upload.env, "Android upload environment");
+    const tooling = findStep("Prepare trusted Linux Android tooling");
+    const diagnostics = findStep("Retain emulator startup diagnostics");
+    const emulators = expectDefined(
+      findStep("Setup Android toolchain").with?.["install-screenshot-emulators"],
+      "screenshot emulator selection",
+    );
+    const scenarios: Array<{
+      event: string;
+      operation: string;
+      enabled: string;
+      destination?: "internal" | "play-store";
+      ref?: string;
+      repository?: string;
+    }> = [
+      { event: "schedule", operation: "", enabled: "true", destination: "internal" },
+      { event: "schedule", operation: "", enabled: "" },
+      { event: "schedule", operation: "", enabled: "false" },
+      {
+        event: "workflow_dispatch",
+        operation: "internal",
+        enabled: "false",
+        destination: "internal",
+      },
+      {
+        event: "workflow_dispatch",
+        operation: workflow.on.workflow_dispatch.inputs.operation.default,
+        enabled: "false",
+        destination: "play-store",
+      },
+      { event: "workflow_dispatch", operation: "unknown", enabled: "true" },
+      { event: "push", operation: "internal", enabled: "true" },
+      ...["schedule", "workflow_dispatch"].flatMap((event) => [
+        { event, operation: "internal", enabled: "true", ref: "refs/heads/candidate" },
+        { event, operation: "internal", enabled: "true", repository: "example/fork" },
+      ]),
+    ];
+    for (const scenario of scenarios) {
+      const context = {
+        github: {
+          event_name: scenario.event,
+          ref: scenario.ref ?? "refs/heads/main",
+          repository: scenario.repository ?? "openclaw/openclaw",
+        },
+        inputs: { operation: scenario.operation },
+        vars: { ANDROID_INTERNAL_ENABLED: scenario.enabled },
+        always: () => true,
+      };
+      const evaluate = (expression: string) => evaluateWorkflowExpression(expression, context);
+      expect(Boolean(evaluate(release.if)), JSON.stringify(scenario)).toBe(
+        Boolean(scenario.destination),
+      );
+      if (!scenario.destination) {
+        continue;
+      }
+      const storeRelease = scenario.destination === "play-store";
+      expect(evaluate(release.environment)).toBe(
+        storeRelease ? "android-store-release" : "android-internal",
+      );
+      expect(Boolean(evaluate(tooling.if ?? "true"))).toBe(storeRelease);
+      expect(Boolean(evaluate(diagnostics.if ?? "true"))).toBe(storeRelease);
+      expect(evaluate(String(emulators))).toBe(String(storeRelease));
+      expect(
+        releaseUploadArguments(upload, {
+          ANDROID_RELEASE_DESTINATION: String(
+            evaluate(
+              expectDefined(uploadEnvironment.ANDROID_RELEASE_DESTINATION, "Android destination"),
+            ),
+          ),
+        }),
+      ).toEqual([
+        "android:release:upload",
+        "--",
+        "--destination",
+        scenario.destination,
+        "--recovery-dir",
+        "/synthetic-runner-temp/android-release-recovery",
       ]);
     }
   });

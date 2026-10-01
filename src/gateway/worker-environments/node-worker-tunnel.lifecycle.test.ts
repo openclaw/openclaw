@@ -77,7 +77,7 @@ describe("node worker tunnel lifetime", () => {
     const node = nodes[0]!;
     nodeTransport.listCurrentNodes = async () => nodes;
     let currentTransport: NodeWorkerSupervisorTransport | undefined = nodeTransport;
-    const manager = await createManager(environment(), { getTransport: () => currentTransport });
+    const manager = createManager(environment(), { getTransport: () => currentTransport });
     const handle = await manager.start(startRequest());
     const legacy = resolveNodeWorkerLaunchToolNames(node.workerHost);
     await expect(handle.readLaunchToolNames()).resolves.toEqual(legacy);
@@ -98,7 +98,7 @@ describe("node worker tunnel lifetime", () => {
     let currentClaim = turnClaim();
     const authorizations: boolean[] = [];
     const launchSizes: number[] = [];
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => {
         authorizations.push(request.isDispatchAuthorized());
         launchSizes.push(measureNodeWorkerLaunchBytes(request.deviceId, request.input));
@@ -137,7 +137,7 @@ describe("node worker tunnel lifetime", () => {
     const record = environment();
     const errorText =
       "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out";
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => ({
         launchId: request.input.launchId,
         planHash: "b".repeat(64),
@@ -163,7 +163,7 @@ describe("node worker tunnel lifetime", () => {
 
   it("reuses only the exact same epoch binding", async () => {
     const record = environment();
-    const manager = await createManager(record);
+    const manager = createManager(record);
 
     const first = await manager.start(startRequest());
     await expect(manager.start(startRequest())).resolves.toBe(first);
@@ -184,7 +184,7 @@ describe("node worker tunnel lifetime", () => {
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
     nodeTransport.invoke = withWorkspaceDrain(invoke);
     const transfer = workspaceTransfer();
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
       workspaceTransfer: transfer,
     });
@@ -209,7 +209,7 @@ describe("node worker tunnel lifetime", () => {
       return { ok: true, payloadJSON: "null" };
     });
     nodeTransport.invoke = withWorkspaceDrain(invoke);
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
       launchNodeWorker: async (request) => ({
         launchId: request.input.launchId,
@@ -258,7 +258,7 @@ describe("node worker tunnel lifetime", () => {
         .mockResolvedValue({ ok: true, payloadJSON: "null" });
       nodeTransport.invoke = withWorkspaceDrain(invoke);
       const transfer = { ...workspaceTransfer(), closeAll: vi.fn(async () => {}) };
-      const manager = await createManager(record, {
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
         workspaceTransfer: transfer,
       });
@@ -316,7 +316,7 @@ describe("node worker tunnel lifetime", () => {
       };
       const transfer = workspaceTransfer();
       transfer.prepareRepository = vi.fn(async () => {});
-      const manager = await createManager(record, {
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
         workspaceTransfer: transfer,
       });
@@ -387,7 +387,7 @@ describe("node worker tunnel lifetime", () => {
         );
       });
     const launchNodeWorker = vi.fn(launch);
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker,
     });
     const first = await manager.start(startRequest());
@@ -443,7 +443,7 @@ describe("node worker tunnel lifetime", () => {
       });
     };
     const launchNodeWorker = vi.fn(launch);
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker,
     });
     const handle = await manager.start(startRequest());

@@ -128,12 +128,14 @@ export function catalogErrorMessages(catalog: SessionCatalog): string[] {
 
 export type SidebarSessionCatalog = SessionCatalog & { visibleHosts: SessionCatalogHost[] };
 
+type SessionVisibilityRow = Pick<GatewaySessionRow, "key" | "archived" | "snoozedUntil">;
+
 /** Section peers and rendering share the same nonempty, owner-filtered catalogs. */
 export function projectSidebarSessionCatalogs(
   catalogs: readonly SessionCatalog[],
   ownerId: string | null,
   liveRows: readonly GatewaySessionRow[],
-  isSessionHidden?: (row: GatewaySessionRow) => boolean,
+  isSessionHidden?: (row: SessionVisibilityRow) => boolean,
 ): SidebarSessionCatalog[] {
   // The current list wins over cached agent lists, including an unset live owner.
   const liveRowsByKey = new Map(liveRows.toReversed().map((row) => [row.key, row]));
@@ -150,15 +152,17 @@ export function projectSidebarSessionCatalogs(
 
 function visibleCatalogHosts(
   hosts: readonly SessionCatalogHost[],
-  ownerId?: string | null,
-  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow> = new Map(),
-  isSessionHidden?: (row: GatewaySessionRow) => boolean,
+  ownerId: string | null,
+  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
+  isSessionHidden?: (row: SessionVisibilityRow) => boolean,
 ): SessionCatalogHost[] {
   const visible: SessionCatalogHost[] = [];
   for (const host of hosts) {
     const sessions = host.sessions.filter((session) => {
       const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
-      if (adoptedRow && isSessionHidden?.(adoptedRow)) {
+      // A committed archive can leave the loaded roster before the catalog refreshes.
+      // Its adopted key still belongs to the canonical session lifecycle owner.
+      if (session.sessionKey && isSessionHidden?.(adoptedRow ?? { key: session.sessionKey })) {
         return false;
       }
       if (!ownerId) {

@@ -834,7 +834,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/voice-call/src/webhook.auto-response.lifecycle.test.ts",
   "extensions/voice-call/src/webhook.hangup-once.lifecycle.test.ts",
   "extensions/voice-call/src/webhook/realtime-handler.lifecycle.test.ts",
-  "extensions/voice-call/src/webhook/realtime-handler.persistence.test.ts",
   "extensions/voice-call/src/webhook/realtime-handler.test.ts",
   "extensions/volcengine/tts.test.ts",
   "extensions/whatsapp/src/accounts.whatsapp-auth.test.ts",

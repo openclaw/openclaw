@@ -1394,6 +1394,7 @@ src/state/openclaw-state-lease-worker-owner.ts
 src/state/openclaw-state-lease-worker-storage.ts
 src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
+src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
 src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-operation.ts

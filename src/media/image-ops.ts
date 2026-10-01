@@ -2,6 +2,8 @@ import {
   isRastermillUnavailableError,
   RastermillUnavailableError,
   readImageProbeFromHeader,
+  type EncodedImage,
+  type EncodeOptions,
   type ImageProbe,
   type ImageMetadata,
 } from "rastermill";
@@ -104,13 +106,6 @@ export function isStillPngBuffer(buffer: Buffer): boolean {
   return false;
 }
 
-function wrapRastermillUnavailable(operation: string, error: unknown): never {
-  if (error instanceof RastermillUnavailableError) {
-    throw new ImageProcessorUnavailableError(operation, error.message, error.causes);
-  }
-  throw error;
-}
-
 /** Fully probes display dimensions through Rastermill when header-only metadata is insufficient. */
 export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
   return resolveDisplayImageMetadata(await createImageProcessor().probe(buffer));
@@ -118,36 +113,43 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
 
 /** Resizes or encodes image bytes as JPEG through the shared image processor. */
 export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
-  try {
-    return (
-      await createImageProcessor().encode(params.buffer, {
+  return (
+    await encodeImage(
+      params.buffer,
+      {
         format: "jpeg",
         resize: {
           maxSide: params.maxSide,
           enlarge: params.withoutEnlargement === false,
         },
         quality: params.quality,
-      })
-    ).data;
-  } catch (error) {
-    return wrapRastermillUnavailable("resizeToJpeg", error);
-  }
+      },
+      "resizeToJpeg",
+    )
+  ).data;
 }
 
-async function encodeImageToJpeg(buffer: Buffer, operation: string): Promise<Buffer> {
+async function encodeImage(
+  buffer: Buffer,
+  options: EncodeOptions,
+  operation: string,
+): Promise<EncodedImage> {
   try {
-    return (await createImageProcessor().encode(buffer, { format: "jpeg" })).data;
+    return await createImageProcessor().encode(buffer, options);
   } catch (error) {
-    return wrapRastermillUnavailable(operation, error);
+    if (error instanceof RastermillUnavailableError) {
+      throw new ImageProcessorUnavailableError(operation, error.message, error.causes);
+    }
+    throw error;
   }
 }
 
 export async function convertImageToJpeg(buffer: Buffer): Promise<Buffer> {
-  return await encodeImageToJpeg(buffer, "convertImageToJpeg");
+  return (await encodeImage(buffer, { format: "jpeg" }, "convertImageToJpeg")).data;
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
-  return await encodeImageToJpeg(buffer, "convertHeicToJpeg");
+  return (await encodeImage(buffer, { format: "jpeg" }, "convertHeicToJpeg")).data;
 }
 
 /** Converts image bytes to PNG, including BMP fallback unsupported by Rastermill's Photon gate. */
@@ -185,16 +187,15 @@ export async function optimizeImageToPng(
   resizeSide: number;
   compressionLevel: number;
 }> {
-  let out;
-  try {
-    out = await createImageProcessor().encode(buffer, {
+  const out = await encodeImage(
+    buffer,
+    {
       format: "png",
       maxBytes,
       search: options?.sides === undefined ? {} : { maxSide: options.sides },
-    });
-  } catch (error) {
-    wrapRastermillUnavailable("optimizeImageToPng", error);
-  }
+    },
+    "optimizeImageToPng",
+  );
   return {
     buffer: out.data,
     optimizedSize: out.bytes,

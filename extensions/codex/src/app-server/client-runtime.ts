@@ -12,7 +12,7 @@ import {
   hasSiblingThreadWork,
   hasThreadOwnership,
   invalidateThreadOwnership,
-  revertRetainedThreadSkillsCatalog,
+  revertRetainedThreadInstructions,
   type RetainedLiveThread,
   type CodexEphemeralThreadPolicy,
   type CodexAppServerLiveThreadOwnership,
@@ -635,13 +635,13 @@ function claimCodexAppServerThreadOwnership(
 }
 
 /** Standalone incognito compaction retains its separately owned subscription. */
-export function revertCodexAppServerLiveThreadSkillsCatalog(
+export function revertCodexAppServerLiveThreadInstructions(
   client: CodexAppServerClient,
   threadId: string,
 ): void {
   const runtime = configuredClients.get(client);
   if (runtime && !runtime.closed) {
-    revertRetainedThreadSkillsCatalog(runtime, threadId);
+    revertRetainedThreadInstructions(runtime, threadId);
   }
 }
 
