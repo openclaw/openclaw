@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { installBunCliLauncher, parseBunCliLauncher } from "../../scripts/lib/bun-cli-launcher.mjs";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import {
@@ -31,11 +32,16 @@ async function writeStoredRuntime(packageRoot: string, store: string, generation
 }
 
 describe.skipIf(process.platform === "win32")("native package stage", () => {
-  it.each(["bun", "pnpm10", "pnpm11"] as const)(
+  it.each(["bun", "bun-launcher", "pnpm10", "pnpm11"] as const)(
     "preserves the live %s project and executes its relocated candidate launcher",
     async (layout) => {
       await withTestDir({ prefix: "native-package-stage-" }, async (base) => {
-        const project = path.join(base, "install", "global");
+        const project = path.join(
+          base,
+          ...(layout === "bun-launcher" ? ["Bun '$` install"] : []),
+          "install",
+          "global",
+        );
         const globalRoot = path.join(
           project,
           layout === "pnpm11" ? "v11" : layout === "pnpm10" ? "5/node_modules" : "node_modules",
@@ -76,8 +82,8 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           JSON.stringify({ virtualStoreDir, storeDir: external }),
         );
         const installTarget: ResolvedGlobalInstallTarget = {
-          manager: layout === "bun" ? "bun" : "pnpm",
-          command: layout === "bun" ? "bun" : "pnpm",
+          manager: layout.startsWith("bun") ? "bun" : "pnpm",
+          command: layout.startsWith("bun") ? "bun" : "pnpm",
           globalRoot,
           packageRoot,
         };
@@ -139,8 +145,15 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           "external",
         );
         const launcher = path.join(stage.binDir, "openclaw");
-        if (layout === "bun") {
+        if (layout.startsWith("bun")) {
           await fs.symlink(path.relative(stage.binDir, candidateEntry), launcher);
+          if (layout === "bun-launcher") {
+            installBunCliLauncher({
+              packageRoot: candidateRoot,
+              bunPath: process.execPath,
+              binDir: stage.binDir,
+            });
+          }
         } else {
           const target = path.relative(stage.binDir, candidateEntry);
           await fs.writeFile(
@@ -157,6 +170,12 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         }
         expect((await runFile(launcher, [], { timeout: 5000 })).stdout.trim()).toBe("candidate");
         await finalizeNativePackageStage(stage, "openclaw");
+        if (layout === "bun-launcher") {
+          expect(parseBunCliLauncher(await fs.readFile(launcher, "utf8"))).toEqual({
+            bunPath: process.execPath,
+            entryPath: path.join(packageRoot, "openclaw.mjs"),
+          });
+        }
         expect(
           (
             await runFile(process.execPath, [path.join(packageRoot, "openclaw.mjs")], {
@@ -175,7 +194,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         await fs.rm(stage.binDir, { recursive: true });
         expect(
           (await runFile(path.join(liveBinDir, "openclaw"), [], { timeout: 5000 })).stdout.trim(),
-        ).toBe(layout === "bun" ? "candidate" : "bin-runtime\ncandidate");
+        ).toBe(layout.startsWith("bun") ? "candidate" : "bin-runtime\ncandidate");
         expect(
           (await runFile(path.join(liveBinDir, "shared"), [], { timeout: 5000 })).stdout.trim(),
         ).toBe("external");

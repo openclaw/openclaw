@@ -97,7 +97,8 @@ function start(label, args, childEnv = env) {
   const err = fs.openSync(stderrPath, "w");
   let child;
   try {
-    child = spawn(bun, args, {
+    const throughLauncher = entry !== undefined && args[0] === entry;
+    child = spawn(throughLauncher ? "openclaw" : bun, throughLauncher ? args.slice(1) : args, {
       env: childEnv,
       cwd: env.HOME,
       detached: true,
@@ -305,7 +306,11 @@ try {
       },
     );
     assert.equal(result.exitCode, 0, result.output.slice(-6000));
-    entry = fs.realpathSync(path.join(install, "bin/openclaw"));
+    entry = path.join(install, "install/global/node_modules/openclaw/openclaw.mjs");
+    const launcher = path.join(install, "bin/openclaw");
+    assert(!fs.lstatSync(launcher).isSymbolicLink(), "Bun-only install must publish a launcher");
+    assert(read(launcher).startsWith("#!/bin/sh\n# OpenClaw Bun launcher "));
+    env.PATH = `${path.dirname(launcher)}:${env.PATH}`;
     env.BUN_INSTALL = install;
     assert(
       !fs.existsSync(path.join(path.dirname(entry), ".openclaw-lifecycle-pending")),
