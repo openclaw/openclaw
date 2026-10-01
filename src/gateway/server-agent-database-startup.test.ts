@@ -180,6 +180,7 @@ it.each([
     }
     database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
     const agentPath = database.path;
+    // Join worker reader retirement before changing journal mode or replacing files.
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeStateDatabaseForTest();
